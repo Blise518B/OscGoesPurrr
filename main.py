@@ -29,7 +29,7 @@ import queue
 from typing import Optional
 
 # Third-party imports (at module level for proper virtual environment resolution)
-from buttplug import ButtplugClient
+from buttplug import ButtplugClient, DeviceOutputCommand, OutputType
 from pythonosc.udp_client import SimpleUDPClient
 
 
@@ -52,6 +52,14 @@ class OscGoesPurrrApp:
         self.status_label = None
         self.connection_button = None
         self.is_connected = False
+        self.target_intensity = 0.0
+        self.last_sent_intensity = 0.0
+        
+        # Manual Purr UI components
+        self.testing_frame = None
+        self.purr_check_button = None
+        self.vibration_slider = None
+        self.vibe_meter = None
         
         # Setup UI
         self.setup_ui()
@@ -83,13 +91,46 @@ class OscGoesPurrrApp:
         self.connection_button = ctk.CTkButton(
             main_frame,
             text="Connect to Intiface",
-            command=self.toggle_connection,
+            command=self.connect_to_intiface,
             font=("Arial", 16),
             height=50,
             fg_color="#6B4EFF",
             hover_color="#5A3DCC"
         )
         self.connection_button.pack(pady=20)
+        
+        # Manual Purr Testing Frame
+        self.testing_frame = ctk.CTkFrame(main_frame, corner_radius=8)
+        self.testing_frame.pack(expand=False, fill="x", pady=(10, 20))
+        
+        # Purr-Check Button
+        self.purr_check_button = ctk.CTkButton(
+            self.testing_frame,
+            text="Purr-Check (Test All)",
+            command=self.trigger_purr_check,
+            font=("Arial", 14),
+            height=40
+        )
+        self.purr_check_button.pack(pady=(0, 10))
+        
+        # Vibration Slider
+        self.vibration_slider = ctk.CTkSlider(
+            self.testing_frame,
+            from_=0.0,
+            to=1.0,
+            command=self.on_vibration_slider_change
+        )
+        self.vibration_slider.set(0.0)
+        self.vibration_slider.pack(pady=(0, 5))
+        
+        # Vibe Meter (Progress Bar)
+        self.vibe_meter = ctk.CTkProgressBar(
+            self.testing_frame,
+            width=300,
+            height=20
+        )
+        self.vibe_meter.set(0.0)
+        self.vibe_meter.pack(pady=(0, 10))
         
         # Log/Output Box
         log_frame = ctk.CTkFrame(main_frame, corner_radius=8)
@@ -133,7 +174,6 @@ class OscGoesPurrrApp:
         """Process messages from queue (called from main thread)"""
         try:
             while True:
-                # Use get_nowait() instead of tkinter getvar
                 msg = self.thread_queue.get_nowait()
                 
                 if isinstance(msg, tuple):
@@ -178,7 +218,122 @@ class OscGoesPurrrApp:
                 text="Ready to connect",
                 text_color="#888888"
             )
+    
+    def on_vibration_slider_change(self, value):
+        """Handle slider value changes - only update target intensity for polling loop"""
+        # Update the Vibe Meter
+        self.vibe_meter.set(value)
+        
+        # Update target intensity for polling loop (10Hz rate limit)
+        self.target_intensity = float(value)
+    
+    def trigger_purr_check(self):
+        """Trigger Purr-Check from main thread"""
+        if self.async_loop and self.is_connected:
+            try:
+                future = asyncio.run_coroutine_threadsafe(
+                    self._async_purr_check(),
+                    self.async_loop
+                )
+                future.result(timeout=3)
+            except Exception as e:
+                self.push_ui_update(f"Purr-Check failed: {e}")
+    
+    async def _async_set_vibration(self, intensity: float):
+        """Set vibration intensity for all connected devices"""
+        if not self.buttplug_client or not self.is_connected:
+            return
             
+        try:
+            for device in self.buttplug_client.devices.values():
+                if device.has_output(OutputType.VIBRATE):
+                    await device.run_output(DeviceOutputCommand(OutputType.VIBRATE, intensity))
+                    
+        except Exception as e:
+            self.push_ui_update(f"Vibration error: {e}")
+    
+    async def _async_purr_check(self):
+        """Test all devices by setting them to 0.1, waiting 1 second, then 0"""
+        if not self.buttplug_client or not self.is_connected:
+            return
+            
+        try:
+            self.push_ui_update(f"Running Purr-Check on {len(self.buttplug_client.devices)} devices.")
+            
+            # Set all devices to 0.1 intensity
+            for device in self.buttplug_client.devices.values():
+                if device.has_output(OutputType.VIBRATE):
+                    await device.run_output(DeviceOutputCommand(OutputType.VIBRATE, 0.1))
+            
+            self.push_ui_update("Purr-Check: All devices at 0.1")
+            
+            # Wait for 1 second
+            await asyncio.sleep(1.0)
+            
+            # Set all devices back to 0.0 intensity
+            for device in self.buttplug_client.devices.values():
+                if device.has_output(OutputType.VIBRATE):
+                    await device.run_output(DeviceOutputCommand(OutputType.VIBRATE, 0.0))
+            
+            self.push_ui_update("Purr-Check: All devices at 0.0 - Test Complete")
+            
+        except Exception as e:
+            self.push_ui_update(f"Purr-Check error: {e}")
+    
+    async def _async_connect(self):
+        """Internal async method to connect to Intiface"""
+        if not self.buttplug_client:
+            return
+            
+        await self.buttplug_client.connect("ws://127.0.0.1:12345")
+        
+        # Start scanning for devices after connection
+        await self.buttplug_client.start_scanning()
+        await asyncio.sleep(2.0)  # Give Intiface time to find devices
+        await self.buttplug_client.stop_scanning()
+        self.push_ui_update(f"Scan complete. Devices found: {len(self.buttplug_client.devices)}")
+    
+    async def _async_disconnect(self):
+        """Internal async method to disconnect from Intiface"""
+        if self.buttplug_client:
+            try:
+                await self.buttplug_client.disconnect()
+            except Exception:
+                pass
+    
+    def connect_to_intiface(self):
+        """Handle connection button click - connects/disconnects from main thread"""
+        if not self.is_connected:
+            # Connect when clicked (if not already connected)
+            if self.async_loop and self.buttplug_client:
+                try:
+                    self.push_ui_update("Connecting to Intiface...")
+                    # Schedule the async connect to run in the async thread
+                    future = asyncio.run_coroutine_threadsafe(
+                        self._async_connect(),
+                        self.async_loop
+                    )
+                    # Wait for result with a timeout
+                    future.result(timeout=5)
+                    self.push_ui_update("Connected to Intiface successfully")
+                    self.push_connection_status(True, "Intiface")
+                except Exception as e:
+                    error_msg = f"Connection failed: {e}"
+                    self.push_ui_update(error_msg)
+                    self.push_connection_status(False, "")
+        else:
+            # Disconnect when clicked (if connected)
+            if self.async_loop and self.buttplug_client:
+                try:
+                    future = asyncio.run_coroutine_threadsafe(
+                        self._async_disconnect(),
+                        self.async_loop
+                    )
+                    future.result(timeout=2)
+                    self.push_connection_status(False, "")
+                except Exception as e:
+                    pass
+    
     async def async_worker(self):
         """Main async worker for buttplug and OSC operations"""
         
@@ -196,60 +351,22 @@ class OscGoesPurrrApp:
         except Exception as e:
             self.push_ui_update(f"Initialization error: {e}")
         
-        # Main async loop - does NOT connect automatically
+        # Main async loop - Golden Loop, polls vibration intensity and sends to devices (10Hz polling)
         while True:
-            await asyncio.sleep(0.1)
-    
-    async def connect_to_intiface(self):
-        """Connect to Intiface server (called from async thread)"""
-        if not self.buttplug_client:
-            self.push_ui_update("Buttplug client not initialized")
-            return
+            if self.is_connected and self.buttplug_client:
+                # Only send update if intensity changed since last send
+                if self.target_intensity != self.last_sent_intensity:
+                    try:
+                        for device in self.buttplug_client.devices.values():
+                            if device.has_output(OutputType.VIBRATE):
+                                await device.run_output(
+                                    DeviceOutputCommand(OutputType.VIBRATE, self.target_intensity)
+                                )
+                        self.last_sent_intensity = self.target_intensity
+                    except Exception as e:
+                        self.push_ui_update(f"Vibration error: {e}")
             
-        try:
-            self.push_ui_update("Connecting to Intiface...")
-            await self.buttplug_client.connect("ws://localhost:12345")
-            self.push_ui_update("Connected to Intiface successfully")
-            self.push_connection_status(True, "Intiface")
-            
-        except Exception as e:
-            error_msg = f"Connection failed: {e}"
-            self.push_ui_update(error_msg)
-            self.push_connection_status(False, "")
-        
-    def trigger_connect_to_intiface(self):
-        """Trigger connect_to_intiface from main thread using run_coroutine_threadsafe"""
-        if self.async_loop:
-            try:
-                asyncio.run_coroutine_threadsafe(
-                    self.connect_to_intiface(),
-                    self.async_loop
-                )
-            except Exception as e:
-                self.push_ui_update(f"Failed to trigger connection: {e}")
-            
-    def toggle_connection(self):
-        """Handle connection button click"""
-        if not self.is_connected:
-            # Connect when clicked (if not already connected)
-            self.trigger_connect_to_intiface()
-        else:
-            # Disconnect - for now just log it
-            self.push_ui_update("Disconnect requested")
-            self.push_connection_status(False, "")
-            
-    def run(self):
-        """Start the Three-Pillar application"""
-        # Start async loop in background thread
-        self.start_async_loop()
-        
-        # Periodically check for UI updates from async thread
-        def check_queue():
-            self.process_async_queue()
-            self.app.after(50, check_queue)  # Check every 50ms
-            
-        self.app.after(100, check_queue)
-        
+            await asyncio.sleep(0.1)  #
         # Run GUI mainloop on main thread
         self.app.mainloop()
 
