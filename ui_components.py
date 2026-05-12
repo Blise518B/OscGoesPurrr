@@ -48,51 +48,149 @@ class OscGoesPurrrUI:
         # Device-specific state - moved from main.py
         self.device_ui_frames: dict = {}  # device_name -> config UI frame references
         
+        # Sidebar Navigation State
+        self.sidebar_frame = None
+        self.main_frame = None
+        self.nav_buttons: dict = {}
+        self.views: dict = {}
+        
         # Setup the UI
         self.setup_ui()
     
     def setup_ui(self):
-        """Create and arrange all GUI elements"""
-        # Main scrollable container - wraps everything for scrolling
-        main_container = ctk.CTkScrollableFrame(
-            self.app,
-            fg_color="transparent",
-            scrollbar_fg_color="#333333"
-        )
-        main_container.pack(expand=True, fill="both", padx=20, pady=20)
+        """Create and arrange all GUI elements with sidebar navigation"""
+        # Configure main grid: 1 row, 2 columns
+        # Column 0 (Sidebar) has fixed width, Column 1 (Main Content) expands
+        self.app.grid_rowconfigure(0, weight=1)
+        self.app.grid_columnconfigure(1, weight=1)
         
-        # Title
+        # ====================
+        # SIDEBAR (Column 0)
+        # ====================
+        self.sidebar_frame = ctk.CTkFrame(self.app, width=200, corner_radius=0)
+        self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
+        
+        # Configure sidebar grid - row 6 expands to push bottom elements down
+        self.sidebar_frame.grid_rowconfigure(6, weight=1)
+        
+        # Title Label at top of sidebar
         title_label = ctk.CTkLabel(
-            main_container,
+            self.sidebar_frame,
             text="OscGoesPurrr",
-            font=("Arial", 32, "bold"),
+            font=("Arial", 24, "bold"),
+            text_color="#6B4EFF"
+        )
+        title_label.grid(row=0, column=0, sticky="ew", padx=10, pady=(20, 30))
+        
+        # Navigation Buttons
+        view_names = ["VR Dashboard", "OSC Routing", "Hardware Tester", "Settings", "Help"]
+        
+        for i, view_name in enumerate(view_names, start=1):
+            nav_button = ctk.CTkButton(
+                self.sidebar_frame,
+                text=view_name,
+                command=lambda name=view_name: self.select_view(name),
+                font=("Arial", 14),
+                height=40,
+                fg_color="transparent",
+                hover_color="#3a3a45"
+            )
+            nav_button.grid(row=i, column=0, sticky="ew", padx=10, pady=5)
+            self.nav_buttons[view_name] = nav_button
+        
+        # Status Label - at bottom of sidebar (row 7)
+        self.status_label = ctk.CTkLabel(
+            self.sidebar_frame,
+            text="Ready to connect",
+            font=("Arial", 12),
+            text_color="#888888"
+        )
+        self.status_label.grid(row=7, column=0, sticky="ew", padx=15, pady=(0, 5))
+        
+        # Connection Button - at bottom of sidebar (row 8)
+        self.connection_button = ctk.CTkButton(
+            self.sidebar_frame,
+            text="Connect to Intiface",
+            command=self.controller.connect_to_intiface,
+            font=("Arial", 12),
+            height=40,
+            fg_color="#6B4EFF",
+            hover_color="#5A3DCC"
+        )
+        self.connection_button.grid(row=8, column=0, sticky="ew", padx=15, pady=(0, 10))
+        
+        # Auto-refresh checkbox - below connection button (row 9)
+        # Load saved state from config, default to True
+        auto_refresh_default = True
+        if hasattr(self.controller, 'profile_manager') and self.controller.profile_manager:
+            auto_refresh_default = self.controller.profile_manager.app_settings.get("auto_refresh", True)
+        self.auto_refresh_var = ctk.BooleanVar(value=auto_refresh_default)
+        self.auto_refresh_checkbox = ctk.CTkCheckBox(
+            self.sidebar_frame,
+            text="Auto Refresh Devices",
+            variable=self.auto_refresh_var,
+            command=self.controller.toggle_auto_refresh
+        )
+        self.auto_refresh_checkbox.grid(row=9, column=0, sticky="ew", padx=15, pady=(0, 10))
+        
+        # Auto-connect checkbox - below auto-refresh (row 10)
+        # Load saved state from config, default to True
+        auto_connect_default = True
+        if hasattr(self.controller, 'profile_manager') and self.controller.profile_manager:
+            auto_connect_default = self.controller.profile_manager.app_settings.get("auto_connect", True)
+        self.auto_connect_var = ctk.BooleanVar(value=auto_connect_default)
+        self.auto_connect_checkbox = ctk.CTkCheckBox(
+            self.sidebar_frame,
+            text="Auto Connect",
+            variable=self.auto_connect_var,
+            command=self.controller.toggle_auto_connect
+        )
+        self.auto_connect_checkbox.grid(row=10, column=0, sticky="ew", padx=15, pady=(0, 20))
+        
+        # ====================
+        # MAIN CONTENT AREA (Column 1)
+        # ====================
+        self.main_frame = ctk.CTkFrame(self.app, corner_radius=0, fg_color="transparent")
+        self.main_frame.grid(row=0, column=1, sticky="nsew")
+        
+        # Create views dictionary and frames
+        view_names = ["VR Dashboard", "OSC Routing", "Hardware Tester", "Settings", "Help"]
+        
+        for view_name in view_names:
+            view_frame = ctk.CTkFrame(self.main_frame, corner_radius=8, fg_color="transparent")
+            
+            if view_name == "Hardware Tester":
+                # Hardware Tester: Contains the migrated existing UI
+                self._setup_hardware_tester_view(view_frame)
+            else:
+                # Placeholder for other views
+                placeholder_label = ctk.CTkLabel(
+                    view_frame,
+                    text=f"{view_name} will go here",
+                    font=("Arial", 16),
+                    text_color="#888888"
+                )
+                placeholder_label.pack(expand=True)
+            
+            self.views[view_name] = view_frame
+        
+        # Default to Hardware Tester view
+        self.select_view("Hardware Tester")
+    
+    def _setup_hardware_tester_view(self, parent_frame: ctk.CTkFrame):
+        """Setup the Hardware Tester view with migrated existing UI elements"""
+        # Title for Hardware Tester section
+        title_label = ctk.CTkLabel(
+            parent_frame,
+            text="Hardware Tester",
+            font=("Arial", 28, "bold"),
             text_color="#6B4EFF"
         )
         title_label.pack(pady=(0, 10))
         
-        # Status Label
-        self.status_label = ctk.CTkLabel(
-            main_container,
-            text="Ready to connect",
-            font=("Arial", 14),
-            text_color="#888888"
-        )
-        self.status_label.pack(pady=10)
-        
-        # Connection Button
-        self.connection_button = ctk.CTkButton(
-            main_container,
-            text="Connect to Intiface",
-            command=self.controller.connect_to_intiface,
-            font=("Arial", 16),
-            height=50,
-            fg_color="#6B4EFF",
-            hover_color="#5A3DCC"
-        )
-        self.connection_button.pack(pady=20)
         
         # Manual Purr Testing Frame (now only for Purr-Check)
-        self.testing_frame = ctk.CTkFrame(main_container, corner_radius=8)
+        self.testing_frame = ctk.CTkFrame(parent_frame, corner_radius=8)
         self.testing_frame.pack(expand=False, fill="x", pady=(10, 20))
         
         # Purr-Check Button
@@ -106,7 +204,7 @@ class OscGoesPurrrUI:
         self.purr_check_button.pack(pady=(0, 10))
         
         # Unified Devices Frame - contains saved toys and active controls
-        self.devices_container_frame = ctk.CTkFrame(main_container, corner_radius=8, fg_color="#1E1E2E")
+        self.devices_container_frame = ctk.CTkFrame(parent_frame, corner_radius=8, fg_color="#1E1E2E")
         self.devices_container_frame.pack(expand=False, fill="x", pady=(0, 10), padx=5)
         
         # Header for devices section
@@ -140,7 +238,7 @@ class OscGoesPurrrUI:
         save_profiles_button.pack(pady=(0, 10))
         
         # Log/Output Box
-        log_frame = ctk.CTkFrame(main_container, corner_radius=8)
+        log_frame = ctk.CTkFrame(parent_frame, corner_radius=8)
         log_frame.pack(expand=False, fill="both", pady=(0, 10))
         
         self.log_text = ctk.CTkTextbox(
@@ -150,6 +248,27 @@ class OscGoesPurrrUI:
             fg_color="#1E1E2E"
         )
         self.log_text.pack(expand=False, fill="both", padx=10, pady=10)
+    
+    def select_view(self, view_name: str):
+        """
+        Switch between different views in the UI.
+        
+        Args:
+            view_name: Name of the view to switch to
+        """
+        # 1. Update button colors (highlight active tab)
+        for name, button in self.nav_buttons.items():
+            if name == view_name:
+                button.configure(fg_color=("#333333", "#2B2B36"))  # Active color
+            else:
+                button.configure(fg_color="transparent")  # Inactive color
+        
+        # 2. Hide all views
+        for frame in self.views.values():
+            frame.pack_forget()
+        
+        # 3. Show selected view
+        self.views[view_name].pack(expand=True, fill="both", padx=20, pady=20)
     
     def log_message(self, message: str):
         """Add a message to the log text box (main thread only)"""

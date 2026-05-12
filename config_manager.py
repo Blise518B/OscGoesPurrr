@@ -13,8 +13,59 @@ APPDATA_DIR = Path.home() / "AppData" / "Roaming" / "OscGoesPurrr"
 # Profile file path
 PROFILE_FILE = APPDATA_DIR / "profiles.json"
 
+# App settings file path
+APP_SETTINGS_FILE = APPDATA_DIR / "app_settings.json"
+
+# Default app settings
+DEFAULT_APP_SETTINGS = {
+    "auto_connect": True,
+    "auto_refresh": True
+}
+
 # Ensure AppData directory exists
 os.makedirs(APPDATA_DIR, exist_ok=True)
+
+
+class AppSettingsManager:
+    """Manages app-level settings (auto_connect, auto_refresh, etc.)"""
+    
+    def __init__(self):
+        self.settings: Dict[str, Any] = {}
+        self._load_or_create_defaults()
+    
+    def _load_or_create_defaults(self) -> None:
+        """Load settings from JSON file or create defaults if not exists."""
+        if os.path.exists(APP_SETTINGS_FILE):
+            try:
+                with open(APP_SETTINGS_FILE, 'r') as f:
+                    loaded = json.load(f)
+                    # Merge with defaults to ensure all keys exist
+                    self.settings = {**DEFAULT_APP_SETTINGS, **loaded}
+                    print(f"Loaded app settings from {APP_SETTINGS_FILE}")
+                    return
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"App settings load error: {e}, using defaults")
+        
+        # Use defaults if file doesn't exist or has errors
+        self.settings = DEFAULT_APP_SETTINGS.copy()
+        self._save_settings()
+    
+    def _save_settings(self) -> None:
+        """Save current settings to JSON file."""
+        try:
+            with open(APP_SETTINGS_FILE, 'w') as f:
+                json.dump(self.settings, f, indent=2)
+        except IOError as e:
+            print(f"App settings save error: {e}")
+    
+    def get(self, key: str, default=None) -> Any:
+        """Get a setting value"""
+        return self.settings.get(key, default)
+    
+    def set(self, key: str, value: Any) -> None:
+        """Set a setting value and save to file"""
+        self.settings[key] = value
+        self._save_settings()
 
 
 class ProfileManager:
@@ -23,6 +74,7 @@ class ProfileManager:
     def __init__(self):
         self.profiles: Dict[str, Any] = {}
         self.current_profile = "Default"
+        self.app_settings = AppSettingsManager()
         self._load_or_create_default()
     
     def _load_or_create_default(self) -> None:

@@ -64,6 +64,14 @@ class OscGoesPurrrApp:
         # Haptic Engine - async hardware interface (single source of truth for connection state)
         self.haptic_engine: Optional[HapticEngine] = None
         
+        # Auto-refresh state - loaded from config in _setup_components
+        self.auto_refresh_enabled = True
+        self._auto_refresh_task = None  # For storing the periodic scan task
+        
+        # Auto-connect state - loaded from config in _setup_components
+        self.auto_connect_enabled = True
+        self._auto_connect_task = None  # For storing the auto-connect retry loop task reference
+        
         # Initialize components in correct order
         self._setup_components()
     
@@ -79,11 +87,16 @@ class OscGoesPurrrApp:
         # Instantiate Haptic Engine
         self.haptic_engine = HapticEngine(self.thread_queue, self.device_targets, self.device_last_sent)
         
+        # Load profiles using profile manager (also initializes app_settings)
+        self.profile_manager.load_profiles()
+        
+        # Load app settings (auto_connect, auto_refresh)
+        self.auto_refresh_enabled = self.profile_manager.app_settings.get("auto_refresh", True)
+        self.auto_connect_enabled = self.profile_manager.app_settings.get("auto_connect", True)
+        
         # Instantiate UI Component (must be after haptic_engine is created)
         self.ui = OscGoesPurrrUI(self.app, self)
         
-        # Load profiles using profile manager
-        self.profile_manager.load_profiles()
         # Build stored devices UI after loading profiles
         self.ui.build_stored_devices_ui()
     
@@ -156,6 +169,65 @@ class OscGoesPurrrApp:
         
         # Update UI via ui component
         self.ui.update_connection_status(connected, server)
+        
+        # If auto-connect is enabled and we just disconnected, restart the retry loop
+        if not connected and self.auto_connect_enabled and self.async_loop:
+            try:
+                self._auto_connect_task = asyncio.run_coroutine_threadsafe(
+                    self._async_auto_connect_loop(),
+                    self.async_loop
+                )
+            except Exception as e:
+                pass
+    
+    def toggle_auto_connect(self):
+        """Handle auto-connect checkbox toggle from UI"""
+        if not self.ui.auto_connect_var.get():
+            # Checkbox unchecked - disable auto connect
+            self.auto_connect_enabled = False
+            self.profile_manager.app_settings.set("auto_connect", False)
+            self.log_message("Auto connect disabled")
+            if self._auto_connect_task:
+                try:
+                    self._auto_connect_task.cancel()
+                except Exception:
+                    pass
+                self._auto_connect_task = None
+        else:
+            # Checkbox checked - enable auto connect
+            self.auto_connect_enabled = True
+            self.profile_manager.app_settings.set("auto_connect", True)
+            self.log_message("Auto connect enabled")
+            # If not connected, start the retry loop
+            if not self.haptic_engine.is_connected and self.async_loop:
+                try:
+                    self._auto_connect_task = asyncio.run_coroutine_threadsafe(
+                        self._async_auto_connect_loop(),
+                        self.async_loop
+                    )
+                except Exception as e:
+                    self.log_message(f"Failed to start auto connect: {e}")
+    
+    async def _async_attempt_connection(self):
+        """Attempt to connect to Intiface once. Returns True if successful."""
+        try:
+            await self.haptic_engine._async_connect()
+            return True
+        except Exception as e:
+            self.log_message(f"Connection attempt failed: {e}")
+            return False
+    
+    async def _async_auto_connect_loop(self):
+        """Background task that retries connection every 2 seconds"""
+        while self.auto_connect_enabled and not self.haptic_engine.is_connected:
+            await asyncio.sleep(2.0)
+            if self.auto_connect_enabled and not self.haptic_engine.is_connected:
+                try:
+                    success = await self._async_attempt_connection()
+                    if success:
+                        self.log_message("Auto-connect: Successfully connected!")
+                except Exception as e:
+                    pass  # Errors are logged in _async_attempt_connection
     
     def get_connected_device_names(self) -> set:
         """Get set of currently connected device names"""
@@ -234,6 +306,87 @@ class OscGoesPurrrApp:
             except Exception as e:
                 self.log_message(f"Purr-Check failed: {e}")
     
+    def toggle_auto_refresh(self):
+        """Handle auto-refresh checkbox toggle from UI"""
+        if not self.ui.auto_refresh_var.get():
+            # Checkbox unchecked - disable auto refresh
+            self.auto_refresh_enabled = False
+            self.profile_manager.app_settings.set("auto_refresh", False)
+            self.log_message("Auto refresh disabled")
+            if self._auto_refresh_task:
+                # Cancel any pending scan task
+                self._auto_refresh_task.cancel()
+                self._auto_refresh_task = None
+        else:
+            # Checkbox checked - enable auto refresh
+            self.auto_refresh_enabled = True
+            self.profile_manager.app_settings.set("auto_refresh", True)
+            self.log_message("Auto refresh enabled")
+            # If already connected, start the periodic scanning loop
+            if self.haptic_engine and self.haptic_engine.is_connected and self.async_loop:
+                try:
+                    self._auto_refresh_task = asyncio.run_coroutine_threadsafe(
+                        self._async_auto_refresh_loop(),
+                        self.async_loop
+                    )
+                except Exception as e:
+                    self.log_message(f"Failed to start auto refresh: {e}")
+    
+    async def _async_start_scanning(self):
+        """Start scanning for devices without connecting (just scan)"""
+        if not self.haptic_engine or not self.haptic_engine.buttplug_client:
+            return
+        
+        try:
+            # Start scanning
+            await self.haptic_engine.buttplug_client.start_scanning()
+            await asyncio.sleep(2.0)  # Give Intiface time to find devices
+            
+            # Stop scanning and get device list
+            await self.haptic_engine.buttplug_client.stop_scanning()
+            
+            # Find new devices (devices we haven't seen before)
+            connected_names = {device.name for device in self.haptic_engine.buttplug_client.devices.values()}
+            known_devices = set(self.get_connected_device_names())
+            new_devices = connected_names - known_devices
+            
+            if new_devices:
+                self.log_message(f"Auto-refresh found new devices: {new_devices}")
+                
+                # Find the newly discovered devices
+                found_devices = {}
+                for device in self.haptic_engine.buttplug_client.devices.values():
+                    if device.name in new_devices:
+                        try:
+                            features = device.get_features_with_output(OutputType.VIBRATE)
+                            motor_count = len(features) if features else 1
+                            found_devices[device.index] = {
+                                "name": device.name,
+                                "motor_count": motor_count
+                            }
+                        except Exception:
+                            pass
+                
+                # Push new devices to UI
+                self.thread_queue.put(("devices_found", found_devices))
+                
+                # Refresh stored devices UI to include new devices
+                self.thread_queue.put(("stored_devices_refresh", None))
+            
+        except Exception as e:
+            self.log_message(f"Scan error: {e}")
+    
+    async def _async_auto_refresh_loop(self):
+        """Background task for periodic device scanning"""
+        scan_interval = 30.0  # Scan every 30 seconds
+        while self.auto_refresh_enabled and self.haptic_engine.is_connected:
+            await asyncio.sleep(scan_interval)
+            if self.auto_refresh_enabled and self.haptic_engine.is_connected:
+                try:
+                    await self._async_start_scanning()
+                except Exception as e:
+                    pass  # Errors are logged in _async_start_scanning
+    
     def connect_to_intiface(self):
         """Handle connection button click - connects/disconnects from main thread"""
         if not self.haptic_engine or not self.async_loop:
@@ -252,6 +405,16 @@ class OscGoesPurrrApp:
                 # Wait for result with a timeout
                 future.result(timeout=5)
                 self.log_message("Connected to Intiface successfully")
+                
+                # Start auto-refresh scanning loop if enabled
+                if self.auto_refresh_enabled:
+                    try:
+                        self._auto_refresh_task = asyncio.run_coroutine_threadsafe(
+                            self._async_auto_refresh_loop(),
+                            self.async_loop
+                        )
+                    except Exception as e:
+                        self.log_message(f"Failed to start auto refresh: {e}")
             except Exception as e:
                 error_msg = f"Connection failed: {e}"
                 self.log_message(error_msg)
@@ -265,6 +428,21 @@ class OscGoesPurrrApp:
                 )
                 future.result(timeout=2)
                 self.update_connection_status(False, "")
+                
+                # Stop auto-refresh if disconnecting
+                self.auto_refresh_enabled = False
+                if self._auto_refresh_task:
+                    self._auto_refresh_task.cancel()
+                    self._auto_refresh_task = None
+                
+                # Stop auto-connect if disconnecting
+                self.auto_connect_enabled = False
+                if self._auto_connect_task:
+                    try:
+                        self._auto_connect_task.cancel()
+                    except Exception:
+                        pass
+                    self._auto_connect_task = None
             except Exception as e:
                 pass
     
@@ -280,6 +458,23 @@ class OscGoesPurrrApp:
         """Start the Three-Pillar application"""
         # Start async loop in background thread
         self.start_async_loop()
+        
+        # Wait for async_loop to be ready (race condition: thread needs time to set self.async_loop)
+        import time
+        timeout = 5.0
+        start_time = time.time()
+        while self.async_loop is None and (time.time() - start_time) < timeout:
+            time.sleep(0.05)
+        
+        # Start auto-connect if enabled (single source of truth is haptic_engine.is_connected)
+        if self.auto_connect_enabled and not self.haptic_engine.is_connected and self.async_loop:
+            try:
+                self._auto_connect_task = asyncio.run_coroutine_threadsafe(
+                    self._async_auto_connect_loop(),
+                    self.async_loop
+                )
+            except Exception as e:
+                self.log_message(f"Failed to start auto connect: {e}")
         
         # Periodically check for UI updates from async thread
         def check_queue():
