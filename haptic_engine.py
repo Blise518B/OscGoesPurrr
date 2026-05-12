@@ -25,12 +25,11 @@ import asyncio
 from typing import Optional
 
 from buttplug import ButtplugClient, DeviceOutputCommand, OutputType
-from pythonosc.udp_client import SimpleUDPClient
 
 
 class HapticEngine:
     """
-    Async hardware engine for managing buttplug connections and OSC output.
+    Async hardware engine for managing buttplug connections.
     
     This class is designed to run in its own async thread and communicate
     with the main UI thread via a queue-based message system.
@@ -51,7 +50,6 @@ class HapticEngine:
         
         # Hardware clients - these will be set when async_worker runs
         self.buttplug_client: Optional[ButtplugClient] = None
-        self.osc_client = None
         
         # Connection state
         self.is_connected = False
@@ -177,7 +175,7 @@ class HapticEngine:
     
     async def async_worker(self, app_instance=None):
         """
-        Main async worker for buttplug and OSC operations.
+        Main async worker for buttplug operations.
         
         This is the primary loop that runs in the async thread, polling
         device targets and sending updates at a controlled rate.
@@ -189,10 +187,6 @@ class HapticEngine:
         self.push_ui_update("Async thread started")
         
         try:
-            # Initialize OSC client
-            self.osc_client = SimpleUDPClient("localhost", 9000)
-            self.push_ui_update("OSC client initialized (port 9000)")
-            
             # Initialize Buttplug client
             self.buttplug_client = ButtplugClient("OscGoesPurrr")
             self.push_ui_update("Buttplug client created")

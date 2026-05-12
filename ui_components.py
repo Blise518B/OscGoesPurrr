@@ -53,12 +53,17 @@ class OscGoesPurrrUI:
     
     def setup_ui(self):
         """Create and arrange all GUI elements"""
-        main_frame = ctk.CTkFrame(self.app, fg_color="transparent")
-        main_frame.pack(expand=True, fill="both", padx=20, pady=20)
+        # Main scrollable container - wraps everything for scrolling
+        main_container = ctk.CTkScrollableFrame(
+            self.app,
+            fg_color="transparent",
+            scrollbar_fg_color="#333333"
+        )
+        main_container.pack(expand=True, fill="both", padx=20, pady=20)
         
         # Title
         title_label = ctk.CTkLabel(
-            main_frame,
+            main_container,
             text="OscGoesPurrr",
             font=("Arial", 32, "bold"),
             text_color="#6B4EFF"
@@ -67,7 +72,7 @@ class OscGoesPurrrUI:
         
         # Status Label
         self.status_label = ctk.CTkLabel(
-            main_frame,
+            main_container,
             text="Ready to connect",
             font=("Arial", 14),
             text_color="#888888"
@@ -76,7 +81,7 @@ class OscGoesPurrrUI:
         
         # Connection Button
         self.connection_button = ctk.CTkButton(
-            main_frame,
+            main_container,
             text="Connect to Intiface",
             command=self.controller.connect_to_intiface,
             font=("Arial", 16),
@@ -87,7 +92,7 @@ class OscGoesPurrrUI:
         self.connection_button.pack(pady=20)
         
         # Manual Purr Testing Frame (now only for Purr-Check)
-        self.testing_frame = ctk.CTkFrame(main_frame, corner_radius=8)
+        self.testing_frame = ctk.CTkFrame(main_container, corner_radius=8)
         self.testing_frame.pack(expand=False, fill="x", pady=(10, 20))
         
         # Purr-Check Button
@@ -101,7 +106,7 @@ class OscGoesPurrrUI:
         self.purr_check_button.pack(pady=(0, 10))
         
         # Unified Devices Frame - contains saved toys and active controls
-        self.devices_container_frame = ctk.CTkFrame(main_frame, corner_radius=8, fg_color="#1E1E2E")
+        self.devices_container_frame = ctk.CTkFrame(main_container, corner_radius=8, fg_color="#1E1E2E")
         self.devices_container_frame.pack(expand=False, fill="x", pady=(0, 10), padx=5)
         
         # Header for devices section
@@ -122,9 +127,21 @@ class OscGoesPurrrUI:
         )
         self.unified_devices_frame.pack(expand=False, fill="x", pady=(5, 10), padx=5)
         
+        # Save Profiles Button
+        save_profiles_button = ctk.CTkButton(
+            self.devices_container_frame,
+            text="Save Profiles",
+            command=self.controller.save_all_profiles,
+            font=("Arial", 14),
+            height=40,
+            fg_color="#2E8B57",
+            hover_color="#277A4D"
+        )
+        save_profiles_button.pack(pady=(0, 10))
+        
         # Log/Output Box
-        log_frame = ctk.CTkFrame(main_frame, corner_radius=8)
-        log_frame.pack(expand=True, fill="both", pady=(0, 10))
+        log_frame = ctk.CTkFrame(main_container, corner_radius=8)
+        log_frame.pack(expand=False, fill="both", pady=(0, 10))
         
         self.log_text = ctk.CTkTextbox(
             log_frame,
@@ -132,7 +149,7 @@ class OscGoesPurrrUI:
             state="disabled",
             fg_color="#1E1E2E"
         )
-        self.log_text.pack(expand=True, fill="both", padx=10, pady=10)
+        self.log_text.pack(expand=False, fill="both", padx=10, pady=10)
     
     def log_message(self, message: str):
         """Add a message to the log text box (main thread only)"""
