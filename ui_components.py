@@ -208,6 +208,122 @@ class OscGoesPurrrUI:
                     status_label.configure(text=f"⚠ {device_name}", text_color="#FDB914")
                     delete_button.configure(state="normal", fg_color="#FFA500", hover_color="#E69500")
     
+    def _create_device_frame(self, device_name: str, is_connected: bool, osc_address: str, motor_count: int) -> dict:
+        """
+        Create a UI frame for a device with all controls.
+        
+        This helper method extracts the common frame creation logic used by both
+        build_stored_devices_ui() and build_device_list_ui().
+        
+        Args:
+            device_name: Name of the device
+            is_connected: Whether the device is currently connected (determines status color)
+            osc_address: OSC address for this device
+            motor_count: Number of motors/vibration features on the device
+            
+        Returns:
+            Dictionary containing frame data with keys:
+                - frame: The device frame widget
+                - osc_entry: The OSC address entry widget
+                - status_label: The status label widget
+                - delete_button: The delete button widget
+                - motors: List of motor control dictionaries with 'slider' and 'vibe_meter'
+        """
+        # Create frame container for this device with full controls
+        device_frame = ctk.CTkFrame(
+            self.unified_devices_frame,
+            corner_radius=8,
+            fg_color="#2A2A3E"
+        )
+        device_frame.pack(expand=False, fill="x", pady=(0, 10), padx=5)
+        
+        # Header row: status icon + name + delete button
+        header_frame = ctk.CTkFrame(device_frame, fg_color="transparent")
+        header_frame.pack(expand=True, fill="x", padx=5, pady=(5, 2))
+        
+        # Status label (icon only) - green for connected, yellow otherwise
+        status_icon = "✓" if is_connected else "⚠"
+        status_text = f"{status_icon} {device_name}"
+        status_color = "#00C853" if is_connected else "#FDB914"
+        
+        name_label = ctk.CTkLabel(
+            header_frame,
+            text=status_text,
+            font=("Arial", 14, "bold"),
+            text_color="#FFFFFF",
+            anchor="w"
+        )
+        name_label.pack(side="left")
+        
+        # Delete button on right
+        delete_button = ctk.CTkButton(
+            header_frame,
+            text="Delete",
+            command=lambda name=device_name: self.controller.delete_stored_device(name),
+            font=("Arial", 12),
+            height=30,
+            width=60,
+            fg_color="#FF5E57" if is_connected else "#FFA500",
+            hover_color="#DD4E46" if is_connected else "#E69500"
+        )
+        delete_button.pack(side="right")
+        
+        # OSC Address Entry
+        osc_entry = ctk.CTkEntry(
+            device_frame,
+            placeholder_text="OSC Address",
+            width=250,
+            font=("Arial", 12)
+        )
+        osc_entry.insert(0, osc_address)
+        osc_entry.pack(pady=(5, 5))
+        
+        # Motor controls (sliders + vibe meters) for each motor
+        motor_vars = []
+        for motor_idx in range(motor_count):
+            # Motor label
+            motor_label = ctk.CTkLabel(
+                device_frame,
+                text=f"Motor {motor_idx}:",
+                font=("Arial", 12, "bold"),
+                text_color="#FFFFFF"
+            )
+            motor_label.pack(pady=(5, 2))
+            
+            # Slider for this specific motor
+            slider = ctk.CTkSlider(
+                device_frame,
+                from_=0.0,
+                to=1.0,
+                command=lambda val, name=device_name, m=motor_idx: self.controller.update_device_target(name, val, m),
+                width=250
+            )
+            slider.set(0.0)
+            slider.pack(pady=(0, 5))
+            
+            # Vibe meter (progress bar) for this motor
+            vibe_meter = ctk.CTkProgressBar(
+                device_frame,
+                width=250,
+                height=15
+            )
+            vibe_meter.set(0.0)
+            vibe_meter.pack(pady=(0, 5))
+            
+            motor_vars.append({
+                "slider": slider,
+                "vibe_meter": vibe_meter
+            })
+        
+        # Return unified frame data with all elements
+        return {
+            "frame": device_frame,
+            "osc_entry": osc_entry,
+            "status_label": name_label,
+            "delete_button": delete_button,
+            "motors": motor_vars
+        }
+    
     def build_stored_devices_ui(self):
         """Build the UI for all stored devices from profiles with full controls in unified view
         
@@ -255,7 +371,7 @@ class OscGoesPurrrUI:
         
         # Get actual motor counts from connected devices (if available) via controller
         device_motor_counts = {}
-        if controller.is_connected and controller.haptic_engine and controller.haptic_engine.buttplug_client:
+        if controller.haptic_engine and controller.haptic_engine.is_connected and controller.haptic_engine.buttplug_client:
             try:
                 from haptic_engine import OutputType
                 for device in controller.haptic_engine.buttplug_client.devices.values():
@@ -274,101 +390,19 @@ class OscGoesPurrrUI:
             # Get motor count from detected values first, then profile, then default to 1
             stored_motor_count = device_motor_counts.get(device_name, config.get("motor_count", 1))
             
-            # Create frame container for this device with full controls
-            device_frame = ctk.CTkFrame(
-                self.unified_devices_frame,
-                corner_radius=8,
-                fg_color="#2A2A3E"
-            )
-            device_frame.pack(expand=False, fill="x", pady=(0, 10), padx=5)
-            
-            # Header row: status icon + name + delete button
-            header_frame = ctk.CTkFrame(device_frame, fg_color="transparent")
-            header_frame.pack(expand=True, fill="x", padx=5, pady=(5, 2))
-            
-            # Status label (icon only)
-            status_icon = "✓" if is_connected else "⚠"
-            status_text = f"{status_icon} {device_name}"
-            status_color = "#00C853" if is_connected else "#FDB914"
-            
-            name_label = ctk.CTkLabel(
-                header_frame,
-                text=status_text,
-                font=("Arial", 14, "bold"),
-                text_color="#FFFFFF",
-                anchor="w"
-            )
-            name_label.pack(side="left")
-            
-            # Delete button on right
-            delete_button = ctk.CTkButton(
-                header_frame,
-                text="Delete",
-                command=lambda name=device_name: controller.delete_stored_device(name),
-                font=("Arial", 12),
-                height=30,
-                width=60,
-                fg_color="#FF5E57" if is_connected else "#FFA500",
-                hover_color="#DD4E46" if is_connected else "#E69500"
-            )
-            delete_button.pack(side="right")
-            
-            # OSC Address Entry
+            # Get OSC address from config or use default
             osc_address = config.get("osc_address", "/avatar/parameters/" + device_name.replace(" ", "_"))
-            osc_entry = ctk.CTkEntry(
-                device_frame,
-                placeholder_text="OSC Address",
-                width=250,
-                font=("Arial", 12)
-            )
-            osc_entry.insert(0, osc_address)
-            osc_entry.pack(pady=(5, 5))
             
-            # Motor controls (sliders + vibe meters) for each motor
-            motor_vars = []
-            for motor_idx in range(stored_motor_count):
-                # Motor label
-                motor_label = ctk.CTkLabel(
-                    device_frame,
-                    text=f"Motor {motor_idx}:",
-                    font=("Arial", 12, "bold"),
-                    text_color="#FFFFFF"
-                )
-                motor_label.pack(pady=(5, 2))
-                
-                # Slider for this specific motor
-                slider = ctk.CTkSlider(
-                    device_frame,
-                    from_=0.0,
-                    to=1.0,
-                    command=lambda val, name=device_name, m=motor_idx: controller.update_device_target(name, val, m),
-                    width=250
-                )
-                slider.set(0.0)
-                slider.pack(pady=(0, 5))
-                
-                # Vibe meter (progress bar) for this motor
-                vibe_meter = ctk.CTkProgressBar(
-                    device_frame,
-                    width=250,
-                    height=15
-                )
-                vibe_meter.set(0.0)
-                vibe_meter.pack(pady=(0, 5))
-                
-                motor_vars.append({
-                    "slider": slider,
-                    "vibe_meter": vibe_meter
-                })
+            # Create frame using the helper method
+            frame_data = self._create_device_frame(
+                device_name=device_name,
+                is_connected=is_connected,
+                osc_address=osc_address,
+                motor_count=stored_motor_count
+            )
             
             # Store unified frame data with all elements
-            self.device_ui_frames[device_name] = {
-                "frame": device_frame,
-                "osc_entry": osc_entry,
-                "status_label": name_label,
-                "delete_button": delete_button,
-                "motors": motor_vars
-            }
+            self.device_ui_frames[device_name] = frame_data
             
             # Initialize state for this device via controller
             controller.device_targets[(device_name, -1)] = 0.0
@@ -376,9 +410,9 @@ class OscGoesPurrrUI:
             
             # Also store in stored_device_frames for status updates
             self.stored_device_frames[device_name] = {
-                "frame": device_frame,
-                "status_label": name_label,
-                "delete_button": delete_button
+                "frame": frame_data["frame"],
+                "status_label": frame_data["status_label"],
+                "delete_button": frame_data["delete_button"]
             }
     
     def build_device_list_ui(self, devices_dict: dict):
@@ -399,7 +433,7 @@ class OscGoesPurrrUI:
         
         # Get actual motor counts from connected devices (if available)
         device_motor_counts = {}
-        if controller.is_connected and controller.haptic_engine and controller.haptic_engine.buttplug_client:
+        if controller.haptic_engine and controller.haptic_engine.is_connected and controller.haptic_engine.buttplug_client:
             try:
                 from haptic_engine import OutputType
                 for device in controller.haptic_engine.buttplug_client.devices.values():
@@ -435,96 +469,16 @@ class OscGoesPurrrUI:
                 # Store motor count in profile via controller
                 controller.update_device_config(device_name, "motor_count", motor_count)
                 
-                # Create frame container for this device with full controls
-                device_frame = ctk.CTkFrame(
-                    self.unified_devices_frame,
-                    corner_radius=8,
-                    fg_color="#2A2A3E"
+                # Device is connected since it was just discovered, so use green checkmark
+                frame_data = self._create_device_frame(
+                    device_name=device_name,
+                    is_connected=True,
+                    osc_address=osc_address,
+                    motor_count=actual_motor_count
                 )
-                device_frame.pack(expand=False, fill="x", pady=(0, 10), padx=5)
-                
-                # Header row: status icon + name + delete button
-                header_frame = ctk.CTkFrame(device_frame, fg_color="transparent")
-                header_frame.pack(expand=True, fill="x", padx=5, pady=(5, 2))
-                
-                # Status label with green checkmark for connected device
-                name_label = ctk.CTkLabel(
-                    header_frame,
-                    text=f"✓ {device_name}",
-                    font=("Arial", 14, "bold"),
-                    text_color="#00C853",
-                    anchor="w"
-                )
-                name_label.pack(side="left")
-                
-                # Delete button on right
-                delete_button = ctk.CTkButton(
-                    header_frame,
-                    text="Delete",
-                    command=lambda name=device_name: controller.delete_stored_device(name),
-                    font=("Arial", 12),
-                    height=30,
-                    width=60,
-                    fg_color="#FF5E57",
-                    hover_color="#DD4E46"
-                )
-                delete_button.pack(side="right")
-                
-                # OSC Address Entry (editable)
-                osc_entry = ctk.CTkEntry(
-                    device_frame,
-                    placeholder_text="OSC Address",
-                    width=250,
-                    font=("Arial", 12)
-                )
-                osc_entry.insert(0, osc_address)
-                osc_entry.pack(pady=(5, 5))
-                
-                # Motor controls (sliders + vibe meters) for each motor
-                motor_vars = []
-                for motor_idx in range(actual_motor_count):
-                    # Motor label
-                    motor_label = ctk.CTkLabel(
-                        device_frame,
-                        text=f"Motor {motor_idx}:",
-                        font=("Arial", 12, "bold"),
-                        text_color="#FFFFFF"
-                    )
-                    motor_label.pack(pady=(5, 2))
-                    
-                    # Slider for this specific motor
-                    slider = ctk.CTkSlider(
-                        device_frame,
-                        from_=0.0,
-                        to=1.0,
-                        command=lambda val, name=device_name, m=motor_idx: controller.update_device_target(name, val, m),
-                        width=250
-                    )
-                    slider.set(0.0)
-                    slider.pack(pady=(0, 5))
-                    
-                    # Vibe meter (progress bar) for this motor
-                    vibe_meter = ctk.CTkProgressBar(
-                        device_frame,
-                        width=250,
-                        height=15
-                    )
-                    vibe_meter.set(0.0)
-                    vibe_meter.pack(pady=(0, 5))
-                    
-                    motor_vars.append({
-                        "slider": slider,
-                        "vibe_meter": vibe_meter
-                    })
                 
                 # Store unified frame data with all elements
-                self.device_ui_frames[device_name] = {
-                    "frame": device_frame,
-                    "osc_entry": osc_entry,
-                    "status_label": name_label,
-                    "delete_button": delete_button,
-                    "motors": motor_vars
-                }
+                self.device_ui_frames[device_name] = frame_data
                 
                 # Initialize state for this device via controller
                 controller.device_targets[(device_name, -1)] = 0.0
@@ -532,9 +486,9 @@ class OscGoesPurrrUI:
                 
                 # Also store in stored_device_frames for status updates
                 self.stored_device_frames[device_name] = {
-                    "frame": device_frame,
-                    "status_label": name_label,
-                    "delete_button": delete_button
+                    "frame": frame_data["frame"],
+                    "status_label": frame_data["status_label"],
+                    "delete_button": frame_data["delete_button"]
                 }
         
         controller.log_message(f"Connected devices: {len(devices_dict)}")

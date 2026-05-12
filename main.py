@@ -61,11 +61,8 @@ class OscGoesPurrrApp:
         # UI Component - handles all GUI rendering and updates
         self.ui: OscGoesPurrrUI = None
         
-        # Haptic Engine - async hardware interface
+        # Haptic Engine - async hardware interface (single source of truth for connection state)
         self.haptic_engine: Optional[HapticEngine] = None
-        
-        # Connection status tracking
-        self.is_connected = False
         
         # Initialize components in correct order
         self._setup_components()
@@ -153,7 +150,7 @@ class OscGoesPurrrApp:
     
     def update_connection_status(self, connected: bool, server: str):
         """Update connection UI elements (main thread only)"""
-        # Sync with haptic engine
+        # Sync with haptic engine (haptic_engine.is_connected is now the single source of truth)
         if self.haptic_engine:
             self.haptic_engine.is_connected = connected
         
@@ -162,7 +159,7 @@ class OscGoesPurrrApp:
     
     def get_connected_device_names(self) -> set:
         """Get set of currently connected device names"""
-        if not self.haptic_engine or not self.haptic_engine.buttplug_client:
+        if not self.haptic_engine or not self.haptic_engine.buttplug_client or not self.haptic_engine.is_connected:
             return set()
         return {device.name for device in self.haptic_engine.buttplug_client.devices.values()}
     
@@ -210,6 +207,10 @@ class OscGoesPurrrApp:
             value: New intensity value (0.0 to 1.0)
             motor_index: Motor index (-1 for all motors, 0+ for specific)
         """
+        # Only send updates if connected
+        if not self.haptic_engine or not self.haptic_engine.is_connected:
+            return
+            
         # Update target in state dictionary using tuple key
         self.device_targets[(device_name, motor_index)] = float(value)
         
@@ -220,13 +221,10 @@ class OscGoesPurrrApp:
                 # Update specific motor's vibe meter
                 frame_data["motors"][motor_index]["vibe_meter"].set(float(value))
         
-        # Also update all-motors entry (for backward compatibility)
-        if motor_index != -1:
-            self.device_targets[(device_name, -1)] = float(value)
     
     def trigger_purr_check(self):
         """Trigger Purr-Check from main thread"""
-        if self.async_loop and self.haptic_engine:
+        if self.async_loop and self.haptic_engine and self.haptic_engine.is_connected:
             try:
                 future = asyncio.run_coroutine_threadsafe(
                     self.haptic_engine._async_purr_check(),
@@ -241,9 +239,8 @@ class OscGoesPurrrApp:
         if not self.haptic_engine or not self.async_loop:
             return
             
-        is_connected = self.haptic_engine.is_connected if hasattr(self.haptic_engine, 'is_connected') else False
-        
-        if not is_connected:
+        # Use haptic_engine.is_connected directly as the source of truth
+        if not self.haptic_engine.is_connected:
             # Connect when clicked (if not already connected)
             try:
                 self.log_message("Connecting to Intiface...")

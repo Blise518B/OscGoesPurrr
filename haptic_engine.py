@@ -213,15 +213,16 @@ class HapticEngine:
                         
                         if target_intensity != last_sent:
                             try:
-                                if motor_idx < len(vibration_features):
+                                if motor_idx == -1:
+                                    # Global command to the whole device
+                                    await device.run_output(DeviceOutputCommand(OutputType.VIBRATE, target_intensity))
+                                elif 0 <= motor_idx < len(vibration_features):
+                                    # Specific motor command
                                     feature = vibration_features[motor_idx]
                                     await feature.run_output(DeviceOutputCommand(OutputType.VIBRATE, target_intensity))
+                                
                                 self.device_last_sent[(device_name, motor_idx)] = target_intensity
                             except Exception as e:
                                 self.push_ui_update(f"Vibration error for {device_name} motor {motor_idx}: {e}")
-                            
-                            # Also update "all motors" entry
-                            if motor_idx == 0:  # Only update once (use first motor as trigger)
-                                self.device_last_sent[(device_name, -1)] = target_intensity
             
             await asyncio.sleep(0.1)  # Poll at 10Hz to avoid rate-limit crashes
