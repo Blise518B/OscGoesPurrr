@@ -52,6 +52,30 @@ OscGoesPurrr supports devices with multiple vibration motors (e.g., Lovense Gemi
 
 ---
 
+## 3a. Multi-Device Support (Two of the Same Toy)
+
+When using two toys of the exact same model (e.g., two Lovense Hush devices), there is a critical distinction to understand:
+
+**Device Identity Limitation:**
+* **No Unique Identifiers:** Bluetooth hardware MAC addresses are intentionally hidden by Windows, macOS, and WebBluetooth for privacy protection. Intiface Central scrubs these identifiers before passing devices to your Python app.
+* **Identical Names:** Two of the same toy will both appear with `device.name == "Lovense Hush"` (or whatever the model name is).
+* **Temporary Indexes:** Intiface assigns temporary device.index values (0, 1, etc.) that reset every time Intiface Central restarts.
+
+**The Solution: Custom Names in Intiface Central**
+If you want to use two of the same toy simultaneously (e.g., one for each hand), follow these steps:
+
+1. Connect both toys to **Intiface Central**
+2. Navigate to the **Devices** tab
+3. Click on each toy and assign a **Custom Name**:
+   - Example: `"Left Hush"` and `"Right Hush"`
+   - Or: `"Main Toy"` and `"Secondary Toy"`
+4. Intiface saves these preferences locally
+5. When OscGoesPurrr requests devices, Intiface passes the custom names as `device.name`
+
+Because your profile system uses `device.name` as the unique key for saving/loading OSC parameters, the two toys will now be stored separately in `profiles.json`.
+
+**Note:** This is a platform-level limitation, not an app bug. The solution requires configuring the devices inside Intiface Central before launching OscGoesPurrr.
+
 ## 4. The "Golden Loop" (Haptic Logic Pipeline)
 When processing an incoming OSC float from VRChat, it must pass through this mathematical pipeline before hitting the hardware:
 
