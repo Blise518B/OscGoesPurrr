@@ -34,7 +34,9 @@ PROFILE_FILE = "profiles.json"
 
 # Third-party imports (at module level for proper virtual environment resolution)
 from buttplug import ButtplugClient, DeviceOutputCommand, OutputType
-from pythonosc.udp_client import SimpleUDPClien
+from pythonosc.udp_client import SimpleUDPClient
+
+
 class OscGoesPurrrApp:
     def __init__(self):
         # Initialize main window
@@ -376,9 +378,18 @@ class OscGoesPurrrApp:
             osc_entry.insert(0, osc_address)
             osc_entry.pack(pady=(0, 5))
             
-            # Create a slider/vibe meter pair for each motor
+            # Create a slider/vibe meter pair for each motor with motor labels
             motor_vars = []
             for motor_idx in range(motor_count):
+                # Motor label (e.g., "Motor 0:", "Motor 1:")
+                motor_label = ctk.CTkLabel(
+                    device_frame,
+                    text=f"Motor {motor_idx}:",
+                    font=("Arial", 12, "bold"),
+                    text_color="#FFFFFF"
+                )
+                motor_label.pack(pady=(5, 2))
+                
                 # Slider for this specific motor (uses lambda with default arg to capture device name and index)
                 slider = ctk.CTkSlider(
                     device_frame,
