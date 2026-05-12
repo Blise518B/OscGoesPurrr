@@ -32,12 +32,8 @@ from typing import Optional, Dict, Any
 
 from pathlib import Path
 
-# AppData directory for persistent storage
-APPDATA_DIR = Path.home() / "AppData" / "Roaming" / "OscGoesPurrr"
-PROFILE_FILE = APPDATA_DIR / "profiles.json"
-
-# Ensure AppData directory exists
-os.makedirs(APPDATA_DIR, exist_ok=True)
+# Import ProfileManager from config manager module
+from config_manager import PROFILE_FILE, ProfileManager
 
 # Third-party imports (at module level for proper virtual environment resolution)
 from buttplug import ButtplugClient, DeviceOutputCommand, OutputType
@@ -73,9 +69,12 @@ class OscGoesPurrrApp:
         self.device_last_sent: Dict[tuple, float] = {}  # (device_name, motor_index) -> last sent intensity
         self.device_ui_frames: Dict[str, dict] = {}    # device_name -> config UI frame references
         
-        # Profile system state
-        self.profiles: Dict[str, Any] = {}  # All loaded profiles
-        self.current_profile = "Default"    # Currently active profile
+        # Profile manager instance
+        self.profile_manager = ProfileManager()
+        
+        # Keep aliases for backward compatibility during refactoring
+        self.profiles = self.profile_manager.profiles
+        self.current_profile = self.profile_manager.current_profile
         
         # Manual Purr UI components (kept for legacy Purr-Check functionality)
         self.testing_frame = None
@@ -84,8 +83,8 @@ class OscGoesPurrrApp:
         # Setup UI
         self.setup_ui()
         
-        # Load profiles on startup
-        self.load_profiles()
+        # Load profiles using profile manager
+        self.profile_manager.load_profiles()
         # Build stored devices UI after loading profiles
         self.build_stored_devices_ui()
         
@@ -172,37 +171,15 @@ class OscGoesPurrrApp:
         )
         self.log_text.pack(expand=True, fill="both", padx=10, pady=10)
         
+    # ProfileManager methods - these are now in config_manager.py
+    # Kept for backward compatibility during refactoring (calls profile_manager)
     def load_profiles(self) -> Dict[str, Any]:
-        """Load profiles from JSON file or create default if not exists
-        
-        Returns:
-            Dictionary containing all loaded profiles
-        """
-        if os.path.exists(PROFILE_FILE):
-            try:
-                with open(PROFILE_FILE, 'r') as f:
-                    self.profiles = json.load(f)
-                    self.log_message(f"Loaded profiles from {PROFILE_FILE}")
-                    return self.profiles
-            except (json.JSONDecodeError, IOError) as e:
-                self.log_message(f"Profile load error: {e}, creating default profile")
-        
-        # Create default profile if file doesn't exist or has errors
-        default_profiles = {
-            "Default": {}
-        }
-        self.profiles = default_profiles
-        self.save_profiles()
-        return self.profiles
+        """Load profiles using profile manager"""
+        return self.profile_manager.load_profiles()
     
     def save_profiles(self):
-        """Save current profiles to JSON file"""
-        try:
-            with open(PROFILE_FILE, 'w') as f:
-                json.dump(self.profiles, f, indent=2)
-            self.log_message(f"Profiles saved to {PROFILE_FILE}")
-        except IOError as e:
-            self.push_ui_update(f"Profile save error: {e}")
+        """Save profiles using profile manager"""
+        self.profile_manager.save_profiles()
     
     def _get_motor_display_name(self, motor_index: int) -> str:
         """Convert motor index to display name for OptionMenu
@@ -219,37 +196,12 @@ class OscGoesPurrrApp:
             return f"Motor {motor_index}"
     
     def get_profile_config(self, device_name: str, key: str, default=None):
-        """Get a specific config value for a device from current profile
-        
-        Args:
-            device_name: Name of the device
-            key: Config key (e.g., 'osc_address', 'motor_index')
-            default: Default value if not found
-            
-        Returns:
-            The config value or default
-        """
-        if self.current_profile in self.profiles:
-            profile = self.profiles[self.current_profile]
-            if device_name in profile:
-                return profile[device_name].get(key, default)
-        return default
+        """Get a specific config value for a device from current profile using profile_manager"""
+        return self.profile_manager.get_profile_config(device_name, key, default)
     
     def update_device_config(self, device_name: str, key: str, value):
-        """Update a config value for a device in current profile
-        
-        Args:
-            device_name: Name of the device
-            key: Config key to update
-            value: New value
-        """
-        if self.current_profile not in self.profiles:
-            self.profiles[self.current_profile] = {}
-        
-        if device_name not in self.profiles[self.current_profile]:
-            self.profiles[self.current_profile][device_name] = {}
-            
-        self.profiles[self.current_profile][device_name][key] = value
+        """Update a config value for a device in current profile using profile_manager"""
+        self.profile_manager.update_device_config(device_name, key, value)
     
     def start_async_loop(self):
         """Start the asyncio event loop in a separate thread"""
