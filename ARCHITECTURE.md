@@ -38,7 +38,21 @@ When writing haptic code, strictly follow the modern `buttplug-py` Protocol v4 A
 
 ---
 
-## 3. The "Golden Loop" (Haptic Logic Pipeline)
+## 3. Multi-Motor Device Support
+OscGoesPurrr supports devices with multiple vibration motors (e.g., Lovense Gemini):
+
+* **Motor Count Detection:** Uses `device.get_features_with_output(OutputType.VIBRATE)` to count all vibration-capable features.
+* **Per-Motor Control:** Devices with 2+ motors display individual sliders and progress bars for each motor:
+  - "Motor 0:", "Motor 1:" labels appear above each control pair
+  - Each slider controls only its assigned motor via `feature.run_output()`
+  - All Motors option still available using `device.run_output()` (sends to all features)
+* **State Storage:** Uses tuple keys `(device_name, motor_index)` where:
+  - `-1` = all motors
+  - `0+` = specific motor index
+
+---
+
+## 4. The "Golden Loop" (Haptic Logic Pipeline)
 When processing an incoming OSC float from VRChat, it must pass through this mathematical pipeline before hitting the hardware:
 
 1.  **Raw Input:** Capture the float (0.0 to 1.0).
@@ -54,7 +68,7 @@ When processing an incoming OSC float from VRChat, it must pass through this mat
 
 ---
 
-## 4. UI/UX Standards
+## 5. UI/UX Standards
 * **Theme:** Use `customtkinter` dark mode. Visually emphasize active states with purples/pinks.
 * **Dynamic Views:** The UI features a "Compact/Mini-Mode" toggle via `pack_forget()`, stripping away advanced settings to show only a Profile Switcher, a "Purr-Check" (Test All) button, and the Vibe Meters.
 * **Vibe Meters:** Use `CTkProgressBar` to visualize the *final smoothed output* of the Golden Loop for each device in real-time.
