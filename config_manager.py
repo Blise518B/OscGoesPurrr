@@ -20,6 +20,7 @@ APP_SETTINGS_FILE = APPDATA_DIR / "app_settings.json"
 DEFAULT_APP_SETTINGS = {
     "auto_connect": True,
     "auto_refresh": True,
+    "auto_connect_osc": True,
     "bind_all_interfaces": True
 }
 

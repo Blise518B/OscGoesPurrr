@@ -420,23 +420,113 @@ class OscGoesPurrrApp:
         self.profile_manager.app_settings.update_setting("bind_all_interfaces", value)
         self.ui.log_message("Network bind changed. PLEASE RESTART APP to apply.")
 
-    def restart_osc(self):
-        """Safely rebuilds and restarts the VRChat OSC Server."""
-        self.log_message("Restarting OSC connection...")
-        self.ui.update_osc_status(False, None)
-        if hasattr(self, 'osc_manager') and self.osc_manager:
+    def switch_profile(self, profile_name: str):
+        """Switch to a different profile and reload the device UI.
+
+        Args:
+            profile_name: Name of the profile to switch to.
+        """
+        if profile_name not in self.profile_manager.profiles:
+            self.log_message(f"Profile '{profile_name}' not found.")
+            return
+
+        self.profile_manager.current_profile = profile_name
+        self.current_profile = profile_name
+
+        # Rebuild the device UI for the new profile
+        self.ui.build_stored_devices_ui()
+        self.log_message(f"Switched to profile: {profile_name}")
+
+        # Refresh the profile buttons on the Dashboard
+        if hasattr(self.ui, '_refresh_profile_buttons'):
+            self.ui._refresh_profile_buttons()
+    
+    def rename_profile(self, old_name: str, new_name: str):
+        """Rename a profile in the profiles dictionary.
+
+        Args:
+            old_name: Current name of the profile.
+            new_name: New name for the profile.
+        """
+        if old_name not in self.profile_manager.profiles:
+            self.log_message(f"Cannot rename: profile '{old_name}' not found.")
+            return
+        
+        # Prevent duplicate names
+        if new_name in self.profile_manager.profiles and new_name != old_name:
+            self.log_message(f"Cannot rename: profile '{new_name}' already exists.")
+            return
+        
+        # Rename in the profiles dict
+        data = self.profile_manager.profiles.pop(old_name)
+        self.profile_manager.profiles[new_name] = data
+        self.profile_manager.save_profiles()
+        
+        # Update current_profile if it was the renamed one
+        if self.profile_manager.current_profile == old_name:
+            self.profile_manager.current_profile = new_name
+            self.current_profile = new_name
+        
+        self.log_message(f"Renamed profile '{old_name}' to '{new_name}'")
+        
+        # Refresh the profile buttons on the Dashboard
+        if hasattr(self.ui, '_refresh_profile_buttons'):
+            self.ui._refresh_profile_buttons()
+
+    def toggle_osc_connection(self):
+        """Toggles the VRChat OSC connection on and off safely (non-blocking)."""
+        if hasattr(self, 'osc_manager') and self.osc_manager and self.osc_manager.is_connected:
+            # --- Disconnect Path ---
+            self.log_message("Disconnecting VRChat OSC...")
             try:
                 self.osc_manager.stop()
             except Exception:
                 pass
-                
-        # Re-instantiate for a clean socket/mDNS state
-        bind_all = self.profile_manager.app_settings.settings.get("bind_all_interfaces", True)
-        self.osc_manager = VRChatOSCManager(local_listen_port=0, bind_all_interfaces=bind_all)
-        self.osc_manager.global_osc_callback = self.on_osc_message
-        self.osc_manager.on_connected = lambda ports: self.thread_queue.put(("osc_status", (True, ports.get("local_listen_port"))))
-        self.osc_manager.start()
+            self.osc_manager.is_connected = False
+            self.ui.update_osc_status(False)
+        else:
+            # --- Connect Path ---
+            self.log_message("Starting VRChat OSC server...")
+            self.ui.update_osc_status(False)  # Reset UI to waiting state
+            
+            # Rebuild manager for a clean socket state
+            bind_all = self.profile_manager.app_settings.settings.get("bind_all_interfaces", True)
+            self.osc_manager = VRChatOSCManager(local_listen_port=0, bind_all_interfaces=bind_all)
+            self.osc_manager.global_osc_callback = self.on_osc_message
+            self.osc_manager.on_connected = lambda ports: self.thread_queue.put(
+                ("osc_status", (True, ports.get("local_listen_port")))
+            )
+            
+            # Run startup in a background thread to prevent UI lockup
+            threading.Thread(target=self.osc_manager.start, daemon=True).start()
 
+    def restart_osc(self):
+        """Legacy wrapper: disconnect if connected, then reconnect via toggle."""
+        if hasattr(self, 'osc_manager') and self.osc_manager and self.osc_manager.is_connected:
+            try:
+                self.osc_manager.stop()
+            except Exception:
+                pass
+            self.osc_manager.is_connected = False
+        self.toggle_osc_connection()
+
+    def toggle_osc_auto_connect(self):
+        """Handle OSC auto-connect checkbox toggle from UI"""
+        if not self.ui.osc_auto_connect_var.get():
+            # Checkbox unchecked - disable OSC auto connect
+            self.profile_manager.app_settings.set("auto_connect_osc", False)
+            self.log_message("VRChat OSC Auto connect disabled")
+        else:
+            # Checkbox checked - enable OSC auto connect
+            self.profile_manager.app_settings.set("auto_connect_osc", True)
+            self.log_message("VRChat OSC Auto connect enabled")
+            # If OSC server is not running, start it
+            if self.osc_manager:
+                try:
+                    self.osc_manager.start()
+                except Exception:
+                    pass  # Server may already be running
+    
     def toggle_auto_refresh(self):
         """Handle auto-refresh checkbox toggle from UI"""
         if not self.ui.auto_refresh_var.get():
@@ -585,18 +675,24 @@ class OscGoesPurrrApp:
         """Load profiles using profile manager"""
         return self.profile_manager.load_profiles()
     
+    def _on_closing(self):
+        """Handle clean shutdown: auto-save profiles before exiting."""
+        self.save_profiles()
+        if self.app:
+            self.app.destroy()
+
     def run(self):
         """Start the Three-Pillar application"""
         # Start async loop in background thread
         self.start_async_loop()
-        
+
         # Wait for async_loop to be ready (race condition: thread needs time to set self.async_loop)
         import time
         timeout = 5.0
         start_time = time.time()
         while self.async_loop is None and (time.time() - start_time) < timeout:
             time.sleep(0.05)
-        
+
         # Start auto-connect if enabled (single source of truth is haptic_engine.is_connected)
         if self.auto_connect_enabled and not self.haptic_engine.is_connected and self.async_loop:
             try:
@@ -606,22 +702,26 @@ class OscGoesPurrrApp:
                 )
             except Exception as e:
                 self.log_message(f"Failed to start auto connect: {e}")
-        
+
         # Periodically check for UI updates from async thread
         def check_queue():
             self.process_async_queue()
             if self.app:
                 self.app.after(50, check_queue)  # Check every 50ms
-            
+
         if self.app:
+            # Register clean shutdown handler to auto-save profiles
+            self.app.protocol("WM_DELETE_WINDOW", self._on_closing)
+
             self.app.after(100, check_queue)
-            
-            # Boot OSC server after UI launches
-            self.osc_manager.start()
-            
+
+            # Boot OSC server 500ms after UI launches to prevent freezing
+            if self.profile_manager.app_settings.settings.get("auto_connect_osc", True):
+                self.app.after(500, self.toggle_osc_connection)
+
             # Start the OSC debugger UI refresh loop
             self.refresh_debugger_ui()
-            
+
             # Run GUI mainloop on main thread
             self.app.mainloop()
 
