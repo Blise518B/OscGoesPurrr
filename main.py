@@ -420,6 +420,23 @@ class OscGoesPurrrApp:
         self.profile_manager.app_settings.update_setting("bind_all_interfaces", value)
         self.ui.log_message("Network bind changed. PLEASE RESTART APP to apply.")
 
+    def restart_osc(self):
+        """Safely rebuilds and restarts the VRChat OSC Server."""
+        self.log_message("Restarting OSC connection...")
+        self.ui.update_osc_status(False, None)
+        if hasattr(self, 'osc_manager') and self.osc_manager:
+            try:
+                self.osc_manager.stop()
+            except Exception:
+                pass
+                
+        # Re-instantiate for a clean socket/mDNS state
+        bind_all = self.profile_manager.app_settings.settings.get("bind_all_interfaces", True)
+        self.osc_manager = VRChatOSCManager(local_listen_port=0, bind_all_interfaces=bind_all)
+        self.osc_manager.global_osc_callback = self.on_osc_message
+        self.osc_manager.on_connected = lambda ports: self.thread_queue.put(("osc_status", (True, ports.get("local_listen_port"))))
+        self.osc_manager.start()
+
     def toggle_auto_refresh(self):
         """Handle auto-refresh checkbox toggle from UI"""
         if not self.ui.auto_refresh_var.get():
@@ -598,6 +615,9 @@ class OscGoesPurrrApp:
             
         if self.app:
             self.app.after(100, check_queue)
+            
+            # Boot OSC server after UI launches
+            self.osc_manager.start()
             
             # Start the OSC debugger UI refresh loop
             self.refresh_debugger_ui()

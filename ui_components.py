@@ -288,6 +288,18 @@ class OscGoesPurrrUI:
             text_color="#FFFFFF"
         )
         self.osc_port_label.pack(pady=(5, 15))
+        
+        # Manual Reconnect Button
+        reconnect_button = ctk.CTkButton(
+            osc_dashboard_frame,
+            text="Restart OSC Server",
+            command=self.controller.restart_osc,
+            font=("Arial", 12),
+            height=30,
+            fg_color="#4A4A5A",
+            hover_color="#3A3A4A"
+        )
+        reconnect_button.pack(pady=(10, 15))
     
     def _setup_hardware_tester_view(self, parent_frame: ctk.CTkFrame):
         """Setup the Hardware Tester view with migrated existing UI elements"""

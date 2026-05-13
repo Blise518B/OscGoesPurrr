@@ -113,8 +113,7 @@ class HapticEngine:
     
     async def _async_connect(self):
         """Internal async method to connect to Intiface"""
-        if not self.buttplug_client:
-            return
+        self.buttplug_client = ButtplugClient("OscGoesPurrr")
             
         await self.buttplug_client.connect("ws://127.0.0.1:12345")
         
@@ -186,14 +185,6 @@ class HapticEngine:
         
         self.push_ui_update("Async thread started")
         
-        try:
-            # Initialize Buttplug client
-            self.buttplug_client = ButtplugClient("OscGoesPurrr")
-            self.push_ui_update("Buttplug client created")
-            
-        except Exception as e:
-            self.push_ui_update(f"Initialization error: {e}")
-        
         # Main async loop - Golden Loop, polls each device's intensity and sends (10Hz polling)
         while True:
             if self.is_connected and self.buttplug_client:
@@ -223,6 +214,13 @@ class HapticEngine:
                                 
                                 self.device_last_sent[(device_name, motor_idx)] = target_intensity
                             except Exception as e:
+                                error_str = str(e).lower()
                                 self.push_ui_update(f"Vibration error for {device_name} motor {motor_idx}: {e}")
-            
+                                # Detect WebSocket/Connection drops
+                                if "closed" in error_str or "disconnect" in error_str or "websocket" in error_str or "connection" in error_str:
+                                    self.push_ui_update("Intiface connection lost. Triggering auto-retry.")
+                                    self.is_connected = False
+                                    self.push_connection_status(False, "")
+                                    break  # Break motor loop, let Golden Loop spin until reconnected
+
             await asyncio.sleep(0.1)  # Poll at 10Hz to avoid rate-limit crashes

@@ -70,11 +70,10 @@ class VRChatOSCManager:
         self._last_sent_times: Dict[str, float] = {}
         self.on_connected: Callable = None
         self.global_osc_callback: Callable = None
-        
-        # Start listening AND advertising immediately (before discovery)
+
+    def start(self):
+        """Starts the servers and mDNS advertisement."""
         self._setup_osc()
-        
-        # Start Discovery
         self._start_discovery()
 
     @property
