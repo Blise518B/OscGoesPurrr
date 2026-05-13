@@ -36,6 +36,9 @@ from ui_components import OscGoesPurrrUI
 # Haptic Engine for async hardware operations
 from haptic_engine import HapticEngine
 
+# VRChat OSC Manager for OSC discovery and routing
+from vrchat_osc import VRChatOSCManager
+
 
 class OscGoesPurrrApp:
     def __init__(self):
@@ -72,6 +75,13 @@ class OscGoesPurrrApp:
         self.auto_connect_enabled = True
         self._auto_connect_task = None  # For storing the auto-connect retry loop task reference
         
+        # OSC Debugger state
+        self.osc_debug_data = {}
+        self.is_debugging_osc = False
+        
+        # UI Lock - prevent programmatic UI changes from echoing back to the controller
+        self._is_updating_ui = False
+        
         # Initialize components in correct order
         self._setup_components()
     
@@ -86,6 +96,18 @@ class OscGoesPurrrApp:
         
         # Instantiate Haptic Engine
         self.haptic_engine = HapticEngine(self.thread_queue, self.device_targets, self.device_last_sent)
+
+        # Instantiate VRChat OSC Manager
+        bind_all = self.profile_manager.app_settings.settings.get("bind_all_interfaces", True)
+        self.osc_manager = VRChatOSCManager(local_listen_port=0, bind_all_interfaces=bind_all)
+
+        # Link our router to the global OSC callback
+        self.osc_manager.global_osc_callback = self.on_osc_message
+
+        # Connection hook - push to queue for thread-safe UI update
+        self.osc_manager.on_connected = lambda ports: self.thread_queue.put(
+            ("osc_status", (True, ports.get("local_listen_port")))
+        )
         
         # Load profiles using profile manager (also initializes app_settings)
         self.profile_manager.load_profiles()
@@ -137,6 +159,30 @@ class OscGoesPurrrApp:
                         self.ui.build_device_list_ui(data)
                     elif msg_type == "stored_devices_refresh":
                         self.ui.build_stored_devices_ui()
+                    elif msg_type == "osc_status":
+                        is_connected, port = data
+                        self.ui.update_osc_status(is_connected, port)
+                        self.ui.log_message(f"VRChat OSC Connected! Listening on port {port}")
+                    elif msg_type == "osc_haptic_update":
+                        device_name, val_float, motor_index = data
+                        # This is now safely running on the Main UI thread!
+                        self.update_device_target(device_name, val_float, motor_index)
+                    elif msg_type == "ui_slider_update":
+                        device_name, value, motor_idx = data
+                        if device_name in self.ui.device_ui_frames:
+                            motor_vars = self.ui.device_ui_frames[device_name].get("motors", [])
+                            
+                            self._is_updating_ui = True  # Lock the UI
+                            try:
+                                if 0 <= motor_idx < len(motor_vars):
+                                    motor_vars[motor_idx]["slider"].set(value)
+                                    motor_vars[motor_idx]["vibe_meter"].set(value)
+                                elif motor_idx == -1:
+                                    for mv in motor_vars:
+                                        mv["slider"].set(value)
+                                        mv["vibe_meter"].set(value)
+                            finally:
+                                self._is_updating_ui = False  # Unlock
                         
         except queue.Empty:
             pass  # No more messages in queue
@@ -148,15 +194,21 @@ class OscGoesPurrrApp:
     def save_all_profiles(self):
         """Save all device configurations from UI to profiles.json"""
         for device_name, frame_data in self.ui.device_ui_frames.items():
-            osc_entry = frame_data.get("osc_entry")
+            # Build per-motor OSC address dictionary from motor osc_entries
+            osc_addresses = {}
+            for motor_data in frame_data.get("motors", []):
+                osc_entry = motor_data.get("osc_entry")
+                if osc_entry and hasattr(osc_entry, 'get'):
+                    # The motor index is derived from the position in the list
+                    motor_idx = frame_data["motors"].index(motor_data)
+                    osc_addresses[str(motor_idx)] = osc_entry.get()
             
-            if osc_entry and hasattr(osc_entry, 'get'):
-                osc_address = osc_entry.get()
-            else:
-                osc_address = "/avatar/parameters/" + device_name.replace(" ", "_")
+            # If no per-motor entries found, fall back to default
+            if not osc_addresses:
+                osc_addresses["0"] = "/avatar/parameters/" + device_name.replace(" ", "_")
             
-            # Store OSC address in profile
-            self.update_device_config(device_name, "osc_address", osc_address)
+            # Store per-motor OSC addresses in profile
+            self.update_device_config(device_name, "osc_addresses", osc_addresses)
         
         self.save_profiles()
         self.log_message("All device profiles saved")
@@ -271,6 +323,59 @@ class OscGoesPurrrApp:
         """Update a config value for a device in current profile using profile_manager"""
         self.profile_manager.update_device_config(device_name, key, value)
     
+    def on_osc_message(self, address: str, value):
+        if self.is_debugging_osc:
+            self.osc_debug_data[address] = value
+
+        curr_profile = self.profile_manager.current_profile
+        profiles = self.profile_manager.profiles
+
+        if curr_profile not in profiles:
+            return
+            
+        try:
+            val_float = float(value)
+            # Normalize VRChat 8-bit ints (0-255) to Buttplug floats (0.0-1.0)
+            if val_float > 1.0:
+                val_float = val_float / 255.0
+            val_float = max(0.0, min(1.0, val_float))
+        except (ValueError, TypeError):
+            return
+            
+        for device_name, config in profiles[curr_profile].items():
+            osc_addresses = config.get("osc_addresses", {})
+            for motor_idx_str, saved_address in osc_addresses.items():
+                # UX Fix: Auto-prepend prefix if user just typed the parameter name
+                clean_saved = saved_address.strip()
+                if clean_saved and not clean_saved.startswith("/"):
+                    clean_saved = "/avatar/parameters/" + clean_saved
+                    
+                if clean_saved == address.strip():
+                    self.thread_queue.put(("osc_haptic_update", (device_name, val_float, int(motor_idx_str))))
+
+    def toggle_osc_debugger(self, *args):
+        """Toggle the OSC debugger on/off (accepts *args for safe UI toggle compatibility)"""
+        self.is_debugging_osc = not self.is_debugging_osc
+        if self.is_debugging_osc:
+            self.osc_debug_data.clear()
+            self.ui.log_message("OSC Debugger Started")
+        else:
+            self.ui.log_message("OSC Debugger Stopped")
+
+    def refresh_debugger_ui(self):
+        """Refresh the debugger display at 10Hz (100ms intervals)"""
+        if self.is_debugging_osc and self.app:
+            # Format the dictionary into a clean string
+            debug_text = "Live OSC Variables:\n" + "-" * 30 + "\n"
+            for addr in sorted(self.osc_debug_data.keys()):
+                debug_text += f"{addr}: {self.osc_debug_data[addr]}\n"
+            # Push to the UI
+            self.ui.update_debugger_display(debug_text)
+        
+        # Schedule the next refresh (100ms = 10Hz)
+        if self.app:
+            self.app.after(100, self.refresh_debugger_ui)
+
     def update_device_target(self, device_name: str, value: float, motor_index: int):
         """Update target intensity for a specific device and motor
         
@@ -279,6 +384,10 @@ class OscGoesPurrrApp:
             value: New intensity value (0.0 to 1.0)
             motor_index: Motor index (-1 for all motors, 0+ for specific)
         """
+        # Prevent programmatic UI changes from echoing back to the controller
+        if getattr(self, '_is_updating_ui', False):
+            return
+        
         # Only send updates if connected
         if not self.haptic_engine or not self.haptic_engine.is_connected:
             return
@@ -306,6 +415,11 @@ class OscGoesPurrrApp:
             except Exception as e:
                 self.log_message(f"Purr-Check failed: {e}")
     
+    def toggle_network_bind(self, value: bool):
+        """Handle network bind toggle from Settings UI."""
+        self.profile_manager.app_settings.update_setting("bind_all_interfaces", value)
+        self.ui.log_message("Network bind changed. PLEASE RESTART APP to apply.")
+
     def toggle_auto_refresh(self):
         """Handle auto-refresh checkbox toggle from UI"""
         if not self.ui.auto_refresh_var.get():
@@ -484,6 +598,9 @@ class OscGoesPurrrApp:
             
         if self.app:
             self.app.after(100, check_queue)
+            
+            # Start the OSC debugger UI refresh loop
+            self.refresh_debugger_ui()
             
             # Run GUI mainloop on main thread
             self.app.mainloop()

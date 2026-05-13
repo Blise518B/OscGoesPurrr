@@ -19,7 +19,8 @@ APP_SETTINGS_FILE = APPDATA_DIR / "app_settings.json"
 # Default app settings
 DEFAULT_APP_SETTINGS = {
     "auto_connect": True,
-    "auto_refresh": True
+    "auto_refresh": True,
+    "bind_all_interfaces": True
 }
 
 # Ensure AppData directory exists
@@ -66,6 +67,15 @@ class AppSettingsManager:
         """Set a setting value and save to file"""
         self.settings[key] = value
         self._save_settings()
+    
+    def update_setting(self, key: str, value: Any) -> None:
+        """Update a setting value and persist to file (alias for set)"""
+        self.settings[key] = value
+        try:
+            with open(APP_SETTINGS_FILE, 'w') as f:
+                json.dump(self.settings, f, indent=2)
+        except Exception as e:
+            print(f"Failed to save settings: {e}")
 
 
 class ProfileManager:

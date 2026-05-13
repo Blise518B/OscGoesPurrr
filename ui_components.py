@@ -54,6 +54,13 @@ class OscGoesPurrrUI:
         self.nav_buttons: dict = {}
         self.views: dict = {}
         
+        # OSC Routing Dashboard State
+        self.osc_status_label = None
+        self.osc_port_label = None
+        
+        # OSC Debugger State
+        self.debugger_textbox = None
+        
         # Setup the UI
         self.setup_ui()
     
@@ -83,7 +90,7 @@ class OscGoesPurrrUI:
         title_label.grid(row=0, column=0, sticky="ew", padx=10, pady=(20, 30))
         
         # Navigation Buttons
-        view_names = ["VR Dashboard", "OSC Routing", "Hardware Tester", "Settings", "Help"]
+        view_names = ["OSC Debugger", "OSC Routing", "Hardware Tester", "Settings", "Help"]
         
         for i, view_name in enumerate(view_names, start=1):
             nav_button = ctk.CTkButton(
@@ -154,7 +161,7 @@ class OscGoesPurrrUI:
         self.main_frame.grid(row=0, column=1, sticky="nsew")
         
         # Create views dictionary and frames
-        view_names = ["VR Dashboard", "OSC Routing", "Hardware Tester", "Settings", "Help"]
+        view_names = ["OSC Debugger", "OSC Routing", "Hardware Tester", "Settings", "Help"]
         
         for view_name in view_names:
             view_frame = ctk.CTkFrame(self.main_frame, corner_radius=8, fg_color="transparent")
@@ -162,8 +169,17 @@ class OscGoesPurrrUI:
             if view_name == "Hardware Tester":
                 # Hardware Tester: Contains the migrated existing UI
                 self._setup_hardware_tester_view(view_frame)
+            elif view_name == "OSC Routing":
+                # OSC Routing: Live dashboard for VRChat OSC connection status
+                self._setup_osc_routing_view(view_frame)
+            elif view_name == "OSC Debugger":
+                # OSC Debugger: Real-time OSC variable inspector
+                self._setup_osc_debugger_view(view_frame)
+            elif view_name == "Settings":
+                # Settings: Application configuration dashboard
+                self._setup_settings_view(view_frame)
             else:
-                # Placeholder for other views
+                # Placeholder for other views (Help, etc.)
                 placeholder_label = ctk.CTkLabel(
                     view_frame,
                     text=f"{view_name} will go here",
@@ -176,6 +192,102 @@ class OscGoesPurrrUI:
         
         # Default to Hardware Tester view
         self.select_view("Hardware Tester")
+    
+    def _setup_osc_debugger_view(self, parent_frame: ctk.CTkFrame):
+        """Setup the OSC Debugger view with real-time variable inspector"""
+        # Title
+        title_label = ctk.CTkLabel(
+            parent_frame,
+            text="Real-Time OSC Inspector",
+            font=("Arial", 28, "bold"),
+            text_color="#6B4EFF"
+        )
+        title_label.pack(pady=(0, 20))
+        
+        # Toggle Button Frame
+        button_frame = ctk.CTkFrame(parent_frame, corner_radius=8, fg_color="transparent")
+        button_frame.pack(expand=False, fill="x", padx=20, pady=(0, 10))
+        
+        # Toggle button
+        toggle_button = ctk.CTkButton(
+            button_frame,
+            text="Start OSC Debugger",
+            command=self.controller.toggle_osc_debugger,
+            font=("Arial", 14),
+            height=40,
+            fg_color="#6B4EFF",
+            hover_color="#5A3DCC"
+        )
+        toggle_button.pack(pady=(0, 10))
+        
+        # Debugger Textbox Frame
+        textbox_frame = ctk.CTkFrame(parent_frame, corner_radius=8, fg_color="#1E1E2E")
+        textbox_frame.pack(expand=True, fill="both", padx=20, pady=(0, 20))
+        
+        # Header label inside textbox frame
+        debugger_header = ctk.CTkLabel(
+            textbox_frame,
+            text="Live OSC Variables (toggle to start)",
+            font=("Arial", 14, "bold"),
+            text_color="#888888"
+        )
+        debugger_header.pack(pady=(10, 5))
+        
+        # Large textbox for displaying variables
+        self.debugger_textbox = ctk.CTkTextbox(
+            textbox_frame,
+            font=("Courier New", 12),
+            state="disabled",
+            fg_color="#1E1E2E",
+            corner_radius=0
+        )
+        self.debugger_textbox.pack(expand=True, fill="both", padx=10, pady=(0, 10))
+
+    def _setup_osc_routing_view(self, parent_frame: ctk.CTkFrame):
+        """Setup the OSC Routing view with a live VRChat OSC status dashboard"""
+        # Title
+        title_label = ctk.CTkLabel(
+            parent_frame,
+            text="OSC Routing",
+            font=("Arial", 28, "bold"),
+            text_color="#6B4EFF"
+        )
+        title_label.pack(pady=(0, 20))
+        
+        # Dashboard Frame
+        osc_dashboard_frame = ctk.CTkFrame(
+            parent_frame,
+            corner_radius=8,
+            fg_color="#1E1E2E"
+        )
+        osc_dashboard_frame.pack(expand=False, fill="x", padx=20, pady=(0, 20))
+        
+        # VRChat OSC Link title
+        link_title = ctk.CTkLabel(
+            osc_dashboard_frame,
+            text="VRChat OSC Link",
+            font=("Arial", 18, "bold"),
+            text_color="#FFFFFF"
+        )
+        link_title.pack(pady=(15, 10))
+        
+        # Status label
+        self.osc_status_label = ctk.CTkLabel(
+            osc_dashboard_frame,
+            text="Status: Waiting for VRChat...",
+            font=("Arial", 14),
+            text_color="orange"
+        )
+        self.osc_status_label.pack(pady=(5, 5))
+        
+        # Port label
+        self.osc_port_label = ctk.CTkLabel(
+            osc_dashboard_frame,
+            text="Listening on Port: --",
+            font=("Arial", 14),
+            text_color="#FFFFFF"
+        )
+        self.osc_port_label.pack(pady=(5, 15))
     
     def _setup_hardware_tester_view(self, parent_frame: ctk.CTkFrame):
         """Setup the Hardware Tester view with migrated existing UI elements"""
@@ -307,6 +419,22 @@ class OscGoesPurrrUI:
         # Update stored devices status indicators
         self.update_stored_devices_ui()
     
+    def update_osc_status(self, is_connected: bool, port: int = None):
+        """Update the OSC Routing dashboard with current connection status (main thread only)"""
+        if is_connected:
+            self.osc_status_label.configure(
+                text="Status: Connected to VRChat",
+                text_color="#2E8B57"
+            )
+            if port:
+                self.osc_port_label.configure(text=f"Listening on Port: {port}")
+        else:
+            self.osc_status_label.configure(
+                text="Status: Waiting for VRChat...",
+                text_color="orange"
+            )
+            self.osc_port_label.configure(text="Listening on Port: --")
+    
     def update_stored_devices_ui(self):
         """Update the stored devices UI to show connection status"""
         # Get currently connected devices via controller
@@ -327,7 +455,7 @@ class OscGoesPurrrUI:
                     status_label.configure(text=f"⚠ {device_name}", text_color="#FDB914")
                     delete_button.configure(state="normal", fg_color="#FFA500", hover_color="#E69500")
     
-    def _create_device_frame(self, device_name: str, is_connected: bool, osc_address: str, motor_count: int) -> dict:
+    def _create_device_frame(self, device_name: str, is_connected: bool, osc_addresses: dict, motor_count: int) -> dict:
         """
         Create a UI frame for a device with all controls.
         
@@ -337,16 +465,15 @@ class OscGoesPurrrUI:
         Args:
             device_name: Name of the device
             is_connected: Whether the device is currently connected (determines status color)
-            osc_address: OSC address for this device
+            osc_addresses: Dict mapping motor index string -> OSC address (e.g. {"0": "/param/0", "1": "/param/1"})
             motor_count: Number of motors/vibration features on the device
             
         Returns:
             Dictionary containing frame data with keys:
                 - frame: The device frame widget
-                - osc_entry: The OSC address entry widget
                 - status_label: The status label widget
                 - delete_button: The delete button widget
-                - motors: List of motor control dictionaries with 'slider' and 'vibe_meter'
+                - motors: List of motor control dictionaries with 'slider', 'vibe_meter', and 'osc_entry'
         """
         # Create frame container for this device with full controls
         device_frame = ctk.CTkFrame(
@@ -387,17 +514,7 @@ class OscGoesPurrrUI:
         )
         delete_button.pack(side="right")
         
-        # OSC Address Entry
-        osc_entry = ctk.CTkEntry(
-            device_frame,
-            placeholder_text="OSC Address",
-            width=250,
-            font=("Arial", 12)
-        )
-        osc_entry.insert(0, osc_address)
-        osc_entry.pack(pady=(5, 5))
-        
-        # Motor controls (sliders + vibe meters) for each motor
+        # Motor controls (sliders + vibe meters + per-motor OSC entry) for each motor
         motor_vars = []
         for motor_idx in range(motor_count):
             # Motor label
@@ -408,6 +525,16 @@ class OscGoesPurrrUI:
                 text_color="#FFFFFF"
             )
             motor_label.pack(pady=(5, 2))
+            
+            # Per-motor OSC Address Entry
+            motor_osc_entry = ctk.CTkEntry(
+                device_frame,
+                placeholder_text=f"OSC Address for Motor {motor_idx}",
+                width=250,
+                font=("Arial", 12)
+            )
+            motor_osc_entry.insert(0, osc_addresses.get(str(motor_idx), ""))
+            motor_osc_entry.pack(pady=(0, 2))
             
             # Slider for this specific motor
             slider = ctk.CTkSlider(
@@ -431,13 +558,13 @@ class OscGoesPurrrUI:
             
             motor_vars.append({
                 "slider": slider,
-                "vibe_meter": vibe_meter
+                "vibe_meter": vibe_meter,
+                "osc_entry": motor_osc_entry
             })
         
         # Return unified frame data with all elements
         return {
             "frame": device_frame,
-            "osc_entry": osc_entry,
             "status_label": name_label,
             "delete_button": delete_button,
             "motors": motor_vars
@@ -509,14 +636,16 @@ class OscGoesPurrrUI:
             # Get motor count from detected values first, then profile, then default to 1
             stored_motor_count = device_motor_counts.get(device_name, config.get("motor_count", 1))
             
-            # Get OSC address from config or use default
-            osc_address = config.get("osc_address", "/avatar/parameters/" + device_name.replace(" ", "_"))
+            # Get OSC addresses dict from config, with backward compatibility
+            osc_addresses = config.get("osc_addresses", {})
+            if not osc_addresses and config.get("osc_address"):
+                osc_addresses["0"] = config.get("osc_address")
             
             # Create frame using the helper method
             frame_data = self._create_device_frame(
                 device_name=device_name,
                 is_connected=is_connected,
-                osc_address=osc_address,
+                osc_addresses=osc_addresses,
                 motor_count=stored_motor_count
             )
             
@@ -534,6 +663,72 @@ class OscGoesPurrrUI:
                 "delete_button": frame_data["delete_button"]
             }
     
+    def _setup_settings_view(self, parent_frame: ctk.CTkFrame):
+        """Setup the Settings view with application configuration controls"""
+        # Title
+        title_label = ctk.CTkLabel(
+            parent_frame,
+            text="Application Settings",
+            font=("Arial", 28, "bold"),
+            text_color="#6B4EFF"
+        )
+        title_label.pack(pady=(0, 20))
+        
+        # Settings Dashboard Frame
+        settings_frame = ctk.CTkFrame(
+            parent_frame,
+            corner_radius=8,
+            fg_color="#1E1E2E"
+        )
+        settings_frame.pack(expand=False, fill="x", padx=20, pady=(0, 20))
+        
+        # Section Header
+        section_label = ctk.CTkLabel(
+            settings_frame,
+            text="Network Configuration",
+            font=("Arial", 18, "bold"),
+            text_color="#FFFFFF"
+        )
+        section_label.pack(pady=(15, 10))
+        
+        # Fetch current bind_all_interfaces value
+        bind_val = self.controller.profile_manager.app_settings.settings.get("bind_all_interfaces", True)
+        
+        # BooleanVar for the switch
+        self.network_bind_var = ctk.BooleanVar(value=bind_val)
+        
+        # Network Bind Switch
+        network_switch = ctk.CTkSwitch(
+            settings_frame,
+            text="Network Bind (0.0.0.0 vs 127.0.0.1)",
+            variable=self.network_bind_var,
+            command=lambda value=self.network_bind_var.get(): self.controller.toggle_network_bind(value),
+            font=("Arial", 14)
+        )
+        network_switch.pack(pady=(5, 5))
+        
+        # If initial value is True, select the switch; otherwise deselect
+        if bind_val:
+            network_switch.select()
+        else:
+            network_switch.deselect()
+        
+        # Warning label
+        warning_label = ctk.CTkLabel(
+            settings_frame,
+            text="* 0.0.0.0 is recommended for VRChat Discovery. Requires app restart if changed.",
+            font=("Arial", 11),
+            text_color="#FDB914"
+        )
+        warning_label.pack(pady=(5, 15))
+    
+    def update_debugger_display(self, text: str):
+        """Update the debugger textbox with new content (main thread only)"""
+        self.debugger_textbox.configure(state="normal")
+        self.debugger_textbox.delete("1.0", "end")
+        self.debugger_textbox.insert("1.0", text)
+        self.debugger_textbox.configure(state="disabled")
+
     def build_device_list_ui(self, devices_dict: dict):
         """Build dynamic UI controls for each discovered device and merge into unified view
         
@@ -582,8 +777,11 @@ class OscGoesPurrrUI:
             # Check if we already have a frame for this device in the unified view
             if device_name not in self.device_ui_frames:
                 # Create new frame for this device
-                # Get OSC address from profile or use default via controller
-                osc_address = controller.get_profile_config(device_name, "osc_address", "/avatar/parameters/" + device_name.replace(" ", "_"))
+                # Generate default per-motor OSC addresses
+                osc_addresses = {}
+                for i in range(actual_motor_count):
+                    suffix = f"_{i}" if actual_motor_count > 1 else ""
+                    osc_addresses[str(i)] = f"/avatar/parameters/{device_name.replace(' ', '_')}{suffix}"
                 
                 # Store motor count in profile via controller
                 controller.update_device_config(device_name, "motor_count", motor_count)
@@ -592,7 +790,7 @@ class OscGoesPurrrUI:
                 frame_data = self._create_device_frame(
                     device_name=device_name,
                     is_connected=True,
-                    osc_address=osc_address,
+                    osc_addresses=osc_addresses,
                     motor_count=actual_motor_count
                 )
                 
