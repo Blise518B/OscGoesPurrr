@@ -418,6 +418,13 @@ class OscGoesPurrrUI:
         )
         title_label.pack(pady=(0, 20))
         
+        # --- Detected SPS Zones ---
+        sps_frame = ctk.CTkFrame(parent_frame, fg_color=COLOR_CARD_BG, corner_radius=8)
+        sps_frame.pack(fill="x", padx=30, pady=(10, 10))
+        ctk.CTkLabel(sps_frame, text="Active Avatar SPS Zones", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(10, 0))
+        self.sps_status_label = ctk.CTkLabel(sps_frame, text="Waiting for VRChat...", justify="left", font=ctk.CTkFont(size=12), wraplength=400)
+        self.sps_status_label.pack(anchor="w", padx=15, pady=(5, 15))
+        
         # --- Real-Time OSC Debugger Section ---
         debugger_title = ctk.CTkLabel(
             parent_frame,
@@ -741,19 +748,6 @@ class OscGoesPurrrUI:
         )
         name_label.pack(side="left")
         
-        # Auto-Bind SPS Checkbox
-        sps_var = ctk.BooleanVar(value=self.controller.profile_manager.get_profile_config(device_name, "sps_auto_bind", True))
-        sps_checkbox = ctk.CTkCheckBox(
-            header_frame,
-            text="Auto-Bind SPS",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            variable=sps_var,
-            command=lambda dn=device_name, var=sps_var: (
-                self.controller.profile_manager.update_device_config(dn, "sps_auto_bind", var.get()),
-                self.controller.save_profiles()
-            )
-        )
-        sps_checkbox.pack(side="left", padx=20)
         
         # Delete button on right
         delete_button = ctk.CTkButton(
@@ -768,55 +762,79 @@ class OscGoesPurrrUI:
         )
         delete_button.pack(side="right")
         
-        # Motor controls (sliders + vibe meters + per-motor OSC entry) for each motor
+        # Fetch available zones
+        available_zones = ["None"]
+        if hasattr(self.controller, 'osc_manager') and self.controller.osc_manager:
+            detected = self.controller.osc_manager.detected_zones
+            available_zones.extend(detected.get("Orifices", []))
+            available_zones.extend(detected.get("Penetrators", []))
+
         motor_vars = []
         for motor_idx in range(motor_count):
-            # Motor label
-            motor_label = ctk.CTkLabel(
-                device_frame,
-                text=f"Motor {motor_idx}:",
-                font=("Arial", 12, "bold"),
-                text_color="#FFFFFF"
+            motor_frame = ctk.CTkFrame(device_frame, fg_color=COLOR_CARD_BG, corner_radius=6)
+            motor_frame.pack(fill="x", padx=10, pady=5)
+            motor_frame.grid_columnconfigure(1, weight=1)
+
+            # Row 0: Motor Label & Zone Dropdown
+            motor_label = ctk.CTkLabel(motor_frame, text=f"Motor {motor_idx}:", font=ctk.CTkFont(weight="bold"))
+            motor_label.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="w")
+
+            zone_var = ctk.StringVar(value=self.controller.profile_manager.get_profile_config(device_name, f"motor_{motor_idx}_zone", "None"))
+            zone_dropdown = ctk.CTkOptionMenu(
+                motor_frame, values=available_zones, variable=zone_var,
+                command=lambda val, dn=device_name, midx=motor_idx: (
+                    self.controller.profile_manager.update_device_config(dn, f"motor_{midx}_zone", val),
+                    self.controller.save_profiles()
+                )
             )
-            motor_label.pack(pady=(5, 2))
+            zone_dropdown.grid(row=0, column=1, padx=(0, 10), pady=(10, 5), sticky="ew")
+
+            # Row 1: Interaction Filters
+            filter_frame = ctk.CTkFrame(motor_frame, fg_color="transparent")
+            filter_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=0, sticky="ew")
             
-            # Per-motor OSC Address Entry with auto-save on focus-out
-            motor_osc_entry = ctk.CTkEntry(
-                device_frame,
-                placeholder_text="e.g. OGB/Orifice/Touch",
-                width=250,
-                font=("Arial", 12)
-            )
-            motor_osc_entry.insert(0, osc_addresses.get(str(motor_idx), ""))
-            motor_osc_entry.pack(pady=(0, 2))
+            def create_cb(parent, text, key, default):
+                var = ctk.BooleanVar(value=self.controller.profile_manager.get_profile_config(device_name, key, default))
+                cb = ctk.CTkCheckBox(
+                    parent, text=text, variable=var, font=ctk.CTkFont(size=11), width=60,
+                    command=lambda dn=device_name, k=key, v=var, midx=motor_idx: (
+                        self.controller.profile_manager.update_device_config(dn, k, v.get()),
+                        self.controller.save_profiles(),
+                        self.controller.sync_motor_to_filters(dn, midx)
+                    )
+                )
+                return cb, var
+            cb_touch, _ = create_cb(filter_frame, "Touch", f"motor_{motor_idx}_touch", True)
+            cb_pen, _ = create_cb(filter_frame, "Penetration", f"motor_{motor_idx}_pen", True)
+            cb_self, _ = create_cb(filter_frame, "Self", f"motor_{motor_idx}_self", False)
+            cb_others, _ = create_cb(filter_frame, "Others", f"motor_{motor_idx}_others", True)
             
-            # Bind focus-out to trigger auto-save
-            motor_osc_entry.bind("<FocusOut>", lambda e, dn=device_name: self.controller.save_profiles())
-            
-            # Slider for this specific motor
-            slider = ctk.CTkSlider(
-                device_frame,
-                from_=0.0,
-                to=1.0,
-                command=lambda val, name=device_name, m=motor_idx: self.controller.update_device_target(name, val, m),
-                width=250
-            )
+            cb_touch.grid(row=0, column=0, padx=5, pady=2, sticky="w")
+            cb_pen.grid(row=0, column=1, padx=5, pady=2, sticky="w")
+            cb_self.grid(row=0, column=2, padx=5, pady=2, sticky="w")
+            cb_others.grid(row=0, column=3, padx=5, pady=2, sticky="w")
+
+            # Row 2: Custom Parameter Fallback
+            osc_entry = ctk.CTkEntry(motor_frame, placeholder_text="Custom override (e.g. OGB/Tail/Touch)")
+            osc_entry.insert(0, osc_addresses.get(str(motor_idx), ""))
+            osc_entry.grid(row=2, column=0, columnspan=2, padx=10, pady=(5, 5), sticky="ew")
+            osc_entry.bind("<FocusOut>", lambda e, dn=device_name: self.controller.save_profiles())
+
+            # Row 3: Intensity Slider
+            slider = ctk.CTkSlider(motor_frame, from_=0.0, to=1.0, command=lambda val, dn=device_name, idx=motor_idx: self.controller.update_device_target(dn, float(val), idx))
             slider.set(0.0)
-            slider.pack(pady=(0, 5))
-            
-            # Vibe meter (progress bar) for this motor
-            vibe_meter = ctk.CTkProgressBar(
-                device_frame,
-                width=250,
-                height=15
-            )
+            slider.grid(row=3, column=0, columnspan=2, padx=10, pady=(5, 5), sticky="ew")
+
+            # Row 4: Vibe Meter
+            vibe_meter = ctk.CTkProgressBar(motor_frame, height=6)
             vibe_meter.set(0.0)
-            vibe_meter.pack(pady=(0, 5))
-            
+            vibe_meter.grid(row=4, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="ew")
+
             motor_vars.append({
                 "slider": slider,
                 "vibe_meter": vibe_meter,
-                "osc_entry": motor_osc_entry
+                "osc_entry": osc_entry,
+                "zone_dropdown": zone_dropdown
             })
         
         # Return unified frame data with all elements
@@ -872,22 +890,25 @@ class OscGoesPurrrUI:
             no_stored_label.pack(pady=5)
             return
         
-        # Get actual motor counts from connected devices (if available) via controller
+        # Get actual motor counts from connected devices (if available) via shared helper
+        from haptic_engine import get_device_motor_counts
         device_motor_counts = {}
         if controller.haptic_engine and controller.haptic_engine.is_connected and controller.haptic_engine.buttplug_client:
-            try:
-                from haptic_engine import OutputType
-                for device in controller.haptic_engine.buttplug_client.devices.values():
-                    try:
-                        features = device.get_features_with_output(OutputType.VIBRATE)
-                        device_motor_counts[device.name] = len(features)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+            device_motor_counts = get_device_motor_counts(controller.haptic_engine.buttplug_client)
         
-        for device_name, config in controller.profiles[controller.current_profile].items():
-            # Determine if connected (green) or saved but not connected (yellow)
+        curr_profile = self.controller.profile_manager.current_profile
+        if curr_profile not in self.controller.profiles:
+            return
+            
+        all_devices = list(self.controller.profiles[curr_profile].keys())
+        
+        # Sort logic: 
+        # 1. Connected devices first (name not in connected_names evaluates to False, which comes before True)
+        # 2. Alphabetical secondary sort
+        all_devices.sort(key=lambda name: (name not in connected_names, name.lower()))
+        
+        for device_name in all_devices:
+            config = self.controller.profiles[curr_profile][device_name]
             is_connected = device_name in connected_names
             
             # Get motor count from detected values first, then profile, then default to 1
@@ -935,6 +956,20 @@ class OscGoesPurrrUI:
                     fg_color="#6B4EFF",
                     hover_color="#5A3DCC"
                 )
+
+    def update_zone_dropdowns(self, available_zones: list):
+        """Dynamically updates the values of all motor dropdowns."""
+        for device_name, frame_data in self.device_ui_frames.items():
+            if "motors" in frame_data:
+                for motor in frame_data["motors"]:
+                    if "zone_dropdown" in motor:
+                        current_val = motor["zone_dropdown"].get()
+                        motor["zone_dropdown"].configure(values=available_zones)
+                        # Ensure the current value is still valid, else reset to None
+                        if current_val not in available_zones and current_val != "None":
+                            motor["zone_dropdown"].set("None")
+                        else:
+                            motor["zone_dropdown"].set(current_val)
 
     def update_debugger_display(self, data):
         """Update the debugger textbox with new content (main thread only).
@@ -1001,19 +1036,11 @@ class OscGoesPurrrUI:
         
         connected_names = {device.name for device in controller.haptic_engine.buttplug_client.devices.values()}
         
-        # Get actual motor counts from connected devices (if available)
+        # Get actual motor counts from connected devices (if available) via shared helper
+        from haptic_engine import get_device_motor_counts
         device_motor_counts = {}
         if controller.haptic_engine and controller.haptic_engine.is_connected and controller.haptic_engine.buttplug_client:
-            try:
-                from haptic_engine import OutputType
-                for device in controller.haptic_engine.buttplug_client.devices.values():
-                    try:
-                        features = device.get_features_with_output(OutputType.VIBRATE)
-                        device_motor_counts[device.name] = len(features)
-                    except Exception:
-                        pass
-            except Exception:
-                pass
+            device_motor_counts = get_device_motor_counts(controller.haptic_engine.buttplug_client)
         
         # Process each discovered device
         for index, device_info in devices_dict.items():

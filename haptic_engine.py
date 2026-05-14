@@ -125,21 +125,17 @@ class HapticEngine:
         # Stop scanning and get device list
         await self.buttplug_client.stop_scanning()
         
+        # Get motor counts using shared helper
+        motor_counts = get_device_motor_counts(self.buttplug_client)
+        
         # Construct dictionary of found devices: {index: {"name": name, "motor_count": count}}
         found_devices = {}
         for device in self.buttplug_client.devices.values():
-            # Detect motor count by counting vibration features
-            try:
-                features = device.get_features_with_output(OutputType.VIBRATE)
-                motor_count = len(features)
-                
-                self.push_ui_update(f"Detected {motor_count} vibrate feature(s) for {device.name}")
-                if hasattr(device, 'features'):
-                    self.push_ui_update(f"  Full device features: {len(device.features)} total")
-            except Exception as e:
-                # Fallback to default of 1 motor
-                motor_count = 1
-                self.push_ui_update(f"Error detecting features for {device.name}: {e}")
+            motor_count = motor_counts.get(device.name, 1)
+            
+            self.push_ui_update(f"Detected {motor_count} vibrate feature(s) for {device.name}")
+            if hasattr(device, 'features'):
+                self.push_ui_update(f"  Full device features: {len(device.features)} total")
             
             # Default to 1 if no vibration features found (shouldn't happen for vibe toys, but just in case)
             if motor_count == 0:
@@ -225,3 +221,31 @@ class HapticEngine:
                                     break  # Break motor loop, let Golden Loop spin until reconnected
 
             await asyncio.sleep(HAPTIC_POLL_RATE)  # Poll at 10Hz to avoid rate-limit crashes
+
+
+def get_device_motor_counts(buttplug_client) -> dict:
+    """
+    Detect vibration motor counts for all connected devices.
+
+    Args:
+        buttplug_client: The buttplug client instance with connected devices.
+
+    Returns:
+        Dictionary mapping device name -> motor count (number of VIBRATE features).
+        Returns empty dict if client is None or not connected.
+    """
+    if buttplug_client is None:
+        return {}
+
+    device_motor_counts = {}
+    try:
+        for device in buttplug_client.devices.values():
+            try:
+                features = device.get_features_with_output(OutputType.VIBRATE)
+                device_motor_counts[device.name] = len(features)
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return device_motor_counts

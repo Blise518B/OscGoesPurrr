@@ -102,6 +102,8 @@ class OscGoesPurrrApp:
         # Instantiate Haptic Engine
         self.haptic_engine = HapticEngine(self.thread_queue, self.device_targets, self.device_last_sent)
 
+        # Format: { (device_name, motor_idx): {"TouchSelf": 0.0, "TouchOthers": 0.0, ...} }
+        self.motor_sps_states: Dict[tuple, Dict[str, float]] = {}
         # Instantiate VRChat OSC Manager
         bind_all = self.profile_manager.app_settings.settings.get("bind_all_interfaces", True)
         self.osc_manager = VRChatOSCManager(local_listen_port=0, bind_all_interfaces=bind_all)
@@ -292,13 +294,16 @@ class OscGoesPurrrApp:
             return set()
         return {device.name for device in self.haptic_engine.buttplug_client.devices.values()}
     
+    # ====================
+    # Facade Methods
+    # Delegate to subordinate components to provide a clean single-entry API.
+    # ====================
+
     def update_stored_devices_ui(self):
         """Update the stored devices UI to show connection status"""
-        # Update via ui component
         self.ui.update_stored_devices_ui()
     
     def delete_stored_device(self, device_name: str):
-        """Delete a stored device from profiles and UI"""
         if self.current_profile in self.profiles:
             if device_name in self.profiles[self.current_profile]:
                 del self.profiles[self.current_profile][device_name]
@@ -340,44 +345,136 @@ class OscGoesPurrrApp:
             
         try:
             val_float = float(value)
-            # Normalize VRChat 8-bit ints (0-255) to Buttplug floats (0.0-1.0)
             if val_float > 1.0:
                 val_float = val_float / 255.0
             val_float = max(0.0, min(1.0, val_float))
         except (ValueError, TypeError):
             return
             
+        # Clean address for routing
+        clean_address = address
+        if clean_address.startswith("/avatar/parameters/"):
+            clean_address = clean_address.replace("/avatar/parameters/", "")
+        elif clean_address.startswith("/"):
+            clean_address = clean_address[1:]
+
         for device_name, config in profiles[curr_profile].items():
+            motor_count = config.get("motor_count", 0)
             osc_addresses = config.get("osc_addresses", {})
-            sps_auto_bind = config.get("sps_auto_bind", True)
             
-            for motor_idx_str, saved_address in osc_addresses.items():
-                motor_idx = int(motor_idx_str)
+            for motor_idx in range(motor_count):
+                state_key = (device_name, motor_idx)
+                if state_key not in self.motor_sps_states:
+                    self.motor_sps_states[state_key] = {
+                        "TouchSelf": 0.0, "TouchOthers": 0.0, 
+                        "PenetratingSelf": 0.0, "PenetratingOthers": 0.0,
+                        "PenSelf": 0.0, "PenOthers": 0.0, 
+                        "FrotOthers": 0.0
+                    }
+                
                 is_match = False
-
-                # 1. Check Custom Address (Text Box Override)
-                clean_saved = saved_address.strip()
-                if clean_saved:
-                    # Safety check: Strip the prefix if the user pasted the full VRChat path
-                    if clean_saved.startswith("/avatar/parameters/"):
-                        clean_saved = clean_saved.replace("/avatar/parameters/", "")
-                    elif clean_saved.startswith("/"):
-                        clean_saved = clean_saved[1:]
-
-                    if clean_saved == address.strip() or fnmatch.fnmatch(address.strip(), clean_saved):
-                        is_match = True
-
-                # 2. Check SPS Auto-Bind (Background Wildcards for Touch & Penetration)
-                if not is_match and sps_auto_bind:
-                    if motor_idx == 0 and (fnmatch.fnmatch(address, "*/Orifice*/Penetration") or fnmatch.fnmatch(address, "*/Orifice*/Touch")):
-                        is_match = True
-                    elif motor_idx == 1 and (fnmatch.fnmatch(address, "*/Penetrator*/Penetration") or fnmatch.fnmatch(address, "*/Penetrator*/Touch")):
-                        is_match = True
-                    elif motor_idx > 1 and (fnmatch.fnmatch(address, "*Touch*") or fnmatch.fnmatch(address, "*Penetration*")):
-                        is_match = True
+                target_val = 0.0
+                
+                # --- 1. Check Custom Override Box ---
+                custom_addr = osc_addresses.get(str(motor_idx), "").strip()
+                if custom_addr:
+                    if custom_addr.startswith("/avatar/parameters/"):
+                        custom_addr = custom_addr.replace("/avatar/parameters/", "")
+                    elif custom_addr.startswith("/"):
+                        custom_addr = custom_addr[1:]
                         
+                    if clean_address == custom_addr or fnmatch.fnmatch(clean_address, custom_addr):
+                        is_match = True
+                        target_val = val_float
+                
+                # --- 2. Check SPS Zone Dropdown ---
+                if not is_match:
+                    zone = config.get(f"motor_{motor_idx}_zone", "None")
+                    if zone and zone != "None" and zone != "Custom...":
+                        # VRCFury might use full or abbreviated paths
+                        is_sps_match = False
+                        matched_suffix = ""
+                        
+                        sps_paths = [
+                            f"OGB/Orifice/{zone}/", f"OGB/Orf/{zone}/",
+                            f"OGB/Penetrator/{zone}/", f"OGB/Pen/{zone}/"
+                        ]
+                        
+                        for path in sps_paths:
+                            if clean_address.startswith(path):
+                                matched_suffix = clean_address[len(path):]
+                                is_sps_match = True
+                                break
+                                
+                        if is_sps_match and matched_suffix in self.motor_sps_states[state_key]:
+                            # Update state memory for this specific interaction type
+                            self.motor_sps_states[state_key][matched_suffix] = val_float
+                            
+                            # Apply UI Filters
+                            allow_touch = config.get(f"motor_{motor_idx}_touch", True)
+                            allow_pen = config.get(f"motor_{motor_idx}_pen", True)
+                            allow_self = config.get(f"motor_{motor_idx}_self", False)
+                            allow_others = config.get(f"motor_{motor_idx}_others", True)
+                            
+                            active_vals = [0.0] # Fallback
+                            states = self.motor_sps_states[state_key]
+                            
+                            if allow_touch and allow_self: active_vals.append(states["TouchSelf"])
+                            if allow_touch and allow_others: active_vals.append(states["TouchOthers"])
+                            if allow_pen and allow_self: 
+                                active_vals.append(states["PenetratingSelf"])
+                                active_vals.append(states["PenSelf"])
+                            if allow_pen and allow_others: 
+                                active_vals.append(states["PenetratingOthers"])
+                                active_vals.append(states["PenOthers"])
+                                active_vals.append(states["FrotOthers"]) # Treat Frot as Pen
+                            
+                            # Route the highest allowed interaction value
+                            target_val = max(active_vals)
+                            is_match = True
+                            
+                # Route to engine if a match occurred
                 if is_match:
-                    self.thread_queue.put(("osc_haptic_update", (device_name, val_float, motor_idx)))
+                    self.thread_queue.put(("osc_haptic_update", (device_name, target_val, motor_idx)))
+
+    def sync_motor_to_filters(self, device_name: str, motor_idx: int):
+        """Recalculate the max value for a motor based on current state memory and filter checkboxes.
+        
+        Used when user toggles a checkbox to immediately stop output if all interaction types are blocked.
+        """
+        curr_profile = self.profile_manager.current_profile
+        profiles = self.profile_manager.profiles
+        
+        if curr_profile not in profiles:
+            return
+            
+        config = profiles[curr_profile].get(device_name, {})
+        state_key = (device_name, motor_idx)
+        
+        if state_key not in self.motor_sps_states:
+            return
+            
+        states = self.motor_sps_states[state_key]
+        
+        allow_touch = config.get(f"motor_{motor_idx}_touch", True)
+        allow_pen = config.get(f"motor_{motor_idx}_pen", True)
+        allow_self = config.get(f"motor_{motor_idx}_self", False)
+        allow_others = config.get(f"motor_{motor_idx}_others", True)
+        
+        active_vals = [0.0]  # Fallback to zero
+        
+        if allow_touch and allow_self: active_vals.append(states["TouchSelf"])
+        if allow_touch and allow_others: active_vals.append(states["TouchOthers"])
+        if allow_pen and allow_self: 
+            active_vals.append(states["PenetratingSelf"])
+            active_vals.append(states.get("PenSelf", 0.0))
+        if allow_pen and allow_others: 
+            active_vals.append(states["PenetratingOthers"])
+            active_vals.append(states.get("PenOthers", 0.0))
+            active_vals.append(states["FrotOthers"])
+        
+        target_val = max(active_vals)
+        self.thread_queue.put(("osc_haptic_update", (device_name, target_val, motor_idx)))
 
     def toggle_osc_debugger(self, *args):
         """Toggle the OSC debugger on/off (accepts *args for safe UI toggle compatibility)"""
@@ -418,6 +515,25 @@ class OscGoesPurrrApp:
 
     def refresh_debugger_ui(self):
         """Refresh the debugger display at 10Hz (100ms intervals)"""
+        # Update SPS Zones Status & Dropdowns
+        if hasattr(self, 'osc_manager') and hasattr(self.ui, 'sps_status_label') and self.ui.sps_status_label:
+            orifices = self.osc_manager.detected_zones.get("Orifices", [])
+            penetrators = self.osc_manager.detected_zones.get("Penetrators", [])
+            
+            # Combine for dropdowns
+            available_zones = ["None"] + orifices + penetrators
+            
+            # Only update UI if the zones have actually changed to avoid flickering
+            if not hasattr(self, '_last_detected_zones') or self._last_detected_zones != available_zones:
+                self._last_detected_zones = available_zones
+                
+                # Update text with proper newlines
+                sps_text = f"Orifices: {', '.join(orifices) if orifices else 'None'}\n\nPenetrators: {', '.join(penetrators) if penetrators else 'None'}"
+                self.ui.sps_status_label.configure(text=sps_text)
+                
+                # Push new values to all device dropdowns
+                self.ui.update_zone_dropdowns(available_zones)
+
         if self.is_debugging_osc and self.app:
             # Get search filter
             search_query = ""
@@ -743,12 +859,10 @@ class OscGoesPurrrApp:
             except Exception as e:
                 pass
     
-    def save_profiles(self):
-        """Save profiles using profile manager"""
+    def save_profiles(self):  # Facade -> profile_manager.save_profiles()
         self.profile_manager.save_profiles()
-    
-    def load_profiles(self) -> Dict[str, Any]:
-        """Load profiles using profile manager"""
+
+    def load_profiles(self) -> Dict[str, Any]:  # Facade -> profile_manager.load_profiles()
         return self.profile_manager.load_profiles()
     
     def _on_closing(self):

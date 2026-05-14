@@ -70,11 +70,17 @@ class VRChatOSCManager:
         self._last_sent_times: Dict[str, float] = {}
         self.on_connected: Callable = None
         self.global_osc_callback: Callable = None
+        
+        # OSCQuery Zone Discovery state
+        self.detected_zones = {"Orifices": [], "Penetrators": []}
 
     def start(self):
         """Starts the servers and mDNS advertisement."""
         self._setup_osc()
         self._start_discovery()
+        
+        # Initial zone discovery boot
+        threading.Thread(target=self.fetch_ogb_zones, daemon=True).start()
 
     @property
     def get_ports(self) -> dict:
@@ -222,6 +228,53 @@ class VRChatOSCManager:
             print(f"Failed to poll parameters: {e}")
         return {}
 
+    def fetch_ogb_zones(self):
+        """Fetches the OSCQuery phonebook from VRChat to extract VRCFury/OGB zones."""
+        try:
+            # Wait briefly for VRChat to rebuild JSON and ensure we have discovered the port
+            time.sleep(1.5)
+            
+            if not self.http_port:
+                if hasattr(self, 'global_osc_callback') and self.global_osc_callback:
+                    self.global_osc_callback("SYS/OSCQuery_Status", "Waiting for VRChat mDNS discovery...")
+                return
+
+            response = requests.get(f"http://127.0.0.1:{self.http_port}/avatar/parameters", timeout=2)
+            if response.status_code != 200:
+                return
+
+            data = response.json()
+            contents = data.get("CONTENTS", {})
+            
+            # Safely drill down into the OGB folder
+            ogb_data = contents.get("OGB", {}).get("CONTENTS", {})
+            
+            # VRCFury bandwidth optimization abbreviates Orifice->Orf and Penetrator->Pen
+            orf_data = ogb_data.get("Orifice", {}).get("CONTENTS", {})
+            if not orf_data:
+                orf_data = ogb_data.get("Orf", {}).get("CONTENTS", {})
+                
+            pen_data = ogb_data.get("Penetrator", {}).get("CONTENTS", {})
+            if not pen_data:
+                pen_data = ogb_data.get("Pen", {}).get("CONTENTS", {})
+                
+            orifices = list(orf_data.keys())
+            penetrators = list(pen_data.keys())
+
+            self.detected_zones = {"Orifices": orifices, "Penetrators": penetrators}
+
+            # Inject directly into the UI Debugger using a fake SYS/ prefix
+            if hasattr(self, 'global_osc_callback') and self.global_osc_callback:
+                self.global_osc_callback("SYS/Detected_Orifices", ", ".join(orifices) if orifices else "None")
+                self.global_osc_callback("SYS/Detected_Penetrators", ", ".join(penetrators) if penetrators else "None")
+                self.global_osc_callback("SYS/OSCQuery_Status", f"Successfully fetched from port {self.http_port}")
+
+        except requests.exceptions.RequestException:
+            if hasattr(self, 'global_osc_callback') and self.global_osc_callback:
+                self.global_osc_callback("SYS/OSCQuery_Status", f"VRChat OSCQuery not reachable on {self.http_port}")
+        except Exception as e:
+            print(f"OSCQuery Parse Error: {e}")
+
     def _flatten_oscquery_node(self, node: dict) -> dict:
         results = {}
         if "FULL_PATH" in node and "VALUE" in node:
@@ -286,6 +339,10 @@ class VRChatOSCManager:
             clean_address = address[len(prefix):]
         elif address.startswith("/"):
             clean_address = address[1:] # Clean up leading slash for standard paths
+
+        # Trigger zone discovery when avatar loads
+        if clean_address == "avatar/change":
+            threading.Thread(target=self.fetch_ogb_zones, daemon=True).start()
 
         # Fire global callback with the clean address
         if self.global_osc_callback:
