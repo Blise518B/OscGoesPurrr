@@ -38,6 +38,7 @@ from haptic_engine import HapticEngine
 
 # VRChat OSC Manager for OSC discovery and routing
 from vrchat_osc import VRChatOSCManager
+from constants import *
 
 
 class OscGoesPurrrApp:
@@ -91,8 +92,8 @@ class OscGoesPurrrApp:
         
         # Initialize main window first (required before UI setup)
         self.app = ctk.CTk()
-        self.app.title("OscGoesPurrr")
-        self.app.geometry("800x600")
+        self.app.title(APP_NAME)
+        self.app.geometry(WINDOW_GEOMETRY)
         
         # Instantiate Haptic Engine
         self.haptic_engine = HapticEngine(self.thread_queue, self.device_targets, self.device_last_sent)
@@ -707,17 +708,17 @@ class OscGoesPurrrApp:
         def check_queue():
             self.process_async_queue()
             if self.app:
-                self.app.after(50, check_queue)  # Check every 50ms
+                self.app.after(QUEUE_POLL_RATE_MS, check_queue)  # Check every 50ms
 
         if self.app:
             # Register clean shutdown handler to auto-save profiles
             self.app.protocol("WM_DELETE_WINDOW", self._on_closing)
 
-            self.app.after(100, check_queue)
+            self.app.after(UI_REFRESH_RATE_MS, check_queue)
 
             # Boot OSC server 500ms after UI launches to prevent freezing
             if self.profile_manager.app_settings.settings.get("auto_connect_osc", True):
-                self.app.after(500, self.toggle_osc_connection)
+                self.app.after(OSC_BOOT_DELAY_MS, self.toggle_osc_connection)
 
             # Start the OSC debugger UI refresh loop
             self.refresh_debugger_ui()

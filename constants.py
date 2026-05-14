@@ -1,0 +1,29 @@
+# constants.py
+
+# --- UI Colors ---
+COLOR_SUCCESS = "#2E8B57"         # Green
+COLOR_WARNING = "orange"          # Orange
+COLOR_BTN_PRIMARY = "#6B21A8"     # Purple
+COLOR_BTN_PRIMARY_HOVER = "#581C87"
+COLOR_BTN_DELETE = "#FF5E57"      # Red (disconnect/delete)
+COLOR_BTN_DELETE_HOVER = "#DD4E46"
+COLOR_BTN_SECONDARY = "#4A4A5A"   # Gray
+COLOR_BTN_SECONDARY_HOVER = "#3A3A4A"
+COLOR_TAB_ACTIVE = ("#333333", "#2B2B36")
+COLOR_CARD_BG = "#222222"
+COLOR_SEPARATOR = "#333333"
+
+# --- UI Dimensions ---
+WINDOW_GEOMETRY = "1100x700"
+SIDEBAR_WIDTH = 200
+BTN_HEIGHT_LARGE = 35
+BTN_HEIGHT_SMALL = 30
+
+# --- Timing & System (ms/seconds) ---
+HAPTIC_POLL_RATE = 0.1
+QUEUE_POLL_RATE_MS = 50
+UI_REFRESH_RATE_MS = 100
+OSC_BOOT_DELAY_MS = 500
+
+# --- Application Data ---
+APP_NAME = "OscGoesPurrr"

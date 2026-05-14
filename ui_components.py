@@ -17,6 +17,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import customtkinter as ctk
+from constants import *
 
 
 class OscGoesPurrrUI:
@@ -77,7 +78,7 @@ class OscGoesPurrrUI:
         # ====================
         # SIDEBAR (Column 0)
         # ====================
-        self.sidebar_frame = ctk.CTkFrame(self.app, width=200, corner_radius=0)
+        self.sidebar_frame = ctk.CTkFrame(self.app, width=SIDEBAR_WIDTH, corner_radius=0)
         self.sidebar_frame.grid(row=0, column=0, sticky="nsew")
         
         # Configure sidebar grid - row 7 expands to push bottom elements to bottom
@@ -118,7 +119,7 @@ class OscGoesPurrrUI:
         # --- VRChat OSC Section ---
         ctk.CTkLabel(bottom_sidebar_frame, text="VRChat OSC", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(0, 2))
         
-        self.osc_status_label = ctk.CTkLabel(bottom_sidebar_frame, text="Status: Waiting for VRChat...", text_color="orange")
+        self.osc_status_label = ctk.CTkLabel(bottom_sidebar_frame, text="Status: Waiting for VRChat...", text_color=COLOR_WARNING)
         self.osc_status_label.pack(pady=(0, 0))
         
         self.osc_port_label = ctk.CTkLabel(bottom_sidebar_frame, text="Listening on Port: --")
@@ -129,9 +130,9 @@ class OscGoesPurrrUI:
             text="Connect to VRChat",
             command=self.controller.toggle_osc_connection,
             font=ctk.CTkFont(size=14, weight="bold"),
-            height=35,
-            fg_color="#6B21A8", # Neutral Purple
-            hover_color="#581C87"
+            height=BTN_HEIGHT_LARGE,
+            fg_color=COLOR_BTN_PRIMARY, # Neutral Purple
+            hover_color=COLOR_BTN_PRIMARY_HOVER
         )
         self.osc_connection_button.pack(pady=(0, 5))
 
@@ -142,13 +143,13 @@ class OscGoesPurrrUI:
             self.osc_auto_connect_checkbox.select()
 
         # --- Separator Line ---
-        separator = ctk.CTkFrame(bottom_sidebar_frame, height=2, fg_color="#333333")
+        separator = ctk.CTkFrame(bottom_sidebar_frame, height=2, fg_color=COLOR_SEPARATOR)
         separator.pack(fill="x", padx=15, pady=(0, 15))
 
         # --- Intiface Central Section ---
         ctk.CTkLabel(bottom_sidebar_frame, text="Intiface Central", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(0, 2))
         
-        self.status_label = ctk.CTkLabel(bottom_sidebar_frame, text="Status: Disconnected", text_color="orange")
+        self.status_label = ctk.CTkLabel(bottom_sidebar_frame, text="Status: Disconnected", text_color=COLOR_WARNING)
         self.status_label.pack(pady=(0, 5))
 
         self.connection_button = ctk.CTkButton(
@@ -156,9 +157,9 @@ class OscGoesPurrrUI:
             text="Connect to Intiface",
             command=self.controller.connect_to_intiface,
             font=ctk.CTkFont(size=14, weight="bold"),
-            height=35,
-            fg_color="#6B21A8", # Neutral Purple
-            hover_color="#581C87"
+            height=BTN_HEIGHT_LARGE,
+            fg_color=COLOR_BTN_PRIMARY, # Neutral Purple
+            hover_color=COLOR_BTN_PRIMARY_HOVER
         )
         self.connection_button.pack(pady=(0, 5))
 
@@ -295,7 +296,7 @@ class OscGoesPurrrUI:
             parent,
             font=("Arial", 13),
             width=120,
-            height=30
+            height=BTN_HEIGHT_SMALL
         )
         entry.insert(0, current_name)
         
@@ -440,9 +441,9 @@ class OscGoesPurrrUI:
             text="Restart OSC Server",
             command=self.controller.restart_osc,
             font=("Arial", 12),
-            height=30,
-            fg_color="#4A4A5A",
-            hover_color="#3A3A4A"
+            height=BTN_HEIGHT_SMALL,
+            fg_color=COLOR_BTN_SECONDARY,
+            hover_color=COLOR_BTN_SECONDARY_HOVER
         )
         reconnect_button.pack(pady=(10, 15))
         
@@ -636,7 +637,7 @@ class OscGoesPurrrUI:
         # 1. Update button colors (highlight active tab)
         for name, button in self.nav_buttons.items():
             if name == view_name:
-                button.configure(fg_color=("#333333", "#2B2B36"))  # Active color
+                button.configure(fg_color=COLOR_TAB_ACTIVE)  # Active color
             else:
                 button.configure(fg_color="transparent")  # Inactive color
         
@@ -664,8 +665,8 @@ class OscGoesPurrrUI:
         if connected:
             self.connection_button.configure(
                 text="Disconnect from Intiface",
-                fg_color="#FF5E57",
-                hover_color="#DD4E46"
+                fg_color=COLOR_BTN_DELETE,
+                hover_color=COLOR_BTN_DELETE_HOVER
             )
             self.status_label.configure(
                 text="Status: Connected to Intiface ✓",
@@ -674,12 +675,12 @@ class OscGoesPurrrUI:
         else:
             self.connection_button.configure(
                 text="Connect to Intiface",
-                fg_color="#6B21A8", # Neutral Purple (matches sidebar default)
-                hover_color="#581C87"
+                fg_color=COLOR_BTN_PRIMARY, # Neutral Purple (matches sidebar default)
+                hover_color=COLOR_BTN_PRIMARY_HOVER
             )
             self.status_label.configure(
                 text="Status: Disconnected",
-                text_color="orange"
+                text_color=COLOR_WARNING
             )
         
         # Update stored devices status indicators
@@ -688,16 +689,16 @@ class OscGoesPurrrUI:
     def update_osc_status(self, is_connected: bool, port: int = None):
         """Update the OSC Routing dashboard with current connection status (main thread only)"""
         if is_connected:
-            self.osc_status_label.configure(text="Status: Connected to VRChat", text_color="#2E8B57")
+            self.osc_status_label.configure(text="Status: Connected to VRChat", text_color=COLOR_SUCCESS)
             if port:
                 self.osc_port_label.configure(text=f"Listening on Port: {port}")
             if self.osc_connection_button:
-                self.osc_connection_button.configure(text="Disconnect VRChat", fg_color="#991B1B", hover_color="#7F1D1D")
+                self.osc_connection_button.configure(text="Disconnect VRChat", fg_color=COLOR_BTN_DELETE, hover_color=COLOR_BTN_DELETE_H
         else:
-            self.osc_status_label.configure(text="Status: Waiting for VRChat...", text_color="orange")
+            self.osc_status_label.configure(text="Status: Waiting for VRChat...", text_color=COLOR_WARNING)
             self.osc_port_label.configure(text="Listening on Port: --")
             if self.osc_connection_button:
-                self.osc_connection_button.configure(text="Connect to VRChat", fg_color="#6B21A8", hover_color="#581C87")
+                self.osc_connection_button.configure(text="Connect to VRChat", fg_color=COLOR_BTN_PRIMARY, hover_color=COLOR_BTN_PRIMARY_HOVER)
     
     def update_stored_devices_ui(self):
         """Update the stored devices UI to show connection status"""
@@ -713,7 +714,7 @@ class OscGoesPurrrUI:
                 if device_name in connected_names:
                     # Connected - show green checkmark
                     status_label.configure(text=f"✓ {device_name}", text_color="#00C853")
-                    delete_button.configure(state="normal", fg_color="#FF5E57", hover_color="#DD4E46")
+                    delete_button.configure(state="normal", fg_color=COLOR_BTN_DELETE, hover_color=COLOR_BTN_DELETE_HOVER)
                 else:
                     # Not connected - show yellow warning
                     status_label.configure(text=f"⚠ {device_name}", text_color="#FDB914")
@@ -771,10 +772,10 @@ class OscGoesPurrrUI:
             text="Delete",
             command=lambda name=device_name: self.controller.delete_stored_device(name),
             font=("Arial", 12),
-            height=30,
+            height=BTN_HEIGHT_SMALL,
             width=60,
-            fg_color="#FF5E57" if is_connected else "#FFA500",
-            hover_color="#DD4E46" if is_connected else "#E69500"
+            fg_color=COLOR_BTN_DELETE if is_connected else "#FFA500",
+            hover_color=COLOR_BTN_DELETE_HOVER if is_connected else "#E69500"
         )
         delete_button.pack(side="right")
         

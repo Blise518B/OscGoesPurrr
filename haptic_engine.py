@@ -25,6 +25,7 @@ import asyncio
 from typing import Optional
 
 from buttplug import ButtplugClient, DeviceOutputCommand, OutputType
+from constants import APP_NAME, HAPTIC_POLL_RATE
 
 
 class HapticEngine:
@@ -113,7 +114,7 @@ class HapticEngine:
     
     async def _async_connect(self):
         """Internal async method to connect to Intiface"""
-        self.buttplug_client = ButtplugClient("OscGoesPurrr")
+        self.buttplug_client = ButtplugClient(APP_NAME)
             
         await self.buttplug_client.connect("ws://127.0.0.1:12345")
         
@@ -223,4 +224,4 @@ class HapticEngine:
                                     self.push_connection_status(False, "")
                                     break  # Break motor loop, let Golden Loop spin until reconnected
 
-            await asyncio.sleep(0.1)  # Poll at 10Hz to avoid rate-limit crashes
+            await asyncio.sleep(HAPTIC_POLL_RATE)  # Poll at 10Hz to avoid rate-limit crashes

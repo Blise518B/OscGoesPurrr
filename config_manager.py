@@ -6,9 +6,11 @@ import os
 from pathlib import Path
 from typing import Dict, Any, Optional
 
+from constants import APP_NAME
+
 
 # AppData directory for persistent storage
-APPDATA_DIR = Path.home() / "AppData" / "Roaming" / "OscGoesPurrr"
+APPDATA_DIR = Path.home() / "AppData" / "Roaming" / APP_NAME
 
 # Profile file path
 PROFILE_FILE = APPDATA_DIR / "profiles.json"
