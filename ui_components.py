@@ -762,8 +762,8 @@ class OscGoesPurrrUI:
         )
         delete_button.pack(side="right")
         
-        # Fetch available zones
-        available_zones = ["None"]
+        # Fetch available zones - "All SPS" first (matches any zone), then None, then detected zones
+        available_zones = ["All SPS", "None"]
         if hasattr(self.controller, 'osc_manager') and self.controller.osc_manager:
             detected = self.controller.osc_manager.detected_zones
             available_zones.extend(detected.get("Orifices", []))
@@ -779,7 +779,7 @@ class OscGoesPurrrUI:
             motor_label = ctk.CTkLabel(motor_frame, text=f"Motor {motor_idx}:", font=ctk.CTkFont(weight="bold"))
             motor_label.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="w")
 
-            zone_var = ctk.StringVar(value=self.controller.profile_manager.get_profile_config(device_name, f"motor_{motor_idx}_zone", "None"))
+            zone_var = ctk.StringVar(value=self.controller.profile_manager.get_profile_config(device_name, f"motor_{motor_idx}_zone", "All SPS"))
             zone_dropdown = ctk.CTkOptionMenu(
                 motor_frame, values=available_zones, variable=zone_var,
                 command=lambda val, dn=device_name, midx=motor_idx: (

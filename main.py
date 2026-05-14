@@ -389,22 +389,37 @@ class OscGoesPurrrApp:
                 
                 # --- 2. Check SPS Zone Dropdown ---
                 if not is_match:
-                    zone = config.get(f"motor_{motor_idx}_zone", "None")
+                    zone = config.get(f"motor_{motor_idx}_zone", "All SPS")
                     if zone and zone != "None" and zone != "Custom...":
                         # VRCFury might use full or abbreviated paths
                         is_sps_match = False
                         matched_suffix = ""
                         
-                        sps_paths = [
-                            f"OGB/Orifice/{zone}/", f"OGB/Orf/{zone}/",
-                            f"OGB/Penetrator/{zone}/", f"OGB/Pen/{zone}/"
-                        ]
-                        
-                        for path in sps_paths:
-                            if clean_address.startswith(path):
-                                matched_suffix = clean_address[len(path):]
-                                is_sps_match = True
-                                break
+                        if zone == "All SPS":
+                            # Match any OGB/Orifice/*, OGB/Orf/*, OGB/Penetrator/*, OGB/Pen/* path
+                            sps_prefixes = ["OGB/Orifice/", "OGB/Orf/", "OGB/Penetrator/", "OGB/Pen/"]
+                            for prefix in sps_prefixes:
+                                if clean_address.startswith(prefix):
+                                    # After the generic prefix we have: {zone}/{interaction}
+                                    rest = clean_address[len(prefix):]
+                                    # Extract the interaction suffix (last segment after /)
+                                    if "/" in rest:
+                                        matched_suffix = rest.rsplit("/", 1)[-1]
+                                    else:
+                                        matched_suffix = rest
+                                    is_sps_match = True
+                                    break
+                        else:
+                            sps_paths = [
+                                f"OGB/Orifice/{zone}/", f"OGB/Orf/{zone}/",
+                                f"OGB/Penetrator/{zone}/", f"OGB/Pen/{zone}/"
+                            ]
+                            
+                            for path in sps_paths:
+                                if clean_address.startswith(path):
+                                    matched_suffix = clean_address[len(path):]
+                                    is_sps_match = True
+                                    break
                                 
                         if is_sps_match and matched_suffix in self.motor_sps_states[state_key]:
                             # Update state memory for this specific interaction type
@@ -520,8 +535,8 @@ class OscGoesPurrrApp:
             orifices = self.osc_manager.detected_zones.get("Orifices", [])
             penetrators = self.osc_manager.detected_zones.get("Penetrators", [])
             
-            # Combine for dropdowns
-            available_zones = ["None"] + orifices + penetrators
+            # Combine for dropdowns (include "All SPS" at the top)
+            available_zones = ["All SPS", "None"]
             
             # Only update UI if the zones have actually changed to avoid flickering
             if not hasattr(self, '_last_detected_zones') or self._last_detected_zones != available_zones:
