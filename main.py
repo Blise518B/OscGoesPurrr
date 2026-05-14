@@ -93,7 +93,10 @@ class OscGoesPurrrApp:
         # Initialize main window first (required before UI setup)
         self.app = ctk.CTk()
         self.app.title(APP_NAME)
-        self.app.geometry(WINDOW_GEOMETRY)
+        
+        # Load saved window geometry, falling back to default constant
+        saved_geometry = self.profile_manager.app_settings.settings.get("window_geometry", WINDOW_GEOMETRY)
+        self.app.geometry(saved_geometry)
         
         # Instantiate Haptic Engine
         self.haptic_engine = HapticEngine(self.thread_queue, self.device_targets, self.device_last_sent)
@@ -677,8 +680,18 @@ class OscGoesPurrrApp:
         return self.profile_manager.load_profiles()
     
     def _on_closing(self):
-        """Handle clean shutdown: auto-save profiles before exiting."""
+        """Handle clean shutdown."""
+        self.log_message("Shutting down...")
+        
+        # Save current window size
+        if self.app:
+            # geometry() returns a string like "1100x700+x+y", we want to save it so it restores size and position
+            current_geometry = self.app.geometry()
+            self.profile_manager.app_settings.update_setting("window_geometry", current_geometry)
+        
         self.save_profiles()
+        
+        # Actually close the window
         if self.app:
             self.app.destroy()
 

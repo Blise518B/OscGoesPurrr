@@ -526,104 +526,98 @@ class OscGoesPurrrUI:
         )
         title_label.pack(pady=(0, 20))
         
-        # Settings Dashboard Frame
-        settings_frame = ctk.CTkFrame(
-            parent_frame,
-            corner_radius=8,
-            fg_color="#1E1E2E"
-        )
-        settings_frame.pack(expand=False, fill="x", padx=20, pady=(0, 20))
-        
-        # Section Header
-        section_label = ctk.CTkLabel(
-            settings_frame,
-            text="Network Configuration",
-            font=("Arial", 18, "bold"),
-            text_color="#FFFFFF"
-        )
-        section_label.pack(pady=(15, 10))
-        
-        # Fetch current bind_all_interfaces value
+        # --- Network Settings Card ---
+        network_card = ctk.CTkFrame(parent_frame, fg_color=COLOR_CARD_BG, corner_radius=8)
+        network_card.pack(fill="x", padx=30, pady=10)
+
+        # Card Headers
+        ctk.CTkLabel(network_card, text="OSC Network Bind", font=ctk.CTkFont(size=16, weight="bold")).pack(anchor="w", padx=20, pady=(15, 5))
+        ctk.CTkLabel(network_card, text="Determines how VRChat discovers this application on your local network.", font=ctk.CTkFont(size=12), text_color="gray").pack(anchor="w", padx=20, pady=(0, 15))
+
+        # Switch Container (Horizontal Layout)
+        switch_frame = ctk.CTkFrame(network_card, fg_color="transparent")
+        switch_frame.pack(fill="x", padx=20, pady=(0, 10))
+
+        # Left Label (Off State)
+        ctk.CTkLabel(switch_frame, text="127.0.0.1 (Strict)", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=(0, 10))
+
+        # The Switch (Empty Text)
         bind_val = self.controller.profile_manager.app_settings.settings.get("bind_all_interfaces", True)
-        
-        # BooleanVar for the switch
-        self.network_bind_var = ctk.BooleanVar(value=bind_val)
-        
-        # Network Bind Switch
-        network_switch = ctk.CTkSwitch(
-            settings_frame,
-            text="Network Bind (0.0.0.0 vs 127.0.0.1)",
-            variable=self.network_bind_var,
-            command=lambda value=self.network_bind_var.get(): self.controller.toggle_network_bind(value),
-            font=("Arial", 14)
+        self.network_bind_switch = ctk.CTkSwitch(
+            switch_frame,
+            text="", 
+            width=50,
+            switch_width=40,
+            progress_color=COLOR_SUCCESS,
+            command=lambda: self.controller.toggle_network_bind(self.network_bind_switch.get() == 1)
         )
-        network_switch.pack(pady=(5, 5))
-        
-        # If initial value is True, select the switch; otherwise deselect
-        if bind_val:
-            network_switch.select()
-        else:
-            network_switch.deselect()
-        
-        # Warning label
+        self.network_bind_switch.pack(side="left", padx=10)
+
+        # Right Label (On State)
+        ctk.CTkLabel(switch_frame, text="0.0.0.0 (Recommended)", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=(10, 0))
+
+        # Warning Footer
         warning_label = ctk.CTkLabel(
-            settings_frame,
-            text="* 0.0.0.0 is recommended for VRChat Discovery. Requires app restart if changed.",
-            font=("Arial", 11),
-            text_color="#FDB914"
+            network_card,
+            text="* Requires application restart to apply changes.",
+            font=ctk.CTkFont(size=12, slant="italic"),
+            text_color=COLOR_WARNING
         )
-        warning_label.pack(pady=(5, 15))
+        warning_label.pack(anchor="w", padx=20, pady=(0, 15))
+
+        # Apply initial state
+        if bind_val:
+            self.network_bind_switch.select()
+        else:
+            self.network_bind_switch.deselect()
         
         # ====================
-        # Connection Settings Section
+        # Connection Settings Card
         # ====================
-        conn_section_label = ctk.CTkLabel(
-            settings_frame,
-            text="Connection Settings",
-            font=("Arial", 18, "bold"),
-            text_color="#FFFFFF"
-        )
-        conn_section_label.pack(pady=(15, 10))
-        
+        conn_card = ctk.CTkFrame(parent_frame, fg_color=COLOR_CARD_BG, corner_radius=8)
+        conn_card.pack(fill="x", padx=30, pady=10)
+
+        ctk.CTkLabel(conn_card, text="Connection Settings", font=ctk.CTkFont(size=16, weight="bold")).pack(anchor="w", padx=20, pady=(15, 10))
+
         # Auto Refresh Devices checkbox
         auto_refresh_default = self.controller.profile_manager.app_settings.get("auto_refresh", True)
         self.auto_refresh_var = ctk.BooleanVar(value=auto_refresh_default)
         auto_refresh_checkbox = ctk.CTkCheckBox(
-            settings_frame,
+            conn_card,
             text="Auto Refresh Devices",
             variable=self.auto_refresh_var,
             command=self.controller.toggle_auto_refresh,
-            font=("Arial", 14)
+            font=ctk.CTkFont(size=14)
         )
-        auto_refresh_checkbox.pack(pady=(5, 5))
+        auto_refresh_checkbox.pack(anchor="w", padx=20, pady=(5, 5))
         if auto_refresh_default:
             auto_refresh_checkbox.select()
-        
+
         # Auto Connect (Intiface) checkbox
         auto_connect_default = self.controller.profile_manager.app_settings.get("auto_connect", True)
         self.auto_connect_var = ctk.BooleanVar(value=auto_connect_default)
         auto_connect_checkbox = ctk.CTkCheckBox(
-            settings_frame,
+            conn_card,
             text="Auto Connect (Intiface)",
             variable=self.auto_connect_var,
             command=self.controller.toggle_auto_connect,
-            font=("Arial", 14)
+            font=ctk.CTkFont(size=14)
         )
-        auto_connect_checkbox.pack(pady=(5, 5))
+        auto_connect_checkbox.pack(anchor="w", padx=20, pady=(5, 5))
         if auto_connect_default:
             auto_connect_checkbox.select()
-        
+
         # Auto Connect (VRChat OSC) checkbox
         auto_connect_osc_default = self.controller.profile_manager.app_settings.get("auto_connect_osc", True)
         self.osc_auto_connect_var = ctk.BooleanVar(value=auto_connect_osc_default)
         osc_auto_connect_checkbox = ctk.CTkCheckBox(
-            settings_frame,
+            conn_card,
             text="Auto Connect (VRChat OSC)",
             variable=self.osc_auto_connect_var,
             command=self.controller.toggle_osc_auto_connect,
-            font=("Arial", 14)
+            font=ctk.CTkFont(size=14)
         )
-        osc_auto_connect_checkbox.pack(pady=(5, 10))
+        osc_auto_connect_checkbox.pack(anchor="w", padx=20, pady=(5, 15))
         if auto_connect_osc_default:
             osc_auto_connect_checkbox.select()
     
@@ -693,7 +687,7 @@ class OscGoesPurrrUI:
             if port:
                 self.osc_port_label.configure(text=f"Listening on Port: {port}")
             if self.osc_connection_button:
-                self.osc_connection_button.configure(text="Disconnect VRChat", fg_color=COLOR_BTN_DELETE, hover_color=COLOR_BTN_DELETE_H
+                self.osc_connection_button.configure(text="Disconnect VRChat", fg_color=COLOR_BTN_DELETE, hover_color=COLOR_BTN_DELETE_HOVER)
         else:
             self.osc_status_label.configure(text="Status: Waiting for VRChat...", text_color=COLOR_WARNING)
             self.osc_port_label.configure(text="Listening on Port: --")
