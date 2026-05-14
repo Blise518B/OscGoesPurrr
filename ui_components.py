@@ -783,7 +783,7 @@ class OscGoesPurrrUI:
             # Per-motor OSC Address Entry with auto-save on focus-out
             motor_osc_entry = ctk.CTkEntry(
                 device_frame,
-                placeholder_text="Custom parameter (Optional)",
+                placeholder_text="e.g. OGB/Orifice/Touch",
                 width=250,
                 font=("Arial", 12)
             )
@@ -1037,7 +1037,7 @@ class OscGoesPurrrUI:
                 osc_addresses = {}
                 for i in range(actual_motor_count):
                     suffix = f"_{i}" if actual_motor_count > 1 else ""
-                    osc_addresses[str(i)] = f"/avatar/parameters/{device_name.replace(' ', '_')}{suffix}"
+                    osc_addresses[str(i)] = f"{device_name.replace(' ', '_')}{suffix}"
                 
                 # Store motor count in profile via controller
                 controller.update_device_config(device_name, "motor_count", motor_count)

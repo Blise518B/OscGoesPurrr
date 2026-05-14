@@ -279,20 +279,28 @@ class VRChatOSCManager:
     def _handle_incoming_osc(self, address: str, *args):
         value = args[0] if args else 0.0
 
-        # Fire global callback if it exists
+        # Strip the redundant VRChat prefix for internal routing and UI
+        prefix = "/avatar/parameters/"
+        clean_address = address
+        if address.startswith(prefix):
+            clean_address = address[len(prefix):]
+        elif address.startswith("/"):
+            clean_address = address[1:] # Clean up leading slash for standard paths
+
+        # Fire global callback with the clean address
         if self.global_osc_callback:
             try:
-                self.global_osc_callback(address, value)
+                self.global_osc_callback(clean_address, value)
             except Exception as e:
-                print(f"Global Callback Error ({address}): {e}")
+                print(f"Global Callback Error ({clean_address}): {e}")
 
-        # Existing specific callback logic
-        if address in self.parameter_callbacks:
-            for callback in self.parameter_callbacks[address]:
+        # Existing specific callback logic (also using clean address)
+        if clean_address in self.parameter_callbacks:
+            for callback in self.parameter_callbacks[clean_address]:
                 try:
-                    callback(address, value)
+                    callback(clean_address, value)
                 except Exception as e:
-                    print(f"Callback Error ({address}): {e}")
+                    print(f"Callback Error ({clean_address}): {e}")
 
     def stop(self):
         """Unregister services and shut down."""

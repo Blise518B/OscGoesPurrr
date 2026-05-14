@@ -210,7 +210,7 @@ class OscGoesPurrrApp:
             
             # If no per-motor entries found, fall back to default
             if not osc_addresses:
-                osc_addresses["0"] = "/avatar/parameters/" + device_name.replace(" ", "_")
+                osc_addresses["0"] = device_name.replace(" ", "_")
             
             # Store per-motor OSC addresses in profile
             self.update_device_config(device_name, "osc_addresses", osc_addresses)
@@ -354,15 +354,19 @@ class OscGoesPurrrApp:
             for motor_idx_str, saved_address in osc_addresses.items():
                 motor_idx = int(motor_idx_str)
                 is_match = False
-                
+
                 # 1. Check Custom Address (Text Box Override)
                 clean_saved = saved_address.strip()
                 if clean_saved:
-                    if not clean_saved.startswith("/") and not clean_saved.startswith("*"):
-                        clean_saved = "/avatar/parameters/" + clean_saved
+                    # Safety check: Strip the prefix if the user pasted the full VRChat path
+                    if clean_saved.startswith("/avatar/parameters/"):
+                        clean_saved = clean_saved.replace("/avatar/parameters/", "")
+                    elif clean_saved.startswith("/"):
+                        clean_saved = clean_saved[1:]
+
                     if clean_saved == address.strip() or fnmatch.fnmatch(address.strip(), clean_saved):
                         is_match = True
-                        
+
                 # 2. Check SPS Auto-Bind (Background Wildcards for Touch & Penetration)
                 if not is_match and sps_auto_bind:
                     if motor_idx == 0 and (fnmatch.fnmatch(address, "*/Orifice*/Penetration") or fnmatch.fnmatch(address, "*/Orifice*/Touch")):

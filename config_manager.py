@@ -97,13 +97,53 @@ class ProfileManager:
                 with open(PROFILE_FILE, 'r') as f:
                     self.profiles = json.load(f)
                     print(f"Loaded profiles from {PROFILE_FILE}")
-                    return
             except (json.JSONDecodeError, IOError) as e:
                 print(f"Profile load error: {e}, creating default profile")
-        
-        # Create default profile if file doesn't exist or has errors
-        self.profiles = {"Default": {}}
-        self.save_profiles()
+                self.profiles = {"Default": {}}
+                self.save_profiles()
+        else:
+            # Create default profile if file doesn't exist
+            self.profiles = {"Default": {}}
+            self.save_profiles()
+
+        # Migrate legacy OSC addresses (strip /avatar/parameters/ prefix)
+        # Always runs after load so existing profiles get cleaned up
+        self._migrate_osc_addresses()
+
+    def _migrate_osc_addresses(self) -> None:
+        """One-time migration: strip /avatar/parameters/ prefix from all saved OSC addresses.
+
+        Safe to run multiple times (idempotent). Modifies profiles in-place and persists changes.
+        """
+        prefix = "/avatar/parameters/"
+        migrated = False
+
+        for profile in self.profiles.values():
+            for device in profile.values():
+                # Handle dict-style osc_addresses (e.g. {"0": "/avatar/parameters/...", "1": "..."})
+                osc_addresses = device.get("osc_addresses", {})
+                if isinstance(osc_addresses, dict):
+                    for key in osc_addresses:
+                        addr = osc_addresses[key]
+                        if isinstance(addr, str) and addr.startswith(prefix):
+                            osc_addresses[key] = addr[len(prefix):]
+                            migrated = True
+                        elif isinstance(addr, str) and addr.startswith("/"):
+                            osc_addresses[key] = addr[1:]
+                            migrated = True
+
+                # Handle legacy single osc_address key
+                legacy_addr = device.get("osc_address", "")
+                if isinstance(legacy_addr, str):
+                    if legacy_addr.startswith(prefix):
+                        device["osc_address"] = legacy_addr[len(prefix):]
+                        migrated = True
+                    elif legacy_addr.startswith("/"):
+                        device["osc_address"] = legacy_addr[1:]
+                        migrated = True
+
+        if migrated:
+            self.save_profiles()
     
     def load_profiles(self) -> Dict[str, Any]:
         """Load profiles from JSON file or create default if not exists
