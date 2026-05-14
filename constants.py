@@ -1,7 +1,7 @@
 # constants.py
 
 # --- UI Colors ---
-COLOR_SUCCESS = "#2E8B57"         # Green
+COLOR_SUCCESS = "#00C853"         # Green
 COLOR_WARNING = "orange"          # Orange
 COLOR_BTN_PRIMARY = "#6B21A8"     # Purple
 COLOR_BTN_PRIMARY_HOVER = "#581C87"

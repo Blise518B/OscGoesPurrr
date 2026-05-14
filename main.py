@@ -25,6 +25,7 @@
 import threading
 import asyncio
 import queue
+import fnmatch
 from typing import Optional, Dict, Any
 
 # ProfileManager from config manager module
@@ -348,14 +349,31 @@ class OscGoesPurrrApp:
             
         for device_name, config in profiles[curr_profile].items():
             osc_addresses = config.get("osc_addresses", {})
+            sps_auto_bind = config.get("sps_auto_bind", True)
+            
             for motor_idx_str, saved_address in osc_addresses.items():
-                # UX Fix: Auto-prepend prefix if user just typed the parameter name
+                motor_idx = int(motor_idx_str)
+                is_match = False
+                
+                # 1. Check Custom Address (Text Box Override)
                 clean_saved = saved_address.strip()
-                if clean_saved and not clean_saved.startswith("/"):
-                    clean_saved = "/avatar/parameters/" + clean_saved
-                    
-                if clean_saved == address.strip():
-                    self.thread_queue.put(("osc_haptic_update", (device_name, val_float, int(motor_idx_str))))
+                if clean_saved:
+                    if not clean_saved.startswith("/") and not clean_saved.startswith("*"):
+                        clean_saved = "/avatar/parameters/" + clean_saved
+                    if clean_saved == address.strip() or fnmatch.fnmatch(address.strip(), clean_saved):
+                        is_match = True
+                        
+                # 2. Check SPS Auto-Bind (Background Wildcards for Touch & Penetration)
+                if not is_match and sps_auto_bind:
+                    if motor_idx == 0 and (fnmatch.fnmatch(address, "*/Orifice*/Penetration") or fnmatch.fnmatch(address, "*/Orifice*/Touch")):
+                        is_match = True
+                    elif motor_idx == 1 and (fnmatch.fnmatch(address, "*/Penetrator*/Penetration") or fnmatch.fnmatch(address, "*/Penetrator*/Touch")):
+                        is_match = True
+                    elif motor_idx > 1 and (fnmatch.fnmatch(address, "*Touch*") or fnmatch.fnmatch(address, "*Penetration*")):
+                        is_match = True
+                        
+                if is_match:
+                    self.thread_queue.put(("osc_haptic_update", (device_name, val_float, motor_idx)))
 
     def toggle_osc_debugger(self, *args):
         """Toggle the OSC debugger on/off (accepts *args for safe UI toggle compatibility)"""
@@ -365,16 +383,66 @@ class OscGoesPurrrApp:
             self.ui.log_message("OSC Debugger Started")
         else:
             self.ui.log_message("OSC Debugger Stopped")
+        
+        # Update button appearance to reflect current state
+        self.ui.update_osc_debugger_button(self.is_debugging_osc)
+
+    @staticmethod
+    def _value_to_color(value) -> str:
+        """Convert a value to a hex color string.
+        
+        - True  -> bright green (#00ff00)
+        - False -> bright red   (#ff0000)
+        - float 0.0->1.0 -> smooth gradient red -> yellow -> green
+        - other types -> white
+        """
+        if isinstance(value, bool):
+            return "#00ff00" if value else "#ff0000"
+        if isinstance(value, (int, float)):
+            f = max(0.0, min(1.0, float(value)))
+            # 0.0 -> red(255,0,0), 0.5 -> yellow(255,255,0), 1.0 -> green(0,255,0)
+            if f <= 0.5:
+                t = f / 0.5  # 0..1 across red->yellow half
+                r = 255
+                g = int(t * 255)
+            else:
+                t = (f - 0.5) / 0.5  # 0..1 across yellow->green half
+                r = int(255 * (1 - t))
+                g = 255
+            return f"#{r:02x}{g:02x}00"
+        return "#ffffff"
 
     def refresh_debugger_ui(self):
         """Refresh the debugger display at 10Hz (100ms intervals)"""
         if self.is_debugging_osc and self.app:
-            # Format the dictionary into a clean string
-            debug_text = "Live OSC Variables:\n" + "-" * 30 + "\n"
-            for addr in sorted(self.osc_debug_data.keys()):
-                debug_text += f"{addr}: {self.osc_debug_data[addr]}\n"
-            # Push to the UI
-            self.ui.update_debugger_display(debug_text)
+            # Get search filter
+            search_query = ""
+            if hasattr(self.ui, 'osc_search_var'):
+                search_query = self.ui.osc_search_var.get().lower()
+            
+            lines = []  # list of (addr_prefix, val_str, hex_color) triplets
+            # Sort alphabetically so parameters don't jump around
+            for addr, val in sorted(self.osc_debug_data.items()):
+                if search_query in addr.lower():
+                    # Cleanly format floats to 4 decimal places, leave bools/ints alone
+                    if isinstance(val, float):
+                        val_str = f"{val:.4f}"
+                    else:
+                        val_str = str(val)
+                    
+                    color = self._value_to_color(val)
+                    # Pad the address so the colons align nicely (address is white, value gets color)
+                    lines.append((addr.ljust(60) + " : ", val_str, color))
+            
+            if not lines and search_query:
+                debug_data = [("No parameters match your search.", "", "#888888")]
+            elif not lines:
+                debug_data = [("Waiting for OSC data...", "", "#888888")]
+            else:
+                debug_data = lines
+            
+            # Push to the UI as a list of (text, color) tuples
+            self.ui.update_debugger_display(debug_data)
         
         # Schedule the next refresh (100ms = 10Hz)
         if self.app:

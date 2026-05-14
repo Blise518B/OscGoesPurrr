@@ -408,7 +408,7 @@ class OscGoesPurrrUI:
         self.unified_devices_frame.pack(expand=True, fill="both", pady=(5, 10), padx=5)
     
     def _setup_network_debug_view(self, parent_frame: ctk.CTkFrame):
-        """Setup the Network & Debug view with OSC restart button and real-time debugger"""
+        """Setup the Network & Debug view with the real-time OSC debugger"""
         # Title
         title_label = ctk.CTkLabel(
             parent_frame,
@@ -417,35 +417,6 @@ class OscGoesPurrrUI:
             text_color="#6B4EFF"
         )
         title_label.pack(pady=(0, 20))
-        
-        # --- OSC Controls Frame ---
-        osc_controls_frame = ctk.CTkFrame(
-            parent_frame,
-            corner_radius=8,
-            fg_color="#1E1E2E"
-        )
-        osc_controls_frame.pack(expand=False, fill="x", padx=20, pady=(0, 20))
-        
-        # Note: VRChat OSC status moved to sidebar bottom frame
-        controls_title = ctk.CTkLabel(
-            osc_controls_frame,
-            text="VRChat OSC Controls",
-            font=("Arial", 18, "bold"),
-            text_color="#FFFFFF"
-        )
-        controls_title.pack(pady=(15, 10))
-        
-        # Manual Reconnect Button
-        reconnect_button = ctk.CTkButton(
-            osc_controls_frame,
-            text="Restart OSC Server",
-            command=self.controller.restart_osc,
-            font=("Arial", 12),
-            height=BTN_HEIGHT_SMALL,
-            fg_color=COLOR_BTN_SECONDARY,
-            hover_color=COLOR_BTN_SECONDARY_HOVER
-        )
-        reconnect_button.pack(pady=(10, 15))
         
         # --- Real-Time OSC Debugger Section ---
         debugger_title = ctk.CTkLabel(
@@ -460,8 +431,8 @@ class OscGoesPurrrUI:
         button_frame = ctk.CTkFrame(parent_frame, corner_radius=8, fg_color="transparent")
         button_frame.pack(expand=False, fill="x", padx=20, pady=(0, 10))
         
-        # Toggle button
-        toggle_button = ctk.CTkButton(
+        # Toggle button - store reference so controller can update its state
+        self.osc_debugger_button = ctk.CTkButton(
             button_frame,
             text="Start OSC Debugger",
             command=self.controller.toggle_osc_debugger,
@@ -470,7 +441,7 @@ class OscGoesPurrrUI:
             fg_color="#6B4EFF",
             hover_color="#5A3DCC"
         )
-        toggle_button.pack(pady=(0, 10))
+        self.osc_debugger_button.pack(pady=(0, 10))
         
         # Debugger Textbox Frame
         textbox_frame = ctk.CTkFrame(parent_frame, corner_radius=8, fg_color="#1E1E2E")
@@ -485,13 +456,23 @@ class OscGoesPurrrUI:
         )
         debugger_header.pack(pady=(10, 5))
         
-        # Large textbox for displaying variables
+        # --- Live Search Filter ---
+        self.osc_search_var = ctk.StringVar()
+        self.osc_search_entry = ctk.CTkEntry(
+            textbox_frame,
+            placeholder_text="Search parameters (e.g., Orifice, Touch, Float)...",
+            textvariable=self.osc_search_var,
+            height=30
+        )
+        self.osc_search_entry.pack(fill="x", padx=10, pady=(5, 5))
+        
+        # --- Dense Data Textbox ---
         self.debugger_textbox = ctk.CTkTextbox(
             textbox_frame,
-            font=("Courier New", 12),
+            height=300,
             state="disabled",
-            fg_color="#1E1E2E",
-            corner_radius=0
+            font=ctk.CTkFont(family="Consolas", size=11),
+            wrap="none"
         )
         self.debugger_textbox.pack(expand=True, fill="both", padx=10, pady=(0, 10))
     
@@ -663,8 +644,8 @@ class OscGoesPurrrUI:
                 hover_color=COLOR_BTN_DELETE_HOVER
             )
             self.status_label.configure(
-                text="Status: Connected to Intiface ✓",
-                text_color="#00C853"
+                text="Status: Connected to Intiface",
+                text_color=COLOR_SUCCESS
             )
         else:
             self.connection_button.configure(
@@ -760,6 +741,20 @@ class OscGoesPurrrUI:
         )
         name_label.pack(side="left")
         
+        # Auto-Bind SPS Checkbox
+        sps_var = ctk.BooleanVar(value=self.controller.profile_manager.get_profile_config(device_name, "sps_auto_bind", True))
+        sps_checkbox = ctk.CTkCheckBox(
+            header_frame,
+            text="Auto-Bind SPS",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            variable=sps_var,
+            command=lambda dn=device_name, var=sps_var: (
+                self.controller.profile_manager.update_device_config(dn, "sps_auto_bind", var.get()),
+                self.controller.save_profiles()
+            )
+        )
+        sps_checkbox.pack(side="left", padx=20)
+        
         # Delete button on right
         delete_button = ctk.CTkButton(
             header_frame,
@@ -788,7 +783,7 @@ class OscGoesPurrrUI:
             # Per-motor OSC Address Entry with auto-save on focus-out
             motor_osc_entry = ctk.CTkEntry(
                 device_frame,
-                placeholder_text=f"OSC Address for Motor {motor_idx}",
+                placeholder_text="Custom parameter (Optional)",
                 width=250,
                 font=("Arial", 12)
             )
@@ -925,13 +920,70 @@ class OscGoesPurrrUI:
                 "delete_button": frame_data["delete_button"]
             }
     
-    def update_debugger_display(self, text: str):
-        """Update the debugger textbox with new content (main thread only)"""
+    def update_osc_debugger_button(self, is_running: bool):
+        """Update the OSC debugger toggle button text and color."""
+        if self.osc_debugger_button:
+            if is_running:
+                self.osc_debugger_button.configure(
+                    text="Stop OSC Debugger",
+                    fg_color=COLOR_BTN_DELETE,
+                    hover_color=COLOR_BTN_DELETE_HOVER
+                )
+            else:
+                self.osc_debugger_button.configure(
+                    text="Start OSC Debugger",
+                    fg_color="#6B4EFF",
+                    hover_color="#5A3DCC"
+                )
+
+    def update_debugger_display(self, data):
+        """Update the debugger textbox with new content (main thread only).
+        
+        Args:
+            data: Either a plain str or a list of (addr_prefix, val_str, hex_color) triplets.
+                  The addr_prefix is rendered in white, val_str in the gradient color.
+        """
         if self.debugger_textbox:
+            # 1. Capture current scroll position
+            try:
+                scroll_pos = self.debugger_textbox._textbox.yview()
+            except Exception:
+                scroll_pos = (0.0, 1.0)
+            
             self.debugger_textbox.configure(state="normal")
-            self.debugger_textbox.delete("1.0", "end")
-            self.debugger_textbox.insert("1.0", text)
+            textbox = self.debugger_textbox._textbox
+            
+            # Remove all old tags to avoid memory leaks on each refresh cycle
+            for old_tag in textbox.tag_names():
+                textbox.tag_remove(old_tag, "1.0", "end")
+            
+            textbox.delete("1.0", "end")
+            
+            if isinstance(data, list):
+                # List of (addr_prefix, val_str, color) triplets
+                # Address tag is shared (all same gray), value tags are unique per line
+                addr_tag = "_dbg_addr"
+                textbox.tag_configure(addr_tag, foreground="#aaaaaa")
+                
+                for idx, (addr_prefix, val_str, color) in enumerate(data):
+                    val_tag = f"_v{idx}"
+                    textbox.tag_configure(val_tag, foreground=color)
+                    if addr_prefix:
+                        textbox.insert("end", addr_prefix, addr_tag)
+                    if val_str:
+                        textbox.insert("end", val_str, val_tag)
+                    textbox.insert("end", "\n")
+            else:
+                # Plain string fallback (backward compatible)
+                textbox.insert("1.0", data)
+            
             self.debugger_textbox.configure(state="disabled")
+            
+            # 2. Restore scroll position
+            try:
+                self.debugger_textbox._textbox.yview_moveto(scroll_pos[0])
+            except Exception:
+                pass
 
     def build_device_list_ui(self, devices_dict: dict):
         """Build dynamic UI controls for each discovered device and merge into unified view
