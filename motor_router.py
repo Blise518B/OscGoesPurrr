@@ -13,6 +13,10 @@ class MotorRouter:
         # Tracks the last calculated output to prevent flooding the UI thread
         self.last_outputs: Dict[tuple, float] = {}
 
+    def _normalize_float(self, v: float) -> float:
+        """Normalizes an incoming OSC float (0.0 to 1.0) or int (0 to 255) to a safe 0.0-1.0 range."""
+        return max(0.0, min(1.0, v if v <= 1.0 else v / 255.0))
+
     def _calculate_motor_target(self, device_name: str, motor_idx: int, config: Dict[str, Any], all_params: Dict[str, Any]) -> float:
         target_val = 0.0
         
@@ -31,7 +35,7 @@ class MotorRouter:
                 if param_name == custom_addr or fnmatch.fnmatch(param_name, custom_addr):
                     try:
                         v = float(param_val)
-                        target_val = max(target_val, max(0.0, min(1.0, v if v <= 1.0 else v / 255.0)))
+                        target_val = max(target_val, self._normalize_float(v))
                     except (ValueError, TypeError):
                         pass
         
@@ -72,7 +76,7 @@ class MotorRouter:
                     if suffix in valid_suffixes:
                         try:
                             v = float(val)
-                            active_vals.append(max(0.0, min(1.0, v if v <= 1.0 else v / 255.0)))
+                            active_vals.append(self._normalize_float(v))
                         except (ValueError, TypeError):
                             pass
                             
@@ -93,9 +97,3 @@ class MotorRouter:
                     updates.append((device_name, target_val, motor_idx))
         return updates
 
-    def process_message(self, active_profile: Dict[str, Any], all_params: Dict[str, Any]) -> List[Tuple[str, float, int]]:
-        """
-        With a Shadow State architecture, every incoming message just triggers a full
-        recalculation of the active profile against the master parameter list.
-        """
-        return self.reevaluate_state(active_profile, all_params)

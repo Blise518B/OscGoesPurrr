@@ -1,6 +1,5 @@
 # OscGoesPurrr - UI Components Module
 import customtkinter as ctk
-from parameter_store import store
 from constants import *
 
 
@@ -746,9 +745,9 @@ class OscGoesPurrrUI:
         )
         delete_button.pack(side="right")
         
-        # Fetch available zones directly from the Central Store
+        # Fetch available zones directly via controller facade
         available_zones = ["All SPS", "None"]
-        detected = store.get_detected_zones()
+        detected = self.controller.get_detected_zones()
         available_zones.extend(detected.get("Orifices", []))
         available_zones.extend(detected.get("Penetrators", []))
 
@@ -781,9 +780,9 @@ class OscGoesPurrrUI:
                 scroll = ctk.CTkScrollableFrame(popup)
                 scroll.pack(fill="both", expand=True, padx=10, pady=10)
 
-                # Fetch fresh zones directly from the Central Store
+                # Fetch fresh zones directly via controller facade
                 fresh_zones = []
-                detected = store.get_detected_zones()
+                detected = self.controller.get_detected_zones()
                 fresh_zones.extend(detected.get("Orifices", []))
                 fresh_zones.extend(detected.get("Penetrators", []))
 

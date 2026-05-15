@@ -8,7 +8,7 @@
 import threading
 import asyncio
 import queue
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, List, Any
 
 # ProfileManager from config manager module
 from config_manager import PROFILE_FILE, ProfileManager
@@ -310,23 +310,17 @@ class OscGoesPurrrApp:
         """Facade method for UI to safely update app settings."""
         self.profile_manager.app_settings.set(key, value)
     
+    def get_detected_zones(self) -> Dict[str, List[str]]:
+        """Facade method for UI to safely read detected zones from the Central Store."""
+        return store.get_detected_zones()
+    
     def update_device_config(self, device_name: str, key: str, value):
         """Update a config value for a device in current profile using profile_manager"""
         self.profile_manager.update_device_config(device_name, key, value)
     
     def on_osc_message(self, address: str, value):
-        curr_profile = self.profile_manager.current_profile
-        profiles = self.profile_manager.profiles
-
-        if curr_profile not in profiles or not hasattr(self, 'osc_manager'):
-            return
-            
-        # Delegate to the standalone router, passing a thread-safe copy from the Central Store
-        required_updates = self.motor_router.process_message(profiles[curr_profile], store.get_all_parameters())
-        
-        # Dispatch the calculated updates to the hardware thread
-        for device_name, target_val, motor_idx in required_updates:
-            self.thread_queue.put(("osc_haptic_update", (device_name, target_val, motor_idx)))
+        """Acts as a trigger ping when new UDP data arrives, forcing a stateless recalculation."""
+        self.force_recalculate()
 
     def force_recalculate(self):
         """Forces the router to recalculate output based on current state and new UI configs."""
