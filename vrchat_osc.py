@@ -25,6 +25,7 @@ from pythonosc.osc_bundle_builder import OscBundleBuilder
 from pythonosc.osc_message_builder import OscMessageBuilder
 from zeroconf import ServiceBrowser, Zeroconf, ServiceStateChange, ServiceInfo
 from parameter_store import store
+from constants import VRC_DEFAULT_PORT
 
 class OSCQueryHandler(BaseHTTPRequestHandler):
     """HTTP handler that serves the OSC phonebook JSON to VRChat."""
@@ -56,7 +57,7 @@ class VRChatOSCManager:
         
         # Connection state
         self.vrc_ip = "127.0.0.1"
-        self.vrc_osc_port = 9000
+        self.vrc_osc_port = VRC_DEFAULT_PORT
         self.http_port = None
         self.local_listen_port = local_listen_port # If 0, OS picks a free port
         self.is_connected = False
@@ -109,7 +110,7 @@ class VRChatOSCManager:
             response = requests.get(f"http://{self.vrc_ip}:{self.http_port}/", timeout=2)
             if response.status_code == 200:
                 data = response.json()
-                self.vrc_osc_port = data.get('OSC Port', 9000)
+                self.vrc_osc_port = data.get('OSC Port', VRC_DEFAULT_PORT)
                 
                 # Rebuild client with the newly discovered VRChat port
                 self.osc_client = SimpleUDPClient(self.vrc_ip, self.vrc_osc_port)

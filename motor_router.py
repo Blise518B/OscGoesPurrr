@@ -1,5 +1,6 @@
 import fnmatch
 from typing import Dict, List, Tuple, Any
+from utilities import normalize_osc_value
 
 class MotorRouter:
     """
@@ -12,10 +13,6 @@ class MotorRouter:
         # We rely on the absolute truth of VRChat's live parameter cache.
         # Tracks the last calculated output to prevent flooding the UI thread
         self.last_outputs: Dict[tuple, float] = {}
-
-    def _normalize_float(self, v: float) -> float:
-        """Normalizes an incoming OSC float (0.0 to 1.0) or int (0 to 255) to a safe 0.0-1.0 range."""
-        return max(0.0, min(1.0, v if v <= 1.0 else v / 255.0))
 
     def _calculate_motor_target(self, device_name: str, motor_idx: int, config: Dict[str, Any], all_params: Dict[str, Any]) -> float:
         target_val = 0.0
@@ -35,7 +32,7 @@ class MotorRouter:
                 if param_name == custom_addr or fnmatch.fnmatch(param_name, custom_addr):
                     try:
                         v = float(param_val)
-                        target_val = max(target_val, self._normalize_float(v))
+                        target_val = max(target_val, normalize_osc_value(v))
                     except (ValueError, TypeError):
                         pass
         
@@ -76,7 +73,7 @@ class MotorRouter:
                     if suffix in valid_suffixes:
                         try:
                             v = float(val)
-                            active_vals.append(self._normalize_float(v))
+                            active_vals.append(normalize_osc_value(v))
                         except (ValueError, TypeError):
                             pass
                             

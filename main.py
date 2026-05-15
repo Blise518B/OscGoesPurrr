@@ -1,19 +1,21 @@
-# OscGoesPurrr - Three-Pillar Threading Architecture
-# Three-Pillar Threading Architecture:
-#
-#   Pillar 1: Main thread - customtkinter mainloop() + UI updates (ui_components.py)
-#   Pillar 2: Async thread - asyncio event loop for buttplug/OSC (haptic_engine.py)
-#   Pillar 3: Queue-based communication between threads (threading-safe)
+# OscGoesPurrr - Main Orchestrator (The Traffic Cop)
+# Architecture: 5-Part MVC Ecosystem
+# 1. The Brain (parameter_store.py) - Central State Vault
+# 2. The Eardrum (vrchat_osc.py) - Network Listener
+# 3. The Muscle (haptic_engine.py) - Async Hardware Driver
+# 4. The Face (ui_components.py) - Dumb View Layer
+# 5. The Traffic Cop (main.py) - Controller & Event Router
 
 import threading
 import asyncio
 import queue
+import pystray
 from typing import Optional, Dict, List, Any
 
 # ProfileManager from config manager module
 from config_manager import PROFILE_FILE, ProfileManager
 
-# UI Components for the Visual Shell (Pillar 1)
+# UI Components for the Visual Shell (The Face / View)
 from ui_components import OscGoesPurrrUI
 
 # Haptic Engine for async hardware operations
@@ -24,6 +26,7 @@ from vrchat_osc import VRChatOSCManager
 from motor_router import MotorRouter
 from parameter_store import store
 from constants import *
+from utilities import value_to_hex_color, toggle_windows_console, create_default_icon
 
 
 class OscGoesPurrrApp:
@@ -64,6 +67,9 @@ class OscGoesPurrrApp:
         
         # Initialize components in correct order
         self._setup_components()
+        
+        # Apply OS-level settings on boot
+        self.apply_console_visibility()
     
     def _setup_components(self):
         """Initialize main window and UI component"""
@@ -270,6 +276,11 @@ class OscGoesPurrrApp:
     # Delegate to subordinate components to provide a clean single-entry API.
     # ====================
 
+    def apply_console_visibility(self):
+        """Applies the current console visibility setting via OS utilities."""
+        show_console = not self.get_app_setting("hide_console", True)
+        toggle_windows_console(show_console)
+
     def update_stored_devices_ui(self):
         """Update the stored devices UI to show connection status"""
         self.ui.update_stored_devices_ui()
@@ -351,31 +362,6 @@ class OscGoesPurrrApp:
         # Update button appearance to reflect current state
         self.ui.update_osc_debugger_button(self.is_debugging_osc)
 
-    @staticmethod
-    def _value_to_color(value) -> str:
-        """Convert a value to a hex color string.
-        
-        - True  -> bright green (#00ff00)
-        - False -> bright red   (#ff0000)
-        - float 0.0->1.0 -> smooth gradient red -> yellow -> green
-        - other types -> white
-        """
-        if isinstance(value, bool):
-            return "#00ff00" if value else "#ff0000"
-        if isinstance(value, (int, float)):
-            f = max(0.0, min(1.0, float(value)))
-            # 0.0 -> red(255,0,0), 0.5 -> yellow(255,255,0), 1.0 -> green(0,255,0)
-            if f <= 0.5:
-                t = f / 0.5  # 0..1 across red->yellow half
-                r = 255
-                g = int(t * 255)
-            else:
-                t = (f - 0.5) / 0.5  # 0..1 across yellow->green half
-                r = int(255 * (1 - t))
-                g = 255
-            return f"#{r:02x}{g:02x}00"
-        return "#ffffff"
-
     def refresh_debugger_ui(self):
         """Refresh the debugger display at 10Hz (100ms intervals)"""
         # Update SPS Zones Status
@@ -411,14 +397,14 @@ class OscGoesPurrrApp:
                     else:
                         val_str = str(val)
 
-                    color = self._value_to_color(val)
+                    color = value_to_hex_color(val)
                     # Pad the address so the colons align nicely (address is gray, value gets color)
                     lines.append((addr.ljust(60) + " : ", val_str, color))
 
             if not lines and search_query:
-                debug_data = [("No parameters match your search.", "", "#888888")]
+                debug_data = [("No parameters match your search.", "", COLOR_TEXT_MUTED)]
             elif not lines:
-                debug_data = [("Waiting for OSC data...", "", "#888888")]
+                debug_data = [("Waiting for OSC data...", "", COLOR_TEXT_MUTED)]
             else:
                 debug_data = lines
 
@@ -428,6 +414,13 @@ class OscGoesPurrrApp:
         # Schedule the next refresh (100ms = 10Hz)
         if self.app:
             self.app.after(100, self.refresh_debugger_ui)
+
+    def get_device_motor_counts(self) -> dict:
+        """Facade method to get motor counts safely from the hardware engine."""
+        from haptic_engine import get_device_motor_counts as get_counts
+        if self.haptic_engine and self.haptic_engine.is_connected and self.haptic_engine.buttplug_client:
+            return get_counts(self.haptic_engine.buttplug_client)
+        return {}
 
     def update_device_target(self, device_name: str, value: float, motor_index: int):
         """Update target intensity for a specific device and motor
@@ -653,7 +646,7 @@ class OscGoesPurrrApp:
     
     async def _async_auto_refresh_loop(self):
         """Background task for periodic device scanning"""
-        scan_interval = 30.0  # Scan every 30 seconds
+        scan_interval = AUTO_REFRESH_RATE_S
         while self.auto_refresh_enabled and self.haptic_engine.is_connected:
             await asyncio.sleep(scan_interval)
             if self.auto_refresh_enabled and self.haptic_engine.is_connected:
@@ -728,19 +721,50 @@ class OscGoesPurrrApp:
         return self.profile_manager.load_profiles()
     
     def _on_closing(self):
-        """Handle clean shutdown."""
-        self.log_message("Shutting down...")
+        """Handle window close event: either minimize to tray or fully quit."""
+        if self.get_app_setting("minimize_to_tray", False):
+            self.minimize_to_tray()
+        else:
+            self.quit_app()
+            
+    def minimize_to_tray(self):
+        """Hides the UI and spawns the system tray icon in a background thread."""
+        if not self.app: return
+        self.app.withdraw()  # Hide the Tkinter window
         
-        # Save current window size
+        image = create_default_icon()
+        menu = pystray.Menu(
+            pystray.MenuItem("Show OscGoesPurrr", self.restore_from_tray, default=True),
+            pystray.MenuItem("Quit", self.quit_from_tray)
+        )
+        self.tray_icon = pystray.Icon("OscGoesPurrr", image, "OscGoesPurrr", menu)
+        
+        # pystray blocks, so we must run it in a daemon thread
+        threading.Thread(target=self.tray_icon.run, daemon=True).start()
+        
+    def restore_from_tray(self, icon, item):
+        """Restores the UI from the system tray (thread-safe)."""
+        icon.stop()
         if self.app:
-            # geometry() returns a string like "1100x700+x+y", we want to save it so it restores size and position
+            self.app.after(0, self.app.deiconify)  # Safely call back to main UI thread
+            
+    def quit_from_tray(self, icon, item):
+        """Fully shuts down the app from the system tray (thread-safe)."""
+        icon.stop()
+        if self.app:
+            self.app.after(0, self.quit_app)  # Safely call back to main UI thread
+            
+    def quit_app(self):
+        """Executes the final, clean shutdown sequence."""
+        self.log_message("Shutting down...")
+        if self.app:
             current_geometry = self.app.geometry()
             self.profile_manager.app_settings.update_setting("window_geometry", current_geometry)
         
         self.save_profiles()
         
-        # Actually close the window
         if self.app:
+            self.app.quit()
             self.app.destroy()
 
     def run(self):

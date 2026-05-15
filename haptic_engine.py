@@ -1,4 +1,4 @@
-# OscGoesPurrr - Haptic Engine Module (Pillar 2)
+# OscGoesPurrr - Haptic Engine Module (The Muscle)
 """
 HapticEngine - Async hardware interface for buttplug and OSC operations.
 Isolated from UI logic to enable clean separation of concerns.
@@ -8,7 +8,7 @@ import asyncio
 from typing import Optional
 
 from buttplug import ButtplugClient, DeviceOutputCommand, OutputType
-from constants import APP_NAME, HAPTIC_POLL_RATE
+from constants import APP_NAME, HAPTIC_POLL_RATE, INTIFACE_WS_URL
 
 
 class HapticEngine:
@@ -102,7 +102,7 @@ class HapticEngine:
         """Internal async method to connect to Intiface"""
         self.buttplug_client = ButtplugClient(APP_NAME)
             
-        await self.buttplug_client.connect("ws://127.0.0.1:12345")
+        await self.buttplug_client.connect(INTIFACE_WS_URL)
         
         # Start scanning for devices after connection
         await self.buttplug_client.start_scanning()

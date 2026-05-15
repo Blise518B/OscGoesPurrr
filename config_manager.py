@@ -23,7 +23,9 @@ DEFAULT_APP_SETTINGS = {
     "auto_connect": True,
     "auto_refresh": True,
     "auto_connect_osc": True,
-    "bind_all_interfaces": True
+    "bind_all_interfaces": True,
+    "hide_console": True,
+    "minimize_to_tray": False
 }
 
 # Ensure AppData directory exists

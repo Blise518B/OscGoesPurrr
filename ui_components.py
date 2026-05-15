@@ -72,7 +72,7 @@ class OscGoesPurrrUI:
             self.sidebar_frame,
             text="OscGoesPurrr",
             font=("Arial", 24, "bold"),
-            text_color="#6B4EFF"
+            text_color=COLOR_PRIMARY
         )
         title_label.grid(row=0, column=0, sticky="ew", padx=10, pady=(20, 30))
         
@@ -87,7 +87,7 @@ class OscGoesPurrrUI:
                 font=("Arial", 14),
                 height=40,
                 fg_color="transparent",
-                hover_color="#3a3a45"
+                hover_color=COLOR_SURFACE_HOVER
             )
             nav_button.grid(row=i, column=0, sticky="ew", padx=10, pady=5)
             self.nav_buttons[view_name] = nav_button
@@ -102,7 +102,7 @@ class OscGoesPurrrUI:
         # --- VRChat OSC Section ---
         ctk.CTkLabel(bottom_sidebar_frame, text="VRChat OSC", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(0, 2))
         
-        self.osc_status_label = ctk.CTkLabel(bottom_sidebar_frame, text="Status: Waiting for VRChat...", text_color=COLOR_WARNING)
+        self.osc_status_label = ctk.CTkLabel(bottom_sidebar_frame, text="Status: Waiting for VRChat...", text_color=COLOR_ALERT)
         self.osc_status_label.pack(pady=(0, 0))
         
         self.osc_port_label = ctk.CTkLabel(bottom_sidebar_frame, text="Listening on Port: --")
@@ -114,8 +114,8 @@ class OscGoesPurrrUI:
             command=self.controller.toggle_osc_connection,
             font=ctk.CTkFont(size=14, weight="bold"),
             height=BTN_HEIGHT_LARGE,
-            fg_color=COLOR_BTN_PRIMARY, # Neutral Purple
-            hover_color=COLOR_BTN_PRIMARY_HOVER
+            fg_color=COLOR_PRIMARY, # Unified Purple
+            hover_color=COLOR_PRIMARY_HOVER
         )
         self.osc_connection_button.pack(pady=(0, 5))
 
@@ -126,13 +126,13 @@ class OscGoesPurrrUI:
             self.osc_auto_connect_checkbox.select()
 
         # --- Separator Line ---
-        separator = ctk.CTkFrame(bottom_sidebar_frame, height=2, fg_color=COLOR_SEPARATOR)
+        separator = ctk.CTkFrame(bottom_sidebar_frame, height=2, fg_color=COLOR_SURFACE)
         separator.pack(fill="x", padx=15, pady=(0, 15))
 
         # --- Intiface Central Section ---
         ctk.CTkLabel(bottom_sidebar_frame, text="Intiface Central", font=ctk.CTkFont(size=14, weight="bold")).pack(pady=(0, 2))
         
-        self.status_label = ctk.CTkLabel(bottom_sidebar_frame, text="Status: Disconnected", text_color=COLOR_WARNING)
+        self.status_label = ctk.CTkLabel(bottom_sidebar_frame, text="Status: Disconnected", text_color=COLOR_ALERT)
         self.status_label.pack(pady=(0, 5))
 
         self.connection_button = ctk.CTkButton(
@@ -141,8 +141,8 @@ class OscGoesPurrrUI:
             command=self.controller.connect_to_intiface,
             font=ctk.CTkFont(size=14, weight="bold"),
             height=BTN_HEIGHT_LARGE,
-            fg_color=COLOR_BTN_PRIMARY, # Neutral Purple
-            hover_color=COLOR_BTN_PRIMARY_HOVER
+            fg_color=COLOR_PRIMARY, # Unified Purple
+            hover_color=COLOR_PRIMARY_HOVER
         )
         self.connection_button.pack(pady=(0, 5))
 
@@ -180,7 +180,7 @@ class OscGoesPurrrUI:
                     view_frame,
                     text=f"{view_name} will go here",
                     font=("Arial", 16),
-                    text_color="#888888"
+                    text_color=COLOR_TEXT_MUTED
                 )
                 placeholder_label.pack(expand=True)
             
@@ -196,7 +196,7 @@ class OscGoesPurrrUI:
             parent_frame,
             text="Dashboard",
             font=("Arial", 28, "bold"),
-            text_color="#6B4EFF"
+            text_color=COLOR_PRIMARY
         )
         title_label.pack(pady=(0, 15))
         
@@ -208,7 +208,7 @@ class OscGoesPurrrUI:
             profile_frame,
             text="Active Profile",
             font=("Arial", 16, "bold"),
-            text_color="#FFFFFF"
+            text_color=COLOR_TEXT
         )
         profile_header.pack(anchor="w", pady=(0, 8))
         
@@ -235,9 +235,9 @@ class OscGoesPurrrUI:
                 font=("Arial", 13),
                 height=36,
                 width=0,
-                fg_color="#6B4EFF" if is_active else "#2A2A3E",
-                hover_color="#5A3DCC" if is_active else "#3A3A4A",
-                text_color="#FFFFFF",
+                fg_color=COLOR_PRIMARY if is_active else COLOR_SURFACE,
+                hover_color=COLOR_PRIMARY_HOVER if is_active else COLOR_SURFACE_HOVER,
+                text_color=COLOR_TEXT,
                 corner_radius=6,
                 command=lambda name=profile_name: self.controller.switch_profile(name)
             )
@@ -345,9 +345,9 @@ class OscGoesPurrrUI:
                 font=("Arial", 13),
                 height=36,
                 width=0,
-                fg_color="#6B4EFF" if is_active else "#2A2A3E",
-                hover_color="#5A3DCC" if is_active else "#3A3A4A",
-                text_color="#FFFFFF",
+                fg_color=COLOR_PRIMARY if is_active else COLOR_SURFACE,
+                hover_color=COLOR_PRIMARY_HOVER if is_active else COLOR_SURFACE_HOVER,
+                text_color=COLOR_TEXT,
                 corner_radius=6,
                 command=lambda name=profile_name: self.controller.switch_profile(name)
             )
@@ -364,12 +364,12 @@ class OscGoesPurrrUI:
             parent_frame,
             text="Device Routing",
             font=("Arial", 28, "bold"),
-            text_color="#6B4EFF"
+            text_color=COLOR_PRIMARY
         )
         title_label.pack(pady=(0, 10))
         
         # Unified Devices Frame - contains saved toys and active controls
-        self.devices_container_frame = ctk.CTkFrame(parent_frame, corner_radius=8, fg_color="#1E1E2E")
+        self.devices_container_frame = ctk.CTkFrame(parent_frame, corner_radius=8, fg_color=COLOR_BG)
         self.devices_container_frame.pack(expand=True, fill="both", pady=(0, 10), padx=5)
         
         # Header for devices section
@@ -377,7 +377,7 @@ class OscGoesPurrrUI:
             self.devices_container_frame,
             text="Toys",
             font=("Arial", 16, "bold"),
-            text_color="#FFFFFF"
+            text_color=COLOR_TEXT
         )
         devices_header_label.pack(pady=(10, 5))
         
@@ -395,14 +395,14 @@ class OscGoesPurrrUI:
         # Title
         title_label = ctk.CTkLabel(
             parent_frame,
-            text="Network & Debug",
+        text="Network & Debug",
             font=("Arial", 28, "bold"),
-            text_color="#6B4EFF"
+            text_color=COLOR_PRIMARY
         )
         title_label.pack(pady=(0, 20))
         
         # --- Detected SPS Zones ---
-        sps_frame = ctk.CTkFrame(parent_frame, fg_color=COLOR_CARD_BG, corner_radius=8)
+        sps_frame = ctk.CTkFrame(parent_frame, fg_color=COLOR_SURFACE, corner_radius=8)
         sps_frame.pack(fill="x", padx=30, pady=(10, 10))
         ctk.CTkLabel(sps_frame, text="Active Avatar SPS Zones", font=ctk.CTkFont(weight="bold")).pack(anchor="w", padx=15, pady=(10, 0))
         self.sps_status_label = ctk.CTkLabel(sps_frame, text="Waiting for VRChat...", justify="left", font=ctk.CTkFont(size=12), wraplength=400)
@@ -413,7 +413,7 @@ class OscGoesPurrrUI:
             parent_frame,
             text="Real-Time OSC Inspector",
             font=("Arial", 20, "bold"),
-            text_color="#6B4EFF"
+            text_color=COLOR_PRIMARY
         )
         debugger_title.pack(pady=(10, 10))
         
@@ -428,13 +428,13 @@ class OscGoesPurrrUI:
             command=self.controller.toggle_osc_debugger,
             font=("Arial", 14),
             height=40,
-            fg_color="#6B4EFF",
-            hover_color="#5A3DCC"
+            fg_color=COLOR_PRIMARY,
+            hover_color=COLOR_PRIMARY_HOVER
         )
         self.osc_debugger_button.pack(pady=(0, 10))
         
         # Debugger Textbox Frame
-        textbox_frame = ctk.CTkFrame(parent_frame, corner_radius=8, fg_color="#1E1E2E")
+        textbox_frame = ctk.CTkFrame(parent_frame, corner_radius=8, fg_color=COLOR_BG)
         textbox_frame.pack(expand=True, fill="both", padx=20, pady=(0, 20))
         
         # Header label inside textbox frame
@@ -442,7 +442,7 @@ class OscGoesPurrrUI:
             textbox_frame,
             text="Live OSC Variables (toggle to start)",
             font=("Arial", 14, "bold"),
-            text_color="#888888"
+            text_color=COLOR_TEXT_MUTED
         )
         debugger_header.pack(pady=(10, 5))
         
@@ -473,7 +473,7 @@ class OscGoesPurrrUI:
             parent_frame,
             text="System Log",
             font=("Arial", 28, "bold"),
-            text_color="#6B4EFF"
+            text_color=COLOR_PRIMARY
         )
         title_label.pack(pady=(0, 10), fill="x")
         
@@ -482,7 +482,7 @@ class OscGoesPurrrUI:
             parent_frame,
             font=("Courier New", 12),
             state="disabled",
-            fg_color="#1E1E2E"
+            fg_color=COLOR_BG
         )
         self.log_text.pack(expand=True, fill="both", padx=5, pady=(0, 5))
     
@@ -493,12 +493,12 @@ class OscGoesPurrrUI:
             parent_frame,
             text="Application Settings",
             font=("Arial", 28, "bold"),
-            text_color="#6B4EFF"
+            text_color=COLOR_PRIMARY
         )
         title_label.pack(pady=(0, 20))
         
         # --- Network Settings Card ---
-        network_card = ctk.CTkFrame(parent_frame, fg_color=COLOR_CARD_BG, corner_radius=8)
+        network_card = ctk.CTkFrame(parent_frame, fg_color=COLOR_SURFACE, corner_radius=8)
         network_card.pack(fill="x", padx=30, pady=10)
 
         # Card Headers
@@ -532,7 +532,7 @@ class OscGoesPurrrUI:
             network_card,
             text="* Requires application restart to apply changes.",
             font=ctk.CTkFont(size=12, slant="italic"),
-            text_color=COLOR_WARNING
+            text_color=COLOR_ALERT
         )
         warning_label.pack(anchor="w", padx=20, pady=(0, 15))
 
@@ -545,7 +545,7 @@ class OscGoesPurrrUI:
         # ====================
         # Connection Settings Card
         # ====================
-        conn_card = ctk.CTkFrame(parent_frame, fg_color=COLOR_CARD_BG, corner_radius=8)
+        conn_card = ctk.CTkFrame(parent_frame, fg_color=COLOR_SURFACE, corner_radius=8)
         conn_card.pack(fill="x", padx=30, pady=10)
 
         ctk.CTkLabel(conn_card, text="Connection Settings", font=ctk.CTkFont(size=16, weight="bold")).pack(anchor="w", padx=20, pady=(15, 10))
@@ -591,6 +591,43 @@ class OscGoesPurrrUI:
         osc_auto_connect_checkbox.pack(anchor="w", padx=20, pady=(5, 15))
         if auto_connect_osc_default:
             osc_auto_connect_checkbox.select()
+
+        # ====================
+        # Quality of Life Settings Card
+        # ====================
+        ql_card = ctk.CTkFrame(parent_frame, fg_color=COLOR_SURFACE, corner_radius=8)
+        ql_card.pack(fill="x", padx=30, pady=10)
+
+        ctk.CTkLabel(ql_card, text="Quality of Life", font=ctk.CTkFont(size=16, weight="bold")).pack(anchor="w", padx=20, pady=(15, 10))
+
+        # Hide Console Switch
+        hide_console_var = ctk.BooleanVar(value=self.controller.get_app_setting("hide_console", True))
+        def on_hide_console():
+            self.controller.set_app_setting("hide_console", hide_console_var.get())
+            self.controller.apply_console_visibility()
+            
+        hide_console_switch = ctk.CTkSwitch(
+            ql_card, 
+            text="Hide Terminal Console", 
+            variable=hide_console_var,
+            command=on_hide_console,
+            progress_color=COLOR_SUCCESS
+        )
+        hide_console_switch.pack(pady=5, padx=20, anchor="w")
+
+        # Minimize to Tray Switch
+        tray_var = ctk.BooleanVar(value=self.controller.get_app_setting("minimize_to_tray", False))
+        def on_tray_toggle():
+            self.controller.set_app_setting("minimize_to_tray", tray_var.get())
+            
+        tray_switch = ctk.CTkSwitch(
+            ql_card, 
+            text="Minimize to System Tray", 
+            variable=tray_var,
+            command=on_tray_toggle,
+            progress_color=COLOR_SUCCESS
+        )
+        tray_switch.pack(pady=5, padx=20, anchor="w")
     
     def select_view(self, view_name: str):
         """
@@ -602,7 +639,7 @@ class OscGoesPurrrUI:
         # 1. Update button colors (highlight active tab)
         for name, button in self.nav_buttons.items():
             if name == view_name:
-                button.configure(fg_color=COLOR_TAB_ACTIVE)  # Active color
+                button.configure(fg_color=COLOR_SURFACE)  # Active color
             else:
                 button.configure(fg_color="transparent")  # Inactive color
         
@@ -630,8 +667,8 @@ class OscGoesPurrrUI:
         if connected:
             self.connection_button.configure(
                 text="Disconnect from Intiface",
-                fg_color=COLOR_BTN_DELETE,
-                hover_color=COLOR_BTN_DELETE_HOVER
+                fg_color=COLOR_ALERT,
+                hover_color=COLOR_ALERT_HOVER
             )
             self.status_label.configure(
                 text="Status: Connected to Intiface",
@@ -640,12 +677,12 @@ class OscGoesPurrrUI:
         else:
             self.connection_button.configure(
                 text="Connect to Intiface",
-                fg_color=COLOR_BTN_PRIMARY, # Neutral Purple (matches sidebar default)
-                hover_color=COLOR_BTN_PRIMARY_HOVER
+                fg_color=COLOR_PRIMARY, # Unified Purple (matches sidebar default)
+                hover_color=COLOR_PRIMARY_HOVER
             )
             self.status_label.configure(
                 text="Status: Disconnected",
-                text_color=COLOR_WARNING
+                text_color=COLOR_ALERT
             )
         
         # Update stored devices status indicators
@@ -658,12 +695,12 @@ class OscGoesPurrrUI:
             if port:
                 self.osc_port_label.configure(text=f"Listening on Port: {port}")
             if self.osc_connection_button:
-                self.osc_connection_button.configure(text="Disconnect VRChat", fg_color=COLOR_BTN_DELETE, hover_color=COLOR_BTN_DELETE_HOVER)
+                self.osc_connection_button.configure(text="Disconnect VRChat", fg_color=COLOR_ALERT, hover_color=COLOR_ALERT_HOVER)
         else:
-            self.osc_status_label.configure(text="Status: Waiting for VRChat...", text_color=COLOR_WARNING)
+            self.osc_status_label.configure(text="Status: Waiting for VRChat...", text_color=COLOR_ALERT)
             self.osc_port_label.configure(text="Listening on Port: --")
             if self.osc_connection_button:
-                self.osc_connection_button.configure(text="Connect to VRChat", fg_color=COLOR_BTN_PRIMARY, hover_color=COLOR_BTN_PRIMARY_HOVER)
+                self.osc_connection_button.configure(text="Connect to VRChat", fg_color=COLOR_PRIMARY, hover_color=COLOR_PRIMARY_HOVER)
     
     def update_stored_devices_ui(self):
         """Update the stored devices UI to show connection status"""
@@ -678,12 +715,12 @@ class OscGoesPurrrUI:
             if status_label and delete_button:
                 if device_name in connected_names:
                     # Connected - show green checkmark
-                    status_label.configure(text=f"✓ {device_name}", text_color="#00C853")
-                    delete_button.configure(state="normal", fg_color=COLOR_BTN_DELETE, hover_color=COLOR_BTN_DELETE_HOVER)
+                    status_label.configure(text=f"✓ {device_name}", text_color=COLOR_SUCCESS)
+                    delete_button.configure(state="normal", fg_color=COLOR_ALERT, hover_color=COLOR_ALERT_HOVER)
                 else:
-                    # Not connected - show yellow warning
-                    status_label.configure(text=f"⚠ {device_name}", text_color="#FDB914")
-                    delete_button.configure(state="normal", fg_color="#FFA500", hover_color="#E69500")
+                    # Not connected - show warning
+                    status_label.configure(text=f"⚠ {device_name}", text_color=COLOR_ALERT)
+                    delete_button.configure(state="normal", fg_color=COLOR_ALERT, hover_color=COLOR_ALERT_HOVER)
     
     def _create_device_frame(self, device_name: str, is_connected: bool, osc_addresses: dict, motor_count: int) -> dict:
         """
@@ -709,7 +746,7 @@ class OscGoesPurrrUI:
         device_frame = ctk.CTkFrame(
             self.unified_devices_frame,
             corner_radius=8,
-            fg_color="#2A2A3E"
+            fg_color=COLOR_SURFACE
         )
         device_frame.pack(expand=False, fill="x", pady=(0, 10), padx=5)
         
@@ -720,13 +757,13 @@ class OscGoesPurrrUI:
         # Status label (icon only) - green for connected, yellow otherwise
         status_icon = "✓" if is_connected else "⚠"
         status_text = f"{status_icon} {device_name}"
-        status_color = "#00C853" if is_connected else "#FDB914"
+        status_color = COLOR_SUCCESS if is_connected else COLOR_ALERT
         
         name_label = ctk.CTkLabel(
             header_frame,
             text=status_text,
             font=("Arial", 14, "bold"),
-            text_color="#FFFFFF",
+            text_color=COLOR_TEXT,
             anchor="w"
         )
         name_label.pack(side="left")
@@ -740,8 +777,8 @@ class OscGoesPurrrUI:
             font=("Arial", 12),
             height=BTN_HEIGHT_SMALL,
             width=60,
-            fg_color=COLOR_BTN_DELETE if is_connected else "#FFA500",
-            hover_color=COLOR_BTN_DELETE_HOVER if is_connected else "#E69500"
+            fg_color=COLOR_ALERT if is_connected else COLOR_ALERT,
+            hover_color=COLOR_ALERT_HOVER if is_connected else COLOR_ALERT_HOVER
         )
         delete_button.pack(side="right")
         
@@ -753,7 +790,7 @@ class OscGoesPurrrUI:
 
         motor_vars = []
         for motor_idx in range(motor_count):
-            motor_frame = ctk.CTkFrame(device_frame, fg_color=COLOR_CARD_BG, corner_radius=6)
+            motor_frame = ctk.CTkFrame(device_frame, fg_color=COLOR_SURFACE, corner_radius=6)
             motor_frame.pack(fill="x", padx=10, pady=5)
             motor_frame.grid_columnconfigure(1, weight=1)
 
@@ -787,7 +824,7 @@ class OscGoesPurrrUI:
                 fresh_zones.extend(detected.get("Penetrators", []))
 
                 if not fresh_zones:
-                    ctk.CTkLabel(scroll, text="No zones detected yet...\nMake sure VRChat is running and avatar loaded.", text_color=COLOR_WARNING).pack(pady=20)
+                    ctk.CTkLabel(scroll, text="No zones detected yet...\nMake sure VRChat is running and avatar loaded.", text_color=COLOR_ALERT).pack(pady=20)
                     return
 
                 current_selected = [z.strip() for z in var.get().split(",") if z.strip()]
@@ -856,7 +893,7 @@ class OscGoesPurrrUI:
                 all_sps_cb.pack(anchor="w", pady=(5, 2), padx=5)
 
                 # Render separator before individual zones
-                sep = ctk.CTkLabel(scroll, text="--- Detected Zones ---", text_color="#888888")
+                sep = ctk.CTkLabel(scroll, text="--- Detected Zones ---", text_color=COLOR_TEXT_MUTED)
                 sep.pack(pady=(10, 5))
 
                 # Render a checkbox for every detected zone
@@ -874,8 +911,8 @@ class OscGoesPurrrUI:
             zone_btn = ctk.CTkButton(
                 motor_frame,
                 text=get_btn_text(zones_var),
-                fg_color=COLOR_BTN_SECONDARY,
-                hover_color=COLOR_BTN_SECONDARY_HOVER
+                fg_color=COLOR_SURFACE,
+                hover_color=COLOR_SURFACE_HOVER
             )
             # Pass the button itself so the submenu can immediately update its text on click
             zone_btn.configure(command=lambda btn=zone_btn: open_zone_submenu(btn=btn))
@@ -979,16 +1016,13 @@ class OscGoesPurrrUI:
                 self.unified_devices_frame,
                 text="No saved toys yet. Connect devices to save them.",
                 font=("Arial", 12),
-                text_color="#666666"
+                text_color=COLOR_TEXT_MUTED
             )
             no_stored_label.pack(pady=5)
             return
         
-        # Get actual motor counts from connected devices (if available) via shared helper
-        from haptic_engine import get_device_motor_counts
-        device_motor_counts = {}
-        if controller.haptic_engine and controller.haptic_engine.is_connected and controller.haptic_engine.buttplug_client:
-            device_motor_counts = get_device_motor_counts(controller.haptic_engine.buttplug_client)
+        # Get actual motor counts via controller facade
+        device_motor_counts = controller.get_device_motor_counts()
         
         curr_profile = self.controller.profile_manager.current_profile
         if curr_profile not in self.controller.profiles:
@@ -1041,22 +1075,14 @@ class OscGoesPurrrUI:
             if is_running:
                 self.osc_debugger_button.configure(
                     text="Stop OSC Debugger",
-                    fg_color=COLOR_BTN_DELETE,
-                    hover_color=COLOR_BTN_DELETE_HOVER
+                    fg_color=COLOR_ALERT,
+                    hover_color=COLOR_ALERT_HOVER
                 )
             else:
                 self.osc_debugger_button.configure(
                     text="Start OSC Debugger",
-                    fg_color="#6B4EFF",
-                    hover_color="#5A3DCC"
-                )
-
-    def update_debugger_display(self, data):
-        """Update the debugger textbox with new content (main thread only).
-        
-        Args:
-            data: Either a plain str or a list of (addr_prefix, val_str, hex_color) triplets.
-                  The addr_prefix is rendered in white, val_str in the gradient color.
+                    fg_color=COLOR_PRIMARY,
+                    hover_color=COLOR
         """
         if self.debugger_textbox:
             # 1. Capture current scroll position
@@ -1078,7 +1104,7 @@ class OscGoesPurrrUI:
                 # List of (addr_prefix, val_str, color) triplets
                 # Address tag is shared (all same gray), value tags are unique per line
                 addr_tag = "_dbg_addr"
-                textbox.tag_configure(addr_tag, foreground="#aaaaaa")
+                textbox.tag_configure(addr_tag, foreground=COLOR_TEXT_MUTED)
                 
                 for idx, (addr_prefix, val_str, color) in enumerate(data):
                     val_tag = f"_v{idx}"
@@ -1116,11 +1142,8 @@ class OscGoesPurrrUI:
         
         connected_names = {device.name for device in controller.haptic_engine.buttplug_client.devices.values()}
         
-        # Get actual motor counts from connected devices (if available) via shared helper
-        from haptic_engine import get_device_motor_counts
-        device_motor_counts = {}
-        if controller.haptic_engine and controller.haptic_engine.is_connected and controller.haptic_engine.buttplug_client:
-            device_motor_counts = get_device_motor_counts(controller.haptic_engine.buttplug_client)
+        # Get actual motor counts via controller facade
+        device_motor_counts = controller.get_device_motor_counts()
         
         # Process each discovered device
         for index, device_info in devices_dict.items():
