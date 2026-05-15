@@ -19,24 +19,27 @@ class HapticEngine:
     with the main UI thread via a queue-based message system.
     """
     
-    def __init__(self, thread_queue, device_targets: dict, device_last_sent: dict):
+    def __init__(self, thread_queue):
         """
-        Initialize the HapticEngine with shared data references.
-        
+        Initialize the HapticEngine.
         Args:
             thread_queue: Thread-safe queue for communication with main thread
-            device_targets: Dict of (device_name, motor_index) -> target intensity
-            device_last_sent: Dict of (device_name, motor_index) -> last sent intensity
         """
         self.thread_queue = thread_queue
-        self.device_targets = device_targets
-        self.device_last_sent = device_last_sent
+        
+        # Engine exclusively owns its internal state now
+        self.device_targets: dict = {}
+        self.device_last_sent: dict = {}
         
         # Hardware clients - these will be set when async_worker runs
         self.buttplug_client: Optional[ButtplugClient] = None
         
         # Connection state
         self.is_connected = False
+    
+    def update_target(self, device_name: str, motor_idx: int, target_val: float):
+        """Thread-safe entry point for the Main Thread to command hardware."""
+        self.device_targets[(device_name, motor_idx)] = target_val
     
     def push_ui_update(self, message: str):
         """Push a UI update to the main thread via queue"""

@@ -22,6 +22,7 @@ from haptic_engine import HapticEngine
 # VRChat OSC Manager for OSC discovery and routing
 from vrchat_osc import VRChatOSCManager
 from motor_router import MotorRouter
+from parameter_store import store
 from constants import *
 
 
@@ -33,11 +34,6 @@ class OscGoesPurrrApp:
         
         # Thread-safe communication queue (standard library, not asyncio)
         self.thread_queue: queue.Queue = queue.Queue()
-        
-        # Device-specific state (replaces single global intensity)
-        # Using tuple key: (device_name, motor_index) where motor_index=-1 means all motors
-        self.device_targets: Dict[tuple, float] = {}  # (device_name, motor_index) -> target intensity
-        self.device_last_sent: Dict[tuple, float] = {}  # (device_name, motor_index) -> last sent intensity
         
         # Profile manager instance
         self.profile_manager = ProfileManager()
@@ -81,8 +77,8 @@ class OscGoesPurrrApp:
         saved_geometry = self.profile_manager.app_settings.settings.get("window_geometry", WINDOW_GEOMETRY)
         self.app.geometry(saved_geometry)
         
-        # Instantiate Haptic Engine
-        self.haptic_engine = HapticEngine(self.thread_queue, self.device_targets, self.device_last_sent)
+        # Instantiate Haptic Engine (now owns its own state)
+        self.haptic_engine = HapticEngine(self.thread_queue)
 
         # Initialize standalone OSC routing engine
         self.motor_router = MotorRouter()
@@ -159,20 +155,12 @@ class OscGoesPurrrApp:
                         self.update_device_target(device_name, val_float, motor_index)
                     elif msg_type == "ui_slider_update":
                         device_name, value, motor_idx = data
-                        if device_name in self.ui.device_ui_frames:
-                            motor_vars = self.ui.device_ui_frames[device_name].get("motors", [])
-                            
-                            self._is_updating_ui = True  # Lock the UI
-                            try:
-                                if 0 <= motor_idx < len(motor_vars):
-                                    motor_vars[motor_idx]["slider"].set(value)
-                                    motor_vars[motor_idx]["vibe_meter"].set(value)
-                                elif motor_idx == -1:
-                                    for mv in motor_vars:
-                                        mv["slider"].set(value)
-                                        mv["vibe_meter"].set(value)
-                            finally:
-                                self._is_updating_ui = False  # Unlock
+                        self._is_updating_ui = True  # Lock the UI to prevent echo loops
+                        try:
+                            # Tell the UI to handle its own widgets
+                            self.ui.update_device_visuals(device_name, motor_idx, value)
+                        finally:
+                            self._is_updating_ui = False  # Unlock
                         
         except queue.Empty:
             pass  # No more messages in queue
@@ -312,6 +300,16 @@ class OscGoesPurrrApp:
         """Get a specific config value for a device from current profile using profile_manager"""
         return self.profile_manager.get_profile_config(device_name, key, default)
     
+    def get_app_setting(self, key: str, default: Any = None):
+        """Facade method for UI to safely read app settings."""
+        if hasattr(self.profile_manager.app_settings, 'get'):
+            return self.profile_manager.app_settings.get(key, default)
+        return self.profile_manager.app_settings.settings.get(key, default)
+    
+    def set_app_setting(self, key: str, value: Any):
+        """Facade method for UI to safely update app settings."""
+        self.profile_manager.app_settings.set(key, value)
+    
     def update_device_config(self, device_name: str, key: str, value):
         """Update a config value for a device in current profile using profile_manager"""
         self.profile_manager.update_device_config(device_name, key, value)
@@ -323,8 +321,8 @@ class OscGoesPurrrApp:
         if curr_profile not in profiles or not hasattr(self, 'osc_manager'):
             return
             
-        # Delegate to the standalone router, passing a thread-safe copy of the live shadow state
-        required_updates = self.motor_router.process_message(profiles[curr_profile], self.osc_manager.all_parameters.copy())
+        # Delegate to the standalone router, passing a thread-safe copy from the Central Store
+        required_updates = self.motor_router.process_message(profiles[curr_profile], store.get_all_parameters())
         
         # Dispatch the calculated updates to the hardware thread
         for device_name, target_val, motor_idx in required_updates:
@@ -335,8 +333,8 @@ class OscGoesPurrrApp:
         curr_profile = self.profile_manager.current_profile
         profiles = self.profile_manager.profiles
         if curr_profile in profiles and hasattr(self, 'motor_router') and hasattr(self, 'osc_manager'):
-            # Pass a thread-safe copy of the shadow state into the router
-            updates = self.motor_router.reevaluate_state(profiles[curr_profile], self.osc_manager.all_parameters.copy())
+            # Pass a thread-safe copy from the Central Store into the router
+            updates = self.motor_router.reevaluate_state(profiles[curr_profile], store.get_all_parameters())
             for device_name, target_val, motor_idx in updates:
                 self.thread_queue.put(("osc_haptic_update", (device_name, target_val, motor_idx)))
 
@@ -388,8 +386,9 @@ class OscGoesPurrrApp:
         """Refresh the debugger display at 10Hz (100ms intervals)"""
         # Update SPS Zones Status
         if hasattr(self, 'osc_manager') and hasattr(self.ui, 'sps_status_label') and self.ui.sps_status_label:
-            orifices = self.osc_manager.detected_zones.get("Orifices", [])
-            penetrators = self.osc_manager.detected_zones.get("Penetrators", [])
+            fresh_zones = store.get_detected_zones()
+            orifices = fresh_zones.get("Orifices", [])
+            penetrators = fresh_zones.get("Penetrators", [])
 
             # Create a simple state tracker
             current_state = orifices + penetrators
@@ -409,8 +408,8 @@ class OscGoesPurrrApp:
                 search_query = self.ui.osc_search_var.get().lower()
 
             lines = []  # list of (addr_prefix, val_str, hex_color) triplets
-            # Sort alphabetically, using .copy() to prevent dictionary iteration thread collisions
-            for addr, val in sorted(self.osc_manager.all_parameters.copy().items()):
+            # Sort alphabetically, using Central Store for thread-safe data
+            for addr, val in sorted(store.get_all_parameters().items()):
                 if search_query in addr.lower():
                     # Cleanly format floats to 4 decimal places, leave bools/ints alone
                     if isinstance(val, float):
@@ -452,8 +451,9 @@ class OscGoesPurrrApp:
         if not self.haptic_engine or not self.haptic_engine.is_connected:
             return
             
-        # Update target in state dictionary using tuple key
-        self.device_targets[(device_name, motor_index)] = float(value)
+        # Send the command safely to the Haptic Engine
+        if self.haptic_engine:
+            self.haptic_engine.update_target(device_name, motor_index, float(value))
         
         # Update the corresponding vibe meter via ui component
         if device_name in self.ui.device_ui_frames:

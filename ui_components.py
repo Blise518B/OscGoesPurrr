@@ -1,5 +1,6 @@
 # OscGoesPurrr - UI Components Module
 import customtkinter as ctk
+from parameter_store import store
 from constants import *
 
 
@@ -122,7 +123,7 @@ class OscGoesPurrrUI:
         self.osc_auto_connect_checkbox = ctk.CTkCheckBox(bottom_sidebar_frame, text="Auto Connect", font=ctk.CTkFont(size=12), command=self.controller.toggle_osc_auto_connect)
         self.osc_auto_connect_checkbox.pack(pady=(0, 15))
         # Initialize checkbox state from app settings
-        if self.controller.profile_manager.app_settings.get("auto_connect_osc", True):
+        if self.controller.get_app_setting("auto_connect_osc", True):
             self.osc_auto_connect_checkbox.select()
 
         # --- Separator Line ---
@@ -149,7 +150,7 @@ class OscGoesPurrrUI:
         self.auto_connect_checkbox = ctk.CTkCheckBox(bottom_sidebar_frame, text="Auto Connect", font=ctk.CTkFont(size=12), command=self.controller.toggle_auto_connect)
         self.auto_connect_checkbox.pack(pady=(0, 10))
         # Initialize checkbox state from app settings
-        if self.controller.profile_manager.app_settings.get("auto_connect", True):
+        if self.controller.get_app_setting("auto_connect", True):
             self.auto_connect_checkbox.select()
         
         # ====================
@@ -513,7 +514,7 @@ class OscGoesPurrrUI:
         ctk.CTkLabel(switch_frame, text="127.0.0.1 (Strict)", font=ctk.CTkFont(weight="bold")).pack(side="left", padx=(0, 10))
 
         # The Switch (Empty Text)
-        bind_val = self.controller.profile_manager.app_settings.settings.get("bind_all_interfaces", True)
+        bind_val = self.controller.get_app_setting("bind_all_interfaces", True)
         self.network_bind_switch = ctk.CTkSwitch(
             switch_frame,
             text="", 
@@ -551,7 +552,7 @@ class OscGoesPurrrUI:
         ctk.CTkLabel(conn_card, text="Connection Settings", font=ctk.CTkFont(size=16, weight="bold")).pack(anchor="w", padx=20, pady=(15, 10))
 
         # Auto Refresh Devices checkbox
-        auto_refresh_default = self.controller.profile_manager.app_settings.get("auto_refresh", True)
+        auto_refresh_default = self.controller.get_app_setting("auto_refresh", True)
         self.auto_refresh_var = ctk.BooleanVar(value=auto_refresh_default)
         auto_refresh_checkbox = ctk.CTkCheckBox(
             conn_card,
@@ -565,7 +566,7 @@ class OscGoesPurrrUI:
             auto_refresh_checkbox.select()
 
         # Auto Connect (Intiface) checkbox
-        auto_connect_default = self.controller.profile_manager.app_settings.get("auto_connect", True)
+        auto_connect_default = self.controller.get_app_setting("auto_connect", True)
         self.auto_connect_var = ctk.BooleanVar(value=auto_connect_default)
         auto_connect_checkbox = ctk.CTkCheckBox(
             conn_card,
@@ -579,7 +580,7 @@ class OscGoesPurrrUI:
             auto_connect_checkbox.select()
 
         # Auto Connect (VRChat OSC) checkbox
-        auto_connect_osc_default = self.controller.profile_manager.app_settings.get("auto_connect_osc", True)
+        auto_connect_osc_default = self.controller.get_app_setting("auto_connect_osc", True)
         self.osc_auto_connect_var = ctk.BooleanVar(value=auto_connect_osc_default)
         osc_auto_connect_checkbox = ctk.CTkCheckBox(
             conn_card,
@@ -745,12 +746,11 @@ class OscGoesPurrrUI:
         )
         delete_button.pack(side="right")
         
-        # Fetch available zones - "All SPS" first (matches any zone), then None, then detected zones
+        # Fetch available zones directly from the Central Store
         available_zones = ["All SPS", "None"]
-        if hasattr(self.controller, 'osc_manager') and self.controller.osc_manager:
-            detected = self.controller.osc_manager.detected_zones
-            available_zones.extend(detected.get("Orifices", []))
-            available_zones.extend(detected.get("Penetrators", []))
+        detected = store.get_detected_zones()
+        available_zones.extend(detected.get("Orifices", []))
+        available_zones.extend(detected.get("Penetrators", []))
 
         motor_vars = []
         for motor_idx in range(motor_count):
@@ -763,8 +763,8 @@ class OscGoesPurrrUI:
             motor_label.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="w")
 
             # Read from the new 'zones' key, fallback to legacy 'zone' key if it exists
-            legacy_zone = self.controller.profile_manager.get_profile_config(device_name, f"motor_{motor_idx}_zone", "")
-            zones_var = ctk.StringVar(value=self.controller.profile_manager.get_profile_config(device_name, f"motor_{motor_idx}_zones", legacy_zone))
+            legacy_zone = self.controller.get_profile_config(device_name, f"motor_{motor_idx}_zone", "")
+            zones_var = ctk.StringVar(value=self.controller.get_profile_config(device_name, f"motor_{motor_idx}_zones", legacy_zone))
 
             def get_btn_text(var):
                 # Don't count "None" as an active zone
@@ -781,12 +781,11 @@ class OscGoesPurrrUI:
                 scroll = ctk.CTkScrollableFrame(popup)
                 scroll.pack(fill="both", expand=True, padx=10, pady=10)
 
-                # Fetch fresh zones directly from backend in real-time
+                # Fetch fresh zones directly from the Central Store
                 fresh_zones = []
-                if hasattr(self.controller, 'osc_manager') and self.controller.osc_manager:
-                    detected = self.controller.osc_manager.detected_zones
-                    fresh_zones.extend(detected.get("Orifices", []))
-                    fresh_zones.extend(detected.get("Penetrators", []))
+                detected = store.get_detected_zones()
+                fresh_zones.extend(detected.get("Orifices", []))
+                fresh_zones.extend(detected.get("Penetrators", []))
 
                 if not fresh_zones:
                     ctk.CTkLabel(scroll, text="No zones detected yet...\nMake sure VRChat is running and avatar loaded.", text_color=COLOR_WARNING).pack(pady=20)
@@ -825,7 +824,7 @@ class OscGoesPurrrUI:
 
                     new_val = ", ".join(selected)
                     var.set(new_val)
-                    self.controller.profile_manager.update_device_config(dn, f"motor_{midx}_zones", new_val)
+                    self.controller.update_device_config(dn, f"motor_{midx}_zones", new_val)
                     self.controller.save_profiles()
                     
                     if hasattr(self.controller, 'force_recalculate'):
@@ -843,7 +842,7 @@ class OscGoesPurrrUI:
                         # Deselecting All SPS clears the value back to empty
                         new_val = ""
                     var.set(new_val)
-                    self.controller.profile_manager.update_device_config(dn, f"motor_{midx}_zones", new_val)
+                    self.controller.update_device_config(dn, f"motor_{midx}_zones", new_val)
                     self.controller.save_profiles()
                     
                     if hasattr(self.controller, 'force_recalculate'):
@@ -888,11 +887,11 @@ class OscGoesPurrrUI:
             filter_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=0, sticky="ew")
             
             def create_cb(parent, text, key, default):
-                var = ctk.BooleanVar(value=self.controller.profile_manager.get_profile_config(device_name, key, default))
+                var = ctk.BooleanVar(value=self.controller.get_profile_config(device_name, key, default))
                 cb = ctk.CTkCheckBox(
                     parent, text=text, variable=var, font=ctk.CTkFont(size=11), width=60,
                     command=lambda dn=device_name, k=key, v=var: (
-                        self.controller.profile_manager.update_device_config(dn, k, v.get()),
+                        self.controller.update_device_config(dn, k, v.get()),
                         self.controller.save_profiles(),
                         self.controller.force_recalculate() if hasattr(self.controller, 'force_recalculate') else None
                     )
@@ -1026,9 +1025,9 @@ class OscGoesPurrrUI:
             # Store unified frame data with all elements
             self.device_ui_frames[device_name] = frame_data
             
-            # Initialize state for this device via controller
-            controller.device_targets[(device_name, -1)] = 0.0
-            controller.device_last_sent[(device_name, -1)] = 0.0
+            # Tell the orchestrator to initialize hardware state for this device
+            if hasattr(controller, 'update_device_target'):
+                controller.update_device_target(device_name, 0.0, -1)
             
             # Also store in stored_device_frames for status updates
             self.stored_device_frames[device_name] = {
@@ -1162,9 +1161,9 @@ class OscGoesPurrrUI:
                 # Store unified frame data with all elements
                 self.device_ui_frames[device_name] = frame_data
                 
-                # Initialize state for this device via controller
-                controller.device_targets[(device_name, -1)] = 0.0
-                controller.device_last_sent[(device_name, -1)] = 0.0
+                # Tell the orchestrator to initialize hardware state for this device
+                if hasattr(controller, 'update_device_target'):
+                    controller.update_device_target(device_name, 0.0, -1)
                 
                 # Also store in stored_device_frames for status updates
                 self.stored_device_frames[device_name] = {
@@ -1174,3 +1173,15 @@ class OscGoesPurrrUI:
                 }
         
         controller.log_message(f"Connected devices: {len(devices_dict)}")
+    
+    def update_device_visuals(self, device_name: str, motor_idx: int, value: float):
+        """Safely updates the sliders and vibe meters without exposing widgets to the backend."""
+        if device_name in self.device_ui_frames:
+            motor_vars = self.device_ui_frames[device_name].get("motors", [])
+            if 0 <= motor_idx < len(motor_vars):
+                motor_vars[motor_idx]["slider"].set(value)
+                motor_vars[motor_idx]["vibe_meter"].set(value)
+            elif motor_idx == -1:
+                for mv in motor_vars:
+                    mv["slider"].set(value)
+                    mv["vibe_meter"].set(value)

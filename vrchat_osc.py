@@ -24,6 +24,7 @@ from pythonosc.osc_server import ThreadingOSCUDPServer
 from pythonosc.osc_bundle_builder import OscBundleBuilder
 from pythonosc.osc_message_builder import OscMessageBuilder
 from zeroconf import ServiceBrowser, Zeroconf, ServiceStateChange, ServiceInfo
+from parameter_store import store
 
 class OSCQueryHandler(BaseHTTPRequestHandler):
     """HTTP handler that serves the OSC phonebook JSON to VRChat."""
@@ -71,11 +72,6 @@ class VRChatOSCManager:
         self.on_connected: Callable = None
         self.global_osc_callback: Callable = None
         
-        # OSCQuery Zone Discovery state
-        self.detected_zones = {"Orifices": [], "Penetrators": []}
-        
-        # Master cache of ALL avatar parameters (Shadow State)
-        self.all_parameters: Dict[str, Any] = {}
 
     def start(self):
         """Starts the servers and mDNS advertisement."""
@@ -234,19 +230,6 @@ class VRChatOSCManager:
             print(f"Failed to poll parameters: {e}")
         return {}
 
-    def _parse_oscquery_node(self, node: dict, prefix: str = ""):
-        """Recursively flattens the OSCQuery JSON tree into the master cache dictionary."""
-        if "CONTENTS" in node:
-            for key, child in node["CONTENTS"].items():
-                new_prefix = f"{prefix}/{key}" if prefix else key
-                self._parse_oscquery_node(child, new_prefix)
-        else:
-            # Leaf node (actual parameter)
-            val = 0.0
-            if "VALUE" in node and isinstance(node["VALUE"], list) and len(node["VALUE"]) > 0:
-                val = node["VALUE"][0]
-            self.all_parameters[prefix] = val
-
     def fetch_all_parameters(self):
         """Fetches the entire OSCQuery phonebook and rebuilds the master cache."""
         try:
@@ -263,31 +246,11 @@ class VRChatOSCManager:
 
             data = response.json()
             
-            # 1. Clear and rebuild the master cache
-            self.all_parameters.clear()
-            self._parse_oscquery_node(data)
+            # Rebuild the master cache in the Central Store
+            num_params = store.rebuild_from_json(data)
             
-            # 2. Extract OGB Zones from the master cache to maintain UI compatibility
-            orifices = set()
-            penetrators = set()
-            
-            for path in self.all_parameters.keys():
-                parts = path.split("/")
-                if len(parts) >= 3 and parts[0] == "OGB":
-                    category = parts[1]
-                    zone_name = parts[2]
-                    if category in ["Orifice", "Orf"]:
-                        orifices.add(zone_name)
-                    elif category in ["Penetrator", "Pen"]:
-                        penetrators.add(zone_name)
-                        
-            self.detected_zones = {
-                "Orifices": sorted(list(orifices)), 
-                "Penetrators": sorted(list(penetrators))
-            }
-
             if hasattr(self, 'global_osc_callback') and self.global_osc_callback:
-                self.global_osc_callback("SYS/OSCQuery_Status", f"Loaded {len(self.all_parameters)} total parameters")
+                self.global_osc_callback("SYS/OSCQuery_Status", f"Loaded {num_params} total parameters")
 
         except requests.exceptions.RequestException:
             pass
@@ -363,8 +326,8 @@ class VRChatOSCManager:
         if clean_address == "avatar/change":
             threading.Thread(target=self.fetch_all_parameters, daemon=True).start()
 
-        # Keep master cache updated in real time
-        self.all_parameters[clean_address] = value
+        # Send real-time updates to the Central Store
+        store.update_parameter(clean_address, value)
 
         # Fire global callback with the clean address
         if self.global_osc_callback:

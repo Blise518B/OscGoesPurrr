@@ -21,3 +21,4 @@ OscGoesPurrr listens to your VRChat avatar's interactions (like touching, pettin
 2. Open a terminal in the folder and install the dependencies:
    ```bash
    pip install -r requirements.txt
+   

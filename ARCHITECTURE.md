@@ -1,57 +1,48 @@
 # OSCgoesPurrr - AI Context & Architecture Documentation
 
-## Project Overview
-**OSCgoesPurrr** is a playful, high-performance, Python-based haptic feedback router for VRChat. It listens for OSC data from VRChat and translates it into vibration commands for Bluetooth haptic hardware via Intiface Central. 
+## 🛑 CRITICAL AI DIRECTIVE: THE BOUNDARIES
+This application recently underwent a massive refactoring to eliminate "Shared Mutable State" and UI coupling. It strictly follows an MVC/Event-Driven architecture across multiple threads. 
 
-It utilizes a highly robust "Shadow State" architecture to guarantee zero ghost-values, instant UI responsiveness, and crash-proof thread management.
-
-## Core Tech Stack
-* **UI:** `customtkinter` (Desktop-first, dark mode)
-* **Haptics:** `buttplug` (Official Python Buttplug.io client for Intiface Central)
-* **VRChat Input:** `python-osc` (UDP Server/Client) + `requests`
-* **VRChat Discovery:** `zeroconf` (mDNS Service Advertisement & Discovery)
-* **Persistence:** Standard Python `json` module for profiles.
+**DO NOT TANGLE THESE LAYERS.** Before writing any code, you must adhere to the following anti-tangling rules:
+1. **The Law of Demeter:** The UI (`ui_components.py`) MUST NOT access backend services directly (e.g., `controller.profile_manager` or `controller.haptic_engine`). It MUST use the Facade methods provided in `main.py` (e.g., `controller.get_app_setting()`, `controller.update_device_target()`).
+2. **Visual Decoupling:** The Orchestrator (`main.py`) MUST NOT import or touch `customtkinter` widgets directly. Do not use `.set()` or `.insert()` in `main.py`. Pass primitive data to `ui.update_device_visuals()` and let the UI handle the drawing.
+3. **No Shared Hardware State:** `HapticEngine` is a sealed black box. Do not pass dictionaries between threads. `main.py` drops commands into the queue, and `HapticEngine` manages its own internal `device_targets` memory.
+4. **Stateless Networking:** `vrchat_osc.py` does not own data. It only writes to `parameter_store.py`.
 
 ---
 
-## 1. The Global Brain: `parameter_store.py`
-The application utilizes a Central Store pattern to decouple networking from logic and UI. 
-* **The Shadow State:** Instead of guessing what parameters exist, the app downloads the entire VRChat OSCQuery JSON tree on boot and flattens it into a single dictionary (`all_parameters`).
-* **Thread Safety:** This store uses `threading.Lock()`. UDP threads write to it constantly, while the UI and Router read from it via `.copy()` to prevent dictionary size-change crashes.
+## The 5-Part Ecosystem
 
-## 2. The Three-Pillar Threading Model
-Combining synchronous UI (`customtkinter`) with asynchronous networking requires strict thread separation:
+### 1. The Brain (`parameter_store.py`)
+* **Role:** Single Source of Truth.
+* **Mechanism:** A thread-safe, global singleton (`store`). 
+* **Rule:** UDP threads lock and write to it. The UI and Router threads read from it using `.copy()` to prevent dictionary size-change exceptions. 
 
-* **Pillar 1: Main Thread (UI & Routing)**
-    * Runs `app.mainloop()`.
-    * Handles all `customtkinter` rendering and user clicks.
-    * Executes the Stateless Router (see below).
-    * **Rule:** NEVER execute blocking network calls or `time.sleep()` here.
-* **Pillar 2: Async Worker Thread (Hardware & Network)**
-    * Runs the `asyncio` event loop for the `buttplug` client.
-    * Runs the `python-osc` UDP server to listen for VRChat messages.
-* **Pillar 3: The Thread Queue**
-    * A standard `queue.Queue` bridges the pillars. The Main Thread drops vibration commands (`osc_haptic_update`) into the queue, and the Async Thread consumes them to command the toys.
+### 2. The Eardrum (`vrchat_osc.py`)
+* **Role:** Network listener.
+* **Mechanism:** Handles mDNS discovery and runs the UDP Server.
+* **Rule:** It is entirely memoryless. It parses incoming OSCQuery JSON and UDP packets and immediately dumps them into the Brain.
+
+### 3. The Muscle (`haptic_engine.py`)
+* **Role:** Async hardware driver for Bluetooth toys (via Buttplug.io).
+* **Mechanism:** Runs its own isolated `asyncio` event loop. 
+* **Rule:** It owns its internal state. The outside world communicates with it exclusively via `update_target()` and the `thread_queue`.
+
+### 4. The Face (`ui_components.py`)
+* **Role:** The "Dumb" View Layer.
+* **Mechanism:** Renders the `customtkinter` interface.
+* **Rule:** It only knows how to draw widgets. If a user clicks a button, it fires an event to the Controller (`main.py`). It never executes hardware or file-saving logic itself.
+
+### 5. The Traffic Cop (`main.py`)
+* **Role:** The Orchestrator / Controller.
+* **Mechanism:** Boots the threads, holds the `profile_manager`, and delegates tasks.
+* **Rule:** Acts as a Facade. It routes data between the Face, the Muscle, and the Brain without ever micromanaging *how* they do their jobs.
 
 ---
 
-## 3. The Stateless Router (`motor_router.py`)
-We do not use state-machines or memory to track interactions. The router is a pure, stateless calculator. 
+## The Stateless Router (`motor_router.py`)
+We do not use state-machines to track interactions. The router is a pure, stateless calculator. 
 1. **Trigger:** An incoming UDP packet arrives, or the user clicks a UI checkbox.
-2. **Evaluate:** The router takes the active UI profile and compares it against the master `ParameterStore` (The Shadow State).
-3. **Calculate:** It sweeps the massive parameter list, applies the Touch/Penetration/Self/Others filters, and calculates the absolute `max()` value allowed for that specific motor.
-4. **Debounce:** To prevent "Update Floods" (VRChat dumping 500 packets in a millisecond and freezing Tkinter), the router tracks `last_outputs` and only fires an event to the UI/Hardware queue if the target vibration value *actually changes*.
-
----
-
-## 4. UI/UX Standards
-* **Dynamic Menus:** Avoid hardcoded dropdowns. Use the `ParameterStore` to generate dynamic checkbox popups (e.g., the multi-zone selector) so the user can interact with their exact avatar setup.
-* **Vibe Meters:** Use `CTkProgressBar` to visualize the final output sent to the toys.
-* **Debugger:** The Network & Debug tab reflects the live `ParameterStore` state, allowing users to see exactly what VRChat is broadcasting in real-time.
-
-## AI Assistant Instructions
-When asked to implement a new feature:
-1. Identify which "Pillar" the code belongs in.
-2. Never allow the UI to memorize OSC states. Always read from `parameter_store.py`.
-3. Use `.copy()` when iterating over global dictionaries to prevent thread collisions.
-4. Do not hallucinate external libraries (like `PyQt` or `Pygame`); stick strictly to `customtkinter`.
+2. **Evaluate:** It grabs the active UI profile and compares it against the master `ParameterStore` (The Shadow State).
+3. **Calculate:** It sweeps the parameter list, applies the filters (Touch/Pen/Self/Others), and calculates the absolute `max()` vibration allowed.
+4. **Debounce:** It tracks `last_outputs` and only fires an event to the UI/Hardware queue if the target vibration value *actually changes* to prevent Tkinter update floods.
