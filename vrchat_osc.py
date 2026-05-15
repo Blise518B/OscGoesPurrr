@@ -73,6 +73,9 @@ class VRChatOSCManager:
         
         # OSCQuery Zone Discovery state
         self.detected_zones = {"Orifices": [], "Penetrators": []}
+        
+        # Master cache of ALL avatar parameters (Shadow State)
+        self.all_parameters: Dict[str, Any] = {}
 
     def start(self):
         """Starts the servers and mDNS advertisement."""
@@ -80,7 +83,7 @@ class VRChatOSCManager:
         self._start_discovery()
         
         # Initial zone discovery boot
-        threading.Thread(target=self.fetch_ogb_zones, daemon=True).start()
+        threading.Thread(target=self.fetch_all_parameters, daemon=True).start()
 
     @property
     def get_ports(self) -> dict:
@@ -124,6 +127,9 @@ class VRChatOSCManager:
                 self.poll_current_parameters()
                 if self.on_connected:
                     self.on_connected(self.get_ports)
+
+                # FIX: Fetch all parameters the exact moment the HTTP port is verified!
+                threading.Thread(target=self.fetch_all_parameters, daemon=True).start()
         except Exception as e:
             print(f"Failed to fetch OSCQuery data: {e}")
 
@@ -228,11 +234,23 @@ class VRChatOSCManager:
             print(f"Failed to poll parameters: {e}")
         return {}
 
-    def fetch_ogb_zones(self):
-        """Fetches the OSCQuery phonebook from VRChat to extract VRCFury/OGB zones."""
+    def _parse_oscquery_node(self, node: dict, prefix: str = ""):
+        """Recursively flattens the OSCQuery JSON tree into the master cache dictionary."""
+        if "CONTENTS" in node:
+            for key, child in node["CONTENTS"].items():
+                new_prefix = f"{prefix}/{key}" if prefix else key
+                self._parse_oscquery_node(child, new_prefix)
+        else:
+            # Leaf node (actual parameter)
+            val = 0.0
+            if "VALUE" in node and isinstance(node["VALUE"], list) and len(node["VALUE"]) > 0:
+                val = node["VALUE"][0]
+            self.all_parameters[prefix] = val
+
+    def fetch_all_parameters(self):
+        """Fetches the entire OSCQuery phonebook and rebuilds the master cache."""
         try:
-            # Wait briefly for VRChat to rebuild JSON and ensure we have discovered the port
-            time.sleep(1.5)
+            time.sleep(1.5)  # Wait for VRChat to build JSON
             
             if not self.http_port:
                 if hasattr(self, 'global_osc_callback') and self.global_osc_callback:
@@ -244,34 +262,35 @@ class VRChatOSCManager:
                 return
 
             data = response.json()
-            contents = data.get("CONTENTS", {})
             
-            # Safely drill down into the OGB folder
-            ogb_data = contents.get("OGB", {}).get("CONTENTS", {})
+            # 1. Clear and rebuild the master cache
+            self.all_parameters.clear()
+            self._parse_oscquery_node(data)
             
-            # VRCFury bandwidth optimization abbreviates Orifice->Orf and Penetrator->Pen
-            orf_data = ogb_data.get("Orifice", {}).get("CONTENTS", {})
-            if not orf_data:
-                orf_data = ogb_data.get("Orf", {}).get("CONTENTS", {})
-                
-            pen_data = ogb_data.get("Penetrator", {}).get("CONTENTS", {})
-            if not pen_data:
-                pen_data = ogb_data.get("Pen", {}).get("CONTENTS", {})
-                
-            orifices = list(orf_data.keys())
-            penetrators = list(pen_data.keys())
+            # 2. Extract OGB Zones from the master cache to maintain UI compatibility
+            orifices = set()
+            penetrators = set()
+            
+            for path in self.all_parameters.keys():
+                parts = path.split("/")
+                if len(parts) >= 3 and parts[0] == "OGB":
+                    category = parts[1]
+                    zone_name = parts[2]
+                    if category in ["Orifice", "Orf"]:
+                        orifices.add(zone_name)
+                    elif category in ["Penetrator", "Pen"]:
+                        penetrators.add(zone_name)
+                        
+            self.detected_zones = {
+                "Orifices": sorted(list(orifices)), 
+                "Penetrators": sorted(list(penetrators))
+            }
 
-            self.detected_zones = {"Orifices": orifices, "Penetrators": penetrators}
-
-            # Inject directly into the UI Debugger using a fake SYS/ prefix
             if hasattr(self, 'global_osc_callback') and self.global_osc_callback:
-                self.global_osc_callback("SYS/Detected_Orifices", ", ".join(orifices) if orifices else "None")
-                self.global_osc_callback("SYS/Detected_Penetrators", ", ".join(penetrators) if penetrators else "None")
-                self.global_osc_callback("SYS/OSCQuery_Status", f"Successfully fetched from port {self.http_port}")
+                self.global_osc_callback("SYS/OSCQuery_Status", f"Loaded {len(self.all_parameters)} total parameters")
 
         except requests.exceptions.RequestException:
-            if hasattr(self, 'global_osc_callback') and self.global_osc_callback:
-                self.global_osc_callback("SYS/OSCQuery_Status", f"VRChat OSCQuery not reachable on {self.http_port}")
+            pass
         except Exception as e:
             print(f"OSCQuery Parse Error: {e}")
 
@@ -342,7 +361,10 @@ class VRChatOSCManager:
 
         # Trigger zone discovery when avatar loads
         if clean_address == "avatar/change":
-            threading.Thread(target=self.fetch_ogb_zones, daemon=True).start()
+            threading.Thread(target=self.fetch_all_parameters, daemon=True).start()
+
+        # Keep master cache updated in real time
+        self.all_parameters[clean_address] = value
 
         # Fire global callback with the clean address
         if self.global_osc_callback:

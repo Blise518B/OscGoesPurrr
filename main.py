@@ -1,21 +1,4 @@
 # OscGoesPurrr - Three-Pillar Threading Architecture
-# Copyright (C) 2024-2025  OscGoesPurrr Contributors
-#
-# This program is free software: you can redistribute it and/or modify
-# it under the terms of the GNU General Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
-#
-# This program is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
-#
-# You should have received a copy of the GNU General Public License
-# along with this program.  If not, see <https://www.gnu.org/licenses/>.
-#
-# SPDX-License-Identifier: GPL-3.0-or-later
-
 # Three-Pillar Threading Architecture:
 #
 #   Pillar 1: Main thread - customtkinter mainloop() + UI updates (ui_components.py)
@@ -25,7 +8,6 @@
 import threading
 import asyncio
 import queue
-import fnmatch
 from typing import Optional, Dict, Any
 
 # ProfileManager from config manager module
@@ -39,6 +21,7 @@ from haptic_engine import HapticEngine
 
 # VRChat OSC Manager for OSC discovery and routing
 from vrchat_osc import VRChatOSCManager
+from motor_router import MotorRouter
 from constants import *
 
 
@@ -78,7 +61,6 @@ class OscGoesPurrrApp:
         self._auto_connect_task = None  # For storing the auto-connect retry loop task reference
         
         # OSC Debugger state
-        self.osc_debug_data = {}
         self.is_debugging_osc = False
         
         # UI Lock - prevent programmatic UI changes from echoing back to the controller
@@ -102,8 +84,9 @@ class OscGoesPurrrApp:
         # Instantiate Haptic Engine
         self.haptic_engine = HapticEngine(self.thread_queue, self.device_targets, self.device_last_sent)
 
-        # Format: { (device_name, motor_idx): {"TouchSelf": 0.0, "TouchOthers": 0.0, ...} }
-        self.motor_sps_states: Dict[tuple, Dict[str, float]] = {}
+        # Initialize standalone OSC routing engine
+        self.motor_router = MotorRouter()
+
         # Instantiate VRChat OSC Manager
         bind_all = self.profile_manager.app_settings.settings.get("bind_all_interfaces", True)
         self.osc_manager = VRChatOSCManager(local_listen_port=0, bind_all_interfaces=bind_all)
@@ -334,168 +317,41 @@ class OscGoesPurrrApp:
         self.profile_manager.update_device_config(device_name, key, value)
     
     def on_osc_message(self, address: str, value):
-        if self.is_debugging_osc:
-            self.osc_debug_data[address] = value
-
         curr_profile = self.profile_manager.current_profile
         profiles = self.profile_manager.profiles
 
-        if curr_profile not in profiles:
+        if curr_profile not in profiles or not hasattr(self, 'osc_manager'):
             return
             
-        try:
-            val_float = float(value)
-            if val_float > 1.0:
-                val_float = val_float / 255.0
-            val_float = max(0.0, min(1.0, val_float))
-        except (ValueError, TypeError):
-            return
-            
-        # Clean address for routing
-        clean_address = address
-        if clean_address.startswith("/avatar/parameters/"):
-            clean_address = clean_address.replace("/avatar/parameters/", "")
-        elif clean_address.startswith("/"):
-            clean_address = clean_address[1:]
+        # Delegate to the standalone router, passing a thread-safe copy of the live shadow state
+        required_updates = self.motor_router.process_message(profiles[curr_profile], self.osc_manager.all_parameters.copy())
+        
+        # Dispatch the calculated updates to the hardware thread
+        for device_name, target_val, motor_idx in required_updates:
+            self.thread_queue.put(("osc_haptic_update", (device_name, target_val, motor_idx)))
 
-        for device_name, config in profiles[curr_profile].items():
-            motor_count = config.get("motor_count", 0)
-            osc_addresses = config.get("osc_addresses", {})
-            
-            for motor_idx in range(motor_count):
-                state_key = (device_name, motor_idx)
-                if state_key not in self.motor_sps_states:
-                    self.motor_sps_states[state_key] = {
-                        "TouchSelf": 0.0, "TouchOthers": 0.0, 
-                        "PenetratingSelf": 0.0, "PenetratingOthers": 0.0,
-                        "PenSelf": 0.0, "PenOthers": 0.0, 
-                        "FrotOthers": 0.0
-                    }
-                
-                is_match = False
-                target_val = 0.0
-                
-                # --- 1. Check Custom Override Box ---
-                custom_addr = osc_addresses.get(str(motor_idx), "").strip()
-                if custom_addr:
-                    if custom_addr.startswith("/avatar/parameters/"):
-                        custom_addr = custom_addr.replace("/avatar/parameters/", "")
-                    elif custom_addr.startswith("/"):
-                        custom_addr = custom_addr[1:]
-                        
-                    if clean_address == custom_addr or fnmatch.fnmatch(clean_address, custom_addr):
-                        is_match = True
-                        target_val = val_float
-                
-                # --- 2. Check SPS Zone Dropdown ---
-                if not is_match:
-                    zone = config.get(f"motor_{motor_idx}_zone", "All SPS")
-                    if zone and zone != "None" and zone != "Custom...":
-                        # VRCFury might use full or abbreviated paths
-                        is_sps_match = False
-                        matched_suffix = ""
-                        
-                        if zone == "All SPS":
-                            # Match any OGB/Orifice/*, OGB/Orf/*, OGB/Penetrator/*, OGB/Pen/* path
-                            sps_prefixes = ["OGB/Orifice/", "OGB/Orf/", "OGB/Penetrator/", "OGB/Pen/"]
-                            for prefix in sps_prefixes:
-                                if clean_address.startswith(prefix):
-                                    # After the generic prefix we have: {zone}/{interaction}
-                                    rest = clean_address[len(prefix):]
-                                    # Extract the interaction suffix (last segment after /)
-                                    if "/" in rest:
-                                        matched_suffix = rest.rsplit("/", 1)[-1]
-                                    else:
-                                        matched_suffix = rest
-                                    is_sps_match = True
-                                    break
-                        else:
-                            sps_paths = [
-                                f"OGB/Orifice/{zone}/", f"OGB/Orf/{zone}/",
-                                f"OGB/Penetrator/{zone}/", f"OGB/Pen/{zone}/"
-                            ]
-                            
-                            for path in sps_paths:
-                                if clean_address.startswith(path):
-                                    matched_suffix = clean_address[len(path):]
-                                    is_sps_match = True
-                                    break
-                                
-                        if is_sps_match and matched_suffix in self.motor_sps_states[state_key]:
-                            # Update state memory for this specific interaction type
-                            self.motor_sps_states[state_key][matched_suffix] = val_float
-                            
-                            # Apply UI Filters
-                            allow_touch = config.get(f"motor_{motor_idx}_touch", True)
-                            allow_pen = config.get(f"motor_{motor_idx}_pen", True)
-                            allow_self = config.get(f"motor_{motor_idx}_self", False)
-                            allow_others = config.get(f"motor_{motor_idx}_others", True)
-                            
-                            active_vals = [0.0] # Fallback
-                            states = self.motor_sps_states[state_key]
-                            
-                            if allow_touch and allow_self: active_vals.append(states["TouchSelf"])
-                            if allow_touch and allow_others: active_vals.append(states["TouchOthers"])
-                            if allow_pen and allow_self: 
-                                active_vals.append(states["PenetratingSelf"])
-                                active_vals.append(states["PenSelf"])
-                            if allow_pen and allow_others: 
-                                active_vals.append(states["PenetratingOthers"])
-                                active_vals.append(states["PenOthers"])
-                                active_vals.append(states["FrotOthers"]) # Treat Frot as Pen
-                            
-                            # Route the highest allowed interaction value
-                            target_val = max(active_vals)
-                            is_match = True
-                            
-                # Route to engine if a match occurred
-                if is_match:
-                    self.thread_queue.put(("osc_haptic_update", (device_name, target_val, motor_idx)))
+    def force_recalculate(self):
+        """Forces the router to recalculate output based on current state and new UI configs."""
+        curr_profile = self.profile_manager.current_profile
+        profiles = self.profile_manager.profiles
+        if curr_profile in profiles and hasattr(self, 'motor_router') and hasattr(self, 'osc_manager'):
+            # Pass a thread-safe copy of the shadow state into the router
+            updates = self.motor_router.reevaluate_state(profiles[curr_profile], self.osc_manager.all_parameters.copy())
+            for device_name, target_val, motor_idx in updates:
+                self.thread_queue.put(("osc_haptic_update", (device_name, target_val, motor_idx)))
 
     def sync_motor_to_filters(self, device_name: str, motor_idx: int):
-        """Recalculate the max value for a motor based on current state memory and filter checkboxes.
-        
+        """Recalculate the max value for a motor based on the live shadow state and filter checkboxes.
+
         Used when user toggles a checkbox to immediately stop output if all interaction types are blocked.
+        With the stateless router, this just triggers a full recalculation against the shadow state.
         """
-        curr_profile = self.profile_manager.current_profile
-        profiles = self.profile_manager.profiles
-        
-        if curr_profile not in profiles:
-            return
-            
-        config = profiles[curr_profile].get(device_name, {})
-        state_key = (device_name, motor_idx)
-        
-        if state_key not in self.motor_sps_states:
-            return
-            
-        states = self.motor_sps_states[state_key]
-        
-        allow_touch = config.get(f"motor_{motor_idx}_touch", True)
-        allow_pen = config.get(f"motor_{motor_idx}_pen", True)
-        allow_self = config.get(f"motor_{motor_idx}_self", False)
-        allow_others = config.get(f"motor_{motor_idx}_others", True)
-        
-        active_vals = [0.0]  # Fallback to zero
-        
-        if allow_touch and allow_self: active_vals.append(states["TouchSelf"])
-        if allow_touch and allow_others: active_vals.append(states["TouchOthers"])
-        if allow_pen and allow_self: 
-            active_vals.append(states["PenetratingSelf"])
-            active_vals.append(states.get("PenSelf", 0.0))
-        if allow_pen and allow_others: 
-            active_vals.append(states["PenetratingOthers"])
-            active_vals.append(states.get("PenOthers", 0.0))
-            active_vals.append(states["FrotOthers"])
-        
-        target_val = max(active_vals)
-        self.thread_queue.put(("osc_haptic_update", (device_name, target_val, motor_idx)))
+        self.force_recalculate()
 
     def toggle_osc_debugger(self, *args):
         """Toggle the OSC debugger on/off (accepts *args for safe UI toggle compatibility)"""
         self.is_debugging_osc = not self.is_debugging_osc
         if self.is_debugging_osc:
-            self.osc_debug_data.clear()
             self.ui.log_message("OSC Debugger Started")
         else:
             self.ui.log_message("OSC Debugger Stopped")
@@ -530,55 +386,52 @@ class OscGoesPurrrApp:
 
     def refresh_debugger_ui(self):
         """Refresh the debugger display at 10Hz (100ms intervals)"""
-        # Update SPS Zones Status & Dropdowns
+        # Update SPS Zones Status
         if hasattr(self, 'osc_manager') and hasattr(self.ui, 'sps_status_label') and self.ui.sps_status_label:
             orifices = self.osc_manager.detected_zones.get("Orifices", [])
             penetrators = self.osc_manager.detected_zones.get("Penetrators", [])
-            
-            # Combine for dropdowns (include "All SPS" at the top)
-            available_zones = ["All SPS", "None"]
-            
+
+            # Create a simple state tracker
+            current_state = orifices + penetrators
+
             # Only update UI if the zones have actually changed to avoid flickering
-            if not hasattr(self, '_last_detected_zones') or self._last_detected_zones != available_zones:
-                self._last_detected_zones = available_zones
-                
+            if not hasattr(self, '_last_detected_zones') or self._last_detected_zones != current_state:
+                self._last_detected_zones = current_state
+
                 # Update text with proper newlines
                 sps_text = f"Orifices: {', '.join(orifices) if orifices else 'None'}\n\nPenetrators: {', '.join(penetrators) if penetrators else 'None'}"
                 self.ui.sps_status_label.configure(text=sps_text)
-                
-                # Push new values to all device dropdowns
-                self.ui.update_zone_dropdowns(available_zones)
 
-        if self.is_debugging_osc and self.app:
+        if getattr(self, 'is_debugging_osc', False) and hasattr(self, 'osc_manager'):
             # Get search filter
             search_query = ""
             if hasattr(self.ui, 'osc_search_var'):
                 search_query = self.ui.osc_search_var.get().lower()
-            
+
             lines = []  # list of (addr_prefix, val_str, hex_color) triplets
-            # Sort alphabetically so parameters don't jump around
-            for addr, val in sorted(self.osc_debug_data.items()):
+            # Sort alphabetically, using .copy() to prevent dictionary iteration thread collisions
+            for addr, val in sorted(self.osc_manager.all_parameters.copy().items()):
                 if search_query in addr.lower():
                     # Cleanly format floats to 4 decimal places, leave bools/ints alone
                     if isinstance(val, float):
                         val_str = f"{val:.4f}"
                     else:
                         val_str = str(val)
-                    
+
                     color = self._value_to_color(val)
-                    # Pad the address so the colons align nicely (address is white, value gets color)
+                    # Pad the address so the colons align nicely (address is gray, value gets color)
                     lines.append((addr.ljust(60) + " : ", val_str, color))
-            
+
             if not lines and search_query:
                 debug_data = [("No parameters match your search.", "", "#888888")]
             elif not lines:
                 debug_data = [("Waiting for OSC data...", "", "#888888")]
             else:
                 debug_data = lines
-            
+
             # Push to the UI as a list of (text, color) tuples
             self.ui.update_debugger_display(debug_data)
-        
+
         # Schedule the next refresh (100ms = 10Hz)
         if self.app:
             self.app.after(100, self.refresh_debugger_ui)
