@@ -65,6 +65,9 @@ class OscGoesPurrrApp:
         # UI Lock - prevent programmatic UI changes from echoing back to the controller
         self._is_updating_ui = False
         
+        # Dirty flag to debounce rapid OSC bundles
+        self._needs_recalculation = False
+        
         # Initialize components in correct order
         self._setup_components()
         
@@ -330,8 +333,8 @@ class OscGoesPurrrApp:
         self.profile_manager.update_device_config(device_name, key, value)
     
     def on_osc_message(self, address: str, value):
-        """Acts as a trigger ping when new UDP data arrives, forcing a stateless recalculation."""
-        self.force_recalculate()
+        """Acts as a trigger ping when new UDP data arrives. Sets a flag to batch rapid updates."""
+        self._needs_recalculation = True
 
     def force_recalculate(self):
         """Forces the router to recalculate output based on current state and new UI configs."""
@@ -411,9 +414,9 @@ class OscGoesPurrrApp:
             # Push to the UI as a list of (text, color) tuples
             self.ui.update_debugger_display(debug_data)
 
-        # Schedule the next refresh (100ms = 10Hz)
+        # Schedule the next refresh (Throttled to save UI thread)
         if self.app:
-            self.app.after(100, self.refresh_debugger_ui)
+            self.app.after(UI_REFRESH_RATE_MS, self.refresh_debugger_ui)
 
     def get_device_motor_counts(self) -> dict:
         """Facade method to get motor counts safely from the hardware engine."""
@@ -789,6 +792,14 @@ class OscGoesPurrrApp:
             except Exception as e:
                 self.log_message(f"Failed to start auto connect: {e}")
 
+        # Decoupled routing tick (Batches rapid OSC updates to max ~30Hz)
+        def routing_tick():
+            if getattr(self, '_needs_recalculation', False):
+                self._needs_recalculation = False
+                self.force_recalculate()
+            if self.app:
+                self.app.after(ROUTER_POLL_RATE_MS, routing_tick)
+
         # Periodically check for UI updates from async thread
         def check_queue():
             self.process_async_queue()
@@ -800,6 +811,9 @@ class OscGoesPurrrApp:
             self.app.protocol("WM_DELETE_WINDOW", self._on_closing)
 
             self.app.after(UI_REFRESH_RATE_MS, check_queue)
+
+            # Start the routing tick loop
+            self.app.after(ROUTER_POLL_RATE_MS, routing_tick)
 
             # Boot OSC server 500ms after UI launches to prevent freezing
             if self.profile_manager.app_settings.settings.get("auto_connect_osc", True):

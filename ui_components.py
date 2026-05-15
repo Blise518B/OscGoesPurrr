@@ -1082,8 +1082,11 @@ class OscGoesPurrrUI:
                 self.osc_debugger_button.configure(
                     text="Start OSC Debugger",
                     fg_color=COLOR_PRIMARY,
-                    hover_color=COLOR
-        """
+                    hover_color=COLOR_PRIMARY_HOVER
+                )
+
+    def update_debugger_display(self, data):
+        """Updates the OSC debugger textbox with color-coded data."""
         if self.debugger_textbox:
             # 1. Capture current scroll position
             try:
