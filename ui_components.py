@@ -807,47 +807,38 @@ class OscGoesPurrrUI:
                 count = len([z for z in var.get().split(",") if z.strip() and z.strip() != "None"])
                 return f"Select Zones ({count} enabled)" if count > 0 else "Select Zones..."
 
-            def open_zone_submenu(dn=device_name, midx=motor_idx, var=zones_var, btn=None):
-                popup = ctk.CTkToplevel(self.app)
-                popup.title(f"Select Zones for Motor {midx}")
-                popup.geometry("300x400")
-                popup.transient(self.app)
-                popup.grab_set()
+            zone_expanded = [False]
+            zone_panel_cb_vars = []
 
-                scroll = ctk.CTkScrollableFrame(popup)
-                scroll.pack(fill="both", expand=True, padx=10, pady=10)
+            # Inline expanding zone panel (initially hidden)
+            zone_panel = ctk.CTkFrame(motor_frame, fg_color=COLOR_SURFACE_HOVER, corner_radius=4)
 
-                # Fetch fresh zones directly via controller facade
+            def build_zone_panel(dn=device_name, midx=motor_idx, var=zones_var):
+                for w in zone_panel.winfo_children():
+                    w.destroy()
+                zone_panel_cb_vars.clear()
+
                 fresh_zones = []
                 detected = self.controller.get_detected_zones()
                 fresh_zones.extend(detected.get("Orifices", []))
                 fresh_zones.extend(detected.get("Penetrators", []))
 
                 if not fresh_zones:
-                    ctk.CTkLabel(scroll, text="No zones detected yet...\nMake sure VRChat is running and avatar loaded.", text_color=COLOR_ALERT).pack(pady=20)
+                    ctk.CTkLabel(zone_panel, text="No zones detected yet.\nMake sure VRChat is running and avatar loaded.", text_color=COLOR_ALERT).pack(anchor="w", padx=8, pady=5)
                     return
 
                 current_selected = [z.strip() for z in var.get().split(",") if z.strip()]
                 is_all_sps_active = ("All SPS" in current_selected)
 
-                # Store references to individual zone checkbox vars so we can sync them live
-                individual_cb_vars = []
-
                 def sync_individual_checkboxes():
-                    """Re-read var and update all individual checkbox visuals to match."""
                     new_selected = [z.strip() for z in var.get().split(",") if z.strip()]
                     new_all_sps = ("All SPS" in new_selected)
                     all_sps_var.set(new_all_sps)
-                    for zone_name, cb_v in individual_cb_vars:
-                        if new_all_sps:
-                            # When All SPS is active, individual checkboxes should appear unchecked
-                            cb_v.set(False)
-                        else:
-                            cb_v.set(zone_name in new_selected)
+                    for zone_name, cb_v in zone_panel_cb_vars:
+                        cb_v.set(False if new_all_sps else (zone_name in new_selected))
 
                 def toggle_zone(zone, cb_var):
                     selected = [z.strip() for z in var.get().split(",") if z.strip()]
-                    # If "All SPS" is currently in selected, remove it first (individual toggle implies not All SPS)
                     if "All SPS" in selected:
                         selected.remove("All SPS")
                         all_sps_var.set(False)
@@ -857,70 +848,66 @@ class OscGoesPurrrUI:
                     else:
                         if zone in selected:
                             selected.remove(zone)
-
                     new_val = ", ".join(selected)
                     var.set(new_val)
                     self.controller.update_device_config(dn, f"motor_{midx}_zones", new_val)
                     self.controller.save_profiles()
-                    
                     if hasattr(self.controller, 'force_recalculate'):
                         self.controller.force_recalculate()
-                        
-                    if btn: btn.configure(text=get_btn_text(var))
+                    zone_btn.configure(text=get_btn_text(var) + " ▲")
 
-                # Render "All SPS" checkbox (matches any incoming zone)
                 all_sps_var = ctk.BooleanVar(value=is_all_sps_active)
+
                 def on_all_sps_toggle():
-                    if all_sps_var.get():
-                        # Selecting All SPS means clearing individual zones and setting the special flag
-                        new_val = "All SPS"
-                    else:
-                        # Deselecting All SPS clears the value back to empty
-                        new_val = ""
+                    new_val = "All SPS" if all_sps_var.get() else ""
                     var.set(new_val)
                     self.controller.update_device_config(dn, f"motor_{midx}_zones", new_val)
                     self.controller.save_profiles()
-                    
                     if hasattr(self.controller, 'force_recalculate'):
                         self.controller.force_recalculate()
-                        
-                    if btn: btn.configure(text=get_btn_text(var))
-                    
-                    # CRITICAL FIX: Sync all individual checkbox visuals after toggling All SPS
+                    zone_btn.configure(text=get_btn_text(var) + " ▲")
                     sync_individual_checkboxes()
 
-                all_sps_cb = ctk.CTkCheckBox(scroll, text="All SPS (match any zone)", variable=all_sps_var, command=on_all_sps_toggle)
-                all_sps_cb.pack(anchor="w", pady=(5, 2), padx=5)
+                all_sps_cb = ctk.CTkCheckBox(zone_panel, text="All SPS (match any zone)", variable=all_sps_var, command=on_all_sps_toggle)
+                all_sps_cb.pack(anchor="w", pady=(6, 2), padx=8)
 
-                # Render separator before individual zones
-                sep = ctk.CTkLabel(scroll, text="--- Detected Zones ---", text_color=COLOR_TEXT_MUTED)
-                sep.pack(pady=(10, 5))
+                sep = ctk.CTkLabel(zone_panel, text="─── Detected Zones ───", text_color=COLOR_TEXT_MUTED, font=ctk.CTkFont(size=11))
+                sep.pack(pady=(5, 3))
 
-                # Render a checkbox for every detected zone
                 for zone in fresh_zones:
                     if zone == "None":
                         continue
-                    # If All SPS is active, individual zones should appear unchecked
                     initial_state = (zone in current_selected) if not is_all_sps_active else False
                     cb_var = ctk.BooleanVar(value=initial_state)
-                    individual_cb_vars.append((zone, cb_var))
-                    cb = ctk.CTkCheckBox(scroll, text=zone, variable=cb_var,
+                    zone_panel_cb_vars.append((zone, cb_var))
+                    cb = ctk.CTkCheckBox(zone_panel, text=zone, variable=cb_var,
                                          command=lambda z=zone, v=cb_var: toggle_zone(z, v))
-                    cb.pack(anchor="w", pady=5, padx=5)
+                    cb.pack(anchor="w", pady=3, padx=8)
+
+                ctk.CTkFrame(zone_panel, height=6, fg_color="transparent").pack()
+
+            def toggle_zone_panel():
+                zone_expanded[0] = not zone_expanded[0]
+                if zone_expanded[0]:
+                    build_zone_panel()
+                    zone_panel.grid(row=1, column=0, columnspan=2, padx=10, pady=(0, 5), sticky="ew")
+                    zone_btn.configure(text=get_btn_text(zones_var) + " ▲")
+                else:
+                    zone_panel.grid_forget()
+                    zone_btn.configure(text=get_btn_text(zones_var))
 
             zone_btn = ctk.CTkButton(
                 motor_frame,
                 text=get_btn_text(zones_var),
                 fg_color=COLOR_SURFACE,
-                hover_color=COLOR_SURFACE_HOVER
+                hover_color=COLOR_SURFACE_HOVER,
+                command=toggle_zone_panel
             )
-            # Pass the button itself so the submenu can immediately update its text on click
-            zone_btn.configure(command=lambda btn=zone_btn: open_zone_submenu(btn=btn))
             zone_btn.grid(row=0, column=1, padx=(0, 10), pady=(10, 5), sticky="ew")
 
-            # Row 1: Interaction Filters
+            # Row 2: Interaction Filters
             filter_frame = ctk.CTkFrame(motor_frame, fg_color="transparent")
-            filter_frame.grid(row=1, column=0, columnspan=2, padx=10, pady=0, sticky="ew")
+            filter_frame.grid(row=2, column=0, columnspan=2, padx=10, pady=0, sticky="ew")
             
             def create_cb(parent, text, key, default):
                 var = ctk.BooleanVar(value=self.controller.get_profile_config(device_name, key, default))
@@ -943,24 +930,24 @@ class OscGoesPurrrUI:
             cb_self.grid(row=0, column=2, padx=5, pady=2, sticky="w")
             cb_others.grid(row=0, column=3, padx=5, pady=2, sticky="w")
 
-            # Row 2: Custom Parameter Fallback
+            # Row 3: Custom Parameter Fallback
             osc_entry = ctk.CTkEntry(motor_frame, placeholder_text="Custom override (e.g. OGB/Tail/Touch)")
             osc_entry.insert(0, osc_addresses.get(str(motor_idx), ""))
-            osc_entry.grid(row=2, column=0, columnspan=2, padx=10, pady=(5, 5), sticky="ew")
+            osc_entry.grid(row=3, column=0, columnspan=2, padx=10, pady=(5, 5), sticky="ew")
             osc_entry.bind("<FocusOut>", lambda e, dn=device_name: (
                 self.controller.save_profiles(),
                 self.controller.force_recalculate() if hasattr(self.controller, 'force_recalculate') else None
             ))
 
-            # Row 3: Intensity Slider
+            # Row 4: Intensity Slider
             slider = ctk.CTkSlider(motor_frame, from_=0.0, to=1.0, command=lambda val, dn=device_name, idx=motor_idx: self.controller.update_device_target(dn, float(val), idx))
             slider.set(0.0)
-            slider.grid(row=3, column=0, columnspan=2, padx=10, pady=(5, 5), sticky="ew")
+            slider.grid(row=4, column=0, columnspan=2, padx=10, pady=(5, 5), sticky="ew")
 
-            # Row 4: Vibe Meter
+            # Row 5: Vibe Meter
             vibe_meter = ctk.CTkProgressBar(motor_frame, height=6)
             vibe_meter.set(0.0)
-            vibe_meter.grid(row=4, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="ew")
+            vibe_meter.grid(row=5, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="ew")
 
             motor_vars.append({
                 "slider": slider,
