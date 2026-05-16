@@ -13,6 +13,10 @@ Order within a group is rough priority, not a hard sequence.
   When checked, the border should still be a different color from the
   fill — right now the whole box collapses into one color and the
   affordance disappears.
+- **Copy/Paste button visual feedback.**
+  When the user presses a "Copy" button on a profile/device row, all other
+  available Copy buttons should transform into "Paste" buttons, giving clear
+  visual feedback about where to interact next.
 - **Better iconography.**
   - Green ✓ / red ✗ for confirm/cancel (current ones are low contrast).
   - Edit pencil with stronger outline.
