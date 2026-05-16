@@ -5,6 +5,7 @@
 # means rewriting this file only.
 
 from typing import List, Optional, Dict, Any, Callable
+import os
 import re
 import sys
 
@@ -460,6 +461,20 @@ class OscGoesPurrrUI:
         self.window: _MainWindow = _MainWindow()
         self.window.setObjectName("root")
         self.window.resize(1100, 700)
+
+        # Set application icon for window title bar and taskbar.
+        # Resolves correctly in development and when frozen by PyInstaller.
+        try:
+            if getattr(sys, "frozen", False):
+                icon_path = os.path.join(sys._MEIPASS, "Images", "OGP_Icon.ico")
+            else:
+                icon_path = os.path.join(os.path.dirname(__file__), "Images", "OGP_Icon.ico")
+            if os.path.exists(icon_path):
+                icon = QIcon(icon_path)
+                self.qapp.setWindowIcon(icon)
+                self.window.setWindowIcon(icon)
+        except Exception:
+            pass
 
         # Cross-thread scheduler (used by schedule_callback /
         # schedule_on_main_thread when called from a non-UI thread).

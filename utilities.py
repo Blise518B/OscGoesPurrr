@@ -32,10 +32,28 @@ def toggle_windows_console(show: bool):
             ctypes.windll.user32.ShowWindow(hwnd, 5 if show else 0)
 
 def create_default_icon():
-    """Creates a simple placeholder icon for the system tray."""
+    """Returns a 64x64 PIL Image for the system tray icon.
+
+    Loads OGP_Icon.ico from the bundled resource path (works both during
+    development and when frozen by PyInstaller). Falls back to a
+    programmatic placeholder if the file cannot be read.
+    """
+    try:
+        import sys
+        from PIL import Image
+
+        if getattr(sys, "frozen", False):
+            icon_path = os.path.join(sys._MEIPASS, "Images", "OGP_Icon.ico")
+        else:
+            icon_path = os.path.join(os.path.dirname(__file__), "Images", "OGP_Icon.ico")
+
+        if os.path.exists(icon_path):
+            return Image.open(icon_path).resize((64, 64)).convert("RGB")
+    except Exception:
+        pass
+
     from PIL import Image, ImageDraw
-    # Create a dark gray box with a purple circle
-    image = Image.new('RGB', (64, 64), color=(30, 30, 30))
+    image = Image.new("RGB", (64, 64), color=(30, 30, 30))
     dc = ImageDraw.Draw(image)
     dc.ellipse((16, 16, 48, 48), fill=(147, 112, 219))
     return image
