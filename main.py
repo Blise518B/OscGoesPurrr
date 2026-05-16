@@ -104,6 +104,11 @@ class OscGoesPurrrApp:
         self.osc_manager.on_connected = lambda ports: self.thread_queue.put(
             ("osc_status", (True, ports.get("local_listen_port")))
         )
+        # Disconnect hook (mDNS removal or health-check failure) -- routes the
+        # same queue message so the UI/log path is symmetric.
+        self.osc_manager.on_disconnected = lambda: self.thread_queue.put(
+            ("osc_status", (False, self.osc_manager.local_listen_port if self.osc_manager else None))
+        )
         
         # Load profiles using profile manager (also initializes app_settings)
         self.profile_manager.load_profiles()
@@ -164,7 +169,10 @@ class OscGoesPurrrApp:
                     elif msg_type == "osc_status":
                         is_connected, port = data
                         self.ui.update_osc_status(is_connected, port)
-                        self.ui.log_message(f"VRChat OSC Connected! Listening on port {port}")
+                        if is_connected:
+                            self.ui.log_message(f"VRChat OSC Connected! Listening on port {port}")
+                        else:
+                            self.ui.log_message("VRChat OSC Disconnected. Waiting for VRChat to come back...")
                     elif msg_type == "osc_haptic_update":
                         device_name, val_float, motor_index = data
                         # This is now safely running on the Main UI thread!
@@ -589,6 +597,9 @@ class OscGoesPurrrApp:
             self.osc_manager.global_osc_callback = self.on_osc_message
             self.osc_manager.on_connected = lambda ports: self.thread_queue.put(
                 ("osc_status", (True, ports.get("local_listen_port")))
+            )
+            self.osc_manager.on_disconnected = lambda: self.thread_queue.put(
+                ("osc_status", (False, self.osc_manager.local_listen_port if self.osc_manager else None))
             )
             
             # Run startup in a background thread to prevent UI lockup

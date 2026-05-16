@@ -71,14 +71,23 @@ class VRChatOSCManager:
         self.rate_limit_hz = rate_limit_hz
         self._last_sent_times: Dict[str, float] = {}
         self.on_connected: Callable = None
+        self.on_disconnected: Callable = None  # fired when VRChat goes away (mDNS removal or HTTP health-check failure)
         self.global_osc_callback: Callable = None
+
+        # Health-check thread keeps polling the VRChat OSCQuery HTTP endpoint
+        # while we believe we're connected; catches crashes where mDNS never
+        # broadcasts a Removed event.
+        self._shutdown = threading.Event()
+        self._health_thread: threading.Thread = None
         
 
     def start(self):
         """Starts the servers and mDNS advertisement."""
+        self._shutdown.clear()
         self._setup_osc()
         self._start_discovery()
-        
+        self._start_health_check()
+
         # Initial zone discovery boot
         threading.Thread(target=self.fetch_all_parameters, daemon=True).start()
 
@@ -104,6 +113,72 @@ class VRChatOSCManager:
                 self.http_port = info.port
                 self.vrc_ip = "127.0.0.1" # Force localhost to prevent timeouts
                 self._fetch_osc_ports()
+        elif state_change == ServiceStateChange.Removed:
+            # VRChat closed (cleanly) -- its mDNS advertisement vanished. Reconnect
+            # happens automatically when ServiceStateChange.Added fires again on the
+            # browser, so we just need to flip our state to disconnected.
+            if "VRChat" in name:
+                self._handle_disconnect("VRChat mDNS service removed")
+
+    def _handle_disconnect(self, reason: str) -> None:
+        """Mark the manager disconnected and notify the controller.
+
+        Idempotent: a second call after we've already disconnected is a no-op.
+        Safe to invoke from any thread (mDNS callback thread, health-check thread,
+        etc.) since it only does flag updates and a queue/callback dispatch.
+        """
+        if not self.is_connected:
+            return
+        self.is_connected = False
+        # Don't blank http_port -- the mDNS Added handler will overwrite it on
+        # reconnect anyway, and keeping the old value lets the health-check
+        # thread describe what it was last polling.
+        if self.global_osc_callback:
+            try:
+                self.global_osc_callback("SYS/OSCQuery_Status", f"VRChat disconnected ({reason}). Waiting...")
+            except Exception:
+                pass
+        if self.on_disconnected:
+            try:
+                self.on_disconnected()
+            except Exception:
+                pass
+
+    def _start_health_check(self) -> None:
+        """Spawn a daemon thread that pings VRChat's OSCQuery HTTP endpoint while we
+        believe we're connected. Catches crashes / force-kills where the mDNS
+        Removed event never fires."""
+        if self._health_thread and self._health_thread.is_alive():
+            return
+
+        def loop() -> None:
+            consecutive_failures = 0
+            while not self._shutdown.is_set():
+                # Sleep first so we don't immediately race the initial connect.
+                if self._shutdown.wait(5.0):
+                    return
+                if not self.is_connected or not self.http_port:
+                    consecutive_failures = 0
+                    continue
+                try:
+                    response = requests.get(
+                        f"http://127.0.0.1:{self.http_port}/",
+                        timeout=1.5,
+                    )
+                    if response.status_code == 200:
+                        consecutive_failures = 0
+                        continue
+                    consecutive_failures += 1
+                except Exception:
+                    consecutive_failures += 1
+                # Two strikes before declaring dead -- one stray timeout on a busy
+                # system shouldn't kick us into the disconnect path.
+                if consecutive_failures >= 2:
+                    self._handle_disconnect("OSCQuery HTTP unreachable")
+                    consecutive_failures = 0
+
+        self._health_thread = threading.Thread(target=loop, daemon=True)
+        self._health_thread.start()
 
     def _fetch_osc_ports(self):
         try:
@@ -347,6 +422,8 @@ class VRChatOSCManager:
 
     def stop(self):
         """Unregister services and shut down."""
+        # Wake the health-check loop so it exits promptly.
+        self._shutdown.set()
         if self.service_info:
             print("Shutting down OSC advertisement...")
             self.zeroconf.unregister_all_services()
