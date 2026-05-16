@@ -3,6 +3,7 @@ from typing import List, Optional
 
 import customtkinter as ctk
 from constants import *
+from parameter_store import store
 
 
 class OscGoesPurrrUI:
@@ -176,8 +177,9 @@ class OscGoesPurrrUI:
                 self._setup_system_log_view(view_frame)
             elif view_name == "Settings":
                 self._setup_settings_view(view_frame)
+            elif view_name == "Help":
+                self._setup_help_view(view_frame)
             else:
-                # Placeholder for Help view
                 placeholder_label = ctk.CTkLabel(
                     view_frame,
                     text=f"{view_name} will go here",
@@ -202,53 +204,32 @@ class OscGoesPurrrUI:
         )
         title_label.pack(pady=(0, 15))
         
-        # ---- Profile Selector Frame (4 configurable profile buttons) ----
+        # ---- Profile Selector Frame (4 configurable profile slots) ----
         profile_frame = ctk.CTkFrame(parent_frame, corner_radius=8, fg_color="transparent")
         profile_frame.pack(expand=False, fill="x", padx=20, pady=(0, 15))
-        
+
         profile_header = ctk.CTkLabel(
             profile_frame,
             text="Active Profile",
             font=("Arial", 16, "bold"),
             text_color=COLOR_TEXT
         )
-        profile_header.pack(anchor="w", pady=(0, 8))
-        
-        # Create a row of 4 profile buttons
-        profile_buttons_frame = ctk.CTkFrame(profile_frame, fg_color="transparent")
-        profile_buttons_frame.pack(expand=False, fill="x")
-        
+        profile_header.pack(anchor="w", pady=(0, 4))
+
+        ctk.CTkLabel(
+            profile_frame,
+            text="Each profile keeps its own toy settings (SPS zones, custom OSC parameters, filters).",
+            font=ctk.CTkFont(size=11),
+            text_color=COLOR_TEXT_MUTED,
+        ).pack(anchor="w", pady=(0, 8))
+
+        # Wrapping flow of profile tiles; rebuilt dynamically so the user can
+        # add/remove as many profiles as they want.
+        self.profile_buttons_frame = ctk.CTkFrame(profile_frame, fg_color="transparent")
+        self.profile_buttons_frame.pack(expand=False, fill="x")
+
         self.profile_buttons = []
-        current_profile = self.controller.profile_manager.current_profile
-        
-        for i in range(4):
-            # Get profile name (use existing profiles or default names)
-            profile_keys = list(self.controller.profile_manager.profiles.keys())
-            if i < len(profile_keys):
-                profile_name = profile_keys[i]
-            else:
-                profile_name = f"Profile {i + 1}"
-            
-            is_active = (profile_name == current_profile)
-            
-            btn = ctk.CTkButton(
-                profile_buttons_frame,
-                text=profile_name,
-                font=("Arial", 13),
-                height=36,
-                width=0,
-                fg_color=COLOR_PRIMARY if is_active else COLOR_SURFACE,
-                hover_color=COLOR_PRIMARY_HOVER if is_active else COLOR_SURFACE_HOVER,
-                text_color=COLOR_TEXT,
-                corner_radius=6,
-                command=lambda name=profile_name: self.controller.switch_profile(name)
-            )
-            btn.grid(row=0, column=i, padx=(0, 8), sticky="ew")
-            
-            # Bind double-click (Double-<Button-1>) to rename
-            btn.bind("<Double-Button-1>", lambda e, b=btn, idx=i: self._start_profile_rename(b, idx))
-            
-            self.profile_buttons.append(btn)
+        self._build_profile_slots()
         
         # Purr Testing Frame
         self.testing_frame = ctk.CTkFrame(parent_frame, corner_radius=8)
@@ -264,100 +245,181 @@ class OscGoesPurrrUI:
         )
         self.purr_check_button.pack(pady=(0, 10))
     
-    def _start_profile_rename(self, button_widget, index):
-        """Start renaming a profile by replacing the button with an entry field"""
-        current_name = button_widget.cget("text")
-        
-        # Destroy the button in its grid cell
-        button_widget.grid_forget()
-        
-        # Create frame to hold entry + confirm button
-        rename_frame = ctk.CTkFrame(self.profile_buttons[index].grid_info()['in'] if hasattr(self.profile_buttons[index], 'grid_info') else button_widget.master, fg_color="transparent")
-        
-        # Actually place it in the parent of the buttons frame
-        parent = button_widget.master
-        
-        entry = ctk.CTkEntry(
-            parent,
-            font=("Arial", 13),
-            width=120,
-            height=BTN_HEIGHT_SMALL
-        )
+    def _build_profile_slots(self):
+        """Render every existing profile as a tile, followed by a '+ New' tile.
+        Wraps across rows so the user can add as many profiles as they want."""
+        if not hasattr(self, "profile_buttons_frame") or self.profile_buttons_frame is None:
+            return
+
+        for child in self.profile_buttons_frame.winfo_children():
+            child.destroy()
+
+        self.profile_buttons = []
+        current_profile = self.controller.profile_manager.current_profile
+        names = list(self.controller.profile_manager.profiles.keys())
+
+        cols = 4
+        for i in range(cols):
+            self.profile_buttons_frame.grid_columnconfigure(i, weight=1, uniform="profilecol")
+
+        can_delete = len(names) > 1
+
+        def place(widget, idx):
+            widget.grid(row=idx // cols, column=idx % cols, padx=(0, 8), pady=(0, 6), sticky="ew")
+
+        for i, name in enumerate(names):
+            is_active = (name == current_profile)
+            slot = ctk.CTkFrame(self.profile_buttons_frame, fg_color="transparent")
+            place(slot, i)
+            slot.grid_columnconfigure(0, weight=1)
+
+            name_btn = ctk.CTkButton(
+                slot, text=name,
+                font=("Arial", 13), height=36,
+                fg_color=COLOR_PRIMARY if is_active else COLOR_SURFACE,
+                hover_color=COLOR_PRIMARY_HOVER if is_active else COLOR_SURFACE_HOVER,
+                text_color=COLOR_TEXT, corner_radius=6,
+                command=lambda n=name: self.controller.switch_profile(n),
+            )
+            name_btn.grid(row=0, column=0, sticky="ew")
+
+            ctk.CTkButton(
+                slot, text="✎", width=28, height=36,
+                font=("Arial", 14),
+                fg_color=COLOR_SURFACE, hover_color=COLOR_SURFACE_HOVER,
+                text_color=COLOR_TEXT_MUTED, corner_radius=6,
+                command=lambda n=name: self._start_profile_rename(n),
+            ).grid(row=0, column=1, padx=(4, 0))
+
+            del_btn = ctk.CTkButton(
+                slot, text="🗑", width=28, height=36,
+                font=("Arial", 13),
+                fg_color=COLOR_SURFACE,
+                hover_color=COLOR_ALERT_HOVER if can_delete else COLOR_SURFACE,
+                text_color=COLOR_ALERT if can_delete else COLOR_TEXT_MUTED,
+                corner_radius=6,
+                state="normal" if can_delete else "disabled",
+                command=lambda n=name: self._confirm_profile_delete(n),
+            )
+            del_btn.grid(row=0, column=2, padx=(4, 0))
+
+            self.profile_buttons.append(name_btn)
+
+        # Trailing "+ New Profile" tile
+        add_slot = ctk.CTkFrame(self.profile_buttons_frame, fg_color="transparent")
+        place(add_slot, len(names))
+        add_slot.grid_columnconfigure(0, weight=1)
+        ctk.CTkButton(
+            add_slot, text="+ New Profile",
+            font=("Arial", 13), height=36,
+            fg_color=COLOR_SURFACE, hover_color=COLOR_PRIMARY_HOVER,
+            text_color=COLOR_TEXT, corner_radius=6,
+            command=self._add_new_profile,
+        ).grid(row=0, column=0, sticky="ew")
+
+    # Alias kept for callers in main.py that already use this name.
+    def _refresh_profile_buttons(self):
+        self._build_profile_slots()
+
+    def _add_new_profile(self):
+        name = self.controller.create_profile()
+        # Drop the user straight into renaming the freshly-created profile.
+        self._build_profile_slots()
+        self._start_profile_rename(name)
+
+    def _confirm_profile_delete(self, name: str):
+        """Show a small confirmation dialog before deleting a profile."""
+        if len(self.controller.profile_manager.profiles) <= 1:
+            return
+        dlg = ctk.CTkToplevel(self.app)
+        dlg.title("Delete Profile")
+        dlg.geometry("360x160")
+        dlg.transient(self.app)
+        try:
+            dlg.grab_set()
+        except Exception:
+            pass
+
+        ctk.CTkLabel(
+            dlg, text=f"Delete profile '{name}'?",
+            font=("Arial", 15, "bold"), text_color=COLOR_TEXT,
+        ).pack(pady=(20, 6))
+        ctk.CTkLabel(
+            dlg,
+            text="This removes the profile's saved per-toy settings.\nYour toys themselves remain.",
+            font=ctk.CTkFont(size=11), text_color=COLOR_TEXT_MUTED,
+            justify="center",
+        ).pack(pady=(0, 14))
+
+        row = ctk.CTkFrame(dlg, fg_color="transparent")
+        row.pack()
+        ctk.CTkButton(
+            row, text="Cancel",
+            fg_color=COLOR_SURFACE, hover_color=COLOR_SURFACE_HOVER,
+            command=dlg.destroy,
+        ).pack(side="left", padx=6)
+
+        def do_delete():
+            dlg.destroy()
+            self.controller.delete_profile(name)
+
+        ctk.CTkButton(
+            row, text="Delete",
+            fg_color=COLOR_ALERT, hover_color=COLOR_ALERT_HOVER,
+            command=do_delete,
+        ).pack(side="left", padx=6)
+
+    def _start_profile_rename(self, current_name: str):
+        """Open an inline rename entry in the tile for `current_name`."""
+        if not hasattr(self, "profile_buttons_frame"):
+            return
+        if current_name not in self.controller.profile_manager.profiles:
+            return
+
+        # Find the tile by walking children and matching against the name button text.
+        target_slot = None
+        for slot in self.profile_buttons_frame.winfo_children():
+            for sub in slot.winfo_children():
+                try:
+                    if isinstance(sub, ctk.CTkButton) and sub.cget("text") == current_name:
+                        target_slot = slot
+                        break
+                except Exception:
+                    pass
+            if target_slot is not None:
+                break
+        if target_slot is None:
+            return
+
+        for w in target_slot.winfo_children():
+            w.destroy()
+        target_slot.grid_columnconfigure(0, weight=1)
+
+        entry = ctk.CTkEntry(target_slot, font=("Arial", 13), height=36)
         entry.insert(0, current_name)
-        
-        # Find the grid position of the replaced button and place the entry there
-        # We need to temporarily use the grid slot
-        row_info = {"row": 0, "column": index}
-        
-        def confirm_rename():
+        entry.select_range(0, "end")
+        entry.grid(row=0, column=0, sticky="ew")
+
+        def confirm(_evt=None):
             new_name = entry.get().strip()
             if new_name and new_name != current_name:
                 self.controller.rename_profile(current_name, new_name)
-            # Rebuild the profile buttons after rename
-            self._refresh_profile_buttons()
-        
-        entry.bind("<Return>", lambda e: confirm_rename())
-        entry.bind("<Escape>", lambda e: self._refresh_profile_buttons())
-        
+            self._build_profile_slots()
+
+        def cancel(_evt=None):
+            self._build_profile_slots()
+
+        entry.bind("<Return>", confirm)
+        entry.bind("<Escape>", cancel)
+        entry.bind("<FocusOut>", confirm)
         entry.focus_set()
-        
-        # Replace button with entry in the grid
-        for child in parent.winfo_children():
-            if isinstance(child, ctk.CTkButton):
-                info = child.grid_info()
-                if info and info.get('column') == index:
-                    child.grid_forget()
-                    break
-        
-        entry.grid(row=0, column=index, padx=(0, 8), sticky="ew")
-        
-        # Store reference so we can clean up
-        self._rename_entry = entry
-    
-    def _refresh_profile_buttons(self):
-        """Rebuild the 4 profile buttons in the Dashboard"""
-        parent = None
-        for btn in self.profile_buttons:
-            if btn.master:
-                parent = btn.master
-                break
-        
-        if not parent:
-            return
-        
-        # Clear existing children from the buttons frame
-        for child in parent.winfo_children():
-            child.destroy()
-        
-        self.profile_buttons = []
-        current_profile = self.controller.profile_manager.current_profile
-        profile_keys = list(self.controller.profile_manager.profiles.keys())
-        
-        for i in range(4):
-            if i < len(profile_keys):
-                profile_name = profile_keys[i]
-            else:
-                profile_name = f"Profile {i + 1}"
-            
-            is_active = (profile_name == current_profile)
-            
-            btn = ctk.CTkButton(
-                parent,
-                text=profile_name,
-                font=("Arial", 13),
-                height=36,
-                width=0,
-                fg_color=COLOR_PRIMARY if is_active else COLOR_SURFACE,
-                hover_color=COLOR_PRIMARY_HOVER if is_active else COLOR_SURFACE_HOVER,
-                text_color=COLOR_TEXT,
-                corner_radius=6,
-                command=lambda name=profile_name: self.controller.switch_profile(name)
-            )
-            btn.grid(row=0, column=i, padx=(0, 8), sticky="ew")
-            
-            btn.bind("<Double-Button-1>", lambda e, b=btn, idx=i: self._start_profile_rename(b, idx))
-            
-            self.profile_buttons.append(btn)
+
+        ctk.CTkButton(
+            target_slot, text="✓", width=28, height=36,
+            font=("Arial", 14, "bold"),
+            fg_color=COLOR_PRIMARY, hover_color=COLOR_PRIMARY_HOVER,
+            command=confirm,
+        ).grid(row=0, column=1, padx=(4, 0))
     
     def _setup_device_routing_view(self, parent_frame: ctk.CTkFrame):
         """Setup the Device Routing view (formerly Hardware Tester) - no save button"""
@@ -488,6 +550,132 @@ class OscGoesPurrrUI:
         )
         self.log_text.pack(expand=True, fill="both", padx=5, pady=(0, 5))
     
+    def _setup_help_view(self, parent_frame: ctk.CTkFrame):
+        """Setup the Help view — explains how settings, profiles, devices and
+        the OSC inspector work so the user doesn't have to dig through code or
+        external docs."""
+        title_label = ctk.CTkLabel(
+            parent_frame, text="Help & How It Works",
+            font=("Arial", 28, "bold"), text_color=COLOR_PRIMARY,
+        )
+        title_label.pack(pady=(0, 12))
+
+        scroller = ctk.CTkScrollableFrame(parent_frame, fg_color="transparent")
+        scroller.pack(expand=True, fill="both", padx=20, pady=(0, 20))
+
+        def section(title: str, body: str):
+            card = ctk.CTkFrame(scroller, fg_color=COLOR_SURFACE, corner_radius=8)
+            card.pack(fill="x", pady=(0, 10))
+            ctk.CTkLabel(
+                card, text=title, font=("Arial", 16, "bold"),
+                text_color=COLOR_PRIMARY, anchor="w", justify="left",
+            ).pack(anchor="w", padx=15, pady=(12, 4))
+            ctk.CTkLabel(
+                card, text=body.strip(), font=("Arial", 12),
+                text_color=COLOR_TEXT, anchor="w", justify="left",
+                wraplength=720,
+            ).pack(anchor="w", padx=15, pady=(0, 12), fill="x")
+
+        section(
+            "Profiles — what they are",
+            """
+A profile is a complete bundle of toy settings, selectable on the
+Dashboard. The currently-selected profile is the one the haptic engine
+uses for routing OSC parameters to motor outputs.
+
+  • Click a profile tile to switch to it.
+  • Click the pencil (✎) to rename it.
+  • Click the trash (🗑) to delete it (disabled when only one profile remains).
+  • Click "+ New Profile" to add another. There is no fixed cap.
+""",
+        )
+
+        section(
+            "What is saved per profile vs. globally",
+            """
+Per profile (each profile keeps its own copy):
+  • SPS zones selected for each motor (Pussy, Ass, Dick, etc., or "All SPS")
+  • Custom OSC parameter addresses mapped to each motor
+  • Interaction filters: Touch, Penetration, Self, Others
+  • Linear-actuator mode (Position / Speed) and idle behaviour (Hold / Rest)
+
+Global (shared by all profiles):
+  • The list of known toys (every toy you've ever connected). New or empty
+    profiles automatically inherit this list with default settings, so
+    switching profiles never loses sight of a toy.
+  • App settings: OSC network bind, auto-connect, auto-refresh,
+    minimize-to-tray, hide-console, etc. (see the Settings tab).
+""",
+        )
+
+        section(
+            "Switching profiles",
+            """
+Switching profiles instantly swaps the active routing rules. Every motor
+re-evaluates against the new profile's zones, filters and custom OSC
+addresses. The set of toys you see does not change — it's the same global
+toy list — only their settings do.
+
+If you switch to a brand-new profile, every previously-seen toy appears
+with default settings, ready for you to configure.
+""",
+        )
+
+        section(
+            "Deleting a toy",
+            """
+The red "Delete" button on a toy card forgets that toy entirely — it is
+removed from every profile and from the global known-toys list. The card
+will not reappear when you switch profiles. To use the toy again, simply
+reconnect it; it will be re-registered automatically.
+""",
+        )
+
+        section(
+            "Custom OSC addresses on a motor",
+            """
+Under each motor, the "+ Add Variable" button lets you map any number of
+OSC parameters to that motor. The motor's output is the maximum of all
+mapped parameters' normalized values (plus any contribution from
+selected SPS zones, if enabled).
+
+The picker shows live avatar parameters captured by the OSC inspector
+(see the Network & Debug tab). Double-click a row to add it, or use the
+manual entry field for parameters not currently on the avatar (wildcards
+like OGB/Tail/* are accepted).
+
+Tick "Include non-avatar parameters" to also see OGB / SPS / system
+paths in the same picker.
+
+The × on each chip removes that mapping for the current profile only.
+""",
+        )
+
+        section(
+            "Real-Time OSC Inspector",
+            """
+Network & Debug → Real-Time OSC Inspector shows every OSC parameter
+your avatar is broadcasting. Useful for finding the exact name of a
+parameter before mapping it to a motor. Use the search box to filter.
+The active SPS zones panel above lists detected OGB orifices and
+penetrators on the loaded avatar.
+""",
+        )
+
+        section(
+            "Where settings live on disk",
+            """
+%APPDATA%\\OscGoesPurrr\\
+  • profiles.json         — per-profile device settings
+  • known_devices.json    — global toy list (name, motor count, motor kinds)
+  • app_settings.json     — global app preferences
+
+Deleting known_devices.json forces a rebuild from profiles.json on next
+launch. Deleting profiles.json wipes all profile settings (toys remain
+known and will be re-seeded with defaults).
+""",
+        )
+
     def _setup_settings_view(self, parent_frame: ctk.CTkFrame):
         """Setup the Settings view with application configuration controls"""
         # Title
@@ -765,7 +953,7 @@ class OscGoesPurrrUI:
                 - frame: The device frame widget
                 - status_label: The status label widget
                 - delete_button: The delete button widget
-                - motors: List of motor control dictionaries with 'slider', 'vibe_meter', and 'osc_entry'
+                - motors: List of motor control dictionaries with 'slider', 'vibe_meter', and 'addresses' (list[str])
         """
         # Create frame container for this device with full controls
         device_frame = ctk.CTkFrame(
@@ -1004,14 +1192,19 @@ class OscGoesPurrrUI:
                 idle_btn.set("Hold" if current_idle == "hold" else "Rest")
                 idle_btn.pack(side="left")
 
-            # Row 4: Custom Parameter Fallback
-            osc_entry = ctk.CTkEntry(motor_frame, placeholder_text="Custom override (e.g. OGB/Tail/Touch)")
-            osc_entry.insert(0, osc_addresses.get(str(motor_idx), ""))
-            osc_entry.grid(row=4, column=0, columnspan=2, padx=10, pady=(5, 5), sticky="ew")
-            osc_entry.bind("<FocusOut>", lambda e, dn=device_name: (
-                self.controller.save_profiles(),
-                self.controller.force_recalculate() if hasattr(self.controller, 'force_recalculate') else None
-            ))
+            # Row 4: Custom OSC Addresses (list of chips + Add button).
+            # Each motor can have N addresses; the router takes the max.
+            raw_entry = osc_addresses.get(str(motor_idx), [])
+            if isinstance(raw_entry, str):
+                addresses_list = [raw_entry] if raw_entry.strip() else []
+            elif isinstance(raw_entry, list):
+                addresses_list = [a for a in raw_entry if isinstance(a, str)]
+            else:
+                addresses_list = []
+
+            self._setup_motor_address_row(
+                motor_frame, device_name, motor_idx, addresses_list, row=4
+            )
 
             # Row 5: Intensity Slider
             slider = ctk.CTkSlider(motor_frame, from_=0.0, to=1.0, command=lambda val, dn=device_name, idx=motor_idx: self.controller.update_device_target(dn, float(val), idx))
@@ -1026,7 +1219,7 @@ class OscGoesPurrrUI:
             motor_vars.append({
                 "slider": slider,
                 "vibe_meter": vibe_meter,
-                "osc_entry": osc_entry
+                "addresses": addresses_list,
             })
         
         # Return unified frame data with all elements
@@ -1037,7 +1230,330 @@ class OscGoesPurrrUI:
             "delete_button": delete_button,
             "motors": motor_vars
         }
-    
+
+    def _setup_motor_address_row(self, motor_frame, device_name, motor_idx, addresses_list, row):
+        """Build the per-motor custom-address row (chip list + Add Variable button).
+        Lives in its own method so each motor gets its own closure scope."""
+        addr_container = ctk.CTkFrame(motor_frame, fg_color="transparent")
+        addr_container.grid(row=row, column=0, columnspan=2, padx=10, pady=(5, 5), sticky="ew")
+        addr_container.grid_columnconfigure(0, weight=1)
+
+        chips_frame = ctk.CTkFrame(addr_container, fg_color="transparent")
+        chips_frame.grid(row=0, column=0, columnspan=2, sticky="ew")
+
+        def persist():
+            current = self.controller.get_profile_config(device_name, "osc_addresses", {}) or {}
+            if not isinstance(current, dict):
+                current = {}
+            current[str(motor_idx)] = list(addresses_list)
+            self.controller.update_device_config(device_name, "osc_addresses", current)
+            self.controller.save_profiles()
+            if hasattr(self.controller, 'force_recalculate'):
+                self.controller.force_recalculate()
+
+        def render():
+            for w in chips_frame.winfo_children():
+                w.destroy()
+            if not addresses_list:
+                ctk.CTkLabel(
+                    chips_frame,
+                    text="No addresses — click 'Add Variable' to map an OSC parameter.",
+                    font=ctk.CTkFont(size=11),
+                    text_color=COLOR_TEXT_MUTED,
+                ).pack(anchor="w", padx=4, pady=2)
+                return
+            for i, addr in enumerate(addresses_list):
+                chip = ctk.CTkFrame(chips_frame, fg_color=COLOR_SURFACE_HOVER, corner_radius=10)
+                chip.pack(side="top", anchor="w", fill="x", pady=1)
+                ctk.CTkLabel(
+                    chip, text=addr, font=ctk.CTkFont(size=11), anchor="w"
+                ).pack(side="left", padx=(8, 4), pady=2, fill="x", expand=True)
+                ctk.CTkButton(
+                    chip, text="×", width=22, height=20,
+                    fg_color="transparent", hover_color=COLOR_ALERT_HOVER,
+                    text_color=COLOR_ALERT,
+                    font=ctk.CTkFont(size=14, weight="bold"),
+                    command=lambda idx=i: self._remove_motor_address(addresses_list, idx, render, persist),
+                ).pack(side="right", padx=(2, 4))
+
+        def add_address(new_addr):
+            cleaned = (new_addr or "").strip()
+            if cleaned.startswith("/avatar/parameters/"):
+                cleaned = cleaned[len("/avatar/parameters/"):]
+            elif cleaned.startswith("/"):
+                cleaned = cleaned[1:]
+            if not cleaned or cleaned in addresses_list:
+                return
+            addresses_list.append(cleaned)
+            render()
+            persist()
+
+        ctk.CTkButton(
+            addr_container,
+            text="+ Add Variable",
+            height=BTN_HEIGHT_SMALL,
+            fg_color=COLOR_SURFACE,
+            hover_color=COLOR_SURFACE_HOVER,
+            command=lambda: self._open_variable_picker(add_address),
+        ).grid(row=1, column=0, columnspan=2, sticky="ew", pady=(4, 2))
+
+        render()
+
+    @staticmethod
+    def _remove_motor_address(lst, idx, render, persist):
+        if 0 <= idx < len(lst):
+            lst.pop(idx)
+            render()
+            persist()
+
+    def _open_variable_picker(self, on_pick):
+        """Open a modal that lists live avatar parameters from the store.
+
+        Uses a native ttk.Treeview because CTk widgets are far too heavy when
+        there are several hundred avatar parameters (rebuilding the list on
+        every keystroke caused multi-second freezes). The Treeview can handle
+        thousands of rows without breaking a sweat.
+        """
+        import tkinter as tk
+        from tkinter import ttk
+
+        win = ctk.CTkToplevel(self.app)
+        win.title("Add OSC Variable")
+        win.geometry("560x600")
+        win.transient(self.app)
+        try:
+            win.grab_set()
+        except Exception:
+            pass
+
+        ctk.CTkLabel(
+            win, text="Add OSC Variable", font=("Arial", 18, "bold"),
+            text_color=COLOR_PRIMARY,
+        ).pack(pady=(12, 4))
+        ctk.CTkLabel(
+            win,
+            text="Pick from live avatar parameters (double-click to add) or enter one manually.",
+            font=ctk.CTkFont(size=11),
+            text_color=COLOR_TEXT_MUTED,
+        ).pack(pady=(0, 8))
+
+        search_var = ctk.StringVar()
+        search_entry = ctk.CTkEntry(
+            win,
+            placeholder_text="Search avatar parameters...",
+            textvariable=search_var,
+            height=30,
+        )
+        search_entry.pack(fill="x", padx=12, pady=(0, 6))
+
+        show_all_var = ctk.BooleanVar(value=False)
+        toggle_row = ctk.CTkFrame(win, fg_color="transparent")
+        toggle_row.pack(fill="x", padx=12, pady=(0, 4))
+        ctk.CTkCheckBox(
+            toggle_row,
+            text="Include non-avatar parameters (OGB/SPS, system, etc.)",
+            variable=show_all_var,
+            font=ctk.CTkFont(size=11),
+            command=lambda: refresh(force=True),
+        ).pack(side="left")
+
+        # Native tk frame to host the Treeview (CTk's scrollable frame is far too
+        # slow for hundreds of rows).
+        tree_frame = tk.Frame(win, bg=COLOR_BG, highlightthickness=0, bd=0)
+        tree_frame.pack(expand=True, fill="both", padx=12, pady=(0, 8))
+
+        # Style the Treeview to fit the dark theme.
+        ttk_style = ttk.Style(win)
+        try:
+            ttk_style.theme_use("clam")
+        except tk.TclError:
+            pass
+        ttk_style.configure(
+            "Picker.Treeview",
+            background=COLOR_BG, foreground=COLOR_TEXT,
+            fieldbackground=COLOR_BG, bordercolor=COLOR_BG,
+            rowheight=22, font=("Consolas", 10),
+        )
+        ttk_style.map(
+            "Picker.Treeview",
+            background=[("selected", COLOR_PRIMARY)],
+            foreground=[("selected", "white")],
+        )
+        ttk_style.configure(
+            "Picker.Treeview.Heading",
+            background=COLOR_SURFACE, foreground=COLOR_TEXT,
+            relief="flat", font=("Arial", 10, "bold"),
+        )
+
+        tree = ttk.Treeview(
+            tree_frame,
+            columns=("value",),
+            show="tree headings",
+            style="Picker.Treeview",
+            selectmode="browse",
+        )
+        tree.heading("#0", text="Parameter")
+        tree.heading("value", text="Value")
+        tree.column("#0", width=380, anchor="w", stretch=True)
+        tree.column("value", width=120, anchor="e", stretch=False)
+
+        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        tree.pack(side="left", expand=True, fill="both")
+        vsb.pack(side="right", fill="y")
+
+        empty_label = ctk.CTkLabel(
+            win, text="No avatar parameters seen yet.",
+            text_color=COLOR_TEXT_MUTED, font=ctk.CTkFont(size=11),
+        )
+
+        state = {
+            "closed": False,
+            "last_filtered": None,   # tuple of currently shown keys
+            "last_keys": None,       # tuple of all avatar param keys (sorted)
+            "last_query": None,
+            "tick_id": None,
+            "debounce_id": None,
+        }
+
+        def is_avatar_param(addr: str) -> bool:
+            # Store strips "/avatar/parameters/" before keys are written, so the
+            # avatar variables are everything that isn't an OGB/SPS detection path.
+            return not addr.startswith("OGB/")
+
+        def fmt(val):
+            if isinstance(val, float):
+                return f"{val:.2f}"
+            return str(val)
+
+        def add_selected(_evt=None):
+            sel = tree.selection()
+            if sel:
+                add_and_close(sel[0])
+
+        def add_and_close(addr):
+            try:
+                on_pick(addr)
+            finally:
+                close_window()
+
+        def rebuild_tree(filtered_keys, params):
+            tree.delete(*tree.get_children())
+            for key in filtered_keys:
+                tree.insert("", "end", iid=key, text=key, values=(fmt(params.get(key, "")),))
+
+        def update_values_only(filtered_keys, params):
+            for key in filtered_keys:
+                try:
+                    tree.set(key, "value", fmt(params.get(key, "")))
+                except tk.TclError:
+                    pass
+
+        def refresh(force=False):
+            if state["closed"]:
+                return
+            # Cancel any pending tick so we don't stack timers on forced refreshes.
+            if state.get("tick_id") is not None:
+                try:
+                    win.after_cancel(state["tick_id"])
+                except Exception:
+                    pass
+                state["tick_id"] = None
+
+            params = store.get_all_parameters()
+            include_all = bool(show_all_var.get())
+            if include_all:
+                keys = tuple(sorted(params.keys()))
+            else:
+                keys = tuple(sorted(k for k in params.keys() if is_avatar_param(k)))
+            query = search_var.get().strip().lower()
+
+            keys_changed = keys != state["last_keys"]
+            query_changed = query != state["last_query"]
+            state["last_keys"] = keys
+            state["last_query"] = query
+
+            if not keys:
+                tree.delete(*tree.get_children())
+                empty_label.pack(pady=10)
+                state["last_filtered"] = ()
+            else:
+                empty_label.pack_forget()
+                if force or keys_changed or query_changed:
+                    filtered = tuple(k for k in keys if not query or query in k.lower())
+                    state["last_filtered"] = filtered
+                    rebuild_tree(filtered, params)
+                else:
+                    update_values_only(state["last_filtered"] or (), params)
+
+            # Periodic value refresh (cheap when nothing changed).
+            state["tick_id"] = win.after(1500, refresh)
+
+        def on_search_change(*_):
+            # Debounce: only re-filter after the user pauses typing.
+            if state["debounce_id"] is not None:
+                try:
+                    win.after_cancel(state["debounce_id"])
+                except Exception:
+                    pass
+            state["debounce_id"] = win.after(180, refresh)
+
+        search_var.trace_add("write", on_search_change)
+        tree.bind("<Double-Button-1>", add_selected)
+        tree.bind("<Return>", add_selected)
+
+        # Bottom row: manual entry + Add Selected
+        bottom = ctk.CTkFrame(win, fg_color=COLOR_SURFACE, corner_radius=6)
+        bottom.pack(fill="x", padx=12, pady=(0, 12))
+        ctk.CTkLabel(
+            bottom, text="Or add manually (wildcards allowed, e.g. OGB/Tail/*):",
+            font=ctk.CTkFont(size=11), text_color=COLOR_TEXT_MUTED, anchor="w",
+        ).pack(fill="x", padx=8, pady=(6, 2))
+        manual_row = ctk.CTkFrame(bottom, fg_color="transparent")
+        manual_row.pack(fill="x", padx=8, pady=(0, 8))
+        manual_entry = ctk.CTkEntry(manual_row, placeholder_text="e.g. OGB/Tail/Touch")
+        manual_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+
+        def submit_manual(_evt=None):
+            text = manual_entry.get().strip()
+            if text:
+                add_and_close(text)
+
+        manual_entry.bind("<Return>", submit_manual)
+        ctk.CTkButton(
+            manual_row, text="Add Manual", width=100, height=BTN_HEIGHT_SMALL,
+            fg_color=COLOR_SURFACE_HOVER, hover_color=COLOR_PRIMARY_HOVER,
+            command=submit_manual,
+        ).pack(side="right")
+
+        action_row = ctk.CTkFrame(bottom, fg_color="transparent")
+        action_row.pack(fill="x", padx=8, pady=(0, 8))
+        ctk.CTkButton(
+            action_row, text="Add Selected", height=BTN_HEIGHT_SMALL,
+            fg_color=COLOR_PRIMARY, hover_color=COLOR_PRIMARY_HOVER,
+            command=add_selected,
+        ).pack(side="right")
+
+        def close_window():
+            state["closed"] = True
+            for key in ("tick_id", "debounce_id"):
+                aid = state.get(key)
+                if aid is not None:
+                    try:
+                        win.after_cancel(aid)
+                    except Exception:
+                        pass
+                    state[key] = None
+            try:
+                win.grab_release()
+            except Exception:
+                pass
+            win.destroy()
+
+        win.protocol("WM_DELETE_WINDOW", close_window)
+        refresh()
+        search_entry.focus_set()
+
     def build_stored_devices_ui(self):
         """Build the UI for all stored devices from profiles with full controls in unified view
         
@@ -1104,10 +1620,12 @@ class OscGoesPurrrUI:
             # Get motor count from detected values first, then profile, then default to 1
             stored_motor_count = device_motor_counts.get(device_name, config.get("motor_count", 1))
             
-            # Get OSC addresses dict from config, with backward compatibility
+            # Get OSC addresses dict from config, with backward compatibility.
+            # Each value is expected to be a list[str]; older configs may still
+            # have a string which _create_device_frame will normalize.
             osc_addresses = config.get("osc_addresses", {})
             if not osc_addresses and config.get("osc_address"):
-                osc_addresses["0"] = config.get("osc_address")
+                osc_addresses["0"] = [config.get("osc_address")]
             
             # Pull persisted motor kinds (saved by _sync_linear_configs on connect).
             # Falls back to None when the device has never been seen by this build,
@@ -1238,7 +1756,7 @@ class OscGoesPurrrUI:
                 osc_addresses = {}
                 for i in range(actual_motor_count):
                     suffix = f"_{i}" if actual_motor_count > 1 else ""
-                    osc_addresses[str(i)] = f"{device_name.replace(' ', '_')}{suffix}"
+                    osc_addresses[str(i)] = [f"{device_name.replace(' ', '_')}{suffix}"]
                 
                 # Store motor count in profile via controller
                 controller.update_device_config(device_name, "motor_count", motor_count)

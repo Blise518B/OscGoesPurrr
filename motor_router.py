@@ -304,10 +304,24 @@ class MotorRouter:
     ) -> float:
         target_val = 0.0
 
-        # --- 1. Custom Override Box --------------------------------------------------
+        # --- 1. Custom Override Addresses --------------------------------------------
+        # `osc_addresses[motor_idx]` may be a list of addresses (current format)
+        # or a single string (legacy format). Each address contributes; max wins.
         osc_addresses = config.get("osc_addresses", {})
-        custom_addr = osc_addresses.get(str(motor_idx), "").strip()
-        if custom_addr:
+        raw_entry = osc_addresses.get(str(motor_idx), [])
+        if isinstance(raw_entry, str):
+            custom_list = [raw_entry]
+        elif isinstance(raw_entry, list):
+            custom_list = raw_entry
+        else:
+            custom_list = []
+
+        for custom_addr in custom_list:
+            if not isinstance(custom_addr, str):
+                continue
+            custom_addr = custom_addr.strip()
+            if not custom_addr:
+                continue
             if custom_addr.startswith("/avatar/parameters/"):
                 custom_addr = custom_addr.replace("/avatar/parameters/", "")
             elif custom_addr.startswith("/"):

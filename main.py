@@ -41,7 +41,15 @@ class OscGoesPurrrApp:
         
         # Profile manager instance
         self.profile_manager = ProfileManager()
-        
+
+        # Seed *every* profile with every known toy on startup. Toys are
+        # global; profiles are settings overlays. Running this for all
+        # profiles means a stale config from before the global registry
+        # existed gets unified the first time you launch the new build.
+        for _pname in list(self.profile_manager.profiles.keys()):
+            self._seed_profile_with_known_devices(_pname)
+        print(f"[profiles] known toys: {list(self.profile_manager.known_devices.all().keys())}")
+
         # Keep aliases for backward compatibility during refactoring
         self.profiles = self.profile_manager.profiles
         self.current_profile = self.profile_manager.current_profile
@@ -162,6 +170,15 @@ class OscGoesPurrrApp:
                         # in limbo with no retries.
                         self.update_connection_status(connected, server)
                     elif msg_type == "devices_found":
+                        # Update the global known-toys registry so future
+                        # empty profiles still see these toys.
+                        for _info in (data.values() if isinstance(data, dict) else []):
+                            if isinstance(_info, dict):
+                                self.profile_manager.known_devices.register(
+                                    _info.get("name", ""),
+                                    int(_info.get("motor_count", 1)),
+                                    _info.get("motor_kinds"),
+                                )
                         self.ui.build_device_list_ui(data)
                         self._sync_linear_configs(data)
                         # Re-evaluate the green-check vs yellow-warning icons on
@@ -206,24 +223,14 @@ class OscGoesPurrrApp:
         self.ui.log_message(message)
     
     def save_all_profiles(self):
-        """Save all device configurations from UI to profiles.json"""
-        for device_name, frame_data in self.ui.device_ui_frames.items():
-            # Build per-motor OSC address dictionary from motor osc_entries
-            osc_addresses = {}
-            for motor_data in frame_data.get("motors", []):
-                osc_entry = motor_data.get("osc_entry")
-                if osc_entry and hasattr(osc_entry, 'get'):
-                    # The motor index is derived from the position in the list
-                    motor_idx = frame_data["motors"].index(motor_data)
-                    osc_addresses[str(motor_idx)] = osc_entry.get()
-            
-            # If no per-motor entries found, fall back to default
-            if not osc_addresses:
-                osc_addresses["0"] = device_name.replace(" ", "_")
-            
-            # Store per-motor OSC addresses in profile
-            self.update_device_config(device_name, "osc_addresses", osc_addresses)
-        
+        """Persist all profiles. Per-motor addresses are kept up-to-date in the
+        profile dict on every UI add/remove, so this just flushes to disk and
+        ensures every device has at least one default address."""
+        for device_name in self.ui.device_ui_frames.keys():
+            existing = self.get_profile_config(device_name, "osc_addresses", None)
+            if not existing:
+                default_addr = device_name.replace(" ", "_")
+                self.update_device_config(device_name, "osc_addresses", {"0": [default_addr]})
         self.save_profiles()
         self.log_message("All device profiles saved")
     
@@ -316,17 +323,23 @@ class OscGoesPurrrApp:
         self.ui.update_stored_devices_ui()
     
     def delete_stored_device(self, device_name: str):
-        if self.current_profile in self.profiles:
-            if device_name in self.profiles[self.current_profile]:
-                del self.profiles[self.current_profile][device_name]
-                self.save_profiles()
-        
+        """Forget a toy entirely — removes it from every profile and the
+        global known-toys registry. The card will not reappear on profile
+        switch. To use this toy again, reconnect it."""
+        for profile in self.profile_manager.profiles.values():
+            if isinstance(profile, dict) and device_name in profile:
+                del profile[device_name]
+        self.save_profiles()
+        self.profile_manager.known_devices.forget(device_name)
+
         # Remove from UI via ui component
         if device_name in self.ui.stored_device_frames:
             frame_data = self.ui.stored_device_frames[device_name]
             frame_data.get("frame").destroy()
             del self.ui.stored_device_frames[device_name]
-        
+        if device_name in self.ui.device_ui_frames:
+            del self.ui.device_ui_frames[device_name]
+
         self.log_message(f"Deleted stored toy: {device_name}")
     
     def build_stored_devices_ui(self):
@@ -541,56 +554,150 @@ class OscGoesPurrrApp:
         self.profile_manager.app_settings.update_setting("bind_all_interfaces", value)
         self.ui.log_message("Network bind changed. PLEASE RESTART APP to apply.")
 
+    def _seed_profile_with_known_devices(self, profile_name: str) -> None:
+        """Make sure every known toy has a default entry in the given profile.
+
+        This is what gives new/empty profiles the "remember my toys" behaviour
+        — the user gets blank-but-present device cards to configure, rather
+        than having to reconnect each toy to see it.
+        """
+        profile = self.profile_manager.profiles.setdefault(profile_name, {})
+        known = self.profile_manager.known_devices.all()
+        if not known:
+            return
+        added = []
+        for name, meta in known.items():
+            if name in profile:
+                continue
+            motor_count = int(meta.get("motor_count", 1))
+            entry = {"motor_count": motor_count}
+            if meta.get("motor_kinds"):
+                entry["motor_kinds"] = list(meta["motor_kinds"])
+            # Default per-motor OSC addresses match what build_device_list_ui
+            # would seed for a freshly-discovered device.
+            addrs = {}
+            for i in range(motor_count):
+                suffix = f"_{i}" if motor_count > 1 else ""
+                addrs[str(i)] = [f"{name.replace(' ', '_')}{suffix}"]
+            entry["osc_addresses"] = addrs
+            profile[name] = entry
+            added.append(name)
+        if added:
+            self.profile_manager.save_profiles()
+            print(f"[profiles] seeded profile '{profile_name}' with {len(added)} known toy(s): {added}")
+
     def switch_profile(self, profile_name: str):
         """Switch to a different profile and reload the device UI.
+
+        Auto-creates an empty profile if `profile_name` doesn't exist yet, so
+        the four dashboard slots feel like real profile slots even before the
+        user has saved anything to them.
 
         Args:
             profile_name: Name of the profile to switch to.
         """
         if profile_name not in self.profile_manager.profiles:
-            self.log_message(f"Profile '{profile_name}' not found.")
-            return
+            self.profile_manager.profiles[profile_name] = {}
+            self.profile_manager.save_profiles()
+            self.log_message(f"Created new profile: {profile_name}")
+
+        # Toys are global; profiles are pure settings overlays. Every profile
+        # therefore has an entry for every known toy (default settings until
+        # the user changes them). "Delete" is the explicit way to forget a toy
+        # across all profiles — see delete_stored_device.
+        self._seed_profile_with_known_devices(profile_name)
 
         self.profile_manager.current_profile = profile_name
         self.current_profile = profile_name
 
-        # Rebuild the device UI for the new profile
+        # Clear cached UI frames so build_stored_devices_ui doesn't short-circuit
+        # and leave the previous profile's device cards on screen when the new
+        # profile is empty.
+        try:
+            self.ui.device_ui_frames.clear()
+            self.ui.stored_device_frames.clear()
+        except Exception:
+            pass
+
         self.ui.build_stored_devices_ui()
+        if hasattr(self.ui, "_refresh_profile_buttons"):
+            self.ui._refresh_profile_buttons()
+        if hasattr(self, "force_recalculate"):
+            self.force_recalculate()
         self.log_message(f"Switched to profile: {profile_name}")
 
         # Refresh the profile buttons on the Dashboard
         if hasattr(self.ui, '_refresh_profile_buttons'):
             self.ui._refresh_profile_buttons()
     
+    def create_profile(self, base_name: str = "New Profile") -> str:
+        """Create a fresh profile and return its name. If `base_name` is
+        already taken, appends ' 2', ' 3', ... until a free name is found."""
+        existing = set(self.profile_manager.profiles.keys())
+        name = base_name
+        n = 2
+        while name in existing:
+            name = f"{base_name} {n}"
+            n += 1
+        self.profile_manager.profiles[name] = {}
+        self._seed_profile_with_known_devices(name)
+        self.profile_manager.save_profiles()
+        self.log_message(f"Created profile '{name}'")
+        if hasattr(self.ui, "_refresh_profile_buttons"):
+            self.ui._refresh_profile_buttons()
+        return name
+
+    def delete_profile(self, profile_name: str):
+        """Delete a profile. Refuses to delete the last remaining profile.
+        If the deleted profile is currently active, switches to another."""
+        if profile_name not in self.profile_manager.profiles:
+            return
+        if len(self.profile_manager.profiles) <= 1:
+            self.log_message("Cannot delete the only remaining profile.")
+            return
+
+        del self.profile_manager.profiles[profile_name]
+        self.profile_manager.save_profiles()
+        self.log_message(f"Deleted profile '{profile_name}'")
+
+        if self.profile_manager.current_profile == profile_name:
+            fallback = next(iter(self.profile_manager.profiles.keys()))
+            self.switch_profile(fallback)
+        elif hasattr(self.ui, "_refresh_profile_buttons"):
+            self.ui._refresh_profile_buttons()
+
     def rename_profile(self, old_name: str, new_name: str):
-        """Rename a profile in the profiles dictionary.
+        """Rename a profile, or create a new one if `old_name` is a placeholder
+        slot (e.g. "Profile 3") that hasn't been used yet.
 
         Args:
-            old_name: Current name of the profile.
+            old_name: Current name of the profile (or placeholder slot name).
             new_name: New name for the profile.
         """
-        if old_name not in self.profile_manager.profiles:
-            self.log_message(f"Cannot rename: profile '{old_name}' not found.")
+        new_name = new_name.strip()
+        if not new_name:
             return
-        
-        # Prevent duplicate names
         if new_name in self.profile_manager.profiles and new_name != old_name:
             self.log_message(f"Cannot rename: profile '{new_name}' already exists.")
             return
-        
-        # Rename in the profiles dict
-        data = self.profile_manager.profiles.pop(old_name)
-        self.profile_manager.profiles[new_name] = data
+
+        if old_name in self.profile_manager.profiles:
+            data = self.profile_manager.profiles.pop(old_name)
+            self.profile_manager.profiles[new_name] = data
+            self.log_message(f"Renamed profile '{old_name}' to '{new_name}'")
+        else:
+            # Renaming an empty placeholder slot creates a fresh profile,
+            # seeded with all previously-seen toys (default settings).
+            self.profile_manager.profiles[new_name] = {}
+            self._seed_profile_with_known_devices(new_name)
+            self.log_message(f"Created profile '{new_name}'")
+
         self.profile_manager.save_profiles()
-        
-        # Update current_profile if it was the renamed one
+
         if self.profile_manager.current_profile == old_name:
             self.profile_manager.current_profile = new_name
             self.current_profile = new_name
-        
-        self.log_message(f"Renamed profile '{old_name}' to '{new_name}'")
-        
-        # Refresh the profile buttons on the Dashboard
+
         if hasattr(self.ui, '_refresh_profile_buttons'):
             self.ui._refresh_profile_buttons()
 
