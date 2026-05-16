@@ -197,6 +197,11 @@ class OscGoesPurrrApp:
                         self.ui.update_osc_status(is_connected, port)
                         if is_connected:
                             self.ui.log_message(f"VRChat OSC Connected! Listening on port {port}")
+                            # /avatar/change fires only when the avatar loads.
+                            # If we connected mid-session we'll never see it,
+                            # so probe the OSCQuery HTTP node for the current
+                            # value as soon as the OSCQuery handshake settles.
+                            self._schedule_avatar_id_probe()
                         else:
                             self.ui.log_message("VRChat OSC Disconnected. Waiting for VRChat to come back...")
                     elif msg_type == "osc_haptic_update":
@@ -211,6 +216,8 @@ class OscGoesPurrrApp:
                             self.ui.update_device_visuals(device_name, motor_idx, value)
                         finally:
                             self._is_updating_ui = False  # Unlock
+                    elif msg_type == "avatar_change":
+                        self._on_avatar_change(data)
                         
         except queue.Empty:
             pass  # No more messages in queue
@@ -323,9 +330,11 @@ class OscGoesPurrrApp:
         """Forget a toy entirely — removes it from every profile and the
         global known-toys registry. The card will not reappear on profile
         switch. To use this toy again, reconnect it."""
-        for profile in self.profile_manager.profiles.values():
-            if isinstance(profile, dict) and device_name in profile:
-                del profile[device_name]
+        for source in (self.profile_manager.profiles,
+                       self.profile_manager.avatar_profiles):
+            for profile in source.values():
+                if isinstance(profile, dict) and device_name in profile:
+                    del profile[device_name]
         self.save_profiles()
         self.profile_manager.known_devices.forget(device_name)
 
@@ -367,16 +376,26 @@ class OscGoesPurrrApp:
     def on_osc_message(self, address: str, value):
         """Acts as a trigger ping when new UDP data arrives. Sets a flag to batch rapid updates."""
         self._needs_recalculation = True
+        # VRChat reports the freshly-loaded avatar's ID via /avatar/change.
+        # The OSC layer strips the leading slash, so we see "avatar/change".
+        if address == "avatar/change":
+            self.thread_queue.put(("avatar_change", str(value) if value is not None else ""))
 
     def force_recalculate(self):
-        """Forces the router to recalculate output based on current state and new UI configs."""
-        curr_profile = self.profile_manager.current_profile
-        profiles = self.profile_manager.profiles
-        if curr_profile in profiles and hasattr(self, 'motor_router') and hasattr(self, 'osc_manager'):
-            # Pass a thread-safe copy from the Central Store into the router
-            updates = self.motor_router.reevaluate_state(profiles[curr_profile], store.get_all_parameters())
-            for device_name, target_val, motor_idx in updates:
-                self.thread_queue.put(("osc_haptic_update", (device_name, target_val, motor_idx)))
+        """Forces the router to recalculate output based on current state and new UI configs.
+
+        Reads from whichever profile the manager considers *active* — an avatar
+        profile when the current VRChat avatar has one bound, otherwise the
+        selected global profile.
+        """
+        if not (hasattr(self, 'motor_router') and hasattr(self, 'osc_manager')):
+            return
+        active = self.profile_manager.get_active_profile_dict()
+        if active is None:
+            return
+        updates = self.motor_router.reevaluate_state(active, store.get_all_parameters())
+        for device_name, target_val, motor_idx in updates:
+            self.thread_queue.put(("osc_haptic_update", (device_name, target_val, motor_idx)))
 
     def sync_motor_to_filters(self, device_name: str, motor_idx: int):
         """Recalculate the max value for a motor based on the live shadow state and filter checkboxes.
@@ -594,6 +613,10 @@ class OscGoesPurrrApp:
 
         self.profile_manager.current_profile = profile_name
         self.current_profile = profile_name
+        # Remember this choice for the currently-loaded avatar (if any) so
+        # the next time that avatar loads, this global stays selected
+        # instead of auto-switching to a bound avatar profile.
+        self.profile_manager.record_choice("global", profile_name)
 
         # Clear cached UI frames so build_stored_devices_ui doesn't short-circuit
         # and leave the previous profile's device cards on screen when the new
@@ -681,6 +704,157 @@ class OscGoesPurrrApp:
 
         if hasattr(self.ui, '_refresh_profile_buttons'):
             self.ui._refresh_profile_buttons()
+
+    # ====================
+    # Avatar profiles + clipboard (copy/paste)
+    # ====================
+
+    def _schedule_avatar_id_probe(self):
+        """Spawn a short background poll that asks VRChat's OSCQuery server
+        for the current avatar id. Posts an avatar_change queue message on
+        success. Safe to call repeatedly — it's just a few HTTP GETs."""
+        def _probe():
+            import time as _t
+            # OSCQuery mDNS discovery + JSON build can lag a couple of seconds
+            # after OSC starts. Retry briefly so the user doesn't see "not
+            # detected" on first launch.
+            for attempt in range(6):
+                if not self.osc_manager or not self.osc_manager.is_connected:
+                    return
+                avatar_id = self.osc_manager.query_avatar_id()
+                if avatar_id:
+                    self.thread_queue.put(("avatar_change", avatar_id))
+                    return
+                _t.sleep(1.0)
+        threading.Thread(target=_probe, daemon=True).start()
+
+    def _on_avatar_change(self, avatar_id: str):
+        """Handle a fresh /avatar/change message from VRChat.
+
+        If an avatar profile is bound to this id, it becomes the active
+        profile silently — device cards rebuild against the new settings.
+        Otherwise we keep the currently-selected global profile.
+        """
+        avatar_id = (avatar_id or "").strip()
+        previously_active = self.profile_manager.get_active_profile_info()
+        bound_name = self.profile_manager.set_current_avatar(avatar_id)
+        now_active = self.profile_manager.get_active_profile_info()
+
+        if previously_active != now_active:
+            if now_active["kind"] == "avatar":
+                self.log_message(
+                    f"Avatar changed → activating avatar profile '{now_active['name']}'"
+                )
+            else:
+                self.log_message(
+                    f"Avatar changed → no bound profile, staying on global '{now_active['name']}'"
+                )
+            self.ui.clear_device_caches()
+            self.ui.build_stored_devices_ui()
+            self.force_recalculate()
+        else:
+            self.log_message(f"Avatar changed (id={avatar_id or 'unknown'})")
+
+        if hasattr(self.ui, '_refresh_profile_buttons'):
+            self.ui._refresh_profile_buttons()
+
+    def get_current_avatar_id(self) -> str:
+        return self.profile_manager.current_avatar_id or ""
+
+    def get_active_profile_info(self) -> dict:
+        """{"kind": "avatar"|"global", "name": str} — for UI display."""
+        return self.profile_manager.get_active_profile_info()
+
+    def get_avatar_profile_names(self) -> list:
+        return list(self.profile_manager.avatar_profiles.keys())
+
+    def get_avatar_binding(self, profile_name: str) -> str:
+        return self.profile_manager.avatar_bindings.get(profile_name, "")
+
+    def create_avatar_profile(self, base_name: str = "New Avatar Profile") -> str:
+        """Create an avatar profile bound to the *current* avatar id and seeded
+        from the currently-active profile's settings (per design decision).
+        """
+        active = self.profile_manager.get_active_profile_dict() or {}
+        new_name = self.profile_manager.create_avatar_profile(
+            base_name=base_name,
+            avatar_id=self.profile_manager.current_avatar_id,
+            copy_from=active,
+        )
+        self.log_message(f"Created avatar profile '{new_name}'")
+        # The new profile is automatically bound to the current avatar (if any),
+        # which makes it the active profile. Rebuild device cards so the user
+        # sees the inherited settings under the new profile name.
+        self.ui.clear_device_caches()
+        self.ui.build_stored_devices_ui()
+        if hasattr(self.ui, '_refresh_profile_buttons'):
+            self.ui._refresh_profile_buttons()
+        return new_name
+
+    def delete_avatar_profile(self, name: str):
+        if name not in self.profile_manager.avatar_profiles:
+            return
+        was_active = (self.profile_manager.get_active_profile_info()
+                      == {"kind": "avatar", "name": name})
+        self.profile_manager.delete_avatar_profile(name)
+        self.log_message(f"Deleted avatar profile '{name}'")
+        if was_active:
+            self.ui.clear_device_caches()
+            self.ui.build_stored_devices_ui()
+            self.force_recalculate()
+        if hasattr(self.ui, '_refresh_profile_buttons'):
+            self.ui._refresh_profile_buttons()
+
+    def rename_avatar_profile(self, old: str, new: str):
+        if self.profile_manager.rename_avatar_profile(old, new):
+            self.log_message(f"Renamed avatar profile '{old}' → '{new}'")
+        if hasattr(self.ui, '_refresh_profile_buttons'):
+            self.ui._refresh_profile_buttons()
+
+    def bind_avatar_profile_to_current(self, name: str):
+        """Bind `name` to the current avatar and record it as the user's
+        remembered choice for that avatar."""
+        self.profile_manager.bind_avatar_profile(
+            name, self.profile_manager.current_avatar_id
+        )
+        self.log_message(
+            f"Bound avatar profile '{name}' to "
+            f"{self.profile_manager.current_avatar_id or 'no avatar'}"
+        )
+        self.ui.clear_device_caches()
+        self.ui.build_stored_devices_ui()
+        self.force_recalculate()
+        if hasattr(self.ui, '_refresh_profile_buttons'):
+            self.ui._refresh_profile_buttons()
+
+    def copy_profile(self, kind: str, name: str):
+        """Copy a profile into the in-memory clipboard. `kind` is 'global'|'avatar'."""
+        ok = self.profile_manager.copy_profile_to_clipboard(kind, name)
+        if ok:
+            self.log_message(f"Copied {kind} profile '{name}' to clipboard")
+        if hasattr(self.ui, '_refresh_profile_buttons'):
+            self.ui._refresh_profile_buttons()
+
+    def paste_profile(self, target_kind: str):
+        """Paste the clipboard into a new profile in the target section."""
+        bind_avatar = self.profile_manager.current_avatar_id if target_kind == "avatar" else None
+        name = self.profile_manager.paste_profile(target_kind, avatar_id=bind_avatar)
+        if name:
+            self.log_message(f"Pasted clipboard → new {target_kind} profile '{name}'")
+            if target_kind == "avatar" and bind_avatar:
+                self.ui.clear_device_caches()
+                self.ui.build_stored_devices_ui()
+                self.force_recalculate()
+            if hasattr(self.ui, '_refresh_profile_buttons'):
+                self.ui._refresh_profile_buttons()
+        else:
+            self.log_message("Paste failed — clipboard is empty")
+
+    def has_clipboard(self) -> bool:
+        return self.profile_manager.has_clipboard()
+
+    def get_clipboard_source_name(self) -> str:
+        return self.profile_manager.get_clipboard_source_name() or ""
 
     def toggle_osc_connection(self):
         """Toggles the VRChat OSC connection on and off safely (non-blocking)."""

@@ -306,6 +306,32 @@ class VRChatOSCManager:
             print(f"Failed to poll parameters: {e}")
         return {}
 
+    def query_avatar_id(self) -> str:
+        """Ask VRChat's OSCQuery server for the *current* /avatar/change value.
+
+        Needed because /avatar/change is broadcast as an OSC message only
+        when an avatar loads — if we connect to OSC mid-session, the message
+        is already gone. The HTTP node, however, always holds the live value.
+        Returns "" on any failure (server not up, network, etc.).
+        """
+        if not self.http_port:
+            return ""
+        try:
+            r = requests.get(
+                f"http://{self.vrc_ip}:{self.http_port}/avatar/change",
+                timeout=2,
+            )
+            if r.status_code != 200:
+                return ""
+            data = r.json()
+            val = data.get("VALUE")
+            # OSCQuery wraps single values in a one-element list.
+            if isinstance(val, list) and val:
+                val = val[0]
+            return str(val) if val else ""
+        except Exception:
+            return ""
+
     def fetch_all_parameters(self):
         """Fetches the entire OSCQuery phonebook and rebuilds the master cache."""
         try:
