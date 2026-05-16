@@ -70,6 +70,14 @@ if %errorlevel% neq 0 (
 echo.
 echo [4/4] Cleaning up temporary files...
 
+REM Delete .spec files (PyInstaller build blueprints)
+for %%f in (*.spec) do (
+    if exist "%%f" (
+        echo Deleting %%f...
+        del /q "%%f"
+    )
+)
+
 REM Delete the build directory (PyInstaller temp files)
 if exist "build" (
     echo Deleting build directory...
