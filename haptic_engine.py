@@ -345,6 +345,76 @@ class HapticEngine:
             idle = "rest"
         self.linear_configs[(device_name, motor_idx)] = {"mode": mode, "idle": idle}
 
+    # ------------------------------------------------------------------
+    # Read-only introspection facades — return primitives only so callers
+    # never need to touch self.buttplug_client. This is the sealed-box
+    # boundary referenced in ARCHITECTURE.md (rule #3).
+    # ------------------------------------------------------------------
+
+    def list_connected_device_names(self) -> List[str]:
+        """Names of every currently-connected toy. Empty list if disconnected."""
+        if not self.is_connected or self.buttplug_client is None:
+            return []
+        try:
+            return [d.name for d in self.buttplug_client.devices.values()]
+        except Exception:
+            return []
+
+    def get_motor_count_map(self) -> Dict[str, int]:
+        """`{device_name: motor_count}` for every connected device.
+
+        Counts vibrate-class AND linear features (see `get_motor_features_for_device`).
+        Empty dict if disconnected.
+        """
+        if not self.is_connected or self.buttplug_client is None:
+            return {}
+        out: Dict[str, int] = {}
+        try:
+            for device in self.buttplug_client.devices.values():
+                try:
+                    out[device.name] = len(get_motor_features_for_device(device))
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return out
+
+    def snapshot_discovered_devices(self) -> Dict[int, Dict[str, object]]:
+        """Snapshot every connected toy as `{device_index: {"name": str,
+        "motor_count": int}}`. Used by scan/refresh paths to push primitive
+        device records onto the main thread queue.
+        """
+        if not self.is_connected or self.buttplug_client is None:
+            return {}
+        out: Dict[int, Dict[str, object]] = {}
+        try:
+            for device in self.buttplug_client.devices.values():
+                try:
+                    features = device.get_features_with_output(OutputType.VIBRATE)
+                    motor_count = len(features) if features else 1
+                    out[device.index] = {
+                        "name": device.name,
+                        "motor_count": motor_count,
+                    }
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return out
+
+    async def async_start_scan(self, scan_seconds: float = 2.0) -> None:
+        """Run a one-shot scan on the engine's own loop. Awaitable so the
+        caller can `run_coroutine_threadsafe` it. No return value — callers
+        follow up with `snapshot_discovered_devices()`."""
+        if self.buttplug_client is None:
+            return
+        try:
+            await self.buttplug_client.start_scanning()
+            await asyncio.sleep(scan_seconds)
+            await self.buttplug_client.stop_scanning()
+        except Exception:
+            pass
+
     def push_ui_update(self, message: str):
         """Push a UI update to the main thread via queue"""
         self.thread_queue.put(("ui_update", message))

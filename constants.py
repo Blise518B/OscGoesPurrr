@@ -12,6 +12,12 @@ COLOR_BG = "#1E1E2E"              # Deep app background
 COLOR_SURFACE = "#2A2A3E"         # Cards, active tabs, separators, secondary btns
 COLOR_SURFACE_HOVER = "#3A3A4A"   # Hover state for tabs & secondary btns
 
+# Interactive widget surfaces — slightly lighter so dropdowns, search fields
+# and pickers stand out from cards/window background as obviously clickable.
+COLOR_INPUT_BG = "#363649"        # Text inputs, combo boxes, pickers
+COLOR_INPUT_BORDER = "#5A5A78"    # Resting border for interactive widgets
+COLOR_INPUT_FOCUS = "#8A78FF"     # Focus border (lighter purple)
+
 # Text
 COLOR_TEXT = "#FFFFFF"
 COLOR_TEXT_MUTED = "#888888"

@@ -50,6 +50,41 @@ Order within a group is rough priority, not a hard sequence.
   touching contacts with reserved names (e.g. `OGP/Remote/*`). Needs an
   allow-list so randoms can't grief, plus a kill-switch.
 
+## VRChat Integration
+
+- **Profile switching from the VRChat Expressions menu.**
+  Map an integer avatar parameter (e.g. `/avatar/parameters/PurrProfile`)
+  to profile slots so the active profile can be changed in-game without
+  alt-tabbing. Configurable parameter name; out-of-range values ignored.
+- **SPS priority layering.**
+  While SPS contacts are actively firing, dim or mute the regular touch
+  zones so the SPS sensation isn't drowned out by background contact
+  hits. Per-profile toggle with a dim-amount slider.
+- **Per-input max-value clamp.**
+  Per-OSC-parameter ceiling (0.0–1.0) so a single zone or contact can't
+  push a motor to full output. Lets users cap noisy or overly-eager
+  inputs without rewriting the whole routing.
+
+## Reliability & Lifecycle
+
+- **Stuck-value safety cutoff.**
+  If an OSC float input stays exactly static for ~2 s (configurable),
+  treat it as a stuck/frozen sender and force the corresponding motors
+  to 0 until the value changes again.  Prevents motors running forever
+  when VRChat or an avatar param hangs. if its at 1.0 maybe have it ramp down slowly because it could also mean all the way in.
+- **SteamVR-aware shutdown.**
+  Detect when SteamVR exits and either auto-quit OscGoesPurrr or at
+  minimum send 0 to every connected device and stop output. User
+  setting to pick which behavior.
+
+## UI Modes
+
+- **Mini-Mode / VR companion window.**
+  A compact, always-on-top layout showing only the essentials (active
+  profile, vibe meters, master toggle) for use as a desktop overlay
+  while in VR. Toggle from the main window; remembers its own size and
+  position.
+
 ## Hardware Integrations
 
 - **Haptic Pancake integration (Vive/Tundra trackers).**
