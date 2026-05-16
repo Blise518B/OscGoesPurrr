@@ -481,8 +481,15 @@ class OscGoesPurrrApp:
                 continue
             if not device_name:
                 continue
-            # Persist the discovered motor_kinds list so build_stored_devices_ui
-            # can render the linear controls even when the device is offline.
+            # Persist motor_count and motor_kinds so build_stored_devices_ui can
+            # render the correct number of motor rows and linear controls even
+            # when the device is offline. motor_count must be saved here (not just
+            # in build_device_list_ui) because that path skips devices already in
+            # device_ui_frames, leaving a stale count in the profile after the
+            # first incomplete hot-plug detection (e.g. Lovense Gravity reporting
+            # only its vibrate motor before BLE negotiation finishes).
+            if motor_count > 0:
+                self.profile_manager.update_device_config(device_name, "motor_count", motor_count)
             kinds = info.get("motor_kinds")
             if kinds is not None:
                 self.profile_manager.update_device_config(device_name, "motor_kinds", list(kinds))
