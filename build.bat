@@ -56,6 +56,8 @@ set EXE_NAME=OscGoesPurrr_!BUILD_VERSION!
 pyinstaller --noconfirm ^
     --onefile ^
     --windowed ^
+    --icon "Images\OGP_Icon.ico" ^
+    --add-data "Images;Images" ^
     --name "!EXE_NAME!" ^
     main.py
 
