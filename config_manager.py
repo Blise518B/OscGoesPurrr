@@ -527,6 +527,7 @@ class ProfileManager:
         if name not in src:
             return False
         self._clipboard = {
+            "kind": kind,
             "name": name,
             "config": _deep_copy_profile(src[name]),
         }
@@ -537,6 +538,28 @@ class ProfileManager:
 
     def get_clipboard_source_name(self) -> Optional[str]:
         return self._clipboard.get("name") if self._clipboard else None
+
+    def get_clipboard_source_kind(self) -> Optional[str]:
+        return self._clipboard.get("kind") if self._clipboard else None
+
+    def paste_into_profile(self, target_kind: str, target_name: str) -> bool:
+        """Overwrite an existing profile's contents with the clipboard.
+
+        Preserves the target profile's name (and, for avatar profiles, its
+        binding). Returns True on success, False if the clipboard is empty
+        or the target doesn't exist.
+        """
+        if self._clipboard is None:
+            return False
+        src = self.profiles if target_kind == "global" else self.avatar_profiles
+        if target_name not in src:
+            return False
+        src[target_name] = _deep_copy_profile(self._clipboard["config"])
+        self.save_profiles()
+        return True
+
+    def clear_clipboard(self) -> None:
+        self._clipboard = None
 
     def paste_profile(self, target_kind: str,
                       avatar_id: Optional[str] = None) -> Optional[str]:

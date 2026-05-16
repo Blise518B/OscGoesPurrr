@@ -308,9 +308,9 @@ class OscGoesPurrrApp:
     
     def get_connected_device_names(self) -> set:
         """Get set of currently connected device names"""
-        if not self.haptic_engine or not self.haptic_engine.buttplug_client or not self.haptic_engine.is_connected:
+        if not self.haptic_engine:
             return set()
-        return {device.name for device in self.haptic_engine.buttplug_client.devices.values()}
+        return set(self.haptic_engine.list_connected_device_names())
     
     # ====================
     # Facade Methods
@@ -468,10 +468,9 @@ class OscGoesPurrrApp:
 
     def get_device_motor_counts(self) -> dict:
         """Facade method to get motor counts safely from the hardware engine."""
-        from haptic_engine import get_device_motor_counts as get_counts
-        if self.haptic_engine and self.haptic_engine.is_connected and self.haptic_engine.buttplug_client:
-            return get_counts(self.haptic_engine.buttplug_client)
-        return {}
+        if not self.haptic_engine:
+            return {}
+        return self.haptic_engine.get_motor_count_map()
 
     def update_linear_motor_config(self, device_name: str, motor_idx: int) -> None:
         """Facade: read the persisted mode/idle settings for one motor and forward
@@ -850,11 +849,74 @@ class OscGoesPurrrApp:
         else:
             self.log_message("Paste failed — clipboard is empty")
 
+    def paste_profile_into(self, target_kind: str, target_name: str):
+        """Overwrite an existing profile with the current clipboard contents,
+        then clear the clipboard so the row toggles back to Copy mode."""
+        ok = self.profile_manager.paste_into_profile(target_kind, target_name)
+        if not ok:
+            self.log_message("Paste failed — clipboard empty or target missing")
+            return
+        self.profile_manager.clear_clipboard()
+        self.log_message(
+            f"Pasted clipboard onto {target_kind} profile '{target_name}'"
+        )
+        # If we just overwrote the currently-active profile, reapply it so
+        # devices pick up the new settings immediately.
+        active = self.profile_manager.get_active_profile_info() or {}
+        if active.get("kind") == target_kind and active.get("name") == target_name:
+            self.ui.clear_device_caches()
+            self.ui.build_stored_devices_ui()
+            self.force_recalculate()
+        if hasattr(self.ui, '_refresh_profile_buttons'):
+            self.ui._refresh_profile_buttons()
+
+    def clear_clipboard(self):
+        """Cancel a pending copy — used when the user clicks the source row
+        again to dismiss the paste-mode UI."""
+        if not self.profile_manager.has_clipboard():
+            return
+        self.profile_manager.clear_clipboard()
+        if hasattr(self.ui, '_refresh_profile_buttons'):
+            self.ui._refresh_profile_buttons()
+
     def has_clipboard(self) -> bool:
         return self.profile_manager.has_clipboard()
 
     def get_clipboard_source_name(self) -> str:
         return self.profile_manager.get_clipboard_source_name() or ""
+
+    def get_clipboard_source_kind(self) -> str:
+        """Facade: which section ('global'|'avatar') the clipboard came from."""
+        return self.profile_manager.get_clipboard_source_kind() or ""
+
+    # ---- Profile-list facades (used by the UI to render rows) ----
+
+    def get_global_profile_names(self) -> List[str]:
+        """Facade: ordered list of every global profile's name."""
+        return list(self.profile_manager.profiles.keys())
+
+    def get_current_global_profile_name(self) -> str:
+        """Facade: the global profile most recently selected by the user.
+        Falls back to the resolver's active name if none is set."""
+        return self.profile_manager.current_profile or ""
+
+    def profile_exists(self, kind: str, name: str) -> bool:
+        """Facade: True if a profile with this name exists in the given pool."""
+        pool = (self.profile_manager.profiles if kind == "global"
+                else self.profile_manager.avatar_profiles)
+        return name in pool
+
+    def get_active_profile_dict(self) -> Dict[str, Any]:
+        """Facade: the live dict of per-device settings the router/UI read."""
+        return self.profile_manager.get_active_profile_dict() or {}
+
+    # ---- Haptic engine facades ----
+
+    def set_haptic_connected(self, connected: bool) -> None:
+        """Facade: keep the haptic engine's connection flag in sync with the
+        VRChat OSC link. Setter-only so the UI never holds the object."""
+        if hasattr(self, 'haptic_engine') and self.haptic_engine:
+            self.haptic_engine.is_connected = connected
 
     def toggle_osc_connection(self):
         """Toggles the VRChat OSC connection on and off safely (non-blocking)."""
@@ -941,45 +1003,34 @@ class OscGoesPurrrApp:
     
     async def _async_start_scanning(self):
         """Start scanning for devices without connecting (just scan)"""
-        if not self.haptic_engine or not self.haptic_engine.buttplug_client:
+        if not self.haptic_engine:
             return
-        
+
         try:
-            # Start scanning
-            await self.haptic_engine.buttplug_client.start_scanning()
-            await asyncio.sleep(2.0)  # Give Intiface time to find devices
-            
-            # Stop scanning and get device list
-            await self.haptic_engine.buttplug_client.stop_scanning()
-            
-            # Find new devices (devices we haven't seen before)
-            connected_names = {device.name for device in self.haptic_engine.buttplug_client.devices.values()}
-            known_devices = set(self.get_connected_device_names())
-            new_devices = connected_names - known_devices
-            
+            # Snapshot the pre-scan device set so we can diff after.
+            known_devices = set(self.haptic_engine.list_connected_device_names())
+
+            # Run a one-shot scan through the engine facade.
+            await self.haptic_engine.async_start_scan(scan_seconds=2.0)
+
+            # Snapshot every connected device (primitives only) and pick out
+            # the new ones — never reach into buttplug_client here.
+            snapshot = self.haptic_engine.snapshot_discovered_devices()
+            new_devices = {
+                idx: info for idx, info in snapshot.items()
+                if info.get("name") not in known_devices
+            }
+
             if new_devices:
-                self.log_message(f"Auto-refresh found new devices: {new_devices}")
-                
-                # Find the newly discovered devices
-                found_devices = {}
-                for device in self.haptic_engine.buttplug_client.devices.values():
-                    if device.name in new_devices:
-                        try:
-                            features = device.get_features_with_output(OutputType.VIBRATE)
-                            motor_count = len(features) if features else 1
-                            found_devices[device.index] = {
-                                "name": device.name,
-                                "motor_count": motor_count
-                            }
-                        except Exception:
-                            pass
-                
+                new_names = {info.get("name") for info in new_devices.values()}
+                self.log_message(f"Auto-refresh found new devices: {new_names}")
+
                 # Push new devices to UI
-                self.thread_queue.put(("devices_found", found_devices))
-                
+                self.thread_queue.put(("devices_found", new_devices))
+
                 # Refresh stored devices UI to include new devices
                 self.thread_queue.put(("stored_devices_refresh", None))
-            
+
         except Exception as e:
             self.log_message(f"Scan error: {e}")
     

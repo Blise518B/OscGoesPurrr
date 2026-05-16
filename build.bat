@@ -47,7 +47,7 @@ echo.
 
 REM Run PyInstaller (no --clean flag for faster rebuilds)
 REM --onefile: bundle everything into a single executable
-REM --windowed: no console window (GUI app with customtkinter)
+REM --windowed: no console window (GUI app with PySide6)
 REM --name: output executable name
 REM PyInstaller automatically analyzes imports, so all .py modules are bundled
 REM Temp files are cleaned up after successful build in step 4

@@ -10,10 +10,11 @@ import re
 import sys
 
 from PySide6.QtCore import (
-    Qt, QTimer, Signal, QObject, QEvent, QSize
+    Qt, QTimer, Signal, QObject, QEvent, QSize, QPointF, QRectF
 )
 from PySide6.QtGui import (
-    QFont, QColor, QTextCharFormat, QTextCursor, QFontDatabase, QIcon, QPalette
+    QFont, QColor, QTextCharFormat, QTextCursor, QFontDatabase, QIcon, QPalette,
+    QPixmap, QPainter, QPen, QBrush, QPainterPath, QPolygonF
 )
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
@@ -212,16 +213,59 @@ QPushButton[role="segIdle"] {{
     background-color: {COLOR_SURFACE_HOVER};
 }}
 
-QLineEdit, QTextEdit, QPlainTextEdit {{
-    background-color: {COLOR_BG};
+QPushButton[role="confirm"] {{
+    background-color: {COLOR_SUCCESS};
     color: {COLOR_TEXT};
-    border: 1px solid {COLOR_SURFACE};
+    font-weight: bold;
+}}
+QPushButton[role="confirm"]:hover {{
+    background-color: #00E064;
+}}
+QPushButton[role="cancel"] {{
+    background-color: {COLOR_ALERT};
+    color: {COLOR_TEXT};
+    font-weight: bold;
+}}
+QPushButton[role="cancel"]:hover {{
+    background-color: {COLOR_ALERT_HOVER};
+}}
+
+QLineEdit, QTextEdit, QPlainTextEdit {{
+    background-color: {COLOR_INPUT_BG};
+    color: {COLOR_TEXT};
+    border: 1px solid {COLOR_INPUT_BORDER};
     border-radius: 4px;
     padding: 4px 6px;
     selection-background-color: {COLOR_PRIMARY};
 }}
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
+    border: 1px solid {COLOR_INPUT_FOCUS};
+}}
 QTextEdit, QPlainTextEdit {{
     font-family: "Consolas", "Courier New", monospace;
+}}
+QComboBox, QSpinBox, QDoubleSpinBox, QAbstractSpinBox {{
+    background-color: {COLOR_INPUT_BG};
+    color: {COLOR_TEXT};
+    border: 1px solid {COLOR_INPUT_BORDER};
+    border-radius: 4px;
+    padding: 4px 6px;
+    selection-background-color: {COLOR_PRIMARY};
+}}
+QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover, QAbstractSpinBox:hover {{
+    border-color: {COLOR_INPUT_FOCUS};
+}}
+QComboBox::drop-down {{
+    border: none;
+    width: 18px;
+}}
+QComboBox QAbstractItemView {{
+    background-color: {COLOR_INPUT_BG};
+    color: {COLOR_TEXT};
+    border: 1px solid {COLOR_INPUT_BORDER};
+    selection-background-color: {COLOR_PRIMARY};
+    selection-color: {COLOR_TEXT};
+    outline: 0;
 }}
 
 QCheckBox {{
@@ -233,14 +277,14 @@ QCheckBox::indicator {{
     height: 16px;
     border: 2px solid {COLOR_TEXT_MUTED};
     border-radius: 3px;
-    background-color: {COLOR_SURFACE};
+    background-color: {COLOR_INPUT_BG};
 }}
 QCheckBox::indicator:checked {{
     background-color: {COLOR_PRIMARY};
-    border-color: {COLOR_PRIMARY};
+    border: 2px solid {COLOR_TEXT};
 }}
 QCheckBox::indicator:hover {{
-    border-color: {COLOR_PRIMARY_HOVER};
+    border-color: {COLOR_INPUT_FOCUS};
 }}
 QCheckBox[role="switch"]::indicator {{
     width: 32px;
@@ -249,7 +293,7 @@ QCheckBox[role="switch"]::indicator {{
 }}
 QCheckBox[role="switch"]::indicator:checked {{
     background-color: {COLOR_SUCCESS};
-    border-color: {COLOR_SUCCESS};
+    border: 2px solid {COLOR_TEXT};
 }}
 
 QSlider::groove:horizontal {{
@@ -429,6 +473,155 @@ def _clear_layout(layout):
             if sub is not None:
                 _clear_layout(sub)
                 sub.deleteLater()
+
+
+# ============================================================
+# Vector icons — drawn at runtime so they read crisply at small
+# sizes and don't depend on emoji-font availability.
+# ============================================================
+
+def _new_icon_pixmap(size: int = 20) -> QPixmap:
+    pm = QPixmap(size, size)
+    pm.fill(Qt.transparent)
+    return pm
+
+
+def _icon_pencil(color: str = COLOR_TEXT, size: int = 20) -> QIcon:
+    """Edit pencil with a stronger outline."""
+    pm = _new_icon_pixmap(size)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    c = QColor(color)
+    p.setPen(QPen(c, 1.6))
+    p.setBrush(QBrush(c))
+    # Diagonal pencil body from (4,16) to (14,6) with a triangular tip at top-right.
+    body = QPolygonF([
+        QPointF(3.5, 14.5), QPointF(5.5, 16.5),
+        QPointF(14.0, 8.0), QPointF(12.0, 6.0),
+    ])
+    p.drawPolygon(body)
+    # Pencil tip
+    tip = QPolygonF([
+        QPointF(14.0, 8.0), QPointF(12.0, 6.0),
+        QPointF(16.5, 3.5),
+    ])
+    p.setBrush(QBrush(QColor("#FFD27A")))
+    p.drawPolygon(tip)
+    # Eraser end
+    p.setBrush(QBrush(QColor(color)))
+    eraser = QPolygonF([
+        QPointF(3.5, 14.5), QPointF(5.5, 16.5),
+        QPointF(3.5, 18.5), QPointF(1.5, 16.5),
+    ])
+    p.drawPolygon(eraser)
+    p.end()
+    return QIcon(pm)
+
+
+def _icon_copy(color: str = COLOR_TEXT, size: int = 20) -> QIcon:
+    """Two overlapping sheets of paper."""
+    pm = _new_icon_pixmap(size)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    c = QColor(color)
+    # Back sheet
+    p.setPen(QPen(c, 1.4))
+    p.setBrush(QBrush(QColor(COLOR_SURFACE)))
+    p.drawRoundedRect(QRectF(7.0, 3.0, 10.0, 12.0), 1.5, 1.5)
+    # Front sheet (overlapping, offset down-left)
+    p.setBrush(QBrush(QColor(COLOR_INPUT_BG)))
+    p.drawRoundedRect(QRectF(3.0, 6.5, 10.0, 12.0), 1.5, 1.5)
+    # A couple of lines on the front sheet for clarity
+    p.setPen(QPen(c, 1.0))
+    p.drawLine(QPointF(5.0, 10.0), QPointF(11.0, 10.0))
+    p.drawLine(QPointF(5.0, 13.0), QPointF(11.0, 13.0))
+    p.drawLine(QPointF(5.0, 16.0), QPointF(9.0, 16.0))
+    p.end()
+    return QIcon(pm)
+
+
+def _icon_paste(color: str = COLOR_TEXT, size: int = 20) -> QIcon:
+    """Clipboard with a down-arrow — paste-into-this-slot."""
+    pm = _new_icon_pixmap(size)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    c = QColor(color)
+    p.setPen(QPen(c, 1.4))
+    # Clipboard body
+    p.setBrush(QBrush(QColor(COLOR_SURFACE)))
+    p.drawRoundedRect(QRectF(4.0, 5.0, 12.0, 13.0), 1.5, 1.5)
+    # Clipboard clip
+    p.setBrush(QBrush(c))
+    p.drawRoundedRect(QRectF(7.0, 2.5, 6.0, 3.5), 1.0, 1.0)
+    # Down arrow indicating "paste here"
+    pen = QPen(c, 1.8)
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    p.setPen(pen)
+    p.setBrush(Qt.NoBrush)
+    p.drawLine(QPointF(10.0, 9.0), QPointF(10.0, 14.0))
+    p.drawPolyline(QPolygonF([
+        QPointF(7.5, 12.0), QPointF(10.0, 14.5), QPointF(12.5, 12.0),
+    ]))
+    p.end()
+    return QIcon(pm)
+
+
+def _icon_trash(color: str = COLOR_TEXT, size: int = 20) -> QIcon:
+    """Trapezoid-style trash can with a lid."""
+    pm = _new_icon_pixmap(size)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    c = QColor(color)
+    p.setPen(QPen(c, 1.5))
+    p.setBrush(QBrush(c))
+    # Lid
+    p.drawRoundedRect(QRectF(3.0, 4.5, 14.0, 2.0), 1.0, 1.0)
+    # Handle on top of lid
+    p.setBrush(Qt.NoBrush)
+    p.drawRoundedRect(QRectF(7.5, 2.5, 5.0, 2.0), 1.0, 1.0)
+    # Trapezoid body (wider at top, narrower at bottom)
+    body = QPolygonF([
+        QPointF(4.5, 7.0), QPointF(15.5, 7.0),
+        QPointF(14.5, 17.5), QPointF(5.5, 17.5),
+    ])
+    p.setBrush(QBrush(c))
+    p.drawPolygon(body)
+    # Vertical ribs (subtle contrast lines)
+    p.setPen(QPen(QColor(COLOR_BG), 1.0))
+    p.drawLine(QPointF(8.0, 9.0), QPointF(7.7, 16.0))
+    p.drawLine(QPointF(10.0, 9.0), QPointF(10.0, 16.0))
+    p.drawLine(QPointF(12.0, 9.0), QPointF(12.3, 16.0))
+    p.end()
+    return QIcon(pm)
+
+
+def _icon_check(color: str = COLOR_SUCCESS, size: int = 20) -> QIcon:
+    pm = _new_icon_pixmap(size)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    pen = QPen(QColor(color), 2.6)
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    p.setPen(pen)
+    p.drawPolyline(QPolygonF([
+        QPointF(3.5, 10.5), QPointF(8.5, 15.5), QPointF(16.5, 5.5),
+    ]))
+    p.end()
+    return QIcon(pm)
+
+
+def _icon_cross(color: str = COLOR_ALERT, size: int = 20) -> QIcon:
+    pm = _new_icon_pixmap(size)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    pen = QPen(QColor(color), 2.6)
+    pen.setCapStyle(Qt.RoundCap)
+    p.setPen(pen)
+    p.drawLine(QPointF(5.0, 5.0), QPointF(15.0, 15.0))
+    p.drawLine(QPointF(15.0, 5.0), QPointF(5.0, 15.0))
+    p.end()
+    return QIcon(pm)
 
 
 class _Card(QFrame):
@@ -809,10 +1002,10 @@ class OscGoesPurrrUI:
 
     def _refresh_profile_buttons(self):
         """Rebuild both profile sections + update the active banner."""
-        pm = self.controller.profile_manager
-        active = self.controller.get_active_profile_info() \
-            if hasattr(self.controller, "get_active_profile_info") \
-            else {"kind": "global", "name": pm.current_profile}
+        ctl = self.controller
+        active = ctl.get_active_profile_info() \
+            if hasattr(ctl, "get_active_profile_info") \
+            else {"kind": "global", "name": ctl.get_current_global_profile_name()}
 
         # ---- Active banner ----
         if self.profile_active_label is not None:
@@ -823,15 +1016,15 @@ class OscGoesPurrrUI:
 
         # ---- Current avatar label ----
         if self.current_avatar_label is not None:
-            avatar_id = pm.current_avatar_id or ""
+            avatar_id = ctl.get_current_avatar_id() or ""
             if avatar_id:
                 self.current_avatar_label.setText(f"Current avatar: {_truncate(avatar_id, 28)}")
             else:
                 self.current_avatar_label.setText("Current avatar: (not detected)")
 
         # ---- Clipboard-aware paste buttons ----
-        has_clip = pm.has_clipboard()
-        src = pm.get_clipboard_source_name() or ""
+        has_clip = ctl.has_clipboard()
+        src = ctl.get_clipboard_source_name() or ""
         for btn in (self.global_paste_btn, self.avatar_paste_btn):
             if btn is None:
                 continue
@@ -840,10 +1033,11 @@ class OscGoesPurrrUI:
 
         # ---- Avatar 'New' button availability ----
         if self.avatar_new_btn is not None:
-            if pm.current_avatar_id:
+            avatar_id = ctl.get_current_avatar_id() or ""
+            if avatar_id:
                 self.avatar_new_btn.setEnabled(True)
                 self.avatar_new_btn.setText(
-                    f"+ New Avatar Profile (binds to {_truncate(pm.current_avatar_id, 16)})"
+                    f"+ New Avatar Profile (binds to {_truncate(avatar_id, 16)})"
                 )
                 self.avatar_new_btn.setToolTip("")
             else:
@@ -855,7 +1049,7 @@ class OscGoesPurrrUI:
 
         # ---- Manage-all button ----
         if self.avatar_manage_btn is not None:
-            total = len(pm.avatar_profiles)
+            total = len(ctl.get_avatar_profile_names())
             self.avatar_manage_btn.setText(
                 f"📂 Manage all avatar profiles ({total})"
             )
@@ -874,8 +1068,7 @@ class OscGoesPurrrUI:
             return
         _clear_layout(self.global_profile_list_layout)
 
-        pm = self.controller.profile_manager
-        names = list(pm.profiles.keys())
+        names = self.controller.get_global_profile_names()
         can_delete = len(names) > 1
         for name in names:
             # Exactly one profile across both sections shows the highlight:
@@ -891,6 +1084,7 @@ class OscGoesPurrrUI:
                 on_copy=lambda n=name: self.controller.copy_profile("global", n),
                 on_delete=lambda n=name: self._confirm_profile_delete("global", n),
                 can_delete=can_delete,
+                kind="global",
             )
             self.global_profile_list_layout.addWidget(row)
 
@@ -902,12 +1096,12 @@ class OscGoesPurrrUI:
             return
         _clear_layout(self.avatar_profile_list_layout)
 
-        pm = self.controller.profile_manager
-        current_avatar = pm.current_avatar_id or ""
-        all_names = list(pm.avatar_profiles.keys())
+        ctl = self.controller
+        current_avatar = ctl.get_current_avatar_id() or ""
+        all_names = ctl.get_avatar_profile_names()
         relevant = [
             n for n in all_names
-            if pm.avatar_bindings.get(n, "") == current_avatar and current_avatar
+            if ctl.get_avatar_binding(n) == current_avatar and current_avatar
         ]
 
         if not relevant:
@@ -925,7 +1119,7 @@ class OscGoesPurrrUI:
             self.avatar_profile_list_layout.addWidget(empty)
         else:
             for name in relevant:
-                bound_id = pm.avatar_bindings.get(name, "")
+                bound_id = ctl.get_avatar_binding(name)
                 is_active = (active["kind"] == "avatar" and name == active["name"])
                 row = self._make_profile_row(
                     name=name,
@@ -939,6 +1133,7 @@ class OscGoesPurrrUI:
                     on_delete=lambda n=name: self._confirm_profile_delete("avatar", n),
                     can_delete=True,
                     show_bind=True,
+                    kind="avatar",
                 )
                 self.avatar_profile_list_layout.addWidget(row)
 
@@ -949,7 +1144,9 @@ class OscGoesPurrrUI:
                           meta_text: str = "",
                           bound_avatar_id: str = "", bound_is_current: bool = False,
                           show_bind: bool = False,
-                          extra_actions: Optional[list] = None) -> QWidget:
+                          extra_actions: Optional[list] = None,
+                          kind: str = "global",
+                          on_after_paste: Optional[Callable] = None) -> QWidget:
         """Build a single profile row.
 
         Visual states:
@@ -1002,21 +1199,79 @@ class OscGoesPurrrUI:
             rlay.addWidget(meta)
 
         def make_action(text, tooltip, cb, role="secondary", enabled=True,
-                        width: int = 34):
-            b = QPushButton(text)
+                        width: int = 34, icon: Optional[QIcon] = None):
+            b = QPushButton(text if icon is None else "")
             b.setFixedSize(width, 34)
             b.setProperty("role", role)
             b.setToolTip(tooltip)
             b.setEnabled(enabled)
+            if icon is not None:
+                b.setIcon(icon)
+                b.setIconSize(QSize(18, 18))
             b.clicked.connect(lambda _=False: cb())
             return b
 
-        rlay.addWidget(make_action("✎", "Rename", on_rename))
-        rlay.addWidget(make_action("📋", "Copy to clipboard", on_copy))
+        rlay.addWidget(make_action("", "Rename", on_rename, icon=_icon_pencil()))
+
+        # Middle button is context-sensitive based on clipboard state:
+        #   * empty clipboard  -> "Copy" (purple-secondary, two-sheets icon)
+        #   * this row is the clipboard source -> green "Copied — click to
+        #     cancel" using the same two-sheets icon on a success background
+        #   * a different row is the source -> "Paste here" (clipboard+arrow
+        #     icon) which overwrites this row with the clipboard contents
+        ctl = self.controller
+        has_clip = ctl.has_clipboard()
+        clip_src_name = ctl.get_clipboard_source_name() if has_clip else None
+        clip_src_kind = ctl.get_clipboard_source_kind() if has_clip else None
+        is_clip_source = (
+            clip_src_name == name and clip_src_kind == kind
+        )
+
+        def _paste_here(_n=name, _k=kind):
+            self.controller.paste_profile_into(_k, _n)
+            if on_after_paste is not None:
+                on_after_paste()
+
+        def _cancel_copy():
+            self.controller.clear_clipboard()
+            if on_after_paste is not None:
+                on_after_paste()
+
+        if not has_clip:
+            rlay.addWidget(make_action(
+                "", "Copy to clipboard", on_copy, icon=_icon_copy()
+            ))
+        elif is_clip_source:
+            # Source row: not a paste target (pasting onto itself is a no-op).
+            # Show a green "Copied" badge plus a small × to cancel.
+            badge = QLabel("✓ Copied")
+            badge.setProperty("role", "success")
+            badge.setAlignment(Qt.AlignCenter)
+            badge.setFixedHeight(34)
+            badge.setStyleSheet(
+                f"color: {COLOR_SUCCESS}; font-weight: bold; padding: 0 6px;"
+            )
+            badge.setToolTip(
+                "This profile is on the clipboard — click paste on another "
+                "row to overwrite it, or × to cancel."
+            )
+            self._repolish(badge)
+            rlay.addWidget(badge)
+            rlay.addWidget(make_action(
+                "", "Cancel copy", _cancel_copy,
+                role="secondary", icon=_icon_cross(COLOR_TEXT_MUTED),
+            ))
+        else:
+            rlay.addWidget(make_action(
+                "", f"Paste over '{name}' (overwrite with clipboard)",
+                _paste_here, role="confirm", icon=_icon_paste(),
+            ))
+        trash_color = COLOR_TEXT if can_delete else COLOR_TEXT_MUTED
         rlay.addWidget(make_action(
-            "🗑", "Delete", on_delete,
+            "", "Delete", on_delete,
             role="danger" if can_delete else "secondary",
             enabled=can_delete,
+            icon=_icon_trash(trash_color),
         ))
         for (label, tooltip, cb) in (extra_actions or []):
             rlay.addWidget(make_action(label, tooltip, cb, width=110))
@@ -1026,7 +1281,7 @@ class OscGoesPurrrUI:
         """Modal viewer + editor for every avatar profile, regardless of which
         avatar is currently loaded. Shows binding info and offers rename /
         copy / delete plus a 'Bind to current avatar' shortcut."""
-        pm = self.controller.profile_manager
+        ctl = self.controller
         dlg = QDialog(self.window)
         dlg.setWindowTitle("Avatar Profile Manager")
         dlg.resize(720, 520)
@@ -1039,7 +1294,7 @@ class OscGoesPurrrUI:
         title.setObjectName("sectionTitle")
         lay.addWidget(title)
 
-        cur_id = pm.current_avatar_id or "(not detected)"
+        cur_id = ctl.get_current_avatar_id() or "(not detected)"
         lay.addWidget(self._muted_label(
             f"Current avatar: {cur_id} — use ↻ to rebind a profile to it."
         ))
@@ -1068,8 +1323,9 @@ class OscGoesPurrrUI:
         # wrap the build step in a closure that reuses both.
         def rebuild():
             _clear_layout(host_lay)
-            active = self.controller.get_active_profile_info()
-            names = list(pm.avatar_profiles.keys())
+            active = ctl.get_active_profile_info()
+            names = ctl.get_avatar_profile_names()
+            current_avatar = ctl.get_current_avatar_id() or ""
             if not names:
                 empty = QLabel("No avatar profiles. Close this dialog and create one from the Dashboard.")
                 empty.setProperty("muted", "true")
@@ -1077,7 +1333,7 @@ class OscGoesPurrrUI:
                 host_lay.addWidget(empty)
                 return
             for name in names:
-                bound_id = pm.avatar_bindings.get(name, "")
+                bound_id = ctl.get_avatar_binding(name)
                 is_active = (active["kind"] == "avatar" and name == active["name"])
                 # "Activating" from this dialog rebinds the profile to the
                 # current avatar (the only way to make an avatar profile go
@@ -1087,27 +1343,29 @@ class OscGoesPurrrUI:
                     is_selected=is_active,
                     is_active=is_active,
                     bound_avatar_id=bound_id,
-                    bound_is_current=bool(bound_id and bound_id == pm.current_avatar_id),
+                    bound_is_current=bool(bound_id and bound_id == current_avatar),
                     on_activate=lambda n=name: (
-                        self.controller.bind_avatar_profile_to_current(n),
+                        ctl.bind_avatar_profile_to_current(n),
                         rebuild(),
                     ),
                     on_rename=lambda n=name: self._dialog_rename_avatar(dlg, n, rebuild),
                     on_copy=lambda n=name: (
-                        self.controller.copy_profile("avatar", n),
+                        ctl.copy_profile("avatar", n),
                         rebuild(),
                     ),
                     on_delete=lambda n=name: self._dialog_delete_avatar(dlg, n, rebuild),
                     can_delete=True,
                     show_bind=True,
+                    kind="avatar",
+                    on_after_paste=rebuild,
                     extra_actions=[(
                         "↻ Bind to current",
                         "Rebind this profile to the currently-loaded avatar",
                         lambda n=name: (
-                            self.controller.bind_avatar_profile_to_current(n),
+                            ctl.bind_avatar_profile_to_current(n),
                             rebuild(),
                         ),
-                    )] if pm.current_avatar_id else [],
+                    )] if current_avatar else [],
                 )
                 host_lay.addWidget(row)
             host_lay.addStretch(1)
@@ -1152,8 +1410,7 @@ class OscGoesPurrrUI:
         self._start_profile_rename("global", name)
 
     def _confirm_profile_delete(self, kind: str, name: str):
-        pm = self.controller.profile_manager
-        if kind == "global" and len(pm.profiles) <= 1:
+        if kind == "global" and len(self.controller.get_global_profile_names()) <= 1:
             return
         box = QMessageBox(self.window)
         kind_word = "avatar profile" if kind == "avatar" else "profile"
@@ -1179,9 +1436,7 @@ class OscGoesPurrrUI:
         it fires on stray focus changes (including the rebuild that happens
         when a commit succeeds), which used to silently revert the rename.
         """
-        pm = self.controller.profile_manager
-        source = pm.profiles if kind == "global" else pm.avatar_profiles
-        if current_name not in source:
+        if not self.controller.profile_exists(kind, current_name):
             return
         layout = (self.global_profile_list_layout if kind == "global"
                   else self.avatar_profile_list_layout)
@@ -1247,17 +1502,21 @@ class OscGoesPurrrUI:
         esc = QShortcut(QKeySequence("Escape"), entry)
         esc.activated.connect(cancel)
 
-        ok = QPushButton("✓")
-        ok.setFixedSize(32, 34)
-        ok.setProperty("role", "")
+        ok = QPushButton("")
+        ok.setFixedSize(34, 34)
+        ok.setProperty("role", "confirm")
         ok.setToolTip("Confirm")
+        ok.setIcon(_icon_check(COLOR_TEXT))
+        ok.setIconSize(QSize(18, 18))
         ok.clicked.connect(lambda _=False: commit())
         row_layout.addWidget(ok)
 
-        no = QPushButton("✗")
-        no.setFixedSize(32, 34)
-        no.setProperty("role", "secondary")
+        no = QPushButton("")
+        no.setFixedSize(34, 34)
+        no.setProperty("role", "cancel")
         no.setToolTip("Cancel")
+        no.setIcon(_icon_cross(COLOR_TEXT))
+        no.setIconSize(QSize(18, 18))
         no.clicked.connect(lambda _=False: cancel())
         row_layout.addWidget(no)
 
@@ -1605,9 +1864,10 @@ Network & Debug → Real-Time OSC Inspector shows every OSC parameter your avata
     # ----------------------------------------------------------
 
     def update_connection_status(self, connected: bool, server: str):
-        # Sync haptic engine flag (preserves prior behaviour).
-        if hasattr(self.controller, 'haptic_engine') and self.controller.haptic_engine:
-            self.controller.haptic_engine.is_connected = connected
+        # Sync haptic engine flag through the controller facade
+        # (preserves prior behaviour without holding a reference to the engine).
+        if hasattr(self.controller, 'set_haptic_connected'):
+            self.controller.set_haptic_connected(connected)
 
         if self.connection_button is not None:
             if connected:
@@ -2341,7 +2601,7 @@ Network & Debug → Real-Time OSC Inspector shows every OSC parameter your avata
         # The "active" profile is whichever ProfileManager resolves right
         # now — an avatar profile bound to the current VRChat avatar, or
         # the selected global profile as a fallback.
-        active_profile = controller.profile_manager.get_active_profile_dict() or {}
+        active_profile = controller.get_active_profile_dict() or {}
         has_saved_devices = bool(active_profile)
 
         # If no saved devices and we already have frames (from build_device_list_ui),
