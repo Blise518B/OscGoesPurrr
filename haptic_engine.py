@@ -313,6 +313,9 @@ class HapticEngine:
         self.linear_actuators: Dict[Tuple[str, int], LinearActuator] = {}
         self.stroke_speed_actuators: Dict[Tuple[str, int], StrokeSpeedActuator] = {}
 
+        # Guards re-entrant device-list polls in async_worker (see _poll_device_list).
+        self._device_poll_in_flight = False
+
         # Per-(device_name, motor_idx) user-configured linear behavior.
         #   mode: "position" (default) or "speed"
         #   idle: "rest"     (default) or "hold"
@@ -399,6 +402,39 @@ class HapticEngine:
 
         except Exception as e:
             self.push_ui_update(f"Purr-Check error: {e}")
+
+    async def _poll_device_list(self) -> None:
+        """Manually re-request the server's device list.
+
+        The Python `buttplug` client (v1.0.0) only processes bulk DeviceList
+        messages in `_handle_server_message`; the per-device DeviceAdded /
+        DeviceRemoved protocol messages that Intiface actually emits on BLE
+        connect/disconnect are silently dropped. So our `on_device_added` /
+        `on_device_removed` callbacks would never fire on a real-world toy
+        powering off, despite the hooks being registered.
+
+        Workaround: periodically call the client's internal _request_device_list,
+        which routes through _handle_device_list -- the same code path that
+        diffs the device map and fires our callbacks. This makes the engine's
+        view of connected toys self-correcting within one poll interval.
+
+        Guarded by _device_poll_in_flight so async_worker can fire-and-forget
+        the coroutine without piling up overlapping requests if Intiface gets
+        slow.
+        """
+        if self._device_poll_in_flight:
+            return
+        if not self.buttplug_client or not self.is_connected:
+            return
+        self._device_poll_in_flight = True
+        try:
+            await self.buttplug_client._request_device_list()
+        except Exception:
+            # Connector errors during a disconnect are handled by the
+            # _on_server_disconnect path; nothing useful for us to do here.
+            pass
+        finally:
+            self._device_poll_in_flight = False
 
     def _on_device_added(self, device) -> None:
         """Buttplug client callback fired when a device appears AFTER the initial
@@ -603,6 +639,14 @@ class HapticEngine:
 
         self.push_ui_update("Async thread started")
 
+        # Re-request the device list on a slow cadence so toy hot-plug events
+        # surface in real time. Buttplug protocol uses DeviceAdded / DeviceRemoved
+        # messages, but the Python client v1.0.0 doesn't process them -- only the
+        # bulk DeviceList. Polling every ~2s drives _handle_device_list ourselves.
+        # 100 ticks * 0.02s = 2.0s.
+        device_poll_tick_count = int(2.0 / max(HAPTIC_POLL_RATE, 0.001))
+        ticks_since_device_poll = 0
+
         # Main async loop - Golden Loop
         while True:
             if self.is_connected and self.buttplug_client:
@@ -615,6 +659,16 @@ class HapticEngine:
                         continue
                 except Exception:
                     pass
+
+                # Drive device add/remove callbacks via periodic re-request.
+                ticks_since_device_poll += 1
+                if ticks_since_device_poll >= device_poll_tick_count:
+                    ticks_since_device_poll = 0
+                    # Fire-and-forget so dispatch never blocks on Intiface latency.
+                    try:
+                        asyncio.create_task(self._poll_device_list())
+                    except Exception:
+                        pass
 
                 connection_dropped = False
                 now_ms = time.monotonic() * 1000.0
