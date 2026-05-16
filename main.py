@@ -168,6 +168,8 @@ class OscGoesPurrrApp:
                         # every stored device frame so reconnects flip back to
                         # connected immediately.
                         self.ui.update_stored_devices_ui()
+                    elif msg_type == "battery_update":
+                        self.ui.update_battery_label(data["device_name"], data["level"])
                     elif msg_type == "device_removed":
                         device_name = data
                         self.log_message(f"Toy disconnected: {device_name}")

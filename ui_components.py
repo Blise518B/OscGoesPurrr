@@ -720,10 +720,30 @@ class OscGoesPurrrUI:
                     status_label.configure(text=f"✓ {device_name}", text_color=COLOR_SUCCESS)
                     delete_button.configure(state="normal", fg_color=COLOR_ALERT, hover_color=COLOR_ALERT_HOVER)
                 else:
-                    # Not connected - show warning
+                    # Not connected - show warning, clear stale battery reading
                     status_label.configure(text=f"⚠ {device_name}", text_color=COLOR_ALERT)
                     delete_button.configure(state="normal", fg_color=COLOR_ALERT, hover_color=COLOR_ALERT_HOVER)
-    
+                    battery_label = self.device_ui_frames.get(device_name, {}).get("battery_label")
+                    if battery_label:
+                        battery_label.configure(text="")
+        self._reorder_device_frames()
+
+    def update_battery_label(self, device_name: str, level: float):
+        """Update the battery label for a device with a 0.0–1.0 level reading."""
+        if device_name not in self.device_ui_frames:
+            return
+        battery_label = self.device_ui_frames[device_name].get("battery_label")
+        if not battery_label:
+            return
+        pct = int(level * 100)
+        if pct > 50:
+            color = COLOR_SUCCESS
+        elif pct > 20:
+            color = COLOR_ALERT
+        else:
+            color = "#FF4444"
+        battery_label.configure(text=f"🔋 {pct}%", text_color=color)
+
     def _create_device_frame(self, device_name: str, is_connected: bool, osc_addresses: dict, motor_count: int, motor_kinds: Optional[List[str]] = None) -> dict:
         """
         Create a UI frame for a device with all controls.
@@ -772,8 +792,18 @@ class OscGoesPurrrUI:
             anchor="w"
         )
         name_label.pack(side="left")
-        
-        
+
+        # Battery level — populated by battery poll; empty until first reading
+        battery_label = ctk.CTkLabel(
+            header_frame,
+            text="",
+            font=("Arial", 11),
+            text_color=COLOR_SUCCESS,
+            width=65,
+            anchor="w",
+        )
+        battery_label.pack(side="left", padx=(10, 0))
+
         # Delete button on right
         delete_button = ctk.CTkButton(
             header_frame,
@@ -1003,6 +1033,7 @@ class OscGoesPurrrUI:
         return {
             "frame": device_frame,
             "status_label": name_label,
+            "battery_label": battery_label,
             "delete_button": delete_button,
             "motors": motor_vars
         }
@@ -1240,7 +1271,18 @@ class OscGoesPurrrUI:
                 }
         
         controller.log_message(f"Connected devices: {len(devices_dict)}")
-    
+        self._reorder_device_frames()
+
+    def _reorder_device_frames(self):
+        """Re-pack device frames so connected devices appear at the top."""
+        connected_names = self.controller.get_connected_device_names()
+        all_names = list(self.device_ui_frames.keys())
+        all_names.sort(key=lambda name: (name not in connected_names, name.lower()))
+        for name in all_names:
+            frame = self.device_ui_frames[name]["frame"]
+            frame.pack_forget()
+            frame.pack(expand=False, fill="x", pady=(0, 10), padx=5)
+
     def update_device_visuals(self, device_name: str, motor_idx: int, value: float):
         """Safely updates the sliders and vibe meters without exposing widgets to the backend."""
         if device_name in self.device_ui_frames:

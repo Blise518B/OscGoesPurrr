@@ -316,6 +316,9 @@ class HapticEngine:
         # Guards re-entrant device-list polls in async_worker (see _poll_device_list).
         self._device_poll_in_flight = False
 
+        # Guards re-entrant battery polls in async_worker (see _poll_device_batteries).
+        self._battery_poll_in_flight = False
+
         # Per-(device_name, motor_idx) user-configured linear behavior.
         #   mode: "position" (default) or "speed"
         #   idle: "rest"     (default) or "hold"
@@ -429,12 +432,79 @@ class HapticEngine:
         self._device_poll_in_flight = True
         try:
             await self.buttplug_client._request_device_list()
+
+            # After the device list refreshes, re-check feature counts for every
+            # already-known device. Lovense toys (Gravity, Solace Pro, etc.) go
+            # through BLE service discovery AFTER Intiface first reports them, so
+            # the initial _on_device_added callback fires before the rotate / linear
+            # features are available. Once negotiation completes the feature dict
+            # silently grows, but _on_device_added never fires again because the
+            # device index is already in the client map.
+            for device in list(self.buttplug_client.devices.values()):
+                fresh = get_motor_features_for_device(device)
+                if not fresh:
+                    continue
+                cached = self._motor_features.get(device.name)
+                if cached is not None and len(fresh) == len(cached):
+                    continue  # No change — skip
+
+                # Feature set grew (or first time seeing this device in the cache).
+                self._motor_features[device.name] = fresh
+                motor_kinds = [kind for kind, _, _ in fresh]
+                for motor_idx, (kind, _ot, _f) in enumerate(fresh):
+                    if kind in LINEAR_KINDS:
+                        self.linear_actuators.setdefault(
+                            (device.name, motor_idx), LinearActuator()
+                        )
+                        self.stroke_speed_actuators.setdefault(
+                            (device.name, motor_idx), StrokeSpeedActuator()
+                        )
+                self.push_ui_update(
+                    f"Feature update: {device.name} now has {len(fresh)} motors"
+                )
+                # Push devices_found first so _sync_linear_configs persists the
+                # new motor_kinds into the profile before the rebuild reads them.
+                self.thread_queue.put((
+                    "devices_found",
+                    {
+                        device.index: {
+                            "name": device.name,
+                            "motor_count": len(fresh),
+                            "motor_kinds": motor_kinds,
+                        }
+                    },
+                ))
+                # Full rebuild so the new motor rows actually appear in the UI.
+                self.push_stored_devices_refresh()
+
         except Exception:
             # Connector errors during a disconnect are handled by the
             # _on_server_disconnect path; nothing useful for us to do here.
             pass
         finally:
             self._device_poll_in_flight = False
+
+    async def _poll_device_batteries(self) -> None:
+        """Read battery level from every connected device that supports it."""
+        if self._battery_poll_in_flight:
+            return
+        if not self.buttplug_client or not self.is_connected:
+            return
+        self._battery_poll_in_flight = True
+        try:
+            for device in list(self.buttplug_client.devices.values()):
+                if not device.has_battery():
+                    continue
+                try:
+                    level = await device.battery()
+                    self.thread_queue.put(("battery_update", {
+                        "device_name": device.name,
+                        "level": level,
+                    }))
+                except Exception:
+                    pass
+        finally:
+            self._battery_poll_in_flight = False
 
     def _on_device_added(self, device) -> None:
         """Buttplug client callback fired when a device appears AFTER the initial
@@ -647,6 +717,10 @@ class HapticEngine:
         device_poll_tick_count = int(2.0 / max(HAPTIC_POLL_RATE, 0.001))
         ticks_since_device_poll = 0
 
+        # Poll battery every ~30s. Start at max so first read fires immediately.
+        battery_poll_tick_count = int(30.0 / max(HAPTIC_POLL_RATE, 0.001))
+        ticks_since_battery_poll = battery_poll_tick_count
+
         # Main async loop - Golden Loop
         while True:
             if self.is_connected and self.buttplug_client:
@@ -667,6 +741,15 @@ class HapticEngine:
                     # Fire-and-forget so dispatch never blocks on Intiface latency.
                     try:
                         asyncio.create_task(self._poll_device_list())
+                    except Exception:
+                        pass
+
+                # Refresh battery levels on a slow cadence.
+                ticks_since_battery_poll += 1
+                if ticks_since_battery_poll >= battery_poll_tick_count:
+                    ticks_since_battery_poll = 0
+                    try:
+                        asyncio.create_task(self._poll_device_batteries())
                     except Exception:
                         pass
 
