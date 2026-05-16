@@ -153,6 +153,7 @@ class OscGoesPurrrApp:
                         self.ui.update_connection_status(connected, server)
                     elif msg_type == "devices_found":
                         self.ui.build_device_list_ui(data)
+                        self._sync_linear_configs(data)
                     elif msg_type == "stored_devices_refresh":
                         self.ui.build_stored_devices_ui()
                     elif msg_type == "osc_status":
@@ -425,6 +426,43 @@ class OscGoesPurrrApp:
         if self.haptic_engine and self.haptic_engine.is_connected and self.haptic_engine.buttplug_client:
             return get_counts(self.haptic_engine.buttplug_client)
         return {}
+
+    def update_linear_motor_config(self, device_name: str, motor_idx: int) -> None:
+        """Facade: read the persisted mode/idle settings for one motor and forward
+        them to the HapticEngine. Called by the UI when the user toggles the
+        per-motor Mode or Idle control, and by `_sync_linear_configs` on connect.
+        """
+        if not self.haptic_engine:
+            return
+        mode = self.profile_manager.get_profile_config(
+            device_name, f"motor_{motor_idx}_linear_mode", "position"
+        )
+        idle = self.profile_manager.get_profile_config(
+            device_name, f"motor_{motor_idx}_linear_idle", "rest"
+        )
+        self.haptic_engine.set_linear_config(device_name, motor_idx, mode=mode, idle=idle)
+
+    def _sync_linear_configs(self, devices_dict: dict) -> None:
+        """Push the persisted linear mode/idle setting for every motor on every
+        freshly discovered device into the engine. Called once on `devices_found`
+        so the engine starts with the right behavior even before the user touches
+        the UI.
+        """
+        for index, info in (devices_dict or {}).items():
+            if isinstance(info, dict):
+                device_name = info.get("name")
+                motor_count = info.get("motor_count", 0)
+            else:
+                continue
+            if not device_name:
+                continue
+            # Persist the discovered motor_kinds list so build_stored_devices_ui
+            # can render the linear controls even when the device is offline.
+            kinds = info.get("motor_kinds")
+            if kinds is not None:
+                self.profile_manager.update_device_config(device_name, "motor_kinds", list(kinds))
+            for motor_idx in range(motor_count):
+                self.update_linear_motor_config(device_name, motor_idx)
 
     def update_device_target(self, device_name: str, value: float, motor_index: int):
         """Update target intensity for a specific device and motor

@@ -12,6 +12,7 @@ level has been 0 for `resting_time` seconds, the actuator returns to `resting_po
 """
 
 import asyncio
+import math
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -60,7 +61,7 @@ class LinearActuator:
         # gets the same effect from Date.now() being a huge absolute number.)
         self.last_suck_time_ms: float = float("-inf")
 
-    def tick(self, level: float, now_ms: float) -> Optional[Tuple[float, int]]:
+    def tick(self, level: float, now_ms: float, idle_mode: str = "rest") -> Optional[Tuple[float, int]]:
         # Safety-limited tick interval (matches OGB's clamp(timeDeltaReal, 0, 250)).
         time_delta = max(0.0, min(250.0, now_ms - self.last_push_time_ms))
         time_delta_s = time_delta / 1000.0
@@ -75,11 +76,17 @@ class LinearActuator:
 
         if clamped_level > 0:
             self.last_suck_time_ms = now_ms
-        elif self.last_suck_time_ms < now_ms - self.resting_time_ms:
-            # Resting timeout: snap back toward the resting position.
-            target = max(0.0, min(1.0, self.resting_pos))
-            max_a = 999.0
-            max_v = max(0.0, min(1.0, max_v))
+        elif idle_mode == "rest":
+            if self.last_suck_time_ms < now_ms - self.resting_time_ms:
+                # Resting timeout: snap back toward the resting position.
+                target = max(0.0, min(1.0, self.resting_pos))
+                max_a = 999.0
+                max_v = max(0.0, min(1.0, max_v))
+            # else: target stays at 1.0 (top of stroke) during the grace period --
+            # this is OGB's stroke-and-return feel.
+        else:
+            # idle_mode == "hold": freeze at the current position when level==0.
+            target = self.last_position
 
         target = max(0.0, min(1.0, target))
         current = self.last_position
@@ -129,6 +136,79 @@ class LinearActuator:
             duration = int(round(time_delta * self.duration_mult))
             self.last_position = new_position
             return new_position, duration
+        return None
+
+
+STROKE_SPEED_DEFAULTS = {
+    "max_strokes_per_sec": 2.5,   # full in-out cycles per second at level=1
+    "min_pos": 0.0,
+    "max_pos": 1.0,
+    "resting_pos": 0.0,
+    "resting_time_s": 3.0,
+    "duration_mult": 1.0,
+}
+
+
+class StrokeSpeedActuator:
+    """Per-feature continuous-oscillator for "speed mode" on linear actuators.
+
+    Unlike `LinearActuator`, this one ignores depth and instead generates a sine-wave
+    stroke pattern whose frequency is scaled by the routed 0-1 level. Level=0 means
+    no stroking; level=1 means `max_strokes_per_sec` full in-out cycles per second.
+
+    `idle_mode` (passed to `tick`):
+      - "rest": after `resting_time_s` of zero level, drift toward `resting_pos`
+      - "hold": freeze at the last commanded position when level=0
+    """
+
+    def __init__(self, **config) -> None:
+        merged = {**STROKE_SPEED_DEFAULTS, **config}
+        self.max_strokes_per_sec: float = merged["max_strokes_per_sec"]
+        self.min_pos: float = merged["min_pos"]
+        self.max_pos: float = merged["max_pos"]
+        self.resting_pos: float = merged["resting_pos"]
+        self.resting_time_ms: float = merged["resting_time_s"] * 1000.0
+        self.duration_mult: float = merged["duration_mult"]
+
+        self.phase: float = 0.0          # 0..1, wraps; current position in the sine cycle
+        self.last_position: float = 0.0
+        self.last_push_time_ms: float = 0.0
+        # Initialize to -inf so the "rest" branch can engage on the very first idle tick
+        # regardless of the caller's clock origin (same defensive trick as LinearActuator).
+        self.last_active_time_ms: float = float("-inf")
+
+    def tick(self, level: float, now_ms: float, idle_mode: str = "rest") -> Optional[Tuple[float, int]]:
+        dt_real_ms = max(0.0, min(250.0, now_ms - self.last_push_time_ms))
+        dt_s = dt_real_ms / 1000.0
+        clamped = max(0.0, min(1.0, level))
+        self.last_push_time_ms = now_ms
+
+        if clamped > 0:
+            self.last_active_time_ms = now_ms
+            rate_hz = clamped * self.max_strokes_per_sec
+            self.phase = (self.phase + rate_hz * dt_s) % 1.0
+
+            # Half-cosine wave: phase 0 -> min, phase 0.5 -> max, phase 1 -> min again.
+            normalized = (1.0 - math.cos(2.0 * math.pi * self.phase)) * 0.5
+            new_position = self.min_pos + normalized * (self.max_pos - self.min_pos)
+            new_position = max(0.0, min(1.0, new_position))
+            if abs(new_position - self.last_position) >= 1e-4:
+                self.last_position = new_position
+                duration = max(1, int(round(dt_real_ms * self.duration_mult)))
+                return new_position, duration
+            return None
+
+        # level == 0 from here.
+        if idle_mode == "rest":
+            if self.last_active_time_ms < now_ms - self.resting_time_ms:
+                target = max(0.0, min(1.0, self.resting_pos))
+                if abs(target - self.last_position) >= 1e-4:
+                    duration = max(1, int(round(dt_real_ms * self.duration_mult)))
+                    self.last_position = target
+                    return target, duration
+            # Either still in the grace period, or already at resting -- emit nothing.
+            return None
+        # idle_mode == "hold": stop emitting; the toy holds whatever was last commanded.
         return None
 
 
@@ -217,8 +297,18 @@ class HapticEngine:
         # Connection state
         self.is_connected = False
 
-        # Per-(device_name, motor_idx) physics state for linear actuators.
+        # Per-(device_name, motor_idx) physics state for linear actuators. Both
+        # actuator types are pre-allocated for every linear motor at connect time;
+        # the dispatch loop picks one based on the user's current mode setting.
         self.linear_actuators: Dict[Tuple[str, int], LinearActuator] = {}
+        self.stroke_speed_actuators: Dict[Tuple[str, int], StrokeSpeedActuator] = {}
+
+        # Per-(device_name, motor_idx) user-configured linear behavior.
+        #   mode: "position" (default) or "speed"
+        #   idle: "rest"     (default) or "hold"
+        # Updated externally via set_linear_config(); read by the worker loop.
+        self.linear_configs: Dict[Tuple[str, int], Dict[str, str]] = {}
+
         # Cache of [(kind, output_type, feature), ...] per device name, built at
         # connect time so the worker loop doesn't reflect each tick.
         self._motor_features: Dict[str, List[Tuple[str, OutputType, object]]] = {}
@@ -226,6 +316,18 @@ class HapticEngine:
     def update_target(self, device_name: str, motor_idx: int, target_val: float):
         """Thread-safe entry point for the Main Thread to command hardware."""
         self.device_targets[(device_name, motor_idx)] = target_val
+
+    def set_linear_config(self, device_name: str, motor_idx: int,
+                          mode: str = "position", idle: str = "rest") -> None:
+        """Thread-safe entry point for the controller to push per-motor linear
+        actuator behavior. Only meaningful for motors whose feature kind is in
+        LINEAR_KINDS; calling for a vibrate motor is a harmless no-op at dispatch
+        time. `mode` is "position" or "speed"; `idle` is "rest" or "hold"."""
+        if mode not in ("position", "speed"):
+            mode = "position"
+        if idle not in ("rest", "hold"):
+            idle = "rest"
+        self.linear_configs[(device_name, motor_idx)] = {"mode": mode, "idle": idle}
 
     def push_ui_update(self, message: str):
         """Push a UI update to the main thread via queue"""
@@ -304,21 +406,25 @@ class HapticEngine:
         # Rebuild feature/actuator caches from the freshly discovered devices.
         self._motor_features.clear()
         self.linear_actuators.clear()
+        self.stroke_speed_actuators.clear()
         for device in self.buttplug_client.devices.values():
             features = get_motor_features_for_device(device)
             self._motor_features[device.name] = features
             for motor_idx, (kind, _output_type, _feature) in enumerate(features):
                 if kind in LINEAR_KINDS:
+                    # Pre-allocate both modes so a UI toggle is instant.
                     self.linear_actuators[(device.name, motor_idx)] = LinearActuator()
+                    self.stroke_speed_actuators[(device.name, motor_idx)] = StrokeSpeedActuator()
 
-        # Construct dictionary of found devices: {index: {"name": name, "motor_count": count}}
+        # Construct dictionary of found devices: {index: {"name", "motor_count", "motor_kinds"}}
         found_devices = {}
         for device in self.buttplug_client.devices.values():
             features = self._motor_features.get(device.name, [])
             motor_count = len(features)
+            motor_kinds = [kind for kind, _, _ in features]
 
             kind_counts = {}
-            for kind, _, _ in features:
+            for kind in motor_kinds:
                 kind_counts[kind] = kind_counts.get(kind, 0) + 1
             summary = ", ".join(f"{n}x {k}" for k, n in kind_counts.items()) or "none"
             self.push_ui_update(f"Detected motors for {device.name}: {summary}")
@@ -328,12 +434,14 @@ class HapticEngine:
             # the global vibrate path.
             if motor_count == 0:
                 motor_count = 1
+                motor_kinds = ["vibrate"]
 
             self.push_ui_update(f"Final motor count for {device.name}: {motor_count} motors")
 
             found_devices[device.index] = {
                 "name": device.name,
-                "motor_count": motor_count
+                "motor_count": motor_count,
+                "motor_kinds": motor_kinds,
             }
 
         # Update connection status before triggering UI rebuild (fixes race condition)
@@ -358,6 +466,7 @@ class HapticEngine:
         self.is_connected = False
         self._motor_features.clear()
         self.linear_actuators.clear()
+        self.stroke_speed_actuators.clear()
 
     async def async_worker(self, app_instance=None):
         """
@@ -406,12 +515,19 @@ class HapticEngine:
                         target = self.device_targets.get((device_name, motor_idx), 0.0)
 
                         if kind in LINEAR_KINDS:
-                            # Linear actuator: run velocity-limited physics every tick;
-                            # only send a command when the computed position changes.
-                            actuator = self.linear_actuators.get((device_name, motor_idx))
+                            # Linear actuator: pick mode ("position" depth-aware physics
+                            # vs "speed" continuous-oscillator) from per-motor config.
+                            cfg = self.linear_configs.get((device_name, motor_idx), {})
+                            mode = cfg.get("mode", "position")
+                            idle = cfg.get("idle", "rest")
+
+                            if mode == "speed":
+                                actuator = self.stroke_speed_actuators.get((device_name, motor_idx))
+                            else:
+                                actuator = self.linear_actuators.get((device_name, motor_idx))
                             if actuator is None:
                                 continue
-                            result = actuator.tick(target, now_ms)
+                            result = actuator.tick(target, now_ms, idle_mode=idle)
                             if result is None:
                                 continue
                             new_position, duration_ms = result

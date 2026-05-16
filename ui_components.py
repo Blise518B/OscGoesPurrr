@@ -1,4 +1,6 @@
 # OscGoesPurrr - UI Components Module
+from typing import List, Optional
+
 import customtkinter as ctk
 from constants import *
 
@@ -722,19 +724,22 @@ class OscGoesPurrrUI:
                     status_label.configure(text=f"⚠ {device_name}", text_color=COLOR_ALERT)
                     delete_button.configure(state="normal", fg_color=COLOR_ALERT, hover_color=COLOR_ALERT_HOVER)
     
-    def _create_device_frame(self, device_name: str, is_connected: bool, osc_addresses: dict, motor_count: int) -> dict:
+    def _create_device_frame(self, device_name: str, is_connected: bool, osc_addresses: dict, motor_count: int, motor_kinds: Optional[List[str]] = None) -> dict:
         """
         Create a UI frame for a device with all controls.
-        
+
         This helper method extracts the common frame creation logic used by both
         build_stored_devices_ui() and build_device_list_ui().
-        
+
         Args:
             device_name: Name of the device
             is_connected: Whether the device is currently connected (determines status color)
             osc_addresses: Dict mapping motor index string -> OSC address (e.g. {"0": "/param/0", "1": "/param/1"})
             motor_count: Number of motors/vibration features on the device
-            
+            motor_kinds: Optional list of feature-kind strings per motor (e.g. ["vibrate", "linear-d"]).
+                When provided, motors whose kind is "linear" or "linear-d" get extra UI controls
+                for switching between Position / Speed mode and Hold / Rest idle behavior.
+
         Returns:
             Dictionary containing frame data with keys:
                 - frame: The device frame widget
@@ -930,24 +935,63 @@ class OscGoesPurrrUI:
             cb_self.grid(row=0, column=2, padx=5, pady=2, sticky="w")
             cb_others.grid(row=0, column=3, padx=5, pady=2, sticky="w")
 
-            # Row 3: Custom Parameter Fallback
+            # Row 3: Linear-actuator controls (only when this motor is a stroker).
+            # Lets the user pick between OGB-style depth-based "Position" mode and
+            # the new continuous-oscillation "Speed" mode, plus what to do when the
+            # routed level returns to zero ("Hold" = freeze, "Rest" = drift to resting_pos).
+            this_kind = motor_kinds[motor_idx] if (motor_kinds and motor_idx < len(motor_kinds)) else None
+            if this_kind in ("linear", "linear-d"):
+                linear_frame = ctk.CTkFrame(motor_frame, fg_color="transparent")
+                linear_frame.grid(row=3, column=0, columnspan=2, padx=10, pady=(2, 4), sticky="ew")
+
+                ctk.CTkLabel(linear_frame, text="Mode:", font=ctk.CTkFont(size=11)).pack(side="left", padx=(0, 4))
+                current_mode = self.controller.get_profile_config(device_name, f"motor_{motor_idx}_linear_mode", "position")
+                mode_btn = ctk.CTkSegmentedButton(
+                    linear_frame,
+                    values=["Position", "Speed"],
+                    width=140, height=22,
+                    command=lambda val, dn=device_name, idx=motor_idx: (
+                        self.controller.update_device_config(dn, f"motor_{idx}_linear_mode", val.lower()),
+                        self.controller.save_profiles(),
+                        self.controller.update_linear_motor_config(dn, idx) if hasattr(self.controller, "update_linear_motor_config") else None,
+                    ),
+                )
+                mode_btn.set("Speed" if current_mode == "speed" else "Position")
+                mode_btn.pack(side="left", padx=(0, 12))
+
+                ctk.CTkLabel(linear_frame, text="Idle:", font=ctk.CTkFont(size=11)).pack(side="left", padx=(0, 4))
+                current_idle = self.controller.get_profile_config(device_name, f"motor_{motor_idx}_linear_idle", "rest")
+                idle_btn = ctk.CTkSegmentedButton(
+                    linear_frame,
+                    values=["Hold", "Rest"],
+                    width=110, height=22,
+                    command=lambda val, dn=device_name, idx=motor_idx: (
+                        self.controller.update_device_config(dn, f"motor_{idx}_linear_idle", val.lower()),
+                        self.controller.save_profiles(),
+                        self.controller.update_linear_motor_config(dn, idx) if hasattr(self.controller, "update_linear_motor_config") else None,
+                    ),
+                )
+                idle_btn.set("Hold" if current_idle == "hold" else "Rest")
+                idle_btn.pack(side="left")
+
+            # Row 4: Custom Parameter Fallback
             osc_entry = ctk.CTkEntry(motor_frame, placeholder_text="Custom override (e.g. OGB/Tail/Touch)")
             osc_entry.insert(0, osc_addresses.get(str(motor_idx), ""))
-            osc_entry.grid(row=3, column=0, columnspan=2, padx=10, pady=(5, 5), sticky="ew")
+            osc_entry.grid(row=4, column=0, columnspan=2, padx=10, pady=(5, 5), sticky="ew")
             osc_entry.bind("<FocusOut>", lambda e, dn=device_name: (
                 self.controller.save_profiles(),
                 self.controller.force_recalculate() if hasattr(self.controller, 'force_recalculate') else None
             ))
 
-            # Row 4: Intensity Slider
+            # Row 5: Intensity Slider
             slider = ctk.CTkSlider(motor_frame, from_=0.0, to=1.0, command=lambda val, dn=device_name, idx=motor_idx: self.controller.update_device_target(dn, float(val), idx))
             slider.set(0.0)
-            slider.grid(row=4, column=0, columnspan=2, padx=10, pady=(5, 5), sticky="ew")
+            slider.grid(row=5, column=0, columnspan=2, padx=10, pady=(5, 5), sticky="ew")
 
-            # Row 5: Vibe Meter
+            # Row 6: Vibe Meter
             vibe_meter = ctk.CTkProgressBar(motor_frame, height=6)
             vibe_meter.set(0.0)
-            vibe_meter.grid(row=5, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="ew")
+            vibe_meter.grid(row=6, column=0, columnspan=2, padx=10, pady=(0, 10), sticky="ew")
 
             motor_vars.append({
                 "slider": slider,
@@ -1034,12 +1078,18 @@ class OscGoesPurrrUI:
             if not osc_addresses and config.get("osc_address"):
                 osc_addresses["0"] = config.get("osc_address")
             
+            # Pull persisted motor kinds (saved by _sync_linear_configs on connect).
+            # Falls back to None when the device has never been seen by this build,
+            # which simply means no linear UI is rendered until first connect.
+            stored_motor_kinds = config.get("motor_kinds")
+
             # Create frame using the helper method
             frame_data = self._create_device_frame(
                 device_name=device_name,
                 is_connected=is_connected,
                 osc_addresses=osc_addresses,
-                motor_count=stored_motor_count
+                motor_count=stored_motor_count,
+                motor_kinds=stored_motor_kinds,
             )
             
             # Store unified frame data with all elements
@@ -1162,12 +1212,17 @@ class OscGoesPurrrUI:
                 # Store motor count in profile via controller
                 controller.update_device_config(device_name, "motor_count", motor_count)
                 
+                # Pull motor kinds from the device payload so linear motors render
+                # the Mode/Idle controls; vibrate-only devices stay visually unchanged.
+                motor_kinds = device_info.get("motor_kinds") if isinstance(device_info, dict) else None
+
                 # Device is connected since it was just discovered, so use green checkmark
                 frame_data = self._create_device_frame(
                     device_name=device_name,
                     is_connected=True,
                     osc_addresses=osc_addresses,
-                    motor_count=actual_motor_count
+                    motor_count=actual_motor_count,
+                    motor_kinds=motor_kinds,
                 )
                 
                 # Store unified frame data with all elements
