@@ -27,6 +27,7 @@ from motor_router import MotorRouter
 from parameter_store import store
 from constants import *
 from utilities import value_to_hex_color, toggle_windows_console, create_default_icon
+from version import __version__
 
 
 class OscGoesPurrrApp:
@@ -80,7 +81,7 @@ class OscGoesPurrrApp:
         
         # Initialize main window first (required before UI setup)
         self.app = ctk.CTk()
-        self.app.title(APP_NAME)
+        self.app.title(f"{APP_NAME} - v{__version__}")
         
         # Load saved window geometry, falling back to default constant
         saved_geometry = self.profile_manager.app_settings.settings.get("window_geometry", WINDOW_GEOMETRY)

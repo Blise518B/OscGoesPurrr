@@ -799,8 +799,8 @@ class OscGoesPurrrUI:
             motor_label.grid(row=0, column=0, padx=10, pady=(10, 5), sticky="w")
 
             # Read from the new 'zones' key, fallback to legacy 'zone' key if it exists
-            legacy_zone = self.controller.get_profile_config(device_name, f"motor_{motor_idx}_zone", "")
-            zones_var = ctk.StringVar(value=self.controller.get_profile_config(device_name, f"motor_{motor_idx}_zones", legacy_zone))
+            legacy_zone = self.controller.get_profile_config(device_name, f"motor_{motor_idx}_zone", "All SPS")
+            zones_var = ctk.StringVar(value=self.controller.get_profile_config(device_name, f"motor_{motor_idx}_zones", legacy_zone or "All SPS"))
 
             def get_btn_text(var):
                 # Don't count "None" as an active zone

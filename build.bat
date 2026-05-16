@@ -6,6 +6,12 @@ echo   OscGoesPurrr - PyInstaller Build Script
 echo ========================================
 echo.
 
+REM Get version from version.py by querying git commit count
+echo Resolving version from Git...
+for /f "usebackq tokens=*" %%i in (`python -c "from version import __version__; print(__version__)"`) do set BUILD_VERSION=%%i
+echo Building version: !BUILD_VERSION!
+echo.
+
 REM Check if Python is available
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
@@ -49,6 +55,7 @@ pyinstaller --noconfirm ^
     --onefile ^
     --windowed ^
     --name "OscGoesPurrr" ^
+    --version-number !BUILD_VERSION! ^
     main.py
 
 if %errorlevel% neq 0 (
