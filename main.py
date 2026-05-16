@@ -164,6 +164,16 @@ class OscGoesPurrrApp:
                     elif msg_type == "devices_found":
                         self.ui.build_device_list_ui(data)
                         self._sync_linear_configs(data)
+                        # Re-evaluate the green-check vs yellow-warning icons on
+                        # every stored device frame so reconnects flip back to
+                        # connected immediately.
+                        self.ui.update_stored_devices_ui()
+                    elif msg_type == "device_removed":
+                        device_name = data
+                        self.log_message(f"Toy disconnected: {device_name}")
+                        # Frame stays (the device is "stored"); just flip its
+                        # connection-status icon from green to yellow.
+                        self.ui.update_stored_devices_ui()
                     elif msg_type == "stored_devices_refresh":
                         self.ui.build_stored_devices_ui()
                     elif msg_type == "osc_status":

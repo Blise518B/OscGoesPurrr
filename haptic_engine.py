@@ -400,6 +400,82 @@ class HapticEngine:
         except Exception as e:
             self.push_ui_update(f"Purr-Check error: {e}")
 
+    def _on_device_added(self, device) -> None:
+        """Buttplug client callback fired when a device appears AFTER the initial
+        connect (e.g. user paired a new toy via Intiface, or a paired toy came
+        back into BLE range after a battery swap).
+
+        Pre-initial-scan additions are intentionally ignored here -- they get
+        batched into the bulk `devices_found` push from `_async_connect`. Gating
+        on `is_connected` keeps us from double-pushing during the connect window.
+        """
+        if not self.is_connected:
+            return
+        try:
+            device_name = getattr(device, "name", None)
+            if not device_name:
+                return
+
+            features = get_motor_features_for_device(device)
+            self._motor_features[device_name] = features
+            motor_kinds = [kind for kind, _, _ in features]
+            for motor_idx, (kind, _output_type, _feature) in enumerate(features):
+                if kind in LINEAR_KINDS:
+                    self.linear_actuators.setdefault((device_name, motor_idx), LinearActuator())
+                    self.stroke_speed_actuators.setdefault((device_name, motor_idx), StrokeSpeedActuator())
+
+            motor_count = len(features) if features else 1
+            if not features:
+                motor_kinds = ["vibrate"]
+
+            self.push_ui_update(f"Device connected: {device_name} ({motor_count} motors)")
+            self.thread_queue.put((
+                "devices_found",
+                {
+                    getattr(device, "index", device_name): {
+                        "name": device_name,
+                        "motor_count": motor_count,
+                        "motor_kinds": motor_kinds,
+                    }
+                },
+            ))
+        except Exception as e:
+            self.push_ui_update(f"on_device_added handler error: {e}")
+
+    def _on_device_removed(self, device) -> None:
+        """Buttplug client callback fired when a device disconnects (toy powered
+        off, BLE drop, battery dead, etc.). The device has already been removed
+        from `buttplug_client.devices` by the time this fires.
+        """
+        try:
+            device_name = getattr(device, "name", None)
+            if not device_name:
+                return
+
+            # Drop all per-device state so a stale linear physics tick doesn't
+            # try to command a feature that no longer exists.
+            self._motor_features.pop(device_name, None)
+            for k in list(self.linear_actuators.keys()):
+                if k[0] == device_name:
+                    self.linear_actuators.pop(k, None)
+            for k in list(self.stroke_speed_actuators.keys()):
+                if k[0] == device_name:
+                    self.stroke_speed_actuators.pop(k, None)
+            for k in list(self.device_targets.keys()):
+                if k[0] == device_name:
+                    self.device_targets.pop(k, None)
+            for k in list(self.device_last_sent.keys()):
+                if k[0] == device_name:
+                    self.device_last_sent.pop(k, None)
+            for k in list(self.linear_configs.keys()):
+                if k[0] == device_name:
+                    self.linear_configs.pop(k, None)
+
+            self.push_ui_update(f"Device disconnected: {device_name}")
+            self.thread_queue.put(("device_removed", device_name))
+        except Exception as e:
+            self.push_ui_update(f"on_device_removed handler error: {e}")
+
     def _on_server_disconnect(self) -> None:
         """Buttplug client callback fired when the WS to Intiface closes.
 
@@ -480,6 +556,15 @@ class HapticEngine:
         # Update connection status before triggering UI rebuild (fixes race condition)
         self.is_connected = True
         self.push_connection_status(True, "Intiface")
+
+        # Register device add/remove hooks AFTER the initial bulk sync. Doing it
+        # earlier would cause per-device callbacks to fire during the initial
+        # scan, racing with the bulk devices_found push below.
+        try:
+            self.buttplug_client.on_device_added = self._on_device_added
+            self.buttplug_client.on_device_removed = self._on_device_removed
+        except Exception:
+            pass
 
         # Push message to refresh stored devices UI from main thread
         self.push_stored_devices_refresh()
