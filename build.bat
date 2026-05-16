@@ -51,11 +51,12 @@ REM --windowed: no console window (GUI app with customtkinter)
 REM --name: output executable name
 REM PyInstaller automatically analyzes imports, so all .py modules are bundled
 REM Temp files are cleaned up after successful build in step 4
+set EXE_NAME=OscGoesPurrr_!BUILD_VERSION!
+
 pyinstaller --noconfirm ^
     --onefile ^
     --windowed ^
-    --name "OscGoesPurrr" ^
-    --version-number !BUILD_VERSION! ^
+    --name "!EXE_NAME!" ^
     main.py
 
 if %errorlevel% neq 0 (
@@ -101,12 +102,12 @@ echo ========================================
 echo   Build Complete!
 echo ========================================
 echo.
-echo Executable location: dist\OscGoesPurrr.exe
+echo Executable location: dist\!EXE_NAME!.exe
 echo.
 
 REM Check if the exe was created
-if exist "dist\OscGoesPurrr.exe" (
-    echo [SUCCESS] OscGoesPurrr.exe created successfully!
+if exist "dist\!EXE_NAME!.exe" (
+    echo [SUCCESS] !EXE_NAME!.exe created successfully!
 ) else (
     echo [WARNING] Executable not found in dist folder.
 )
