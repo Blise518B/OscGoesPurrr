@@ -257,7 +257,17 @@ def get_motor_features_for_device(device) -> List[Tuple[str, OutputType, object]
     """
     result: List[Tuple[str, OutputType, object]] = []
     try:
-        features = list(device.features) if hasattr(device, "features") else []
+        # ButtplugDevice.features is a dict[int, DeviceFeature] keyed by feature index,
+        # NOT an iterable of features. Iterating it directly hands us the integer keys
+        # and silently breaks classification (every "feature" then fails has_output()
+        # and gets skipped), leaving connected devices with motor_count = 0.
+        raw_features = getattr(device, "features", None)
+        if isinstance(raw_features, dict):
+            features = list(raw_features.values())
+        elif raw_features is not None:
+            features = list(raw_features)
+        else:
+            features = []
         try:
             features.sort(key=lambda f: getattr(f, "index", 0))
         except Exception:
