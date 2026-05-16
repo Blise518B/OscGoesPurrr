@@ -150,7 +150,12 @@ class OscGoesPurrrApp:
                         self.ui.log_message(data)
                     elif msg_type == "connection_status":
                         connected, server = data
-                        self.ui.update_connection_status(connected, server)
+                        # Route through the controller method (NOT directly to UI) --
+                        # the controller method is what restarts the auto-reconnect
+                        # loop when `connected` is False. Calling self.ui directly
+                        # only repainted the status label and left the engine state
+                        # in limbo with no retries.
+                        self.update_connection_status(connected, server)
                     elif msg_type == "devices_found":
                         self.ui.build_device_list_ui(data)
                         self._sync_linear_configs(data)

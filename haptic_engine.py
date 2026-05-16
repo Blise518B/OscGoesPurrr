@@ -400,11 +400,34 @@ class HapticEngine:
         except Exception as e:
             self.push_ui_update(f"Purr-Check error: {e}")
 
+    def _on_server_disconnect(self) -> None:
+        """Buttplug client callback fired when the WS to Intiface closes.
+
+        Safe to call from any thread/loop -- only does flag updates and queue puts,
+        no I/O. Idempotent: a second invocation after we've already marked the
+        engine disconnected is a no-op. The main thread's queue processor sees
+        the pushed connection_status and reactivates the auto-reconnect loop.
+        """
+        if not self.is_connected:
+            return
+        self.push_ui_update("Intiface server disconnected. Will retry...")
+        self.is_connected = False
+        self.push_connection_status(False, "")
+
     async def _async_connect(self):
         """Internal async method to connect to Intiface"""
         self.buttplug_client = ButtplugClient(APP_NAME)
 
         await self.buttplug_client.connect(INTIFACE_WS_URL)
+
+        # Register the server-disconnect event hook so we notice the moment Intiface
+        # closes the websocket, even when no haptic commands are currently flowing.
+        # The async_worker poll below is a defensive fallback for buttplug versions
+        # where this hook never fires.
+        try:
+            self.buttplug_client.on_server_disconnect = self._on_server_disconnect
+        except Exception:
+            pass
 
         # Start scanning for devices after connection
         await self.buttplug_client.start_scanning()
@@ -498,6 +521,16 @@ class HapticEngine:
         # Main async loop - Golden Loop
         while True:
             if self.is_connected and self.buttplug_client:
+                # Defensive health check: catch WS drops the on_server_disconnect
+                # hook never surfaced (older buttplug versions, edge timing).
+                try:
+                    if not self.buttplug_client.connected:
+                        self._on_server_disconnect()
+                        await asyncio.sleep(HAPTIC_POLL_RATE)
+                        continue
+                except Exception:
+                    pass
+
                 connection_dropped = False
                 now_ms = time.monotonic() * 1000.0
 
