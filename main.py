@@ -32,8 +32,6 @@ from version import __version__
 
 class OscGoesPurrrApp:
     def __init__(self):
-        # Initialize main window
-        self.app = None
         self.async_loop: asyncio.AbstractEventLoop = None
         
         # Thread-safe communication queue (standard library, not asyncio)
@@ -84,17 +82,7 @@ class OscGoesPurrrApp:
         self.apply_console_visibility()
     
     def _setup_components(self):
-        """Initialize main window and UI component"""
-        import customtkinter as ctk
-        
-        # Initialize main window first (required before UI setup)
-        self.app = ctk.CTk()
-        self.app.title(f"{APP_NAME} - v{__version__}")
-        
-        # Load saved window geometry, falling back to default constant
-        saved_geometry = self.profile_manager.app_settings.settings.get("window_geometry", WINDOW_GEOMETRY)
-        self.app.geometry(saved_geometry)
-        
+        """Initialize UI component and backend services."""
         # Instantiate Haptic Engine (now owns its own state)
         self.haptic_engine = HapticEngine(self.thread_queue)
 
@@ -125,9 +113,18 @@ class OscGoesPurrrApp:
         self.auto_refresh_enabled = self.profile_manager.app_settings.get("auto_refresh", True)
         self.auto_connect_enabled = self.profile_manager.app_settings.get("auto_connect", True)
         
-        # Instantiate UI Component (must be after haptic_engine is created)
-        self.ui = OscGoesPurrrUI(self.app, self)
-        
+        # Instantiate UI Component (must be after haptic_engine is created).
+        # The UI owns its own root window so this controller stays
+        # framework-agnostic.
+        self.ui = OscGoesPurrrUI(self)
+
+        # Push window-chrome settings through the UI facade.
+        self.ui.set_title(f"{APP_NAME} - v{__version__}")
+        saved_geometry = self.profile_manager.app_settings.settings.get(
+            "window_geometry", WINDOW_GEOMETRY
+        )
+        self.ui.set_geometry(saved_geometry)
+
         # Build stored devices UI after loading profiles
         self.ui.build_stored_devices_ui()
     
@@ -226,7 +223,7 @@ class OscGoesPurrrApp:
         """Persist all profiles. Per-motor addresses are kept up-to-date in the
         profile dict on every UI add/remove, so this just flushes to disk and
         ensures every device has at least one default address."""
-        for device_name in self.ui.device_ui_frames.keys():
+        for device_name in self.ui.get_known_device_names():
             existing = self.get_profile_config(device_name, "osc_addresses", None)
             if not existing:
                 default_addr = device_name.replace(" ", "_")
@@ -255,7 +252,7 @@ class OscGoesPurrrApp:
     
     def toggle_auto_connect(self):
         """Handle auto-connect checkbox toggle from UI"""
-        if not self.ui.auto_connect_var.get():
+        if not self.ui.get_auto_connect_enabled():
             # Checkbox unchecked - disable auto connect
             self.auto_connect_enabled = False
             self.profile_manager.app_settings.set("auto_connect", False)
@@ -332,13 +329,8 @@ class OscGoesPurrrApp:
         self.save_profiles()
         self.profile_manager.known_devices.forget(device_name)
 
-        # Remove from UI via ui component
-        if device_name in self.ui.stored_device_frames:
-            frame_data = self.ui.stored_device_frames[device_name]
-            frame_data.get("frame").destroy()
-            del self.ui.stored_device_frames[device_name]
-        if device_name in self.ui.device_ui_frames:
-            del self.ui.device_ui_frames[device_name]
+        # Remove from UI via the framework-agnostic facade
+        self.ui.remove_device_frame(device_name)
 
         self.log_message(f"Deleted stored toy: {device_name}")
     
@@ -408,7 +400,7 @@ class OscGoesPurrrApp:
     def refresh_debugger_ui(self):
         """Refresh the debugger display at 10Hz (100ms intervals)"""
         # Update SPS Zones Status
-        if hasattr(self, 'osc_manager') and hasattr(self.ui, 'sps_status_label') and self.ui.sps_status_label:
+        if hasattr(self, 'osc_manager'):
             fresh_zones = store.get_detected_zones()
             orifices = fresh_zones.get("Orifices", [])
             penetrators = fresh_zones.get("Penetrators", [])
@@ -422,13 +414,11 @@ class OscGoesPurrrApp:
 
                 # Update text with proper newlines
                 sps_text = f"Orifices: {', '.join(orifices) if orifices else 'None'}\n\nPenetrators: {', '.join(penetrators) if penetrators else 'None'}"
-                self.ui.sps_status_label.configure(text=sps_text)
+                self.ui.update_sps_status(sps_text)
 
         if getattr(self, 'is_debugging_osc', False) and hasattr(self, 'osc_manager'):
             # Get search filter
-            search_query = ""
-            if hasattr(self.ui, 'osc_search_var'):
-                search_query = self.ui.osc_search_var.get().lower()
+            search_query = self.ui.get_osc_search_query()
 
             lines = []  # list of (addr_prefix, val_str, hex_color) triplets
             # Sort alphabetically, using Central Store for thread-safe data
@@ -455,8 +445,7 @@ class OscGoesPurrrApp:
             self.ui.update_debugger_display(debug_data)
 
         # Schedule the next refresh (Throttled to save UI thread)
-        if self.app:
-            self.app.after(UI_REFRESH_RATE_MS, self.refresh_debugger_ui)
+        self.ui.schedule_callback(UI_REFRESH_RATE_MS, self.refresh_debugger_ui)
 
     def get_device_motor_counts(self) -> dict:
         """Facade method to get motor counts safely from the hardware engine."""
@@ -529,13 +518,9 @@ class OscGoesPurrrApp:
         if self.haptic_engine:
             self.haptic_engine.update_target(device_name, motor_index, float(value))
         
-        # Update the corresponding vibe meter via ui component
-        if device_name in self.ui.device_ui_frames:
-            frame_data = self.ui.device_ui_frames[device_name]
-            if "motors" in frame_data and motor_index >= 0 and motor_index < len(frame_data["motors"]):
-                # Update specific motor's vibe meter
-                frame_data["motors"][motor_index]["vibe_meter"].set(float(value))
-        
+        # Update the corresponding vibe meter via the UI facade
+        self.ui.update_motor_vibe(device_name, motor_index, float(value))
+
     
     def trigger_purr_check(self):
         """Trigger Purr-Check from main thread"""
@@ -613,11 +598,7 @@ class OscGoesPurrrApp:
         # Clear cached UI frames so build_stored_devices_ui doesn't short-circuit
         # and leave the previous profile's device cards on screen when the new
         # profile is empty.
-        try:
-            self.ui.device_ui_frames.clear()
-            self.ui.stored_device_frames.clear()
-        except Exception:
-            pass
+        self.ui.clear_device_caches()
 
         self.ui.build_stored_devices_ui()
         if hasattr(self.ui, "_refresh_profile_buttons"):
@@ -743,7 +724,7 @@ class OscGoesPurrrApp:
 
     def toggle_osc_auto_connect(self):
         """Handle OSC auto-connect checkbox toggle from UI"""
-        if not self.ui.osc_auto_connect_var.get():
+        if not self.ui.get_osc_auto_connect_enabled():
             # Checkbox unchecked - disable OSC auto connect
             self.profile_manager.app_settings.set("auto_connect_osc", False)
             self.log_message("VRChat OSC Auto connect disabled")
@@ -760,7 +741,7 @@ class OscGoesPurrrApp:
     
     def toggle_auto_refresh(self):
         """Handle auto-refresh checkbox toggle from UI"""
-        if not self.ui.auto_refresh_var.get():
+        if not self.ui.get_auto_refresh_enabled():
             # Checkbox unchecked - disable auto refresh
             self.auto_refresh_enabled = False
             self.profile_manager.app_settings.set("auto_refresh", False)
@@ -913,43 +894,38 @@ class OscGoesPurrrApp:
             
     def minimize_to_tray(self):
         """Hides the UI and spawns the system tray icon in a background thread."""
-        if not self.app: return
-        self.app.withdraw()  # Hide the Tkinter window
-        
+        self.ui.hide_window()
+
         image = create_default_icon()
         menu = pystray.Menu(
             pystray.MenuItem("Show OscGoesPurrr", self.restore_from_tray, default=True),
             pystray.MenuItem("Quit", self.quit_from_tray)
         )
         self.tray_icon = pystray.Icon("OscGoesPurrr", image, "OscGoesPurrr", menu)
-        
+
         # pystray blocks, so we must run it in a daemon thread
         threading.Thread(target=self.tray_icon.run, daemon=True).start()
-        
+
     def restore_from_tray(self, icon, item):
         """Restores the UI from the system tray (thread-safe)."""
         icon.stop()
-        if self.app:
-            self.app.after(0, self.app.deiconify)  # Safely call back to main UI thread
-            
+        self.ui.show_window()
+
     def quit_from_tray(self, icon, item):
         """Fully shuts down the app from the system tray (thread-safe)."""
         icon.stop()
-        if self.app:
-            self.app.after(0, self.quit_app)  # Safely call back to main UI thread
-            
+        self.ui.schedule_on_main_thread(self.quit_app)
+
     def quit_app(self):
         """Executes the final, clean shutdown sequence."""
         self.log_message("Shutting down...")
-        if self.app:
-            current_geometry = self.app.geometry()
+        current_geometry = self.ui.get_geometry()
+        if current_geometry:
             self.profile_manager.app_settings.update_setting("window_geometry", current_geometry)
-        
+
         self.save_profiles()
-        
-        if self.app:
-            self.app.quit()
-            self.app.destroy()
+
+        self.ui.shutdown()
 
     def run(self):
         """Start the Three-Pillar application"""
@@ -978,33 +954,30 @@ class OscGoesPurrrApp:
             if getattr(self, '_needs_recalculation', False):
                 self._needs_recalculation = False
                 self.force_recalculate()
-            if self.app:
-                self.app.after(ROUTER_POLL_RATE_MS, routing_tick)
+            self.ui.schedule_callback(ROUTER_POLL_RATE_MS, routing_tick)
 
         # Periodically check for UI updates from async thread
         def check_queue():
             self.process_async_queue()
-            if self.app:
-                self.app.after(QUEUE_POLL_RATE_MS, check_queue)  # Check every 50ms
+            self.ui.schedule_callback(QUEUE_POLL_RATE_MS, check_queue)
 
-        if self.app:
-            # Register clean shutdown handler to auto-save profiles
-            self.app.protocol("WM_DELETE_WINDOW", self._on_closing)
+        # Register clean shutdown handler to auto-save profiles
+        self.ui.set_close_handler(self._on_closing)
 
-            self.app.after(UI_REFRESH_RATE_MS, check_queue)
+        self.ui.schedule_callback(UI_REFRESH_RATE_MS, check_queue)
 
-            # Start the routing tick loop
-            self.app.after(ROUTER_POLL_RATE_MS, routing_tick)
+        # Start the routing tick loop
+        self.ui.schedule_callback(ROUTER_POLL_RATE_MS, routing_tick)
 
-            # Boot OSC server 500ms after UI launches to prevent freezing
-            if self.profile_manager.app_settings.settings.get("auto_connect_osc", True):
-                self.app.after(OSC_BOOT_DELAY_MS, self.toggle_osc_connection)
+        # Boot OSC server 500ms after UI launches to prevent freezing
+        if self.profile_manager.app_settings.settings.get("auto_connect_osc", True):
+            self.ui.schedule_callback(OSC_BOOT_DELAY_MS, self.toggle_osc_connection)
 
-            # Start the OSC debugger UI refresh loop
-            self.refresh_debugger_ui()
+        # Start the OSC debugger UI refresh loop
+        self.refresh_debugger_ui()
 
-            # Run GUI mainloop on main thread
-            self.app.mainloop()
+        # Run GUI event loop on main thread
+        self.ui.run()
 
 
 if __name__ == "__main__":

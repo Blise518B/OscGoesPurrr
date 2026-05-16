@@ -9,16 +9,18 @@ from parameter_store import store
 class OscGoesPurrrUI:
     """UI Component class - handles all GUI rendering and updates"""
     
-    def __init__(self, app_root: ctk.CTk, controller):
+    def __init__(self, controller, app_root: "Optional[ctk.CTk]" = None):
         """
         Initialize the UI component.
-        
+
         Args:
-            app_root: The main customtkinter application window
             controller: Reference to the main application controller
+            app_root: Optional pre-built root window. When omitted, the UI
+                creates its own framework-specific root so the controller
+                stays framework-agnostic.
         """
-        self.app = app_root
         self.controller = controller
+        self.app = app_root if app_root is not None else ctk.CTk()
         
         # GUI State
         self.status_label = None
@@ -1812,3 +1814,124 @@ known and will be re-seeded with defaults).
                 for mv in motor_vars:
                     mv["slider"].set(value)
                     mv["vibe_meter"].set(value)
+
+    # ============================================================
+    # Framework-agnostic facade — main.py interacts with the UI
+    # exclusively through these methods so the GUI toolkit can be
+    # swapped (CustomTkinter -> PySide6) without touching the
+    # controller.
+    # ============================================================
+
+    # --- Window lifecycle ---
+    def set_title(self, text: str) -> None:
+        if self.app:
+            self.app.title(text)
+
+    def set_geometry(self, geometry: str) -> None:
+        if self.app and geometry:
+            self.app.geometry(geometry)
+
+    def get_geometry(self) -> str:
+        if self.app:
+            try:
+                return self.app.geometry()
+            except Exception:
+                return ""
+        return ""
+
+    def set_close_handler(self, callback) -> None:
+        if self.app:
+            self.app.protocol("WM_DELETE_WINDOW", callback)
+
+    def schedule_callback(self, delay_ms: int, func) -> None:
+        """Schedule `func` to run on the UI thread after `delay_ms`."""
+        if self.app:
+            self.app.after(delay_ms, func)
+
+    def schedule_on_main_thread(self, func) -> None:
+        """Run `func` on the UI thread as soon as possible (thread-safe)."""
+        if self.app:
+            self.app.after(0, func)
+
+    def hide_window(self) -> None:
+        if self.app:
+            self.app.withdraw()
+
+    def show_window(self) -> None:
+        """Restore the window from a hidden/tray state (thread-safe)."""
+        if self.app:
+            self.app.after(0, self.app.deiconify)
+
+    def run(self) -> None:
+        """Enter the UI event loop. Blocks until the window is closed."""
+        if self.app:
+            self.app.mainloop()
+
+    def shutdown(self) -> None:
+        """Exit the event loop and tear down the window."""
+        if self.app:
+            try:
+                self.app.quit()
+            finally:
+                self.app.destroy()
+
+    # --- Settings checkbox state ---
+    def get_auto_connect_enabled(self) -> bool:
+        var = getattr(self, "auto_connect_var", None)
+        return bool(var.get()) if var is not None else False
+
+    def get_auto_refresh_enabled(self) -> bool:
+        var = getattr(self, "auto_refresh_var", None)
+        return bool(var.get()) if var is not None else False
+
+    def get_osc_auto_connect_enabled(self) -> bool:
+        var = getattr(self, "osc_auto_connect_var", None)
+        return bool(var.get()) if var is not None else False
+
+    # --- OSC debugger ---
+    def get_osc_search_query(self) -> str:
+        var = getattr(self, "osc_search_var", None)
+        if var is None:
+            return ""
+        try:
+            return var.get().lower()
+        except Exception:
+            return ""
+
+    def update_sps_status(self, text: str) -> None:
+        label = getattr(self, "sps_status_label", None)
+        if label is not None:
+            label.configure(text=text)
+
+    def update_motor_vibe(self, device_name: str, motor_idx: int, value: float) -> None:
+        """Update only the vibe-meter visualization for a motor (leaves
+        the user-facing slider alone). Used by the OSC haptic update path."""
+        if device_name not in self.device_ui_frames:
+            return
+        motors = self.device_ui_frames[device_name].get("motors", [])
+        if 0 <= motor_idx < len(motors):
+            motors[motor_idx]["vibe_meter"].set(value)
+
+    # --- Device frame management ---
+    def remove_device_frame(self, device_name: str) -> None:
+        """Destroy and forget the stored-device card for `device_name`."""
+        frame_data = self.stored_device_frames.pop(device_name, None)
+        if frame_data:
+            frame = frame_data.get("frame")
+            if frame is not None:
+                try:
+                    frame.destroy()
+                except Exception:
+                    pass
+        self.device_ui_frames.pop(device_name, None)
+
+    def clear_device_caches(self) -> None:
+        """Drop cached device-frame references (used on profile switch)."""
+        try:
+            self.device_ui_frames.clear()
+            self.stored_device_frames.clear()
+        except Exception:
+            pass
+
+    def get_known_device_names(self) -> list:
+        return list(self.device_ui_frames.keys())
