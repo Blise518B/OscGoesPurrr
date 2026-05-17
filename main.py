@@ -450,8 +450,7 @@ class OscGoesPurrrApp:
                         val_str = str(val)
 
                     color = value_to_hex_color(val)
-                    # Pad the address so the colons align nicely (address is gray, value gets color)
-                    lines.append((addr.ljust(60) + " : ", val_str, color))
+                    lines.append((addr, val_str, color))
 
             if not lines and search_query:
                 debug_data = [("No parameters match your search.", "", COLOR_TEXT_MUTED)]

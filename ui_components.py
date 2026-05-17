@@ -21,7 +21,8 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QCheckBox, QLineEdit, QSlider, QProgressBar,
     QFrame, QScrollArea, QTextEdit, QPlainTextEdit, QSizePolicy, QSpacerItem,
     QDialog, QMessageBox, QTreeWidget, QTreeWidgetItem, QHeaderView,
-    QButtonGroup, QStackedWidget,
+    QButtonGroup, QStackedWidget, QTableWidget, QTableWidgetItem,
+    QAbstractItemView,
 )
 
 from constants import *
@@ -146,11 +147,11 @@ QPushButton:disabled {{
     background-color: {COLOR_SURFACE};
 }}
 QPushButton[role="secondary"] {{
-    background-color: {COLOR_SURFACE};
+    background-color: {COLOR_BUTTON};
     color: {COLOR_TEXT};
 }}
 QPushButton[role="secondary"]:hover {{
-    background-color: {COLOR_SURFACE_HOVER};
+    background-color: {COLOR_BUTTON_HOVER};
 }}
 QPushButton[role="danger"] {{
     background-color: {COLOR_ALERT};
@@ -190,11 +191,11 @@ QPushButton[role="profileActive"]:hover {{
     background-color: {COLOR_PRIMARY_HOVER};
 }}
 QPushButton[role="profileIdle"] {{
-    background-color: {COLOR_SURFACE};
+    background-color: {COLOR_BUTTON};
     color: {COLOR_TEXT};
 }}
 QPushButton[role="profileIdle"]:hover {{
-    background-color: {COLOR_SURFACE_HOVER};
+    background-color: {COLOR_BUTTON_HOVER};
 }}
 QPushButton[role="chipClose"] {{
     background-color: transparent;
@@ -210,7 +211,10 @@ QPushButton[role="segActive"] {{
     background-color: {COLOR_PRIMARY};
 }}
 QPushButton[role="segIdle"] {{
-    background-color: {COLOR_SURFACE_HOVER};
+    background-color: {COLOR_BUTTON};
+}}
+QPushButton[role="segIdle"]:hover {{
+    background-color: {COLOR_BUTTON_HOVER};
 }}
 
 QPushButton[role="confirm"] {{
@@ -383,6 +387,23 @@ QHeaderView::section {{
     padding: 4px;
     border: none;
     font-weight: bold;
+}}
+QHeaderView::section:horizontal:!last {{
+    border-right: 2px solid {COLOR_BUTTON};
+}}
+QHeaderView::section:horizontal:!last:hover {{
+    border-right: 2px solid {COLOR_PRIMARY};
+    background-color: {COLOR_SURFACE_HOVER};
+}}
+QTableWidget {{
+    background-color: {COLOR_BG};
+    alternate-background-color: {COLOR_SURFACE};
+    color: {COLOR_TEXT};
+    border: 1px solid {COLOR_SURFACE};
+    gridline-color: transparent;
+}}
+QTableWidget::item {{
+    padding: 0px 6px;
 }}
 """
 
@@ -689,8 +710,6 @@ class OscGoesPurrrUI:
         self.osc_status_label: Optional[QLabel] = None
         self.osc_port_label: Optional[QLabel] = None
         self.osc_connection_button: Optional[QPushButton] = None
-        self.osc_auto_connect_checkbox: Optional[QCheckBox] = None
-        self.auto_connect_checkbox: Optional[QCheckBox] = None
 
         # Settings checkboxes (referenced by facade getters)
         self.auto_connect_var: Optional[QCheckBox] = None
@@ -706,7 +725,7 @@ class OscGoesPurrrUI:
         self.sps_status_label: Optional[QLabel] = None
         self.osc_debugger_button: Optional[QPushButton] = None
         self.osc_search_entry: Optional[QLineEdit] = None
-        self.debugger_textbox: Optional[QTextEdit] = None
+        self.debugger_table: Optional[QTableWidget] = None
 
         # System log
         self.log_text: Optional[QTextEdit] = None
@@ -750,12 +769,12 @@ class OscGoesPurrrUI:
         root_layout.addWidget(self.main_stack, 1)
 
         # Build all views into the stack.
-        view_names = ["Dashboard", "Device Routing", "Network & Debug",
+        view_names = ["Dashboard", "Device Routing", "OSC Inspector",
                       "System Log", "Settings", "Help"]
         builders = {
             "Dashboard": self._build_dashboard_view,
             "Device Routing": self._build_device_routing_view,
-            "Network & Debug": self._build_network_debug_view,
+            "OSC Inspector": self._build_network_debug_view,
             "System Log": self._build_system_log_view,
             "Settings": self._build_settings_view,
             "Help": self._build_help_view,
@@ -788,7 +807,7 @@ class OscGoesPurrrUI:
         lay.addWidget(title)
         lay.addSpacing(20)
 
-        nav_buttons = ["Dashboard", "Device Routing", "Network & Debug",
+        nav_buttons = ["Dashboard", "Device Routing", "OSC Inspector",
                        "System Log", "Settings", "Help"]
         for name in nav_buttons:
             btn = QPushButton(name)
@@ -819,15 +838,6 @@ class OscGoesPurrrUI:
         self.osc_connection_button.setMinimumHeight(BTN_HEIGHT_LARGE)
         self.osc_connection_button.clicked.connect(self.controller.toggle_osc_connection)
         lay.addWidget(self.osc_connection_button)
-
-        self.osc_auto_connect_checkbox = QCheckBox("Auto Connect")
-        self.osc_auto_connect_checkbox.setChecked(
-            bool(self.controller.get_app_setting("auto_connect_osc", True))
-        )
-        self.osc_auto_connect_checkbox.toggled.connect(
-            lambda _=False: self.controller.toggle_osc_auto_connect()
-        )
-        lay.addWidget(self.osc_auto_connect_checkbox, alignment=Qt.AlignHCenter)
         lay.addSpacing(8)
 
         # Separator
@@ -848,15 +858,6 @@ class OscGoesPurrrUI:
         self.connection_button.setMinimumHeight(BTN_HEIGHT_LARGE)
         self.connection_button.clicked.connect(self.controller.connect_to_intiface)
         lay.addWidget(self.connection_button)
-
-        self.auto_connect_checkbox = QCheckBox("Auto Connect")
-        self.auto_connect_checkbox.setChecked(
-            bool(self.controller.get_app_setting("auto_connect", True))
-        )
-        self.auto_connect_checkbox.toggled.connect(
-            lambda _=False: self.controller.toggle_auto_connect()
-        )
-        lay.addWidget(self.auto_connect_checkbox, alignment=Qt.AlignHCenter)
         lay.addSpacing(8)
 
         return sidebar
@@ -1555,11 +1556,11 @@ class OscGoesPurrrUI:
         container_lay.addWidget(scroll, 1)
 
     # ----------------------------------------------------------
-    # Network & Debug view
+    # OSC Inspector view
     # ----------------------------------------------------------
 
     def _build_network_debug_view(self, parent_layout: QVBoxLayout):
-        title = QLabel("Network & Debug")
+        title = QLabel("OSC Inspector")
         title.setObjectName("viewTitle")
         title.setAlignment(Qt.AlignHCenter)
         parent_layout.addWidget(title)
@@ -1584,20 +1585,10 @@ class OscGoesPurrrUI:
         dbg_title.setAlignment(Qt.AlignHCenter)
         parent_layout.addWidget(dbg_title)
 
-        self.osc_debugger_button = QPushButton("Start OSC Debugger")
-        self.osc_debugger_button.setMinimumHeight(40)
-        self.osc_debugger_button.clicked.connect(self.controller.toggle_osc_debugger)
-        parent_layout.addWidget(self.osc_debugger_button)
-
         # Container for the inspector
         inspector_card = _Card(dark_bg=True)
         inspector_lay = _vbox(10, 6)
         inspector_card.setLayout(inspector_lay)
-
-        info = QLabel("Live OSC Variables (toggle to start)")
-        info.setProperty("muted", "true")
-        info.setAlignment(Qt.AlignHCenter)
-        inspector_lay.addWidget(info)
 
         self.osc_search_entry = QLineEdit()
         self.osc_search_entry.setPlaceholderText(
@@ -1605,14 +1596,25 @@ class OscGoesPurrrUI:
         )
         inspector_lay.addWidget(self.osc_search_entry)
 
-        self.debugger_textbox = QTextEdit()
-        self.debugger_textbox.setReadOnly(True)
-        self.debugger_textbox.setLineWrapMode(QTextEdit.NoWrap)
+        self.debugger_table = QTableWidget(0, 2)
+        self.debugger_table.setHorizontalHeaderLabels(["Parameter", "Value"])
+        self.debugger_table.verticalHeader().setVisible(False)
+        self.debugger_table.verticalHeader().setDefaultSectionSize(18)
+        self.debugger_table.setShowGrid(False)
+        self.debugger_table.setAlternatingRowColors(True)
+        self.debugger_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.debugger_table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.debugger_table.setFocusPolicy(Qt.NoFocus)
+        hdr = self.debugger_table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.Interactive)
+        hdr.setSectionResizeMode(1, QHeaderView.Stretch)
+        hdr.setCursor(Qt.SplitHCursor)
+        self.debugger_table.setColumnWidth(0, 280)
         font = QFont("Consolas")
         font.setStyleHint(QFont.Monospace)
         font.setPointSize(10)
-        self.debugger_textbox.setFont(font)
-        inspector_lay.addWidget(self.debugger_textbox, 1)
+        self.debugger_table.setFont(font)
+        inspector_lay.addWidget(self.debugger_table, 1)
 
         parent_layout.addWidget(inspector_card, 1)
 
@@ -1824,7 +1826,7 @@ The picker shows live avatar parameters captured by the OSC inspector. Double-cl
 """)
 
         section("Real-Time OSC Inspector", """
-Network & Debug → Real-Time OSC Inspector shows every OSC parameter your avatar is broadcasting. Useful for finding the exact name of a parameter before mapping it to a motor.
+OSC Inspector shows every OSC parameter your avatar is broadcasting. It starts automatically when you open the page and stops when you leave — useful for finding the exact name of a parameter before mapping it to a motor.
 """)
 
         section("Where settings live on disk", """
@@ -1848,6 +1850,14 @@ Network & Debug → Real-Time OSC Inspector shows every OSC parameter your avata
             btn.style().unpolish(btn)
             btn.style().polish(btn)
         self.main_stack.setCurrentWidget(self.views[view_name])
+
+        # OSC debugger should only run while the inspector page is visible.
+        is_inspector = (view_name == "OSC Inspector")
+        debugging = bool(getattr(self.controller, "is_debugging_osc", False))
+        if is_inspector and not debugging:
+            self.controller.toggle_osc_debugger()
+        elif not is_inspector and debugging:
+            self.controller.toggle_osc_debugger()
 
     # ----------------------------------------------------------
     # Logging
@@ -2560,35 +2570,58 @@ Network & Debug → Real-Time OSC Inspector shows every OSC parameter your avata
         self._repolish(self.osc_debugger_button)
 
     def update_debugger_display(self, data):
-        if self.debugger_textbox is None:
+        tbl = self.debugger_table
+        if tbl is None:
             return
-        sb = self.debugger_textbox.verticalScrollBar()
-        scroll_pos = sb.value()
 
-        if isinstance(data, list):
-            html_parts = []
-            for entry in data:
-                if not isinstance(entry, tuple):
-                    continue
-                if len(entry) == 3:
-                    addr_prefix, val_str, color = entry
-                else:
-                    # (text, color) fallback
-                    addr_prefix, color = entry
-                    val_str = ""
-                safe_addr = _html_escape(addr_prefix)
-                safe_val = _html_escape(val_str)
-                line = (
-                    f'<span style="color:{COLOR_TEXT_MUTED}; white-space:pre">{safe_addr}</span>'
-                    f'<span style="color:{color}">{safe_val}</span><br>'
-                )
-                html_parts.append(line)
-            html = f'<pre style="margin:0; font-family:Consolas,monospace;">{"".join(html_parts)}</pre>'
-            self.debugger_textbox.setHtml(html)
-        else:
-            self.debugger_textbox.setPlainText(str(data))
+        if not isinstance(data, list):
+            tbl.setRowCount(1)
+            placeholder = QTableWidgetItem(str(data))
+            placeholder.setForeground(QColor(COLOR_TEXT_MUTED))
+            tbl.setItem(0, 0, placeholder)
+            tbl.setItem(0, 1, QTableWidgetItem(""))
+            return
 
-        sb.setValue(scroll_pos)
+        rows = []
+        for entry in data:
+            if not isinstance(entry, tuple):
+                continue
+            if len(entry) == 3:
+                addr, val_str, color = entry
+            else:
+                addr, color = entry
+                val_str = ""
+            # Address was padded with ljust+ " : " for the old text view; strip
+            # that trailing decoration so the table column owns its own layout.
+            addr_clean = addr.rstrip()
+            if addr_clean.endswith(":"):
+                addr_clean = addr_clean[:-1].rstrip()
+            rows.append((addr_clean, val_str, color))
+
+        tbl.setUpdatesEnabled(False)
+        # In-place update: resize row count, then overwrite text on existing
+        # cells. We never call clear()/setHtml(), so the horizontal scrollbar
+        # range and value are preserved by Qt itself.
+        if tbl.rowCount() != len(rows):
+            tbl.setRowCount(len(rows))
+        muted = QColor(COLOR_TEXT_MUTED)
+        for r, (addr, val_str, color) in enumerate(rows):
+            addr_item = tbl.item(r, 0)
+            if addr_item is None:
+                addr_item = QTableWidgetItem()
+                addr_item.setForeground(muted)
+                tbl.setItem(r, 0, addr_item)
+            if addr_item.text() != addr:
+                addr_item.setText(addr)
+
+            val_item = tbl.item(r, 1)
+            if val_item is None:
+                val_item = QTableWidgetItem()
+                tbl.setItem(r, 1, val_item)
+            if val_item.text() != val_str:
+                val_item.setText(val_str)
+            val_item.setForeground(QColor(color))
+        tbl.setUpdatesEnabled(True)
 
     # ----------------------------------------------------------
     # Stored / discovered device list builders
