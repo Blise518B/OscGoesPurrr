@@ -3,7 +3,7 @@
 # Format: {base_version}.{commit_count}
 # Example: 1.0.47 (if 47 commits exist)
 
-BASE_VERSION = "1.0"
+BASE_VERSION = "1.1"
 
 def _get_git_commit_count() -> int:
     """Return the number of commits on the current branch."""

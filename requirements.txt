@@ -16,3 +16,5 @@ buttplug>=1.0.0
 python-osc>=1.8.0
 pystray>=0.19.0
 Pillow>=9.0.0
+openvr>=1.26.7
+websocket-client>=1.6

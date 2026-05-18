@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
     QFrame, QScrollArea, QTextEdit, QPlainTextEdit, QSizePolicy, QSpacerItem,
     QDialog, QMessageBox, QTreeWidget, QTreeWidgetItem, QHeaderView,
     QButtonGroup, QStackedWidget, QTableWidget, QTableWidgetItem,
-    QAbstractItemView,
+    QAbstractItemView, QComboBox, QSpinBox, QDoubleSpinBox,
 )
 
 from constants import *
@@ -653,6 +653,83 @@ class _Card(QFrame):
         self.setObjectName("cardDark" if dark_bg else "card")
 
 
+class _BHapticsDotGrid(QWidget):
+    """Live debug grid of dots for one bHaptics device.
+
+    Dots fill left-to-right, top-to-bottom — matching the dot-mode index
+    ordering bHaptics expects. Color interpolates red(0%) → yellow(50%) →
+    green(100%) so you can see which nodes are active and how hard.
+    """
+
+    DOT_PX = 18
+    SPACING = 6
+    PADDING = 4
+
+    def __init__(self, node_count: int, cols: int, rows: int, parent=None):
+        super().__init__(parent)
+        self.node_count = max(0, int(node_count))
+        self.cols = max(1, int(cols))
+        self.rows = max(1, int(rows))
+        self._values: List[int] = [0] * self.node_count
+        w = self.PADDING * 2 + self.cols * self.DOT_PX + (self.cols - 1) * self.SPACING
+        h = self.PADDING * 2 + self.rows * self.DOT_PX + (self.rows - 1) * self.SPACING
+        self.setFixedSize(int(w), int(h))
+
+    def set_values(self, values):
+        """values: iterable of ints 0..100, length should match node_count.
+        None or shorter iterables get treated as all-zeros for missing slots."""
+        new_vals = [0] * self.node_count
+        if values:
+            for i, v in enumerate(values):
+                if i >= self.node_count:
+                    break
+                try:
+                    new_vals[i] = max(0, min(100, int(v)))
+                except (TypeError, ValueError):
+                    new_vals[i] = 0
+        if new_vals != self._values:
+            self._values = new_vals
+            self.update()
+
+    @staticmethod
+    def _color_for(value: int) -> QColor:
+        # Three-stop interpolation: 0 → red, 50 → yellow, 100 → green.
+        # Slightly dim red at 0 so off-nodes read as "off" not "alerting".
+        v = max(0, min(100, int(value)))
+        if v <= 50:
+            t = v / 50.0
+            r = int(180 + (255 - 180) * t)
+            g = int( 50 + (200 -  50) * t)
+            b = int( 50 + ( 50 -  50) * t)
+        else:
+            t = (v - 50) / 50.0
+            r = int(255 + ( 70 - 255) * t)
+            g = int(200 + (200 - 200) * t)
+            b = int( 50 + ( 70 -  50) * t)
+        return QColor(r, g, b)
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.fillRect(self.rect(), QColor("#1A1A26"))
+        pen_off = QPen(QColor(80, 80, 100, 180))
+        pen_off.setWidth(1)
+        diameter = self.DOT_PX
+        for i in range(self.node_count):
+            col = i % self.cols
+            row = i // self.cols
+            if row >= self.rows:
+                break
+            x = self.PADDING + col * (diameter + self.SPACING)
+            y = self.PADDING + row * (diameter + self.SPACING)
+            value = self._values[i] if i < len(self._values) else 0
+            fill = self._color_for(value)
+            p.setPen(pen_off)
+            p.setBrush(QBrush(fill))
+            p.drawEllipse(x, y, diameter, diameter)
+        p.end()
+
+
 # ============================================================
 # OscGoesPurrrUI — the PySide6 view layer
 # ============================================================
@@ -726,6 +803,8 @@ class OscGoesPurrrUI:
         self.osc_debugger_button: Optional[QPushButton] = None
         self.osc_search_entry: Optional[QLineEdit] = None
         self.debugger_table: Optional[QTableWidget] = None
+        # Legacy HTML-rendered inspector kept alongside the table for comparison.
+        self.debugger_textbox: Optional[QTextEdit] = None
 
         # System log
         self.log_text: Optional[QTextEdit] = None
@@ -769,11 +848,13 @@ class OscGoesPurrrUI:
         root_layout.addWidget(self.main_stack, 1)
 
         # Build all views into the stack.
-        view_names = ["Dashboard", "Device Routing", "OSC Inspector",
-                      "System Log", "Settings", "Help"]
+        view_names = ["Dashboard", "Device Routing", "SteamVR Device Comms",
+                      "bHaptics", "OSC Inspector", "System Log", "Settings", "Help"]
         builders = {
             "Dashboard": self._build_dashboard_view,
             "Device Routing": self._build_device_routing_view,
+            "SteamVR Device Comms": self._build_steamvr_view,
+            "bHaptics": self._build_bhaptics_view,
             "OSC Inspector": self._build_network_debug_view,
             "System Log": self._build_system_log_view,
             "Settings": self._build_settings_view,
@@ -807,8 +888,8 @@ class OscGoesPurrrUI:
         lay.addWidget(title)
         lay.addSpacing(20)
 
-        nav_buttons = ["Dashboard", "Device Routing", "OSC Inspector",
-                       "System Log", "Settings", "Help"]
+        nav_buttons = ["Dashboard", "Device Routing", "SteamVR Device Comms",
+                       "bHaptics", "OSC Inspector", "System Log", "Settings", "Help"]
         for name in nav_buttons:
             btn = QPushButton(name)
             btn.setProperty("role", "nav")
@@ -1618,6 +1699,31 @@ class OscGoesPurrrUI:
 
         parent_layout.addWidget(inspector_card, 1)
 
+        # ----- Legacy HTML view (kept beneath the table) -----------------
+        # This is the pre-overhaul rendering: a QTextEdit re-rendered with
+        # setHtml() on every tick. Useful as a diagnostic — if the table
+        # above stops ticking but this one does, the regression is in the
+        # table update path, not in the OSC pipeline.
+        legacy_title = QLabel("Real-Time OSC Inspector (Legacy HTML View)")
+        legacy_title.setObjectName("sectionTitle")
+        legacy_title.setAlignment(Qt.AlignHCenter)
+        parent_layout.addWidget(legacy_title)
+
+        legacy_card = _Card(dark_bg=True)
+        legacy_lay = _vbox(10, 6)
+        legacy_card.setLayout(legacy_lay)
+
+        self.debugger_textbox = QTextEdit()
+        self.debugger_textbox.setReadOnly(True)
+        self.debugger_textbox.setLineWrapMode(QTextEdit.NoWrap)
+        legacy_font = QFont("Consolas")
+        legacy_font.setStyleHint(QFont.Monospace)
+        legacy_font.setPointSize(10)
+        self.debugger_textbox.setFont(legacy_font)
+        legacy_lay.addWidget(self.debugger_textbox, 1)
+
+        parent_layout.addWidget(legacy_card, 1)
+
     # ----------------------------------------------------------
     # System Log view
     # ----------------------------------------------------------
@@ -1752,6 +1858,49 @@ class OscGoesPurrrUI:
         ql_lay.addWidget(tray)
 
         parent_layout.addWidget(ql_card)
+
+        # ---- SteamVR Card ----
+        svr_card = _Card()
+        svr_lay = _vbox(20, 8)
+        svr_card.setLayout(svr_lay)
+
+        hdr = QLabel("SteamVR")
+        hdr.setObjectName("cardHeader")
+        svr_lay.addWidget(hdr)
+
+        svr_lay.addWidget(self._muted_label(
+            "Settings for the SteamVR Device Communication bridge."
+        ))
+
+        # Auto Connect — battery broadcaster also (re)scans SteamVR each tick.
+        self.steamvr_auto_connect_check_settings = QCheckBox("Auto Connect (SteamVR)")
+        try:
+            _status = self.controller.get_steamvr_status()
+            initial_auto = bool(_status.get("auto_connect"))
+            initial_autostart = bool(_status.get("autostart"))
+        except Exception:
+            initial_auto = True
+            initial_autostart = False
+        self.steamvr_auto_connect_check_settings.setChecked(initial_auto)
+        self.steamvr_auto_connect_check_settings.toggled.connect(self._on_steamvr_auto_connect_toggled)
+        svr_lay.addWidget(self.steamvr_auto_connect_check_settings)
+
+        # Start with SteamVR — registers the OpenVR app manifest.
+        self.steamvr_autostart_check_settings = QCheckBox("Start with SteamVR")
+        self.steamvr_autostart_check_settings.setChecked(initial_autostart)
+        self.steamvr_autostart_check_settings.toggled.connect(self._on_steamvr_autostart_toggled)
+        svr_lay.addWidget(self.steamvr_autostart_check_settings)
+
+        # Manual Refresh — useful when auto-connect is off.
+        refresh_row = _hbox(0, 8)
+        svr_refresh_btn = QPushButton("Refresh SteamVR Devices")
+        svr_refresh_btn.setMinimumHeight(BTN_HEIGHT_LARGE)
+        svr_refresh_btn.clicked.connect(self._on_steamvr_refresh_clicked)
+        refresh_row.addWidget(svr_refresh_btn)
+        refresh_row.addStretch(1)
+        svr_lay.addLayout(refresh_row)
+
+        parent_layout.addWidget(svr_card)
         parent_layout.addStretch(1)
 
     def _bold_label(self, text: str) -> QLabel:
@@ -1763,6 +1912,658 @@ class OscGoesPurrrUI:
     # ----------------------------------------------------------
     # Help view
     # ----------------------------------------------------------
+
+    # ----------------------------------------------------------
+    # SteamVR Haptics view
+    # ----------------------------------------------------------
+
+    _STEAMVR_PATTERNS = ["None", "Constant", "Linear", "Sine", "Throb"]
+
+    def _build_steamvr_view(self, parent_layout: QVBoxLayout):
+        title = QLabel("SteamVR Device Communication")
+        title.setObjectName("viewTitle")
+        title.setAlignment(Qt.AlignHCenter)
+        parent_layout.addWidget(title)
+
+        parent_layout.addWidget(self._muted_label(
+            "Two-way bridge between VRChat OSC and your SteamVR devices.\n"
+            "• Incoming: OSC addresses below trigger haptic pulses on the matching tracker.\n"
+            "• Outgoing: each device's battery level is published to its configured OSC address."
+        ))
+
+        # ---- Status / actions card ----
+        status_card = _Card()
+        slay = _vbox(14, 8)
+        status_card.setLayout(slay)
+
+        self.steamvr_status_label = QLabel("SteamVR: Unknown")
+        f = self.steamvr_status_label.font(); f.setBold(True); f.setPointSize(12)
+        self.steamvr_status_label.setFont(f)
+        slay.addWidget(self.steamvr_status_label)
+
+        self.steamvr_tracker_count_label = QLabel("Trackers: —")
+        slay.addWidget(self.steamvr_tracker_count_label)
+
+        action_row = _hbox(0, 8)
+        action_row.addWidget(QLabel("Battery poll (s)"))
+        self.steamvr_battery_interval_spin = QSpinBox()
+        self.steamvr_battery_interval_spin.setRange(1, 600)
+        self.steamvr_battery_interval_spin.setValue(5)
+        self.steamvr_battery_interval_spin.valueChanged.connect(self._on_steamvr_battery_interval_changed)
+        action_row.addWidget(self.steamvr_battery_interval_spin)
+
+        action_row.addStretch(1)
+        slay.addLayout(action_row)
+        parent_layout.addWidget(status_card)
+
+        # ---- Pattern config card (PROXIMITY + VELOCITY) ----
+        pat_card = _Card()
+        plat = _vbox(14, 8)
+        pat_card.setLayout(plat)
+        ph = QLabel("Vibration Patterns")
+        ph.setObjectName("sectionTitle")
+        plat.addWidget(ph)
+        plat.addWidget(self._muted_label(
+            "Two patterns combine per pulse: Proximity reacts to the raw value, "
+            "Velocity reacts to how fast it changes. Final strength is the max of both."
+        ))
+        self.steamvr_pattern_widgets = []
+        for idx, name in enumerate(["Proximity", "Velocity"]):
+            row, widgets = self._build_steamvr_pattern_row(name, idx)
+            self.steamvr_pattern_widgets.append(widgets)
+            plat.addLayout(row)
+        parent_layout.addWidget(pat_card)
+
+        # ---- Tracker list card ----
+        list_card = _Card(dark_bg=True)
+        llay = _vbox(10, 6)
+        list_card.setLayout(llay)
+        lh = QLabel("Trackers")
+        lh.setObjectName("sectionTitle")
+        llay.addWidget(lh)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        self.steamvr_tracker_list_layout = _vbox(6, 8)
+        inner.setLayout(self.steamvr_tracker_list_layout)
+        scroll.setWidget(inner)
+        llay.addWidget(scroll, 1)
+        parent_layout.addWidget(list_card, 1)
+
+        # Populate from current state and arrange periodic refresh.
+        self._refresh_steamvr_view()
+        QTimer.singleShot(0, self._refresh_steamvr_view)
+        self._steamvr_refresh_timer = QTimer(self.window)
+        self._steamvr_refresh_timer.setInterval(2000)
+        self._steamvr_refresh_timer.timeout.connect(self._refresh_steamvr_status_only)
+        self._steamvr_refresh_timer.start()
+
+    def _build_steamvr_pattern_row(self, label: str, idx: int):
+        row = _hbox(0, 8)
+        row.addWidget(QLabel(label + ":"))
+        combo = QComboBox()
+        combo.addItems(self._STEAMVR_PATTERNS)
+        row.addWidget(combo)
+
+        row.addWidget(QLabel("Min %"))
+        spin_min = QSpinBox(); spin_min.setRange(0, 100)
+        row.addWidget(spin_min)
+
+        row.addWidget(QLabel("Max %"))
+        spin_max = QSpinBox(); spin_max.setRange(0, 100)
+        row.addWidget(spin_max)
+
+        row.addWidget(QLabel("Speed"))
+        spin_speed = QSpinBox(); spin_speed.setRange(1, 64)
+        row.addWidget(spin_speed)
+        row.addStretch(1)
+
+        widgets = {"combo": combo, "min": spin_min, "max": spin_max, "speed": spin_speed}
+
+        def emit(_=None):
+            if self._is_updating_steamvr:
+                return
+            self.controller.set_steamvr_pattern(idx, {
+                "pattern": combo.currentText(),
+                "str_min": spin_min.value(),
+                "str_max": spin_max.value(),
+                "speed": spin_speed.value(),
+            })
+
+        combo.currentTextChanged.connect(emit)
+        spin_min.valueChanged.connect(emit)
+        spin_max.valueChanged.connect(emit)
+        spin_speed.valueChanged.connect(emit)
+        return row, widgets
+
+    _is_updating_steamvr = False
+
+    def _on_steamvr_refresh_clicked(self):
+        count = self.controller.refresh_steamvr_trackers()
+        self.log_message(f"SteamVR: refreshed, found {count} tracker(s)")
+        self._refresh_steamvr_view()
+
+    def _on_steamvr_autostart_toggled(self, checked: bool):
+        if self._is_updating_steamvr:
+            return
+        self.controller.set_steamvr_autostart(bool(checked))
+
+    def _on_steamvr_auto_connect_toggled(self, checked: bool):
+        if self._is_updating_steamvr:
+            return
+        self.controller.set_steamvr_auto_connect(bool(checked))
+        # Reflect immediately — a successful connect populates the device list.
+        self._refresh_steamvr_view()
+
+    def _on_steamvr_battery_interval_changed(self, value: int):
+        if self._is_updating_steamvr:
+            return
+        self.controller.set_steamvr_battery_interval(float(value))
+
+    def _refresh_steamvr_status_only(self):
+        # Cheap refresh: status bar only, no list rebuild.
+        try:
+            status = self.controller.get_steamvr_status()
+        except Exception:
+            return
+        self._apply_steamvr_status(status)
+
+    def _refresh_steamvr_view(self):
+        if not hasattr(self, "steamvr_tracker_list_layout"):
+            return
+        self._is_updating_steamvr = True
+        try:
+            status = self.controller.get_steamvr_status()
+            self._apply_steamvr_status(status)
+            self._apply_steamvr_patterns(self.controller.get_steamvr_pattern_configs())
+            self._rebuild_steamvr_tracker_list(status.get("trackers", []))
+        finally:
+            self._is_updating_steamvr = False
+
+    def _apply_steamvr_status(self, status: dict):
+        if not status.get("available"):
+            self.steamvr_status_label.setText("SteamVR: openvr binding missing — pip install openvr")
+            self.steamvr_status_label.setProperty("role", "alert")
+        elif not status.get("alive"):
+            self.steamvr_status_label.setText("SteamVR: not running (start SteamVR and click Refresh)")
+            self.steamvr_status_label.setProperty("role", "alert")
+        else:
+            self.steamvr_status_label.setText("SteamVR: connected")
+            self.steamvr_status_label.setProperty("role", None)
+        self.steamvr_status_label.style().unpolish(self.steamvr_status_label)
+        self.steamvr_status_label.style().polish(self.steamvr_status_label)
+
+        trackers = status.get("trackers", [])
+        counts = {"hmd": 0, "controller": 0, "tracker": 0}
+        for t in trackers:
+            counts[t.get("device_class", "tracker")] = counts.get(t.get("device_class", "tracker"), 0) + 1
+        self.steamvr_tracker_count_label.setText(
+            f"Devices: {len(trackers)}  ·  HMD {counts.get('hmd', 0)}  ·  Controllers {counts.get('controller', 0)}  ·  Trackers {counts.get('tracker', 0)}"
+        )
+        if hasattr(self, "steamvr_auto_connect_check_settings"):
+            self.steamvr_auto_connect_check_settings.setChecked(bool(status.get("auto_connect")))
+        if hasattr(self, "steamvr_autostart_check_settings"):
+            self.steamvr_autostart_check_settings.setChecked(bool(status.get("autostart")))
+        try:
+            self.steamvr_battery_interval_spin.setValue(int(round(float(status.get("battery_interval_s", 5)))))
+        except Exception:
+            pass
+
+    def _apply_steamvr_patterns(self, patterns):
+        for idx, widgets in enumerate(self.steamvr_pattern_widgets):
+            if idx >= len(patterns):
+                break
+            p = patterns[idx]
+            name = p.get("pattern", "Linear")
+            if name in self._STEAMVR_PATTERNS:
+                widgets["combo"].setCurrentText(name)
+            widgets["min"].setValue(int(p.get("str_min", 0)))
+            widgets["max"].setValue(int(p.get("str_max", 80)))
+            widgets["speed"].setValue(int(p.get("speed", 4)))
+
+    def _rebuild_steamvr_tracker_list(self, trackers: list):
+        # Wipe existing rows.
+        while self.steamvr_tracker_list_layout.count():
+            item = self.steamvr_tracker_list_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        if not trackers:
+            empty = self._muted_label(
+                "No devices detected. Make sure SteamVR is running and your devices are powered on, then click Refresh."
+            )
+            self.steamvr_tracker_list_layout.addWidget(empty)
+            return
+
+        for t in trackers:
+            self.steamvr_tracker_list_layout.addWidget(self._build_steamvr_tracker_card(t))
+        self.steamvr_tracker_list_layout.addStretch(1)
+
+    _DEVICE_CLASS_LABEL = {"hmd": "HMD", "controller": "Controller", "tracker": "Tracker"}
+
+    def _build_steamvr_tracker_card(self, t: dict) -> QFrame:
+        serial = t["serial"]
+        cfg = t.get("config", {})
+        dev_class = t.get("device_class", "tracker")
+        supports_haptics = bool(t.get("supports_haptics", True))
+
+        card = _Card()
+        lay = _vbox(12, 6)
+        card.setLayout(lay)
+
+        # Header: class tag · model · serial · battery · pulse-test
+        header = _hbox(0, 8)
+        class_tag = QLabel(f"[{self._DEVICE_CLASS_LABEL.get(dev_class, dev_class.title())}]")
+        cf = class_tag.font(); cf.setBold(True)
+        class_tag.setFont(cf)
+        header.addWidget(class_tag)
+
+        title = QLabel(f"{t.get('model', '?')}  ·  {serial}")
+        tf = title.font(); tf.setBold(True); tf.setPointSize(11)
+        title.setFont(tf)
+        header.addWidget(title)
+        header.addStretch(1)
+
+        bat = t.get("battery")
+        bat_text = "Battery: —"
+        if bat is not None:
+            try:
+                bat_text = f"Battery: {int(float(bat) * 100)}%"
+            except Exception:
+                pass
+        header.addWidget(QLabel(bat_text))
+
+        if supports_haptics:
+            pulse_btn = QPushButton("Pulse Test")
+            pulse_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+            pulse_btn.clicked.connect(lambda _=False, s=serial: self.controller.pulse_steamvr_tracker(s))
+            header.addWidget(pulse_btn)
+        lay.addLayout(header)
+
+        enabled = QCheckBox("Enabled")
+        enabled.setChecked(bool(cfg.get("enabled", True)))
+        lay.addWidget(enabled)
+
+        # ---- Outgoing: battery OSC address (all device classes) ----
+        out_row = _hbox(0, 6)
+        out_row.addWidget(QLabel("Outgoing battery OSC address"))
+        lay.addLayout(out_row)
+        battery_edit = QLineEdit()
+        battery_edit.setText(str(cfg.get("battery_osc_address", "")))
+        battery_edit.setPlaceholderText("/avatar/parameters/HMD_Battery  (leave blank to disable)")
+        lay.addWidget(battery_edit)
+
+        # ---- Incoming: haptic OSC addresses (skip for HMD) ----
+        addr_edit = None
+        mult = None
+        bat_thr = None
+        if supports_haptics:
+            in_row = _hbox(0, 6)
+            in_row.addWidget(QLabel("Incoming haptic OSC addresses (separate with ; )"))
+            lay.addLayout(in_row)
+            addr_edit = QLineEdit()
+            addr_edit.setText(";".join(cfg.get("address_list", [])))
+            addr_edit.setPlaceholderText("/avatar/parameters/MyParam;/avatar/parameters/OtherParam")
+            lay.addWidget(addr_edit)
+
+            params_row = _hbox(0, 8)
+            params_row.addWidget(QLabel("Multiplier"))
+            mult = QDoubleSpinBox(); mult.setRange(0.0, 100.0); mult.setSingleStep(0.1)
+            mult.setValue(float(cfg.get("multiplier_override", 1.0)))
+            params_row.addWidget(mult)
+
+            params_row.addWidget(QLabel("Battery threshold %"))
+            bat_thr = QSpinBox(); bat_thr.setRange(0, 100)
+            bat_thr.setValue(int(cfg.get("battery_threshold", 20)))
+            params_row.addWidget(bat_thr)
+            params_row.addStretch(1)
+            lay.addLayout(params_row)
+        else:
+            lay.addWidget(self._muted_label("HMDs don't support haptic pulses — battery broadcast only."))
+
+        def push(_=None):
+            if self._is_updating_steamvr:
+                return
+            new_cfg = dict(cfg)
+            new_cfg["enabled"] = enabled.isChecked()
+            new_cfg["battery_osc_address"] = battery_edit.text().strip()
+            if addr_edit is not None:
+                addrs = [a.strip() for a in addr_edit.text().split(";") if a.strip()]
+                if not addrs:
+                    addrs = ["/avatar/parameters/..."]
+                new_cfg["address_list"] = addrs
+            if mult is not None:
+                new_cfg["multiplier_override"] = float(mult.value())
+            if bat_thr is not None:
+                new_cfg["battery_threshold"] = int(bat_thr.value())
+            self.controller.set_steamvr_tracker_config(serial, new_cfg)
+
+        enabled.toggled.connect(push)
+        battery_edit.editingFinished.connect(push)
+        if addr_edit is not None:
+            addr_edit.editingFinished.connect(push)
+        if mult is not None:
+            mult.valueChanged.connect(push)
+        if bat_thr is not None:
+            bat_thr.valueChanged.connect(push)
+        return card
+
+    # ----------------------------------------------------------
+    # bHaptics view
+    # ----------------------------------------------------------
+
+    _is_updating_bhaptics = False
+
+    # Per-position dot widgets, refreshed by _refresh_bhaptics_grids.
+    _bhaptics_grids: Dict[str, "_BHapticsDotGrid"] = {}
+
+    # Tracks the last set of detected device positions so the device list
+    # only rebuilds when the avatar's bHaptics-capable set actually changes.
+    _bhaptics_last_detected: Optional[frozenset] = None
+
+    def _build_bhaptics_view(self, parent_layout: QVBoxLayout):
+        title = QLabel("bHaptics")
+        title.setObjectName("viewTitle")
+        title.setAlignment(Qt.AlignHCenter)
+        parent_layout.addWidget(title)
+
+        parent_layout.addWidget(self._muted_label(
+            "Translates v1 bHapticsOSC avatar parameters into haptic frames sent to the bHaptics Player.\n"
+            "Supported naming schemes (both auto-detected, max wins per dot):\n"
+            "  • bHaptics_<Device>_<Node>_bool   (HerpDerpinstine v1, bool)   — e.g. bHaptics_Vest_Front_5_bool\n"
+            "  • bOSC_v1_<Position><Node>          (community v1, float 0-1)  — e.g. bOSC_v1_VestFront_5"
+        ))
+
+        # ---- Status / endpoint card ----
+        status_card = _Card()
+        slay = _vbox(14, 8)
+        status_card.setLayout(slay)
+
+        self.bhaptics_status_label = QLabel("bHaptics: Unknown")
+        f = self.bhaptics_status_label.font(); f.setBold(True); f.setPointSize(12)
+        self.bhaptics_status_label.setFont(f)
+        slay.addWidget(self.bhaptics_status_label)
+
+        action_row = _hbox(0, 8)
+        self.bhaptics_auto_connect_check = QCheckBox("Auto Connect (bHaptics)")
+        self.bhaptics_auto_connect_check.toggled.connect(self._on_bhaptics_auto_connect_toggled)
+        action_row.addWidget(self.bhaptics_auto_connect_check)
+
+        connect_btn = QPushButton("Connect Now")
+        connect_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+        connect_btn.clicked.connect(self._on_bhaptics_connect_clicked)
+        action_row.addWidget(connect_btn)
+
+        action_row.addSpacing(16)
+        action_row.addWidget(QLabel("Host"))
+        self.bhaptics_host_edit = QLineEdit()
+        self.bhaptics_host_edit.setFixedWidth(120)
+        action_row.addWidget(self.bhaptics_host_edit)
+        action_row.addWidget(QLabel("Port"))
+        self.bhaptics_port_spin = QSpinBox()
+        self.bhaptics_port_spin.setRange(1, 65535)
+        action_row.addWidget(self.bhaptics_port_spin)
+        apply_btn = QPushButton("Apply")
+        apply_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+        apply_btn.clicked.connect(self._on_bhaptics_endpoint_apply)
+        action_row.addWidget(apply_btn)
+        action_row.addStretch(1)
+        slay.addLayout(action_row)
+        parent_layout.addWidget(status_card)
+
+        # ---- Anti-stuck card ----
+        as_card = _Card()
+        as_lay = _vbox(14, 6)
+        as_card.setLayout(as_lay)
+        as_hdr = QLabel("Anti-stuck")
+        as_hdr.setObjectName("sectionTitle")
+        as_lay.addWidget(as_hdr)
+        as_lay.addWidget(self._muted_label(
+            "When a dot's value hasn't changed for the hold time, ramp it down to 0 "
+            "over the ramp time. Catches contacts that latch on and never release."
+        ))
+        as_row = _hbox(0, 8)
+        self.bhaptics_antistuck_check = QCheckBox("Enabled")
+        self.bhaptics_antistuck_check.toggled.connect(self._on_bhaptics_antistuck_changed)
+        as_row.addWidget(self.bhaptics_antistuck_check)
+
+        as_row.addSpacing(16)
+        as_row.addWidget(QLabel("Hold (s)"))
+        self.bhaptics_antistuck_hold_spin = QDoubleSpinBox()
+        self.bhaptics_antistuck_hold_spin.setRange(0.1, 60.0)
+        self.bhaptics_antistuck_hold_spin.setSingleStep(0.5)
+        self.bhaptics_antistuck_hold_spin.setDecimals(1)
+        self.bhaptics_antistuck_hold_spin.valueChanged.connect(self._on_bhaptics_antistuck_changed)
+        as_row.addWidget(self.bhaptics_antistuck_hold_spin)
+
+        as_row.addSpacing(8)
+        as_row.addWidget(QLabel("Ramp (s)"))
+        self.bhaptics_antistuck_ramp_spin = QDoubleSpinBox()
+        self.bhaptics_antistuck_ramp_spin.setRange(0.1, 60.0)
+        self.bhaptics_antistuck_ramp_spin.setSingleStep(0.5)
+        self.bhaptics_antistuck_ramp_spin.setDecimals(1)
+        self.bhaptics_antistuck_ramp_spin.valueChanged.connect(self._on_bhaptics_antistuck_changed)
+        as_row.addWidget(self.bhaptics_antistuck_ramp_spin)
+        as_row.addStretch(1)
+        as_lay.addLayout(as_row)
+        parent_layout.addWidget(as_card)
+
+        # ---- Per-device cards ----
+        list_card = _Card(dark_bg=True)
+        llay = _vbox(10, 6)
+        list_card.setLayout(llay)
+        lh = QLabel("Devices")
+        lh.setObjectName("sectionTitle")
+        llay.addWidget(lh)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        inner = QWidget()
+        self.bhaptics_device_list_layout = _vbox(6, 8)
+        inner.setLayout(self.bhaptics_device_list_layout)
+        scroll.setWidget(inner)
+        llay.addWidget(scroll, 1)
+        parent_layout.addWidget(list_card, 1)
+
+        # Populate + periodic status refresh.
+        self._refresh_bhaptics_view()
+        self._bhaptics_refresh_timer = QTimer(self.window)
+        self._bhaptics_refresh_timer.setInterval(1500)
+        self._bhaptics_refresh_timer.timeout.connect(self._refresh_bhaptics_status_only)
+        self._bhaptics_refresh_timer.start()
+
+        # Fast grid refresh so the debug dots animate in near real-time.
+        self._bhaptics_grid_timer = QTimer(self.window)
+        self._bhaptics_grid_timer.setInterval(100)
+        self._bhaptics_grid_timer.timeout.connect(self._refresh_bhaptics_grids)
+        self._bhaptics_grid_timer.start()
+
+    def _refresh_bhaptics_grids(self):
+        if not self._bhaptics_grids:
+            return
+        try:
+            snap = self.controller.get_bhaptics_snapshot()
+        except Exception:
+            return
+        for pos, grid in self._bhaptics_grids.items():
+            grid.set_values(snap.get(pos))
+
+    # ---- bHaptics handlers ----
+
+    def _on_bhaptics_auto_connect_toggled(self, checked: bool):
+        if self._is_updating_bhaptics:
+            return
+        self.controller.set_bhaptics_auto_connect(bool(checked))
+
+    def _on_bhaptics_connect_clicked(self):
+        ok = self.controller.bhaptics_connect_now()
+        self.log_message("bHaptics: connected" if ok else "bHaptics: connect failed (is the Player running?)")
+        self._refresh_bhaptics_view()
+
+    def _on_bhaptics_antistuck_changed(self, *_):
+        if self._is_updating_bhaptics:
+            return
+        self.controller.set_bhaptics_antistuck(
+            self.bhaptics_antistuck_check.isChecked(),
+            float(self.bhaptics_antistuck_hold_spin.value()),
+            float(self.bhaptics_antistuck_ramp_spin.value()),
+        )
+
+    def _on_bhaptics_endpoint_apply(self):
+        host = self.bhaptics_host_edit.text().strip() or "127.0.0.1"
+        port = int(self.bhaptics_port_spin.value())
+        self.controller.set_bhaptics_endpoint(host, port)
+        self.log_message(f"bHaptics: endpoint set to {host}:{port}")
+
+    def _refresh_bhaptics_status_only(self):
+        try:
+            status = self.controller.get_bhaptics_status()
+        except Exception:
+            return
+        self._apply_bhaptics_status(status)
+        # Rebuild the device list only when the avatar's detected device set
+        # actually changes (avatar swap, freshly-loaded params). Doing this in
+        # the cheap status tick keeps the page responsive to avatar changes
+        # without tearing down widgets every refresh.
+        detected = frozenset(d["position"] for d in status.get("devices", []) if d.get("detected"))
+        if detected != self._bhaptics_last_detected:
+            self._bhaptics_last_detected = detected
+            self._rebuild_bhaptics_device_list(status.get("devices", []))
+
+    def _refresh_bhaptics_view(self):
+        if not hasattr(self, "bhaptics_device_list_layout"):
+            return
+        self._is_updating_bhaptics = True
+        try:
+            status = self.controller.get_bhaptics_status()
+            self._apply_bhaptics_status(status)
+            devices = status.get("devices", [])
+            self._bhaptics_last_detected = frozenset(
+                d["position"] for d in devices if d.get("detected")
+            )
+            self._rebuild_bhaptics_device_list(devices)
+        finally:
+            self._is_updating_bhaptics = False
+
+    def _apply_bhaptics_status(self, status: dict):
+        if not status.get("available"):
+            self.bhaptics_status_label.setText("bHaptics: websocket-client missing — pip install websocket-client")
+            self.bhaptics_status_label.setProperty("role", "alert")
+        elif status.get("connected"):
+            self.bhaptics_status_label.setText(f"bHaptics Player: connected ({status.get('host')}:{status.get('port')})")
+            self.bhaptics_status_label.setProperty("role", None)
+        else:
+            err = status.get("last_error") or "Player not reachable"
+            self.bhaptics_status_label.setText(f"bHaptics Player: disconnected — {err}")
+            self.bhaptics_status_label.setProperty("role", "alert")
+        self.bhaptics_status_label.style().unpolish(self.bhaptics_status_label)
+        self.bhaptics_status_label.style().polish(self.bhaptics_status_label)
+
+        # Endpoint widgets — only set if value differs to avoid cursor jumps.
+        host = status.get("host", "127.0.0.1")
+        port = int(status.get("port", 15881))
+        if self.bhaptics_host_edit.text() != host:
+            self.bhaptics_host_edit.setText(host)
+        if self.bhaptics_port_spin.value() != port:
+            self.bhaptics_port_spin.setValue(port)
+        self.bhaptics_auto_connect_check.setChecked(bool(status.get("auto_connect")))
+
+        as_cfg = status.get("antistuck") or {}
+        if hasattr(self, "bhaptics_antistuck_check"):
+            self.bhaptics_antistuck_check.setChecked(bool(as_cfg.get("enabled", True)))
+            try:
+                hold = float(as_cfg.get("hold_s", 2.0))
+                if abs(self.bhaptics_antistuck_hold_spin.value() - hold) > 0.001:
+                    self.bhaptics_antistuck_hold_spin.setValue(hold)
+            except Exception:
+                pass
+            try:
+                ramp = float(as_cfg.get("ramp_s", 2.0))
+                if abs(self.bhaptics_antistuck_ramp_spin.value() - ramp) > 0.001:
+                    self.bhaptics_antistuck_ramp_spin.setValue(ramp)
+            except Exception:
+                pass
+
+    def _rebuild_bhaptics_device_list(self, devices: list):
+        # Drop stale grid references — the underlying widgets are about to be
+        # deleted; clearing the dict prevents the fast timer from touching
+        # already-deleted Qt objects.
+        self._bhaptics_grids = {}
+        while self.bhaptics_device_list_layout.count():
+            item = self.bhaptics_device_list_layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+
+        # Only render cards for devices the current avatar actually wires up.
+        # Detection looks for any matching v1 OSC parameter in parameter_store.
+        visible = [d for d in devices if d.get("detected")]
+
+        if not visible:
+            self.bhaptics_device_list_layout.addWidget(self._muted_label(
+                "No bHaptics-capable devices detected on the current avatar.\n"
+                "Load an avatar that broadcasts v1 bHaptics or bOSC_v1 parameters; cards appear automatically."
+            ))
+            return
+
+        for d in visible:
+            self.bhaptics_device_list_layout.addWidget(self._build_bhaptics_device_card(d))
+        self.bhaptics_device_list_layout.addStretch(1)
+
+    def _build_bhaptics_device_card(self, d: dict) -> QFrame:
+        position = d["position"]
+        cfg = d.get("config", {})
+        nodes = int(d.get("node_count", 0))
+
+        card = _Card()
+        lay = _vbox(12, 6)
+        card.setLayout(lay)
+
+        header = _hbox(0, 8)
+        title = QLabel(f"{d.get('display_name', position)}")
+        tf = title.font(); tf.setBold(True); tf.setPointSize(11)
+        title.setFont(tf)
+        header.addWidget(title)
+        header.addWidget(QLabel(f"({nodes} nodes)"))
+        header.addStretch(1)
+        lay.addLayout(header)
+
+        enabled = QCheckBox("Enabled")
+        enabled.setChecked(bool(cfg.get("enabled", True)))
+        lay.addWidget(enabled)
+
+        intensity_row = _hbox(0, 8)
+        intensity_row.addWidget(QLabel("Intensity"))
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(0, 100)
+        slider.setValue(int(cfg.get("intensity", 100)))
+        intensity_row.addWidget(slider, 1)
+        intensity_label = QLabel(f"{slider.value()}%")
+        intensity_label.setMinimumWidth(40)
+        intensity_row.addWidget(intensity_label)
+        lay.addLayout(intensity_row)
+
+        # Live debug grid: dots colored red(0)→yellow(50)→green(100), laid out
+        # in the same orientation as the physical bHaptics device.
+        cols, rows = d.get("grid", (nodes, 1))
+        grid = _BHapticsDotGrid(node_count=nodes, cols=int(cols), rows=int(rows))
+        self._bhaptics_grids[position] = grid
+        lay.addWidget(grid)
+
+        def push(_=None):
+            if self._is_updating_bhaptics:
+                return
+            intensity_label.setText(f"{slider.value()}%")
+            self.controller.set_bhaptics_device(position, {
+                "enabled": enabled.isChecked(),
+                "intensity": int(slider.value()),
+            })
+
+        enabled.toggled.connect(push)
+        slider.valueChanged.connect(push)
+        return card
 
     def _build_help_view(self, parent_layout: QVBoxLayout):
         title = QLabel("Help & How It Works")
@@ -2570,6 +3371,45 @@ OSC Inspector shows every OSC parameter your avatar is broadcasting. It starts a
         self._repolish(self.osc_debugger_button)
 
     def update_debugger_display(self, data):
+        # Render to both views: the table (default) and the legacy HTML box
+        # underneath. They consume the same data so they stay in sync.
+        self._update_debugger_table(data)
+        self._update_debugger_textbox(data)
+
+    def _update_debugger_textbox(self, data):
+        """Legacy display: QTextEdit re-rendered via setHtml on every tick.
+        Mirrors the pre-overhaul implementation (see git 471f158)."""
+        box = self.debugger_textbox
+        if box is None:
+            return
+        sb = box.verticalScrollBar()
+        scroll_pos = sb.value()
+
+        if isinstance(data, list):
+            html_parts = []
+            for entry in data:
+                if not isinstance(entry, tuple):
+                    continue
+                if len(entry) == 3:
+                    addr_prefix, val_str, color = entry
+                else:
+                    addr_prefix, color = entry
+                    val_str = ""
+                safe_addr = _html_escape(addr_prefix)
+                safe_val = _html_escape(val_str)
+                line = (
+                    f'<span style="color:{COLOR_TEXT_MUTED}; white-space:pre">{safe_addr}&nbsp;:&nbsp;</span>'
+                    f'<span style="color:{color}">{safe_val}</span><br>'
+                )
+                html_parts.append(line)
+            html = f'<pre style="margin:0; font-family:Consolas,monospace;">{"".join(html_parts)}</pre>'
+            box.setHtml(html)
+        else:
+            box.setPlainText(str(data))
+
+        sb.setValue(scroll_pos)
+
+    def _update_debugger_table(self, data):
         tbl = self.debugger_table
         if tbl is None:
             return

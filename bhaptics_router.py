@@ -1,0 +1,284 @@
+# bhaptics_router.py
+# Polls the global parameter_store for bHaptics v1 OSC bool parameters and
+# dispatches per-device dot-mode frames to the bHaptics Player.
+#
+# v1 OSC schema (HerpDerpinstine/bHapticsOSC v1.0.0, GPL3):
+#   /avatar/parameters/bHaptics_<Slot>_{N}_bool   (bool, N is 1-based)
+#
+# Slot strings → bHaptics Player v2 position names:
+#   Head             → Head        (6 nodes)
+#   Vest_Front       → VestFront   (20)
+#   Vest_Back        → VestBack    (20)
+#   Arm_Left/Right   → ForearmL/R  (6)
+#   Hand_Left/Right  → HandL/R     (3)
+#   Foot_Left/Right  → FootL/R     (3)
+
+import threading
+import time
+from typing import Callable, Dict, List, Tuple
+
+from parameter_store import store
+from bhaptics_engine import BHapticsEngine, DeviceConfig, NODE_COUNTS
+
+
+# (position, v1_slot, node_count)
+_DEVICE_TABLE: List[Tuple[str, str, int]] = [
+    ("Head",       "Head",        6),
+    ("VestFront",  "Vest_Front",  20),
+    ("VestBack",   "Vest_Back",   20),
+    ("ForearmL",   "Arm_Left",    6),
+    ("ForearmR",   "Arm_Right",   6),
+    ("HandL",      "Hand_Left",   3),
+    ("HandR",      "Hand_Right",  3),
+    ("FootL",      "Foot_Left",   3),
+    ("FootR",      "Foot_Right",  3),
+]
+
+
+def osc_path(slot: str, node_1based: int) -> str:
+    """Canonical OSC address for documentation/UI display (HerpDerpinstine v1.0)."""
+    return f"/avatar/parameters/bHaptics_{slot}_{node_1based}_bool"
+
+
+def _store_key(slot: str, node_1based: int) -> str:
+    """parameter_store key (short form — UDP handler strips the avatar/parameters/ prefix)."""
+    return f"bHaptics_{slot}_{node_1based}_bool"
+
+
+def _store_key_bosc_v1(position: str, node_1based: int) -> str:
+    """Alternate v1 schema commonly seen on community avatars:
+
+      /avatar/parameters/bOSC_v1_<Position><Node>   (float 0.0-1.0)
+
+    Position uses the bHaptics SDK name verbatim (VestFront, ForearmL, etc.)
+    instead of the underscore-separated slot form. Values are proximity
+    floats from VRChat contact receivers rather than booleans."""
+    return f"bOSC_v1_{position}_{node_1based}"
+
+
+def all_paths_for_position(position: str) -> List[str]:
+    for pos, slot, count in _DEVICE_TABLE:
+        if pos == position:
+            return [osc_path(slot, n) for n in range(1, count + 1)]
+    return []
+
+
+def _truthy(value) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    try:
+        return float(value) > 0.5
+    except (TypeError, ValueError):
+        return False
+
+
+class BHapticsRouter:
+    """Polls parameter_store and pushes per-device frames to the engine."""
+
+    def __init__(self,
+                 engine: BHapticsEngine,
+                 get_device_configs: Callable[[], Dict[str, DeviceConfig]],
+                 poll_rate_s: float = 0.05,
+                 get_antistuck: Callable[[], Dict[str, float]] | None = None):
+        self.engine = engine
+        self.get_device_configs = get_device_configs
+        self.poll_rate_s = poll_rate_s
+        # Returns {"enabled": bool, "hold_s": float, "ramp_s": float}.
+        # Read on every tick so config changes apply live.
+        self.get_antistuck = get_antistuck or (lambda: {"enabled": False, "hold_s": 2.0, "ramp_s": 2.0})
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        # Track last submitted dot tuple per device so we can debounce, and so
+        # the debug UI can read what's currently being driven.
+        self._last_dots: Dict[str, Tuple[int, ...]] = {}
+        # Anti-stuck bookkeeping (per device, per node):
+        #   _raw_values   — the raw intensity (0-100) computed from OSC last tick
+        #   _change_times — wall-clock time the raw value last actually changed
+        # Both are sized lazily — first time we see a device we allocate count slots.
+        self._raw_values: Dict[str, List[int]] = {}
+        self._change_times: Dict[str, List[float]] = {}
+        self._snapshot_lock = threading.Lock()
+
+    def start(self):
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop.clear()
+        self._thread = threading.Thread(target=self._run, daemon=True, name="bHapticsRouter")
+        self._thread.start()
+
+    def stop(self):
+        self._stop.set()
+
+    def _run(self):
+        print("[bHaptics] Router thread started")
+        while not self._stop.is_set():
+            try:
+                self._tick()
+            except Exception as e:
+                print(f"[bHaptics][Router] tick error: {e}")
+            time.sleep(self.poll_rate_s)
+
+    def get_snapshot(self) -> Dict[str, List[int]]:
+        """Return a copy of the current per-device dot intensity arrays.
+        Used by the debug UI; safe to call from any thread."""
+        with self._snapshot_lock:
+            return {pos: list(dots) for pos, dots in self._last_dots.items()}
+
+    def _tick(self):
+        if not self.engine.is_connected:
+            # Clear debounce so we re-submit immediately on reconnect, and
+            # blank the debug snapshot + anti-stuck timers so we don't carry
+            # phantom values across a disconnect.
+            with self._snapshot_lock:
+                if self._last_dots:
+                    self._last_dots.clear()
+            self._raw_values.clear()
+            self._change_times.clear()
+            return
+        params = store.get_all_parameters()
+        if not params:
+            return
+        configs = self.get_device_configs()
+        antistuck = self.get_antistuck()
+        as_enabled = bool(antistuck.get("enabled", False))
+        as_hold = max(0.0, float(antistuck.get("hold_s", 2.0)))
+        as_ramp = max(0.01, float(antistuck.get("ramp_s", 2.0)))
+        now = time.time()
+        for position, slot, count in _DEVICE_TABLE:
+            cfg = configs.get(position)
+            if cfg is None or not cfg.enabled:
+                # If we previously submitted activity, push a zero frame once
+                # to silence the device, then keep the zero snapshot.
+                with self._snapshot_lock:
+                    prev = self._last_dots.get(position)
+                if prev and any(prev):
+                    self.engine.submit_dot_frame(position, [0] * count)
+                    with self._snapshot_lock:
+                        self._last_dots[position] = tuple([0] * count)
+                continue
+
+            intensity = max(0, min(100, int(cfg.intensity)))
+
+            # Lazily allocate per-device tracking arrays. Re-allocate if the
+            # device's node_count somehow changes between ticks.
+            raw_arr = self._raw_values.get(position)
+            time_arr = self._change_times.get(position)
+            if raw_arr is None or len(raw_arr) != count:
+                raw_arr = [0] * count
+                time_arr = [now] * count
+                self._raw_values[position] = raw_arr
+                self._change_times[position] = time_arr
+
+            dots: List[int] = []
+            for n in range(1, count + 1):
+                # Two known v1 schemas are supported and combined per-node
+                # (max wins). Both feed the same physical dot.
+                #  1) HerpDerpinstine bHapticsOSC v1: bool, full intensity
+                #     when true, off when false.
+                #  2) bOSC_v1 community schema: float 0.0-1.0 from a contact
+                #     receiver; scaled by the device's intensity setting.
+                bool_val = params.get(_store_key(slot, n))
+                float_val = params.get(_store_key_bosc_v1(position, n))
+
+                from_bool = intensity if _truthy(bool_val) else 0
+
+                from_float = 0
+                if float_val is not None:
+                    try:
+                        f = max(0.0, min(1.0, float(float_val)))
+                        from_float = int(round(f * intensity))
+                    except (TypeError, ValueError):
+                        from_float = 0
+
+                raw = max(from_bool, from_float)
+
+                # --- Anti-stuck ramp-down -----------------------------------
+                # Track when raw last actually changed; if it sits unchanged
+                # past hold_s, ramp the OUTPUT linearly to 0 over ramp_s.
+                # The raw value itself is preserved so a real change resets
+                # the timer and the dot springs back to its true level.
+                idx = n - 1
+                if raw != raw_arr[idx]:
+                    raw_arr[idx] = raw
+                    time_arr[idx] = now
+                    out = raw
+                elif as_enabled and raw > 0:
+                    age = now - time_arr[idx]
+                    if age <= as_hold:
+                        out = raw
+                    else:
+                        ramp_t = age - as_hold
+                        if ramp_t >= as_ramp:
+                            out = 0
+                        else:
+                            scale = 1.0 - (ramp_t / as_ramp)
+                            out = max(0, int(round(raw * scale)))
+                else:
+                    out = raw
+
+                dots.append(out)
+
+            tup = tuple(dots)
+            with self._snapshot_lock:
+                prev = self._last_dots.get(position)
+            if prev == tup:
+                continue
+            with self._snapshot_lock:
+                self._last_dots[position] = tup
+            self.engine.submit_dot_frame(position, dots)
+
+
+def device_table() -> List[Tuple[str, str, int]]:
+    """Exposes (position, v1_slot, node_count) tuples for the UI layer."""
+    return list(_DEVICE_TABLE)
+
+
+def detected_positions(params: Dict[str, object]) -> set:
+    """Return the set of bHaptics positions for which at least one expected
+    OSC parameter is present in the supplied param dict. Used by the UI to
+    hide device cards the avatar doesn't actually wire up."""
+    found = set()
+    for position, slot, count in _DEVICE_TABLE:
+        for n in range(1, count + 1):
+            if _store_key(slot, n) in params or _store_key_bosc_v1(position, n) in params:
+                found.add(position)
+                break
+    return found
+
+
+# Display grid layout per device. Indices fill left-to-right, top-to-bottom
+# starting at 0 — matches bHaptics dot-mode index ordering. The vest is shown
+# in wearer-facing orientation so the front/back panels read like you're
+# looking at the person wearing them.
+_GRID_LAYOUTS: Dict[str, Tuple[int, int]] = {
+    "Head":      (6, 1),
+    "VestFront": (4, 5),
+    "VestBack":  (4, 5),
+    "ForearmL":  (2, 3),
+    "ForearmR":  (2, 3),
+    "HandL":     (3, 1),
+    "HandR":     (3, 1),
+    "FootL":     (3, 1),
+    "FootR":     (3, 1),
+}
+
+
+def grid_layout(position: str) -> Tuple[int, int]:
+    """(cols, rows) for the debug grid; defaults to a single row."""
+    return _GRID_LAYOUTS.get(position, (NODE_COUNTS.get(position, 1), 1))
+
+
+def display_name(position: str) -> str:
+    return {
+        "Head": "Head",
+        "VestFront": "Vest Front",
+        "VestBack": "Vest Back",
+        "ForearmL": "Arm Left",
+        "ForearmR": "Arm Right",
+        "HandL": "Hand Left",
+        "HandR": "Hand Right",
+        "FootL": "Foot Left",
+        "FootR": "Foot Right",
+    }.get(position, position)

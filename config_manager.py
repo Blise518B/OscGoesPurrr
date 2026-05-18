@@ -18,6 +18,12 @@ PROFILE_FILE = APPDATA_DIR / "profiles.json"
 # App settings file path
 APP_SETTINGS_FILE = APPDATA_DIR / "app_settings.json"
 
+# SteamVR settings file path (autostart, vibration patterns, per-tracker config)
+STEAMVR_SETTINGS_FILE = APPDATA_DIR / "steamvr_settings.json"
+
+# bHaptics settings file path (Player connection, per-device enable + intensity)
+BHAPTICS_SETTINGS_FILE = APPDATA_DIR / "bhaptics_settings.json"
+
 # Known devices file path — global registry of every toy that's ever been
 # connected, independent of any profile. Lets new/empty profiles still show
 # previously-seen toys with default settings.
@@ -86,6 +92,260 @@ class AppSettingsManager:
                 json.dump(self.settings, f, indent=2)
         except Exception as e:
             print(f"Failed to save settings: {e}")
+
+
+class SteamVRSettingsManager:
+    """Persists SteamVR Haptics section state: autostart flag, vibration
+    pattern configs, no-data timeout, and per-tracker config (keyed by
+    tracker serial). Lives outside profiles because SteamVR trackers are
+    physical hardware, not avatar-bound state.
+    """
+
+    DEFAULTS: Dict[str, Any] = {
+        "autostart_with_steamvr": False,
+        "auto_connect_steamvr": True,
+        "no_data_enabled": True,
+        "no_data_timeout_s": 15,
+        "battery_poll_interval_s": 5.0,
+        "patterns": [
+            {"pattern": "Linear",   "str_min": 0,  "str_max": 80, "speed": 4},   # PROXIMITY
+            {"pattern": "None",     "str_min": 40, "str_max": 80, "speed": 16},  # VELOCITY
+        ],
+        "trackers": {},  # serial -> {enabled, address_list, multiplier_override, battery_threshold}
+    }
+
+    def __init__(self):
+        self.settings: Dict[str, Any] = {}
+        self._load_or_create_defaults()
+
+    def _load_or_create_defaults(self) -> None:
+        if os.path.exists(STEAMVR_SETTINGS_FILE):
+            try:
+                with open(STEAMVR_SETTINGS_FILE, 'r') as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        merged = {**self.DEFAULTS, **loaded}
+                        if "patterns" not in loaded or not isinstance(loaded.get("patterns"), list) \
+                                or len(loaded["patterns"]) != 2:
+                            merged["patterns"] = self.DEFAULTS["patterns"]
+                        if "trackers" not in loaded or not isinstance(loaded.get("trackers"), dict):
+                            merged["trackers"] = {}
+                        self.settings = merged
+                        return
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"SteamVR settings load error: {e}, using defaults")
+        # Deep-copy defaults so callers don't mutate the class attribute
+        self.settings = json.loads(json.dumps(self.DEFAULTS))
+        self._save()
+
+    def _save(self) -> None:
+        try:
+            with open(STEAMVR_SETTINGS_FILE, 'w') as f:
+                json.dump(self.settings, f, indent=2)
+        except IOError as e:
+            print(f"SteamVR settings save error: {e}")
+
+    # ---- Top-level fields ----
+    def get_autostart(self) -> bool:
+        return bool(self.settings.get("autostart_with_steamvr", False))
+
+    def set_autostart(self, value: bool) -> None:
+        self.settings["autostart_with_steamvr"] = bool(value)
+        self._save()
+
+    def get_auto_connect(self) -> bool:
+        return bool(self.settings.get("auto_connect_steamvr", True))
+
+    def set_auto_connect(self, value: bool) -> None:
+        self.settings["auto_connect_steamvr"] = bool(value)
+        self._save()
+
+    def get_no_data(self) -> Dict[str, Any]:
+        return {
+            "enabled": bool(self.settings.get("no_data_enabled", True)),
+            "timeout_s": int(self.settings.get("no_data_timeout_s", 15)),
+        }
+
+    def set_no_data(self, enabled: bool, timeout_s: int) -> None:
+        self.settings["no_data_enabled"] = bool(enabled)
+        self.settings["no_data_timeout_s"] = int(timeout_s)
+        self._save()
+
+    def get_battery_interval(self) -> float:
+        try:
+            return float(self.settings.get("battery_poll_interval_s", 5.0))
+        except (TypeError, ValueError):
+            return 5.0
+
+    def set_battery_interval(self, seconds: float) -> None:
+        try:
+            seconds = max(1.0, float(seconds))
+        except (TypeError, ValueError):
+            seconds = 5.0
+        self.settings["battery_poll_interval_s"] = seconds
+        self._save()
+
+    # ---- Pattern configs (2 entries: PROXIMITY, VELOCITY) ----
+    def get_patterns(self) -> list:
+        return list(self.settings.get("patterns", self.DEFAULTS["patterns"]))
+
+    def set_pattern(self, index: int, pattern_dict: Dict[str, Any]) -> None:
+        patterns = list(self.settings.get("patterns", []))
+        while len(patterns) <= index:
+            patterns.append(dict(self.DEFAULTS["patterns"][len(patterns)]))
+        patterns[index] = dict(pattern_dict)
+        self.settings["patterns"] = patterns
+        self._save()
+
+    # ---- Per-tracker configs ----
+    def get_tracker_dict(self) -> Dict[str, Dict[str, Any]]:
+        return dict(self.settings.get("trackers", {}))
+
+    def get_tracker(self, serial: str) -> Dict[str, Any]:
+        trackers = self.settings.setdefault("trackers", {})
+        if serial not in trackers:
+            trackers[serial] = {
+                "enabled": True,
+                "address_list": ["/avatar/parameters/..."],
+                "multiplier_override": 1.0,
+                "battery_threshold": 20,
+                "battery_osc_address": "",
+            }
+            self._save()
+        else:
+            # Backfill new fields onto pre-existing entries.
+            if "battery_osc_address" not in trackers[serial]:
+                trackers[serial]["battery_osc_address"] = ""
+                self._save()
+        return dict(trackers[serial])
+
+    def set_tracker(self, serial: str, cfg: Dict[str, Any]) -> None:
+        trackers = self.settings.setdefault("trackers", {})
+        trackers[serial] = dict(cfg)
+        self._save()
+
+
+class BHapticsSettingsManager:
+    """Persists bHaptics integration state: Player connection endpoint,
+    auto-connect flag, and per-device enable + intensity. Per-device
+    defaults match the v1.0.0 bHapticsOSC layout (9 device categories)."""
+
+    _DEFAULT_DEVICES: Dict[str, Dict[str, Any]] = {
+        "Head":      {"enabled": True, "intensity": 100},
+        "VestFront": {"enabled": True, "intensity": 100},
+        "VestBack":  {"enabled": True, "intensity": 100},
+        "ForearmL":  {"enabled": True, "intensity": 100},
+        "ForearmR":  {"enabled": True, "intensity": 100},
+        "HandL":     {"enabled": True, "intensity": 100},
+        "HandR":     {"enabled": True, "intensity": 100},
+        "FootL":     {"enabled": True, "intensity": 100},
+        "FootR":     {"enabled": True, "intensity": 100},
+    }
+
+    DEFAULTS: Dict[str, Any] = {
+        "auto_connect": True,
+        "host": "127.0.0.1",
+        "port": 15881,
+        # Anti-stuck: when a dot's input value hasn't changed for `hold_s`
+        # seconds, linearly ramp it down to 0 over `ramp_s` seconds. Guards
+        # against avatars that latch a contact at full strength and never
+        # release it (e.g. when the sending controller drops out mid-touch).
+        "antistuck_enabled": True,
+        "antistuck_hold_s": 2.0,
+        "antistuck_ramp_s": 2.0,
+        "devices": _DEFAULT_DEVICES,
+    }
+
+    def __init__(self):
+        self.settings: Dict[str, Any] = {}
+        self._load_or_create_defaults()
+
+    def _load_or_create_defaults(self) -> None:
+        if os.path.exists(BHAPTICS_SETTINGS_FILE):
+            try:
+                with open(BHAPTICS_SETTINGS_FILE, 'r') as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        merged = {**self.DEFAULTS, **loaded}
+                        # Backfill any newly-added devices into older configs.
+                        devs = dict(self._DEFAULT_DEVICES)
+                        devs.update(loaded.get("devices", {}) or {})
+                        merged["devices"] = devs
+                        self.settings = merged
+                        return
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"bHaptics settings load error: {e}, using defaults")
+        self.settings = json.loads(json.dumps(self.DEFAULTS))
+        self._save()
+
+    def _save(self) -> None:
+        try:
+            with open(BHAPTICS_SETTINGS_FILE, 'w') as f:
+                json.dump(self.settings, f, indent=2)
+        except IOError as e:
+            print(f"bHaptics settings save error: {e}")
+
+    # ---- Endpoint ----
+    def get_host(self) -> str:
+        return str(self.settings.get("host", "127.0.0.1"))
+
+    def get_port(self) -> int:
+        try:
+            return int(self.settings.get("port", 15881))
+        except (TypeError, ValueError):
+            return 15881
+
+    def set_endpoint(self, host: str, port: int) -> None:
+        self.settings["host"] = str(host or "127.0.0.1").strip()
+        try:
+            self.settings["port"] = int(port)
+        except (TypeError, ValueError):
+            self.settings["port"] = 15881
+        self._save()
+
+    # ---- Auto-connect ----
+    def get_auto_connect(self) -> bool:
+        return bool(self.settings.get("auto_connect", True))
+
+    def set_auto_connect(self, value: bool) -> None:
+        self.settings["auto_connect"] = bool(value)
+        self._save()
+
+    # ---- Anti-stuck ----
+    def get_antistuck(self) -> Dict[str, Any]:
+        return {
+            "enabled": bool(self.settings.get("antistuck_enabled", True)),
+            "hold_s": float(self.settings.get("antistuck_hold_s", 2.0)),
+            "ramp_s": float(self.settings.get("antistuck_ramp_s", 2.0)),
+        }
+
+    def set_antistuck(self, enabled: bool, hold_s: float, ramp_s: float) -> None:
+        self.settings["antistuck_enabled"] = bool(enabled)
+        try:
+            self.settings["antistuck_hold_s"] = max(0.1, float(hold_s))
+        except (TypeError, ValueError):
+            self.settings["antistuck_hold_s"] = 2.0
+        try:
+            self.settings["antistuck_ramp_s"] = max(0.1, float(ramp_s))
+        except (TypeError, ValueError):
+            self.settings["antistuck_ramp_s"] = 2.0
+        self._save()
+
+    # ---- Devices ----
+    def get_devices(self) -> Dict[str, Dict[str, Any]]:
+        return dict(self.settings.get("devices", {}))
+
+    def get_device(self, position: str) -> Dict[str, Any]:
+        devs = self.settings.setdefault("devices", {})
+        if position not in devs:
+            devs[position] = dict(self._DEFAULT_DEVICES.get(position, {"enabled": True, "intensity": 100}))
+            self._save()
+        return dict(devs[position])
+
+    def set_device(self, position: str, cfg: Dict[str, Any]) -> None:
+        devs = self.settings.setdefault("devices", {})
+        devs[position] = dict(cfg)
+        self._save()
 
 
 class KnownDevicesRegistry:
@@ -187,6 +447,8 @@ class ProfileManager:
         self._clipboard: Optional[Dict[str, Any]] = None
 
         self.app_settings = AppSettingsManager()
+        self.steamvr_settings = SteamVRSettingsManager()
+        self.bhaptics_settings = BHapticsSettingsManager()
         self.known_devices = KnownDevicesRegistry()
         self._load_or_create_default()
 
