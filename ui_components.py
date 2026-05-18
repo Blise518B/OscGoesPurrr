@@ -900,6 +900,10 @@ class OscGoesPurrrUI:
         # Main window (intercepts X-button close).
         self.window: _MainWindow = _MainWindow()
         self.window.setObjectName("root")
+        # Explicit small minimum so the user can resize the window down — the
+        # sidebar is fixed at SIDEBAR_WIDTH so we keep at least that plus a
+        # bit of breathing room for the scrollable content area.
+        self.window.setMinimumSize(SIDEBAR_WIDTH + 200, 360)
         self.window.resize(1100, 700)
 
         # Set application icon for window title bar and taskbar.
@@ -936,6 +940,7 @@ class OscGoesPurrrUI:
         self.osc_status_label: Optional[QLabel] = None
         self.osc_port_label: Optional[QLabel] = None
         self.osc_connection_button: Optional[QPushButton] = None
+        self.intiface_sidebar_section: Optional[QWidget] = None
 
         # Settings checkboxes (referenced by facade getters)
         self.auto_connect_var: Optional[QCheckBox] = None
@@ -1005,20 +1010,25 @@ class OscGoesPurrrUI:
         self.sidebar_frame.setFixedWidth(SIDEBAR_WIDTH)
         root_layout.addWidget(self.sidebar_frame)
 
-        # Main content area (stacked views)
+        # Main content area (stacked views). Each page sits inside its own
+        # QScrollArea so the window can shrink below the page's natural size
+        # without Qt locking the central widget. Form-style pages also get a
+        # max-width cap so they hug the left side on wide monitors instead of
+        # stretching buttons across 4K — data-heavy pages (tables, logs,
+        # device routing) stay full-width.
         self.main_stack = QStackedWidget()
         root_layout.addWidget(self.main_stack, 1)
 
-        # Build all views into the stack.
         view_names = ["Dashboard", "Simple Mode", "Device Routing",
-                      "SteamVR Device Comms", "bHaptics", "OSC Inspector",
-                      "System Log", "Settings", "Help"]
+                      "SteamVR Device Comms", "bHaptics", "Hardware Monitor",
+                      "OSC Inspector", "System Log", "Settings", "Help"]
         builders = {
             "Dashboard": self._build_dashboard_view,
             "Simple Mode": self._build_simple_mode_view,
             "Device Routing": self._build_device_routing_view,
             "SteamVR Device Comms": self._build_steamvr_view,
             "bHaptics": self._build_bhaptics_view,
+            "Hardware Monitor": self._build_hardware_monitor_view,
             "OSC Inspector": self._build_network_debug_view,
             "System Log": self._build_system_log_view,
             "Settings": self._build_settings_view,
@@ -1029,19 +1039,44 @@ class OscGoesPurrrUI:
             page_lay = _vbox(20, 12)
             page.setLayout(page_lay)
             builders[name](page_lay)
-            self.views[name] = page
-            self.main_stack.addWidget(page)
+            # self.views stores the *wrapper* (scroll area) that's actually
+            # in the stack, since select_view / visibility checks compare
+            # against main_stack.currentWidget().
+            wrapper = self._wrap_page(name, page)
+            self.views[name] = wrapper
+            self.main_stack.addWidget(wrapper)
 
         self.window.setCentralWidget(root)
 
         # Simple Mode hides the advanced nav buttons. On boot, follow the
         # persisted setting — first-time users that enabled Simple Mode see
         # the stripped-down sidebar with Simple Mode pre-selected.
-        self._apply_simple_mode_visibility()
+        # apply_feature_visibility() also hides the Intiface sidebar block
+        # when that feature flag is off, so call it (it delegates to the
+        # simple-mode pass).
+        self.apply_feature_visibility()
         if bool(getattr(self.controller, "get_simple_mode", lambda: False)()):
             self.select_view("Simple Mode")
         else:
             self.select_view("Dashboard")
+
+    # ----------------------------------------------------------
+    # Page wrapping (scroll area + optional max-width left-align)
+    # ----------------------------------------------------------
+
+    def _wrap_page(self, name: str, page: QWidget) -> QScrollArea:
+        """Wrap a built page widget in a QScrollArea so it can shrink below
+        its natural width without locking the window above the page minimum.
+        Content fills the full available viewport width — Qt's normal layout
+        behaviour resizes the page to the scroll area's viewport, so cards
+        and buttons grow to use the whole window."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setWidget(page)
+        return scroll
 
     # ----------------------------------------------------------
     # Sidebar
@@ -1061,8 +1096,8 @@ class OscGoesPurrrUI:
         lay.addSpacing(20)
 
         nav_buttons = ["Dashboard", "Simple Mode", "Device Routing",
-                       "SteamVR Device Comms", "bHaptics", "OSC Inspector",
-                       "System Log", "Settings", "Help"]
+                       "SteamVR Device Comms", "bHaptics", "Hardware Monitor",
+                       "OSC Inspector", "System Log", "Settings", "Help"]
         for name in nav_buttons:
             btn = QPushButton(name)
             btn.setProperty("role", "nav")
@@ -1094,25 +1129,32 @@ class OscGoesPurrrUI:
         lay.addWidget(self.osc_connection_button)
         lay.addSpacing(8)
 
-        # Separator
+        # --- Intiface Central Section ---
+        # Wrapped in a container so the whole block (separator + title +
+        # status + button) hides cleanly when the Intiface feature is off.
+        self.intiface_sidebar_section = QWidget()
+        intiface_lay = _vbox(0, 6)
+        self.intiface_sidebar_section.setLayout(intiface_lay)
+
         sep = QFrame()
         sep.setObjectName("separator")
-        lay.addWidget(sep)
-        lay.addSpacing(8)
+        intiface_lay.addWidget(sep)
+        intiface_lay.addSpacing(8)
 
-        # --- Intiface Central Section ---
-        lay.addWidget(self._sidebar_section_title("Intiface Central"))
+        intiface_lay.addWidget(self._sidebar_section_title("Intiface Central"))
 
         self.status_label = QLabel("Status: Disconnected")
         self.status_label.setProperty("role", "alert")
         self.status_label.setAlignment(Qt.AlignHCenter)
-        lay.addWidget(self.status_label)
+        intiface_lay.addWidget(self.status_label)
 
         self.connection_button = QPushButton("Connect to Intiface")
         self.connection_button.setMinimumHeight(BTN_HEIGHT_LARGE)
         self.connection_button.clicked.connect(self.controller.connect_to_intiface)
-        lay.addWidget(self.connection_button)
-        lay.addSpacing(8)
+        intiface_lay.addWidget(self.connection_button)
+        intiface_lay.addSpacing(8)
+
+        lay.addWidget(self.intiface_sidebar_section)
 
         return sidebar
 
@@ -1883,8 +1925,43 @@ class OscGoesPurrrUI:
     # bHaptics, the OSC inspector, etc. before they've connected a toy.
     _SIMPLE_MODE_HIDDEN_VIEWS = (
         "Dashboard", "Device Routing", "SteamVR Device Comms",
-        "bHaptics", "OSC Inspector", "System Log",
+        "bHaptics", "Hardware Monitor", "OSC Inspector", "System Log",
     )
+
+    # Sidebar entries gated by Settings → Features. A view is hidden if any
+    # of its required feature flags is off. "SteamVR Device Comms" is shown
+    # when either haptics OR battery is enabled — both halves live in that
+    # one view.
+    _FEATURE_VIEW_REQUIREMENTS = {
+        "bHaptics":              ("feature_bhaptics",),
+        "Hardware Monitor":      ("feature_hardware_monitor",),
+        "OSC Inspector":         ("feature_osc_inspector",),
+        "SteamVR Device Comms":  ("feature_steamvr_haptics", "feature_steamvr_battery"),
+        # Device Routing is entirely about Intiface toy motor mapping, so hide
+        # it when the user has turned Intiface off.
+        "Device Routing":        ("feature_intiface",),
+    }
+
+    def _feature_allows_view(self, view_name: str) -> bool:
+        reqs = self._FEATURE_VIEW_REQUIREMENTS.get(view_name)
+        if not reqs:
+            return True
+        get = getattr(self.controller, "get_feature_enabled", None)
+        if get is None:
+            return True
+        # SteamVR view needs either half on; other views need their single flag.
+        if view_name == "SteamVR Device Comms":
+            return any(bool(get(k)) for k in reqs)
+        return all(bool(get(k)) for k in reqs)
+
+    def apply_feature_visibility(self):
+        """Re-evaluate sidebar visibility after a feature toggle changes."""
+        # Hide the Intiface connect block when that feature is off.
+        if self.intiface_sidebar_section is not None:
+            get = getattr(self.controller, "get_feature_enabled", None)
+            on = bool(get("feature_intiface")) if get else True
+            self.intiface_sidebar_section.setVisible(on)
+        self._apply_simple_mode_visibility()
 
     def _apply_simple_mode_visibility(self):
         on = bool(getattr(self.controller, "get_simple_mode", lambda: False)())
@@ -1893,10 +1970,27 @@ class OscGoesPurrrUI:
                 # Only present in the sidebar while Simple Mode is on.
                 # When off, the user re-enables it from Settings.
                 btn.setVisible(on)
-            elif name in self._SIMPLE_MODE_HIDDEN_VIEWS:
+                continue
+            # Feature-gated views disappear entirely when their toggle is off,
+            # regardless of Simple Mode state.
+            if not self._feature_allows_view(name):
+                btn.setVisible(False)
+                continue
+            if name in self._SIMPLE_MODE_HIDDEN_VIEWS:
                 btn.setVisible(not on)
             else:
                 btn.setVisible(True)
+        # If the currently-shown view just got hidden, fall back to Dashboard
+        # (or Simple Mode when that's the only visible option).
+        current = self.main_stack.currentWidget() if self.main_stack else None
+        if current is not None:
+            for name, page in self.views.items():
+                if page is current and not self.nav_buttons.get(name, None) is None:
+                    btn = self.nav_buttons.get(name)
+                    if btn is not None and not btn.isVisible():
+                        fallback = "Simple Mode" if on else "Dashboard"
+                        self.select_view(fallback)
+                    break
 
     def _make_battery_label(self, level: Optional[float]) -> QLabel:
         lbl = QLabel("")
@@ -2307,6 +2401,43 @@ class OscGoesPurrrUI:
         ql_lay.addWidget(tray)
 
         parent_layout.addWidget(ql_card)
+
+        # ---- Features Card ----
+        # Lets the user turn off subsystems they don't need. Disabling a
+        # feature hides its sidebar entry AND stops its background thread
+        # so the app doesn't pay for what it isn't using.
+        feat_card = _Card()
+        feat_lay = _vbox(20, 6)
+        feat_card.setLayout(feat_lay)
+
+        hdr = QLabel("Features")
+        hdr.setObjectName("cardHeader")
+        feat_lay.addWidget(hdr)
+        feat_lay.addWidget(self._muted_label(
+            "Turn off features you don't need. Disabled features hide their sidebar "
+            "entry and stop their background threads to save resources."
+        ))
+
+        feature_rows = (
+            ("feature_intiface",         "Intiface toy communication (Buttplug.io)"),
+            ("feature_bhaptics",         "bHaptics integration"),
+            ("feature_hardware_monitor", "Hardware Monitor (CPU / RAM / GPU stats)"),
+            ("feature_steamvr_haptics",  "SteamVR tracker haptics"),
+            ("feature_steamvr_battery",  "SteamVR battery → OSC broadcast"),
+            ("feature_osc_inspector",    "OSC Inspector (debug view)"),
+        )
+
+        self.feature_toggles: Dict[str, ToggleSwitch] = {}
+        for key, label in feature_rows:
+            tog = ToggleSwitch(label)
+            tog.setChecked(bool(self.controller.get_feature_enabled(key)))
+            tog.toggled.connect(
+                lambda checked, k=key: self.controller.set_feature_enabled(k, bool(checked))
+            )
+            feat_lay.addWidget(tog)
+            self.feature_toggles[key] = tog
+
+        parent_layout.addWidget(feat_card)
 
         # ---- SteamVR Card ----
         svr_card = _Card()
@@ -3018,6 +3149,288 @@ class OscGoesPurrrUI:
         enabled.toggled.connect(push)
         slider.valueChanged.connect(push)
         return card
+
+    # ----------------------------------------------------------
+    # Hardware Monitor view
+    # ----------------------------------------------------------
+
+    _is_updating_hwmon = False
+
+    # Ordered list of stats shown on the page. Each tuple is
+    # (key, label, value_formatter). The same keys map to OSC addresses
+    # stored in HardwareMonitorSettingsManager.
+    _HWMON_STATS = (
+        ("cpu_percent",   "CPU",       "percent"),
+        ("ram_used_gb",   "RAM Used",  "gb"),
+        ("ram_total_gb",  "RAM Total", "gb"),
+        ("gpu_percent",   "GPU",       "percent"),
+        ("vram_used_gb",  "VRAM Used", "gb"),
+        ("vram_total_gb", "VRAM Total","gb"),
+    )
+
+    def _build_hardware_monitor_view(self, parent_layout: QVBoxLayout):
+        title = QLabel("Hardware Monitor")
+        title.setObjectName("viewTitle")
+        title.setAlignment(Qt.AlignHCenter)
+        parent_layout.addWidget(title)
+
+        parent_layout.addWidget(self._muted_label(
+            "Broadcasts your system stats (CPU, RAM, GPU, VRAM) to VRChat over OSC so an avatar "
+            "can display them. Percentages are sent as 0-1 floats; memory values are sent in GB. "
+            "GPU stats currently require an NVIDIA GPU (NVML)."
+        ))
+
+        # ---- Master settings card ----
+        cfg_card = _Card()
+        cfg_lay = _vbox(14, 8)
+        cfg_card.setLayout(cfg_lay)
+
+        cfg_hdr = QLabel("Settings")
+        cfg_hdr.setObjectName("sectionTitle")
+        cfg_lay.addWidget(cfg_hdr)
+
+        row1 = _hbox(0, 12)
+        self.hwmon_enabled_check = ToggleSwitch("Enabled")
+        self.hwmon_enabled_check.toggled.connect(self._on_hwmon_enabled_toggled)
+        row1.addWidget(self.hwmon_enabled_check)
+
+        self.hwmon_send_osc_check = ToggleSwitch("Send to VRChat (OSC)")
+        self.hwmon_send_osc_check.toggled.connect(self._on_hwmon_send_osc_toggled)
+        row1.addWidget(self.hwmon_send_osc_check)
+
+        self.hwmon_gpu_enabled_check = ToggleSwitch("Read GPU (NVIDIA NVML)")
+        self.hwmon_gpu_enabled_check.toggled.connect(self._on_hwmon_gpu_toggled)
+        row1.addWidget(self.hwmon_gpu_enabled_check)
+
+        row1.addStretch(1)
+        cfg_lay.addLayout(row1)
+
+        row2 = _hbox(0, 8)
+        row2.addWidget(QLabel("Poll rate (s)"))
+        self.hwmon_poll_rate_spin = QDoubleSpinBox()
+        self.hwmon_poll_rate_spin.setRange(0.25, 60.0)
+        self.hwmon_poll_rate_spin.setSingleStep(0.25)
+        self.hwmon_poll_rate_spin.setDecimals(2)
+        self.hwmon_poll_rate_spin.valueChanged.connect(self._on_hwmon_poll_rate_changed)
+        row2.addWidget(self.hwmon_poll_rate_spin)
+
+        row2.addSpacing(20)
+        self.hwmon_status_label = QLabel("")
+        self.hwmon_status_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+        row2.addWidget(self.hwmon_status_label)
+        row2.addStretch(1)
+        cfg_lay.addLayout(row2)
+
+        parent_layout.addWidget(cfg_card)
+
+        # ---- Live stats card ----
+        stats_card = _Card()
+        stats_lay = _vbox(14, 8)
+        stats_card.setLayout(stats_lay)
+
+        stats_hdr = QLabel("Live Stats")
+        stats_hdr.setObjectName("sectionTitle")
+        stats_lay.addWidget(stats_hdr)
+
+        self.hwmon_gpu_name_label = QLabel("GPU: --")
+        self.hwmon_gpu_name_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+        stats_lay.addWidget(self.hwmon_gpu_name_label)
+
+        # Each stat gets a row with: name, value, progress bar (for %).
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(8)
+        self.hwmon_value_labels: Dict[str, QLabel] = {}
+        self.hwmon_progress_bars: Dict[str, QProgressBar] = {}
+        for r, (key, label, kind) in enumerate(self._HWMON_STATS):
+            name_lbl = QLabel(label)
+            f = name_lbl.font(); f.setBold(True); name_lbl.setFont(f)
+            grid.addWidget(name_lbl, r, 0)
+
+            value_lbl = QLabel("--")
+            value_lbl.setMinimumWidth(140)
+            grid.addWidget(value_lbl, r, 1)
+            self.hwmon_value_labels[key] = value_lbl
+
+            if kind == "percent":
+                pb = QProgressBar()
+                pb.setRange(0, 100)
+                pb.setValue(0)
+                pb.setFixedHeight(14)
+                grid.addWidget(pb, r, 2)
+                self.hwmon_progress_bars[key] = pb
+            else:
+                # Spacer so the column lines up with the percent bars.
+                grid.addWidget(QLabel(""), r, 2)
+
+        stats_lay.addLayout(grid)
+        parent_layout.addWidget(stats_card)
+
+        # ---- OSC addresses card ----
+        addr_card = _Card()
+        addr_lay = _vbox(14, 6)
+        addr_card.setLayout(addr_lay)
+
+        addr_hdr = QLabel("OSC Output")
+        addr_hdr.setObjectName("sectionTitle")
+        addr_lay.addWidget(addr_hdr)
+
+        addr_lay.addWidget(self._muted_label(
+            "Set the avatar parameter name each stat is written to. Percent stats are normalised "
+            "to 0-1; memory stats are sent in GB as floats. Untick a row to skip sending that stat."
+        ))
+
+        addr_grid = QGridLayout()
+        addr_grid.setHorizontalSpacing(10)
+        addr_grid.setVerticalSpacing(6)
+        addr_grid.addWidget(QLabel("Stat"), 0, 0)
+        addr_grid.addWidget(QLabel("Send"), 0, 1)
+        addr_grid.addWidget(QLabel("Parameter Name"), 0, 2)
+
+        self.hwmon_addr_edits: Dict[str, QLineEdit] = {}
+        self.hwmon_send_checks: Dict[str, QCheckBox] = {}
+        for r, (key, label, _kind) in enumerate(self._HWMON_STATS, start=1):
+            addr_grid.addWidget(QLabel(label), r, 0)
+
+            chk = QCheckBox()
+            chk.toggled.connect(
+                lambda checked, k=key: self._on_hwmon_send_toggle_changed(k, checked)
+            )
+            addr_grid.addWidget(chk, r, 1)
+            self.hwmon_send_checks[key] = chk
+
+            edit = QLineEdit()
+            edit.editingFinished.connect(
+                lambda k=key: self._on_hwmon_address_changed(k)
+            )
+            addr_grid.addWidget(edit, r, 2)
+            self.hwmon_addr_edits[key] = edit
+
+        addr_grid.setColumnStretch(2, 1)
+        addr_lay.addLayout(addr_grid)
+        parent_layout.addWidget(addr_card)
+
+        parent_layout.addStretch(1)
+
+        # Initial population + periodic refresh.
+        self._refresh_hardware_monitor_view(full=True)
+        self._hwmon_refresh_timer = QTimer(self.window)
+        self._hwmon_refresh_timer.setInterval(500)
+        self._hwmon_refresh_timer.timeout.connect(
+            lambda: self._refresh_hardware_monitor_view(full=False)
+        )
+        self._hwmon_refresh_timer.start()
+
+    # ---- Hardware monitor handlers ----
+
+    def _on_hwmon_enabled_toggled(self, checked: bool):
+        if self._is_updating_hwmon:
+            return
+        self.controller.set_hardware_monitor_enabled(bool(checked))
+
+    def _on_hwmon_send_osc_toggled(self, checked: bool):
+        if self._is_updating_hwmon:
+            return
+        self.controller.set_hardware_monitor_send_osc(bool(checked))
+
+    def _on_hwmon_gpu_toggled(self, checked: bool):
+        if self._is_updating_hwmon:
+            return
+        self.controller.set_hardware_monitor_gpu_enabled(bool(checked))
+
+    def _on_hwmon_poll_rate_changed(self, value: float):
+        if self._is_updating_hwmon:
+            return
+        self.controller.set_hardware_monitor_poll_rate(float(value))
+
+    def _on_hwmon_send_toggle_changed(self, key: str, checked: bool):
+        if self._is_updating_hwmon:
+            return
+        self.controller.set_hardware_monitor_send_toggle(key, bool(checked))
+
+    def _on_hwmon_address_changed(self, key: str):
+        if self._is_updating_hwmon:
+            return
+        edit = self.hwmon_addr_edits.get(key)
+        if edit is None:
+            return
+        self.controller.set_hardware_monitor_address(key, edit.text().strip())
+
+    def _refresh_hardware_monitor_view(self, full: bool = False):
+        if not hasattr(self, "hwmon_value_labels"):
+            return
+        try:
+            status = self.controller.get_hardware_monitor_status()
+        except Exception:
+            return
+        stats = status.get("stats", {}) or {}
+        settings = status.get("settings", {}) or {}
+
+        # Live values
+        for key, _label, kind in self._HWMON_STATS:
+            val = stats.get(key)
+            lbl = self.hwmon_value_labels.get(key)
+            if lbl is not None:
+                if val is None:
+                    lbl.setText("--")
+                elif kind == "percent":
+                    lbl.setText(f"{float(val):.1f} %")
+                else:
+                    lbl.setText(f"{float(val):.2f} GB")
+            pb = self.hwmon_progress_bars.get(key)
+            if pb is not None:
+                try:
+                    pb.setValue(max(0, min(100, int(round(float(val or 0))))))
+                except (TypeError, ValueError):
+                    pb.setValue(0)
+
+        # GPU name / status footer
+        gpu_name = stats.get("gpu_name")
+        backend = stats.get("gpu_backend", "none")
+        if backend == "nvml" and gpu_name:
+            self.hwmon_gpu_name_label.setText(f"GPU: {gpu_name} (NVML)")
+            self.hwmon_gpu_name_label.setStyleSheet(f"color: {COLOR_SUCCESS};")
+        elif not stats.get("has_nvml", False):
+            self.hwmon_gpu_name_label.setText(
+                "GPU: NVML not available (pip install nvidia-ml-py for NVIDIA GPUs)"
+            )
+            self.hwmon_gpu_name_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+        else:
+            self.hwmon_gpu_name_label.setText("GPU: --")
+            self.hwmon_gpu_name_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+
+        # Status line
+        if not stats.get("has_psutil", True):
+            self.hwmon_status_label.setText("psutil not installed — CPU/RAM unavailable")
+            self.hwmon_status_label.setStyleSheet(f"color: {COLOR_ALERT};")
+        elif stats.get("error"):
+            self.hwmon_status_label.setText(f"Last error: {stats['error']}")
+            self.hwmon_status_label.setStyleSheet(f"color: {COLOR_ALERT};")
+        else:
+            self.hwmon_status_label.setText("OK")
+            self.hwmon_status_label.setStyleSheet(f"color: {COLOR_SUCCESS};")
+
+        # Sync settings widgets (only on full refresh to avoid stomping
+        # in-flight user edits to text fields).
+        if full:
+            self._is_updating_hwmon = True
+            try:
+                self.hwmon_enabled_check.setChecked(bool(settings.get("enabled", False)))
+                self.hwmon_send_osc_check.setChecked(bool(settings.get("send_osc", True)))
+                self.hwmon_gpu_enabled_check.setChecked(bool(settings.get("gpu_enabled", True)))
+                self.hwmon_poll_rate_spin.setValue(float(settings.get("poll_rate_s", 2.0)))
+
+                addresses = settings.get("addresses", {}) or {}
+                toggles = settings.get("send_toggles", {}) or {}
+                for key, _label, _kind in self._HWMON_STATS:
+                    edit = self.hwmon_addr_edits.get(key)
+                    if edit is not None and not edit.hasFocus():
+                        edit.setText(str(addresses.get(key, "")))
+                    chk = self.hwmon_send_checks.get(key)
+                    if chk is not None:
+                        chk.setChecked(bool(toggles.get(key, True)))
+            finally:
+                self._is_updating_hwmon = False
 
     def _build_help_view(self, parent_layout: QVBoxLayout):
         title = QLabel("Help & How It Works")
@@ -3877,6 +4290,10 @@ Both consume the same data, so they stay in lockstep.
     def _muted_label(self, text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setProperty("muted", "true")
+        # Word-wrap is critical — without it, long description blocks force
+        # the page's minimum width to fit the full single-line text, which
+        # prevents the window from shrinking and clips titles on narrow views.
+        lbl.setWordWrap(True)
         self._repolish(lbl)
         return lbl
 

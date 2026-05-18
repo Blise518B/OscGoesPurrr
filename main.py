@@ -29,6 +29,7 @@ from steamvr_engine import SteamVREngine, TrackerConfig as SteamVRTrackerConfig,
 from steamvr_router import SteamVRRouter, SteamVRBatteryBroadcaster
 from bhaptics_engine import BHapticsEngine, DeviceConfig as BHapticsDeviceConfig
 from bhaptics_router import BHapticsRouter, device_table as bhaptics_device_table, display_name as bhaptics_display_name, grid_layout as bhaptics_grid_layout, detected_positions as bhaptics_detected_positions
+from hardware_monitor import HardwareMonitorEngine
 from constants import *
 from utilities import value_to_hex_color, toggle_windows_console, create_default_icon
 from version import __version__
@@ -128,6 +129,14 @@ class OscGoesPurrrApp:
             engine=self.bhaptics_engine,
             get_device_configs=self._bhaptics_get_device_configs,
             get_antistuck=self._bhaptics_get_antistuck,
+        )
+
+        # Hardware Monitor — broadcasts system stats (CPU/RAM/GPU/VRAM) to
+        # VRChat over OSC. Off by default; opt-in via the Hardware Monitor
+        # panel. Runs its own poll thread and never touches the UI directly.
+        self.hardware_monitor = HardwareMonitorEngine(
+            get_config=self._hardware_monitor_get_config,
+            send_osc=self._hardware_monitor_send_osc,
         )
 
         # Instantiate VRChat OSC Manager
@@ -345,9 +354,13 @@ class OscGoesPurrrApp:
     
     async def _async_auto_connect_loop(self):
         """Background task that retries connection every 2 seconds"""
-        while self.auto_connect_enabled and not self.haptic_engine.is_connected:
+        while (self.auto_connect_enabled
+               and self.get_feature_enabled("feature_intiface")
+               and not self.haptic_engine.is_connected):
             await asyncio.sleep(2.0)
-            if self.auto_connect_enabled and not self.haptic_engine.is_connected:
+            if (self.auto_connect_enabled
+                    and self.get_feature_enabled("feature_intiface")
+                    and not self.haptic_engine.is_connected):
                 try:
                     success = await self._async_attempt_connection()
                     if success:
@@ -413,6 +426,121 @@ class OscGoesPurrrApp:
     def set_app_setting(self, key: str, value: Any):
         """Facade method for UI to safely update app settings."""
         self.profile_manager.app_settings.set(key, value)
+
+    # ==================================================================
+    # Feature toggles — Settings → Features panel uses these to gate the
+    # expensive background subsystems (bHaptics, Hardware Monitor, SteamVR
+    # haptics/battery, OSC Inspector). Each toggle starts/stops the matching
+    # engine so disabled features actually free their threads.
+    # ==================================================================
+
+    FEATURE_KEYS = (
+        "feature_osc_inspector",
+        "feature_bhaptics",
+        "feature_hardware_monitor",
+        "feature_steamvr_haptics",
+        "feature_steamvr_battery",
+        "feature_intiface",
+    )
+
+    def get_feature_enabled(self, key: str) -> bool:
+        return bool(self.get_app_setting(key, True))
+
+    def get_feature_flags(self) -> Dict[str, bool]:
+        return {k: self.get_feature_enabled(k) for k in self.FEATURE_KEYS}
+
+    def set_feature_enabled(self, key: str, enabled: bool) -> None:
+        enabled = bool(enabled)
+        self.set_app_setting(key, enabled)
+        try:
+            self._apply_feature_state(key, enabled)
+        except Exception as e:
+            self.log_message(f"Feature toggle '{key}' apply error: {e}")
+        # Sync the sidebar visibility so disabled features hide their nav entry.
+        if self.ui is not None:
+            try:
+                self.ui.apply_feature_visibility()
+            except Exception:
+                pass
+
+    def _apply_feature_state(self, key: str, enabled: bool) -> None:
+        """Start or stop the background subsystem behind a feature toggle."""
+        if key == "feature_bhaptics":
+            if enabled:
+                try:
+                    self.bhaptics_engine.start()
+                    self.bhaptics_router.start()
+                except Exception as e:
+                    self.log_message(f"bHaptics start failed: {e}")
+            else:
+                try:
+                    self.bhaptics_router.stop()
+                    self.bhaptics_engine.stop()
+                except Exception:
+                    pass
+        elif key == "feature_hardware_monitor":
+            if enabled:
+                try:
+                    self.hardware_monitor.start()
+                except Exception as e:
+                    self.log_message(f"Hardware monitor start failed: {e}")
+            else:
+                try:
+                    self.hardware_monitor.stop()
+                except Exception:
+                    pass
+        elif key == "feature_steamvr_haptics":
+            if enabled:
+                try:
+                    self.steamvr_router.start()
+                except Exception as e:
+                    self.log_message(f"SteamVR haptics start failed: {e}")
+            else:
+                try:
+                    self.steamvr_router.stop()
+                except Exception:
+                    pass
+        elif key == "feature_steamvr_battery":
+            if enabled:
+                try:
+                    self.steamvr_battery.start()
+                except Exception as e:
+                    self.log_message(f"SteamVR battery start failed: {e}")
+            else:
+                try:
+                    self.steamvr_battery.stop()
+                except Exception:
+                    pass
+        elif key == "feature_osc_inspector":
+            # Pure UI / debug feature — refresh loop checks the flag itself.
+            pass
+        elif key == "feature_intiface":
+            # Intiface toy communication. Turning it off disconnects any
+            # active session and the auto-connect loop short-circuits on the
+            # flag, so no reconnection happens until the user re-enables it.
+            if enabled:
+                if (self.auto_connect_enabled
+                        and self.haptic_engine
+                        and not self.haptic_engine.is_connected
+                        and self.async_loop):
+                    try:
+                        self._auto_connect_task = asyncio.run_coroutine_threadsafe(
+                            self._async_auto_connect_loop(),
+                            self.async_loop,
+                        )
+                    except Exception as e:
+                        self.log_message(f"Intiface auto-connect restart failed: {e}")
+            else:
+                if (self.haptic_engine
+                        and self.haptic_engine.is_connected
+                        and self.async_loop):
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            self.haptic_engine._async_disconnect(),
+                            self.async_loop,
+                        )
+                    except Exception as e:
+                        self.log_message(f"Intiface disconnect failed: {e}")
     
     def get_detected_zones(self) -> Dict[str, List[str]]:
         """Facade method for UI to safely read detected zones from the Central Store."""
@@ -1191,7 +1319,15 @@ class OscGoesPurrrApp:
         """Handle connection button click - connects/disconnects from main thread"""
         if not self.haptic_engine or not self.async_loop:
             return
-            
+
+        # Refuse to dial out when the Intiface feature has been turned off in
+        # Settings → Features. (Disconnect still works so the user can hang
+        # up an active session even if they then disable the feature.)
+        if (not self.haptic_engine.is_connected
+                and not self.get_feature_enabled("feature_intiface")):
+            self.log_message("Intiface feature is disabled in Settings → Features.")
+            return
+
         # Use haptic_engine.is_connected directly as the source of truth
         if not self.haptic_engine.is_connected:
             # Connect when clicked (if not already connected)
@@ -1302,6 +1438,11 @@ class OscGoesPurrrApp:
         try:
             self.bhaptics_router.stop()
             self.bhaptics_engine.stop()
+        except Exception:
+            pass
+
+        try:
+            self.hardware_monitor.stop()
         except Exception:
             pass
 
@@ -1480,6 +1621,49 @@ class OscGoesPurrrApp:
     def set_bhaptics_antistuck(self, enabled: bool, hold_s: float, ramp_s: float) -> None:
         self._bhaptics_settings().set_antistuck(enabled, hold_s, ramp_s)
 
+    # ==================================================================
+    # Hardware Monitor Facade
+    # UI talks to the engine and its settings only through these methods.
+    # ==================================================================
+
+    def _hardware_monitor_settings(self):
+        return self.profile_manager.hardware_monitor_settings
+
+    def _hardware_monitor_get_config(self) -> Dict[str, Any]:
+        return self._hardware_monitor_settings().get_all()
+
+    def _hardware_monitor_send_osc(self, address: str, value: float) -> None:
+        if not self.osc_manager or not getattr(self.osc_manager, "is_connected", False):
+            return
+        try:
+            self.osc_manager.send_parameter(address, float(value), ignore_rate_limit=True)
+        except Exception as e:
+            self.log_message(f"HardwareMonitor OSC send failed ({address}): {e}")
+
+    def get_hardware_monitor_status(self) -> Dict[str, Any]:
+        """Snapshot for the UI: live hardware stats merged with current settings."""
+        snap = self.hardware_monitor.snapshot()
+        cfg = self._hardware_monitor_settings().get_all()
+        return {"stats": snap, "settings": cfg}
+
+    def set_hardware_monitor_enabled(self, enabled: bool) -> None:
+        self._hardware_monitor_settings().set_enabled(bool(enabled))
+
+    def set_hardware_monitor_send_osc(self, enabled: bool) -> None:
+        self._hardware_monitor_settings().set_send_osc(bool(enabled))
+
+    def set_hardware_monitor_gpu_enabled(self, enabled: bool) -> None:
+        self._hardware_monitor_settings().set_gpu_enabled(bool(enabled))
+
+    def set_hardware_monitor_poll_rate(self, seconds: float) -> None:
+        self._hardware_monitor_settings().set_poll_rate(seconds)
+
+    def set_hardware_monitor_address(self, key: str, address: str) -> None:
+        self._hardware_monitor_settings().set_address(key, address)
+
+    def set_hardware_monitor_send_toggle(self, key: str, enabled: bool) -> None:
+        self._hardware_monitor_settings().set_send_toggle(key, bool(enabled))
+
     def run(self):
         """Start the Three-Pillar application"""
         # Start async loop in background thread
@@ -1492,8 +1676,12 @@ class OscGoesPurrrApp:
         while self.async_loop is None and (time.time() - start_time) < timeout:
             time.sleep(0.05)
 
-        # Start auto-connect if enabled (single source of truth is haptic_engine.is_connected)
-        if self.auto_connect_enabled and not self.haptic_engine.is_connected and self.async_loop:
+        # Start auto-connect if enabled (single source of truth is haptic_engine.is_connected).
+        # Skip when the Intiface feature has been disabled in Settings → Features.
+        if (self.auto_connect_enabled
+                and self.get_feature_enabled("feature_intiface")
+                and not self.haptic_engine.is_connected
+                and self.async_loop):
             try:
                 self._auto_connect_task = asyncio.run_coroutine_threadsafe(
                     self._async_auto_connect_loop(),
@@ -1524,19 +1712,35 @@ class OscGoesPurrrApp:
 
         # Start SteamVR Haptics router. Engine init is deferred to first refresh
         # — the router itself is cheap and just polls the parameter store.
-        try:
-            self.steamvr_router.start()
-            self.steamvr_battery.start()
-        except Exception as e:
-            self.log_message(f"SteamVR router/broadcaster failed to start: {e}")
+        # Each half (haptics / battery) is gated by its own feature toggle so
+        # users who only want one side don't pay for the other.
+        if self.get_feature_enabled("feature_steamvr_haptics"):
+            try:
+                self.steamvr_router.start()
+            except Exception as e:
+                self.log_message(f"SteamVR haptics router failed to start: {e}")
+        if self.get_feature_enabled("feature_steamvr_battery"):
+            try:
+                self.steamvr_battery.start()
+            except Exception as e:
+                self.log_message(f"SteamVR battery broadcaster failed to start: {e}")
 
         # Start bHaptics engine + router. Engine's reconnect thread sits
         # idle when auto-connect is off.
-        try:
-            self.bhaptics_engine.start()
-            self.bhaptics_router.start()
-        except Exception as e:
-            self.log_message(f"bHaptics startup failed: {e}")
+        if self.get_feature_enabled("feature_bhaptics"):
+            try:
+                self.bhaptics_engine.start()
+                self.bhaptics_router.start()
+            except Exception as e:
+                self.log_message(f"bHaptics startup failed: {e}")
+
+        # Hardware monitor thread is gated by its feature toggle so the OSC
+        # broadcast + polling thread don't run when the user has no use for it.
+        if self.get_feature_enabled("feature_hardware_monitor"):
+            try:
+                self.hardware_monitor.start()
+            except Exception as e:
+                self.log_message(f"Hardware monitor startup failed: {e}")
 
         # Apply saved SteamVR autostart on boot (no-op if SteamVR is offline).
         if self.profile_manager.steamvr_settings.get_autostart():
