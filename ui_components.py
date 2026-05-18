@@ -2591,6 +2591,17 @@ class OscGoesPurrrUI:
             lay.addWidget(b)
             inner_lay.addWidget(card)
 
+        section("Overview — what this app does", """
+OscGoesPurrr listens to VRChat OSC parameters once, then fans them out to four independent output pipelines:
+
+  • Device Routing — Bluetooth toys via Intiface / Buttplug.io
+  • SteamVR Device Communication — haptic pulses on Vive / Tundra trackers and Index controllers, plus outgoing battery OSC
+  • bHaptics — vest / arms / head / hands / feet via the bHaptics Player
+  • OSC Inspector — live read-out of every parameter your avatar broadcasts
+
+Each section is self-contained: a failure in one (e.g. bHaptics Player not running) never affects the others.
+""")
+
         section("Profiles — what they are", """
 A profile is a complete bundle of toy settings, selectable on the Dashboard. The currently-selected profile is the one the haptic engine uses for routing OSC parameters to motor outputs.
 
@@ -2598,6 +2609,8 @@ A profile is a complete bundle of toy settings, selectable on the Dashboard. The
   • Click the pencil (✎) to rename it.
   • Click the trash (🗑) to delete it (disabled when only one profile remains).
   • Click "+ New Profile" to add another. There is no fixed cap.
+
+Profiles only affect the Device Routing (Buttplug) pipeline. SteamVR and bHaptics settings are global — they're about hardware, not avatars.
 """)
 
         section("What is saved per profile vs. globally", """
@@ -2610,6 +2623,8 @@ Per profile (each profile keeps its own copy):
 Global (shared by all profiles):
   • The list of known toys (every toy you've ever connected). New or empty profiles automatically inherit this list with default settings.
   • App settings: OSC network bind, auto-connect, auto-refresh, minimize-to-tray, hide-console, etc.
+  • SteamVR tracker config, vibration patterns, autostart, battery-poll interval
+  • bHaptics endpoint, per-device enable + intensity, anti-stuck timings
 """)
 
         section("Switching profiles", """
@@ -2626,15 +2641,71 @@ Under each motor, the "+ Add Variable" button lets you map any number of OSC par
 The picker shows live avatar parameters captured by the OSC inspector. Double-click a row to add it, or use the manual entry field. The × on each chip removes that mapping for the current profile only.
 """)
 
+        section("SteamVR Device Communication", """
+A two-way bridge between VRChat OSC and your SteamVR devices.
+
+Incoming (haptic pulses):
+  • Each tracker has its own list of OSC addresses (semicolon-separated). When any of them goes above zero, the tracker vibrates.
+  • Multiplier scales the per-tracker output. Pattern (None / Constant / Linear / Sine / Throb) shapes how the raw value drives the motor.
+  • Two patterns combine per pulse: Proximity reacts to the raw value, Velocity reacts to how fast it changes. Final strength is the max of both.
+  • Battery threshold silences a tracker once its battery drops below the given percent.
+  • Tundra trackers use a microsecond-based pulse API with a ~4ms ceiling — the engine handles the workaround automatically.
+
+Outgoing (battery OSC, VoltOSC-style):
+  • Each device (HMD, controllers, trackers) has an "Outgoing battery OSC address" field. Leave blank to disable.
+  • The configured battery-poll interval (default 5s) controls how often the value is sent.
+
+Settings (Settings tab → SteamVR card):
+  • Auto Connect (SteamVR): when on, the app keeps trying to reach SteamVR and picks up newly-connected devices automatically.
+  • Start with SteamVR: registers an OpenVR app manifest so SteamVR auto-launches OscGoesPurrr.
+  • Refresh SteamVR Devices: manual rescan, useful when auto-connect is off.
+
+Filtered out: Standable virtual trackers (serials/models containing stndbl / STBL_) are skipped — they pollute the list without ever being haptic-capable. Base stations are also hidden.
+""")
+
+        section("bHaptics", """
+Translates v1-style bHaptics OSC parameters from your avatar into haptic frames sent to the bHaptics Player over WebSocket (ws://127.0.0.1:15881/v2/feedbacks by default).
+
+Supported OSC schemas (both auto-detected per node, max wins):
+  • bHaptics_<Device>_<Node>_bool — HerpDerpinstine v1.0 bool form (e.g. bHaptics_Vest_Front_5_bool)
+  • bOSC_v1_<Position>_<Node>     — community float form (e.g. bOSC_v1_VestFront_5, value 0.0-1.0)
+
+Bool-schema dots fire at the per-device intensity setting; float-schema dots scale the intensity by the parameter value. The two combine per dot, so an avatar that mixes both schemas still works.
+
+Live debug grid:
+  • Each device card shows a grid of dots in the same physical layout as the bHaptics device.
+  • Colors: red (off) → yellow (50%) → green (100%). Refreshes ~10 Hz.
+  • Useful for confirming the right dots fire when you trigger contact zones in-world.
+
+Anti-stuck ramp-down:
+  • When a dot's value doesn't change for the configured "idle timeout" (default 2 s), it ramps down to zero over the configured "ramp duration" (default 2 s).
+  • Prevents a stuck-on dot if VRChat or the sending app crashes mid-pulse.
+  • Both numbers are editable in the bHaptics view header.
+
+Auto-detection:
+  • Only devices the loaded avatar actually broadcasts parameters for show up. Swap avatars and the card list updates within ~1.5 s.
+
+Endpoint:
+  • Host / Port are editable. "Apply" reconnects with the new endpoint. "Connect Now" forces a single connection attempt regardless of the auto-connect setting.
+""")
+
         section("Real-Time OSC Inspector", """
-OSC Inspector shows every OSC parameter your avatar is broadcasting. It starts automatically when you open the page and stops when you leave — useful for finding the exact name of a parameter before mapping it to a motor.
+OSC Inspector shows every OSC parameter your avatar is broadcasting. It starts automatically when you open the page and stops when you leave — useful for finding the exact name of a parameter before mapping it to a motor / tracker / bHaptics zone.
+
+Two views are stacked:
+  • Top: the in-place QTableWidget (preserves scroll position across refreshes).
+  • Bottom: a legacy HTML view kept as a diagnostic — if the top freezes but the bottom ticks, the bug is in the table update path; if both freeze, the OSC pipeline upstream is the suspect.
+
+Both consume the same data, so they stay in lockstep.
 """)
 
         section("Where settings live on disk", """
 %APPDATA%\\OscGoesPurrr\\
-  • profiles.json         — per-profile device settings
-  • known_devices.json    — global toy list (name, motor count, motor kinds)
-  • app_settings.json     — global app preferences
+  • profiles.json            — per-profile device settings
+  • known_devices.json       — global toy list (name, motor count, motor kinds)
+  • app_settings.json        — global app preferences
+  • steamvr_settings.json    — autostart, patterns, per-tracker config, battery interval
+  • bhaptics_settings.json   — Player endpoint, per-device enable + intensity, anti-stuck
 """)
 
         inner_lay.addStretch(1)
