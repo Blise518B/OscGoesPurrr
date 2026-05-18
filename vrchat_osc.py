@@ -265,7 +265,7 @@ class VRChatOSCManager:
             lambda *args, **kwargs: OSCQueryHandler(*args, osc_data=self.osc_data, **kwargs)
         )
         threading.Thread(target=self.http_server.serve_forever, daemon=True).start()
-        print(f"📋 Phonebook HTTP server started on port {self.http_listen_port}")
+        print(f"[OSC] Phonebook HTTP server started on port {self.http_listen_port}")
 
     def _advertise_service(self):
         """Registers this app as an OSC service via mDNS (both UDP and TCP phonebook)."""
@@ -279,7 +279,7 @@ class VRChatOSCManager:
             properties={"version": "1.0".encode('utf-8')},
             server="OscGoesPurrr.local."
         )
-        print(f"📢 Advertising OSC Service: {osc_service_name} on port {self.local_listen_port}")
+        print(f"[OSC] Advertising OSC Service: {osc_service_name} on port {self.local_listen_port}")
         self.zeroconf.register_service(self.service_info)
         
         # Register the HTTP JSON phonebook service (required for VRChat auto-discovery)
@@ -292,7 +292,7 @@ class VRChatOSCManager:
             properties={"version": "1.0".encode('utf-8')},
             server="OscGoesPurrr.local."
         )
-        print(f"📢 Advertising OSCJSON Service: {json_service_name} on port {self.http_listen_port}")
+        print(f"[OSC] Advertising OSCJSON Service: {json_service_name} on port {self.http_listen_port}")
         self.zeroconf.register_service(self.service_info_json)
 
     def poll_current_parameters(self) -> dict:

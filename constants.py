@@ -9,8 +9,13 @@ COLOR_SUCCESS = "#00C853"         # Connected / Good (Green)
 
 # Surfaces
 COLOR_BG = "#1E1E2E"              # Deep app background
-COLOR_SURFACE = "#2A2A3E"         # Cards, active tabs, separators, secondary btns
-COLOR_SURFACE_HOVER = "#3A3A4A"   # Hover state for tabs & secondary btns
+COLOR_SURFACE = "#2A2A3E"         # Cards, active tabs, separators
+COLOR_SURFACE_HOVER = "#3A3A4A"   # Hover state for tabs
+
+# Interactive surfaces — buttons and clickable areas sit on top of cards
+# (COLOR_SURFACE), so they need to be clearly lighter to read as "clickable".
+COLOR_BUTTON = "#454560"          # Secondary/idle buttons, segmented controls
+COLOR_BUTTON_HOVER = "#55557A"    # Hover state for interactive buttons
 
 # Interactive widget surfaces — slightly lighter so dropdowns, search fields
 # and pickers stand out from cards/window background as obviously clickable.

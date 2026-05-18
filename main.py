@@ -25,6 +25,10 @@ from haptic_engine import HapticEngine
 from vrchat_osc import VRChatOSCManager
 from motor_router import MotorRouter
 from parameter_store import store
+from steamvr_engine import SteamVREngine, TrackerConfig as SteamVRTrackerConfig, PatternConfig as SteamVRPatternConfig
+from steamvr_router import SteamVRRouter, SteamVRBatteryBroadcaster
+from bhaptics_engine import BHapticsEngine, DeviceConfig as BHapticsDeviceConfig
+from bhaptics_router import BHapticsRouter, device_table as bhaptics_device_table, display_name as bhaptics_display_name, grid_layout as bhaptics_grid_layout, detected_positions as bhaptics_detected_positions
 from constants import *
 from utilities import value_to_hex_color, toggle_windows_console, create_default_icon
 from version import __version__
@@ -88,6 +92,37 @@ class OscGoesPurrrApp:
 
         # Initialize standalone OSC routing engine
         self.motor_router = MotorRouter()
+
+        # SteamVR Haptics — independent pipeline that shares the parameter_store
+        # but targets SteamVR trackers via OpenVR.
+        self.steamvr_engine = SteamVREngine(
+            get_tracker_config=self._steamvr_get_tracker_config,
+            get_pattern_configs=self._steamvr_get_pattern_configs,
+            get_no_data_config=self._steamvr_get_no_data,
+        )
+        self.steamvr_router = SteamVRRouter(
+            engine=self.steamvr_engine,
+            get_all_configs=self._steamvr_get_all_tracker_configs,
+        )
+        self.steamvr_battery = SteamVRBatteryBroadcaster(
+            engine=self.steamvr_engine,
+            get_all_configs=self._steamvr_get_all_tracker_configs,
+            send_osc=self._steamvr_send_osc,
+            poll_interval_s=self._steamvr_get_battery_interval(),
+            get_auto_connect=self._steamvr_get_auto_connect,
+        )
+
+        # bHaptics integration — independent pipeline that shares the
+        # parameter_store and translates v1 bHapticsOSC bool params into
+        # dot-mode frames sent to the bHaptics Player over WebSocket.
+        bs = self.profile_manager.bhaptics_settings
+        self.bhaptics_engine = BHapticsEngine(host=bs.get_host(), port=bs.get_port())
+        self.bhaptics_engine.set_auto_connect_getter(self._bhaptics_get_auto_connect)
+        self.bhaptics_router = BHapticsRouter(
+            engine=self.bhaptics_engine,
+            get_device_configs=self._bhaptics_get_device_configs,
+            get_antistuck=self._bhaptics_get_antistuck,
+        )
 
         # Instantiate VRChat OSC Manager
         bind_all = self.profile_manager.app_settings.settings.get("bind_all_interfaces", True)
@@ -450,8 +485,7 @@ class OscGoesPurrrApp:
                         val_str = str(val)
 
                     color = value_to_hex_color(val)
-                    # Pad the address so the colons align nicely (address is gray, value gets color)
-                    lines.append((addr.ljust(60) + " : ", val_str, color))
+                    lines.append((addr, val_str, color))
 
             if not lines and search_query:
                 debug_data = [("No parameters match your search.", "", COLOR_TEXT_MUTED)]
@@ -1150,7 +1184,188 @@ class OscGoesPurrrApp:
 
         self.save_profiles()
 
+        try:
+            self.steamvr_router.stop()
+            self.steamvr_battery.stop()
+            self.steamvr_engine.shutdown()
+        except Exception:
+            pass
+
+        try:
+            self.bhaptics_router.stop()
+            self.bhaptics_engine.stop()
+        except Exception:
+            pass
+
         self.ui.shutdown()
+
+    # ==================================================================
+    # SteamVR Haptics Facade
+    # The UI and other backend services must go through these methods —
+    # they MUST NOT touch self.steamvr_engine / self.steamvr_router /
+    # self.profile_manager.steamvr_settings directly.
+    # ==================================================================
+
+    def _steamvr_settings(self):
+        return self.profile_manager.steamvr_settings
+
+    def _steamvr_get_tracker_config(self, serial: str) -> SteamVRTrackerConfig:
+        return SteamVRTrackerConfig.from_dict(self._steamvr_settings().get_tracker(serial))
+
+    def _steamvr_get_all_tracker_configs(self) -> Dict[str, SteamVRTrackerConfig]:
+        return {
+            serial: SteamVRTrackerConfig.from_dict(d)
+            for serial, d in self._steamvr_settings().get_tracker_dict().items()
+        }
+
+    def _steamvr_get_pattern_configs(self) -> List[SteamVRPatternConfig]:
+        return [SteamVRPatternConfig.from_dict(d) for d in self._steamvr_settings().get_patterns()]
+
+    def _steamvr_get_no_data(self) -> Dict[str, Any]:
+        return self._steamvr_settings().get_no_data()
+
+    def _steamvr_get_battery_interval(self) -> float:
+        return float(self._steamvr_settings().get_battery_interval())
+
+    def _steamvr_get_auto_connect(self) -> bool:
+        return self._steamvr_settings().get_auto_connect()
+
+    def _steamvr_send_osc(self, address: str, value: float) -> None:
+        # Reuse the existing outbound VRChat client (already targets the
+        # discovered OSCQuery port). No-op if VRChat isn't connected.
+        if not self.osc_manager or not getattr(self.osc_manager, "is_connected", False):
+            return
+        try:
+            self.osc_manager.send_parameter(address, float(value), ignore_rate_limit=True)
+        except Exception as e:
+            self.log_message(f"SteamVR battery OSC send failed ({address}): {e}")
+
+    def get_steamvr_status(self) -> Dict[str, Any]:
+        """Snapshot for the UI: runtime alive, device list, autostart, manifest reg."""
+        devices = self.steamvr_engine.snapshot_devices()
+        return {
+            "available": self.steamvr_engine.is_available,
+            "alive": self.steamvr_engine.is_alive,
+            "bundled": self.steamvr_engine.is_app_bundled,
+            "autostart": self._steamvr_settings().get_autostart(),
+            "auto_connect": self._steamvr_settings().get_auto_connect(),
+            "registered": self.steamvr_engine.is_registered() if self.steamvr_engine.is_alive else False,
+            "battery_interval_s": self._steamvr_get_battery_interval(),
+            "trackers": [
+                {
+                    "serial": d.serial,
+                    "model": d.model,
+                    "device_class": d.device_class,
+                    "supports_haptics": d.supports_haptics,
+                    "battery": self.steamvr_engine.battery_for(d.serial),
+                    "config": self._steamvr_settings().get_tracker(d.serial),
+                }
+                for d in devices
+            ],
+        }
+
+    def refresh_steamvr_trackers(self) -> int:
+        devices = self.steamvr_engine.refresh_devices(quiet=False)
+        return len(devices)
+
+    def pulse_steamvr_tracker(self, serial: str, length_ms: int = 500) -> None:
+        self.steamvr_engine.pulse_test(serial, length_ms)
+
+    def set_steamvr_tracker_config(self, serial: str, cfg: Dict[str, Any]) -> None:
+        self._steamvr_settings().set_tracker(serial, cfg)
+
+    def set_steamvr_autostart(self, enabled: bool) -> None:
+        self._steamvr_settings().set_autostart(enabled)
+        try:
+            self.steamvr_engine.setup_autostart(enabled)
+        except Exception as e:
+            self.log_message(f"SteamVR autostart toggle failed: {e}")
+
+    def set_steamvr_pattern(self, index: int, pattern_dict: Dict[str, Any]) -> None:
+        self._steamvr_settings().set_pattern(index, pattern_dict)
+
+    def get_steamvr_pattern_configs(self) -> List[Dict[str, Any]]:
+        return list(self._steamvr_settings().get_patterns())
+
+    def get_steamvr_no_data(self) -> Dict[str, Any]:
+        return self._steamvr_settings().get_no_data()
+
+    def set_steamvr_no_data(self, enabled: bool, timeout_s: int) -> None:
+        self._steamvr_settings().set_no_data(enabled, timeout_s)
+
+    def set_steamvr_battery_interval(self, seconds: float) -> None:
+        self._steamvr_settings().set_battery_interval(seconds)
+        self.steamvr_battery.set_interval(seconds)
+
+    def set_steamvr_auto_connect(self, enabled: bool) -> None:
+        self._steamvr_settings().set_auto_connect(enabled)
+        # If just turned on, try one immediate refresh so the UI updates quickly.
+        if enabled:
+            try:
+                self.steamvr_engine.refresh_devices(quiet=True)
+            except Exception:
+                pass
+
+    # ==================================================================
+    # bHaptics Facade
+    # ==================================================================
+
+    def _bhaptics_settings(self):
+        return self.profile_manager.bhaptics_settings
+
+    def _bhaptics_get_auto_connect(self) -> bool:
+        return self._bhaptics_settings().get_auto_connect()
+
+    def _bhaptics_get_device_configs(self) -> Dict[str, BHapticsDeviceConfig]:
+        raw = self._bhaptics_settings().get_devices()
+        return {pos: BHapticsDeviceConfig.from_dict(d) for pos, d in raw.items()}
+
+    def _bhaptics_get_antistuck(self) -> Dict[str, Any]:
+        return self._bhaptics_settings().get_antistuck()
+
+    def get_bhaptics_status(self) -> Dict[str, Any]:
+        s = self._bhaptics_settings()
+        detected = bhaptics_detected_positions(store.get_all_parameters())
+        return {
+            "available": self.bhaptics_engine.is_available,
+            "connected": self.bhaptics_engine.is_connected,
+            "last_error": self.bhaptics_engine.last_error,
+            "auto_connect": s.get_auto_connect(),
+            "host": s.get_host(),
+            "port": s.get_port(),
+            "antistuck": s.get_antistuck(),
+            "devices": [
+                {
+                    "position": pos,
+                    "display_name": bhaptics_display_name(pos),
+                    "node_count": count,
+                    "grid": bhaptics_grid_layout(pos),  # (cols, rows)
+                    "config": s.get_device(pos),
+                    "detected": pos in detected,
+                }
+                for pos, _slot, count in bhaptics_device_table()
+            ],
+        }
+
+    def get_bhaptics_snapshot(self) -> Dict[str, List[int]]:
+        """Live per-device dot intensities (0-100). Used by the debug grid."""
+        return self.bhaptics_router.get_snapshot()
+
+    def set_bhaptics_auto_connect(self, enabled: bool) -> None:
+        self._bhaptics_settings().set_auto_connect(enabled)
+
+    def set_bhaptics_endpoint(self, host: str, port: int) -> None:
+        self._bhaptics_settings().set_endpoint(host, port)
+        self.bhaptics_engine.set_endpoint(host, port)
+
+    def set_bhaptics_device(self, position: str, cfg: Dict[str, Any]) -> None:
+        self._bhaptics_settings().set_device(position, cfg)
+
+    def bhaptics_connect_now(self) -> bool:
+        return self.bhaptics_engine.manual_connect()
+
+    def set_bhaptics_antistuck(self, enabled: bool, hold_s: float, ramp_s: float) -> None:
+        self._bhaptics_settings().set_antistuck(enabled, hold_s, ramp_s)
 
     def run(self):
         """Start the Three-Pillar application"""
@@ -1193,6 +1408,37 @@ class OscGoesPurrrApp:
 
         # Start the routing tick loop
         self.ui.schedule_callback(ROUTER_POLL_RATE_MS, routing_tick)
+
+        # Start SteamVR Haptics router. Engine init is deferred to first refresh
+        # — the router itself is cheap and just polls the parameter store.
+        try:
+            self.steamvr_router.start()
+            self.steamvr_battery.start()
+        except Exception as e:
+            self.log_message(f"SteamVR router/broadcaster failed to start: {e}")
+
+        # Start bHaptics engine + router. Engine's reconnect thread sits
+        # idle when auto-connect is off.
+        try:
+            self.bhaptics_engine.start()
+            self.bhaptics_router.start()
+        except Exception as e:
+            self.log_message(f"bHaptics startup failed: {e}")
+
+        # Apply saved SteamVR autostart on boot (no-op if SteamVR is offline).
+        if self.profile_manager.steamvr_settings.get_autostart():
+            try:
+                self.steamvr_engine.setup_autostart(True)
+            except Exception:
+                pass
+
+        # If auto-connect is enabled, try an immediate refresh so the device
+        # list populates without waiting for the first broadcaster tick.
+        if self.profile_manager.steamvr_settings.get_auto_connect():
+            try:
+                self.steamvr_engine.refresh_devices(quiet=True)
+            except Exception:
+                pass
 
         # Boot OSC server 500ms after UI launches to prevent freezing
         if self.profile_manager.app_settings.settings.get("auto_connect_osc", True):

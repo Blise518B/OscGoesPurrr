@@ -12,6 +12,13 @@ class ParameterStore:
         self.detected_zones: Dict[str, List[str]] = {"Orifices": [], "Penetrators": []}
         self.lock = threading.Lock()
 
+    # The OSCQuery tree is rooted at avatar/parameters/* for VRChat avatars,
+    # but the UDP handler stores parameters under their short name (the part
+    # after /avatar/parameters/). Normalize JSON-dump keys the same way so the
+    # initial snapshot and live UDP updates land on identical keys — otherwise
+    # the Inspector shows stale duplicates that never refresh.
+    _AVATAR_PARAM_PREFIX = "avatar/parameters/"
+
     def _parse_oscquery_node(self, node: dict, prefix: str = ""):
         """Recursively flattens the OSCQuery JSON tree."""
         if "CONTENTS" in node:
@@ -23,7 +30,10 @@ class ParameterStore:
             val = 0.0
             if "VALUE" in node and isinstance(node["VALUE"], list) and len(node["VALUE"]) > 0:
                 val = node["VALUE"][0]
-            self.all_parameters[prefix] = val
+            key = prefix
+            if key.startswith(self._AVATAR_PARAM_PREFIX):
+                key = key[len(self._AVATAR_PARAM_PREFIX):]
+            self.all_parameters[key] = val
 
     def rebuild_from_json(self, data: dict) -> int:
         """

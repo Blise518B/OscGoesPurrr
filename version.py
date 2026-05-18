@@ -11,7 +11,7 @@
 import re
 import subprocess
 
-BASE_VERSION = "1.0"
+BASE_VERSION = "1.1"
 RELEASE_BRANCH = "main"
 
 
