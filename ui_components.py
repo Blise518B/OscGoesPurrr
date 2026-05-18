@@ -409,6 +409,93 @@ QTableWidget::item {{
 
 
 # ============================================================
+# ToggleSwitch — QCheckBox rendered as a sliding on/off switch
+# ============================================================
+
+class ToggleSwitch(QCheckBox):
+    """Drop-in QCheckBox replacement painted as a sliding toggle.
+
+    Off: knob on the left, red track. On: knob on the right, green track.
+    All QCheckBox APIs (isChecked, setChecked, toggled, stateChanged, …)
+    work unchanged — only the visual is replaced.
+    """
+
+    _TRACK_W = 40
+    _TRACK_H = 20
+    _KNOB_MARGIN = 2
+    _LABEL_SPACING = 8
+
+    _COLOR_OFF = QColor("#C0392B")
+    _COLOR_ON = QColor(COLOR_SUCCESS)
+    _COLOR_KNOB = QColor("#FFFFFF")
+    _COLOR_DISABLED_KNOB = QColor("#CCCCCC")
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self.setCursor(Qt.PointingHandCursor)
+
+    def sizeHint(self) -> QSize:
+        fm = self.fontMetrics()
+        text = self.text()
+        text_w = fm.horizontalAdvance(text) if text else 0
+        text_h = fm.height()
+        w = self._TRACK_W + (self._LABEL_SPACING + text_w if text else 0)
+        h = max(self._TRACK_H, text_h) + 2
+        return QSize(w, h)
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
+
+    def hitButton(self, pos) -> bool:
+        return self.rect().contains(pos)
+
+    def paintEvent(self, event):  # noqa: N802 (Qt API)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+
+        checked = self.isChecked()
+        enabled = self.isEnabled()
+
+        track_y = (self.height() - self._TRACK_H) / 2
+        track_rect = QRectF(0.0, float(track_y),
+                            float(self._TRACK_W), float(self._TRACK_H))
+
+        bg = QColor(self._COLOR_ON if checked else self._COLOR_OFF)
+        if not enabled:
+            bg.setAlpha(110)
+
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(bg))
+        p.drawRoundedRect(track_rect, self._TRACK_H / 2.0, self._TRACK_H / 2.0)
+
+        knob_d = self._TRACK_H - 2 * self._KNOB_MARGIN
+        if checked:
+            knob_x = track_rect.right() - self._KNOB_MARGIN - knob_d
+        else:
+            knob_x = track_rect.left() + self._KNOB_MARGIN
+        knob_y = track_rect.top() + self._KNOB_MARGIN
+        knob_color = QColor(self._COLOR_KNOB if enabled else self._COLOR_DISABLED_KNOB)
+        p.setBrush(QBrush(knob_color))
+        p.drawEllipse(QRectF(float(knob_x), float(knob_y),
+                             float(knob_d), float(knob_d)))
+
+        text = self.text()
+        if text:
+            text_color = QColor(COLOR_TEXT)
+            if not enabled:
+                text_color.setAlpha(140)
+            p.setPen(text_color)
+            text_x = self._TRACK_W + self._LABEL_SPACING
+            p.drawText(
+                QRectF(float(text_x), 0.0,
+                       float(self.width() - text_x), float(self.height())),
+                int(Qt.AlignVCenter | Qt.AlignLeft),
+                text,
+            )
+        p.end()
+
+
+# ============================================================
 # Cross-thread invocation helper
 # ============================================================
 
@@ -665,6 +752,13 @@ class _BHapticsDotGrid(QWidget):
     SPACING = 6
     PADDING = 4
 
+    # Debug click-to-test signals. Mouse press emits dotPressed(index) and
+    # dotReleased(prev_index_or_-1) so the controller can drive that single
+    # dot at 100% intensity while held. Drag across dots cleanly releases the
+    # previous index before pressing the new one.
+    dotPressed = Signal(int)
+    dotReleased = Signal(int)
+
     def __init__(self, node_count: int, cols: int, rows: int, parent=None):
         super().__init__(parent)
         self.node_count = max(0, int(node_count))
@@ -674,6 +768,9 @@ class _BHapticsDotGrid(QWidget):
         w = self.PADDING * 2 + self.cols * self.DOT_PX + (self.cols - 1) * self.SPACING
         h = self.PADDING * 2 + self.rows * self.DOT_PX + (self.rows - 1) * self.SPACING
         self.setFixedSize(int(w), int(h))
+        self._active_dot: int = -1
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("Click and hold a dot to fire it at 100% (debug test).")
 
     def set_values(self, values):
         """values: iterable of ints 0..100, length should match node_count.
@@ -728,6 +825,58 @@ class _BHapticsDotGrid(QWidget):
             p.setBrush(QBrush(fill))
             p.drawEllipse(x, y, diameter, diameter)
         p.end()
+
+    def _dot_at(self, pos) -> int:
+        """Return the 0-based dot index at widget-local pos, or -1 if none."""
+        diameter = self.DOT_PX
+        x = pos.x()
+        y = pos.y()
+        for i in range(self.node_count):
+            col = i % self.cols
+            row = i // self.cols
+            if row >= self.rows:
+                break
+            dx = self.PADDING + col * (diameter + self.SPACING)
+            dy = self.PADDING + row * (diameter + self.SPACING)
+            if dx <= x <= dx + diameter and dy <= y <= dy + diameter:
+                return i
+        return -1
+
+    def _set_active(self, idx: int) -> None:
+        if idx == self._active_dot:
+            return
+        if self._active_dot >= 0:
+            self.dotReleased.emit(self._active_dot)
+        self._active_dot = idx
+        if idx >= 0:
+            self.dotPressed.emit(idx)
+
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.LeftButton:
+            self._set_active(self._dot_at(ev.position().toPoint()))
+            ev.accept()
+            return
+        super().mousePressEvent(ev)
+
+    def mouseMoveEvent(self, ev):
+        if ev.buttons() & Qt.LeftButton:
+            self._set_active(self._dot_at(ev.position().toPoint()))
+            ev.accept()
+            return
+        super().mouseMoveEvent(ev)
+
+    def mouseReleaseEvent(self, ev):
+        if ev.button() == Qt.LeftButton:
+            self._set_active(-1)
+            ev.accept()
+            return
+        super().mouseReleaseEvent(ev)
+
+    def leaveEvent(self, ev):
+        # If the mouse leaves while still held, release; if it re-enters we'll
+        # repress on mouseMove. Prevents a stuck dot when the user drags off.
+        self._set_active(-1)
+        super().leaveEvent(ev)
 
 
 # ============================================================
@@ -825,6 +974,19 @@ class OscGoesPurrrUI:
         self.avatar_new_btn: Optional[QPushButton] = None
         self.avatar_manage_btn: Optional[QPushButton] = None
 
+        # Simple Mode view widgets
+        self.simple_mode_toggle: Optional[QCheckBox] = None
+        self.simple_mode_settings_toggle: Optional[QCheckBox] = None
+        self.simple_mode_status_label: Optional[QLabel] = None
+        self.simple_mode_sources_layout: Optional[QVBoxLayout] = None
+        self.simple_mode_toys_layout: Optional[QVBoxLayout] = None
+        # Battery labels keyed by device name so live battery_update messages
+        # can refresh them without rebuilding the whole toy list.
+        self.simple_mode_battery_labels: Dict[str, QLabel] = {}
+        # Cached snapshot used to skip rebuilds when nothing changed.
+        self._simple_mode_last_sources: Optional[tuple] = None
+        self._simple_mode_last_toys: Optional[tuple] = None
+
         # Build the UI tree.
         self.setup_ui()
 
@@ -848,10 +1010,12 @@ class OscGoesPurrrUI:
         root_layout.addWidget(self.main_stack, 1)
 
         # Build all views into the stack.
-        view_names = ["Dashboard", "Device Routing", "SteamVR Device Comms",
-                      "bHaptics", "OSC Inspector", "System Log", "Settings", "Help"]
+        view_names = ["Dashboard", "Simple Mode", "Device Routing",
+                      "SteamVR Device Comms", "bHaptics", "OSC Inspector",
+                      "System Log", "Settings", "Help"]
         builders = {
             "Dashboard": self._build_dashboard_view,
+            "Simple Mode": self._build_simple_mode_view,
             "Device Routing": self._build_device_routing_view,
             "SteamVR Device Comms": self._build_steamvr_view,
             "bHaptics": self._build_bhaptics_view,
@@ -869,7 +1033,15 @@ class OscGoesPurrrUI:
             self.main_stack.addWidget(page)
 
         self.window.setCentralWidget(root)
-        self.select_view("Dashboard")
+
+        # Simple Mode hides the advanced nav buttons. On boot, follow the
+        # persisted setting — first-time users that enabled Simple Mode see
+        # the stripped-down sidebar with Simple Mode pre-selected.
+        self._apply_simple_mode_visibility()
+        if bool(getattr(self.controller, "get_simple_mode", lambda: False)()):
+            self.select_view("Simple Mode")
+        else:
+            self.select_view("Dashboard")
 
     # ----------------------------------------------------------
     # Sidebar
@@ -888,8 +1060,9 @@ class OscGoesPurrrUI:
         lay.addWidget(title)
         lay.addSpacing(20)
 
-        nav_buttons = ["Dashboard", "Device Routing", "SteamVR Device Comms",
-                       "bHaptics", "OSC Inspector", "System Log", "Settings", "Help"]
+        nav_buttons = ["Dashboard", "Simple Mode", "Device Routing",
+                       "SteamVR Device Comms", "bHaptics", "OSC Inspector",
+                       "System Log", "Settings", "Help"]
         for name in nav_buttons:
             btn = QPushButton(name)
             btn.setProperty("role", "nav")
@@ -1605,6 +1778,261 @@ class OscGoesPurrrUI:
         entry.setFocus()
 
     # ----------------------------------------------------------
+    # Simple Mode view
+    # ----------------------------------------------------------
+
+    def _build_simple_mode_view(self, parent_layout: QVBoxLayout):
+        title = QLabel("Simple Mode")
+        title.setObjectName("viewTitle")
+        title.setAlignment(Qt.AlignHCenter)
+        parent_layout.addWidget(title)
+
+        # ===== Toggle card =====
+        toggle_card = _Card()
+        tlay = _vbox(14, 8)
+        toggle_card.setLayout(tlay)
+
+        self.simple_mode_toggle = ToggleSwitch("Enable Simple Mode")
+        f = self.simple_mode_toggle.font(); f.setBold(True); f.setPointSize(13)
+        self.simple_mode_toggle.setFont(f)
+        self.simple_mode_toggle.setChecked(bool(self.controller.get_simple_mode()))
+        self.simple_mode_toggle.toggled.connect(self._on_simple_mode_toggled)
+        tlay.addWidget(self.simple_mode_toggle)
+
+        tlay.addWidget(self._muted_label(
+            "Routes every detected SPS source to every connected toy with no "
+            "per-toy configuration. Profiles are ignored while this is on."
+        ))
+
+        self.simple_mode_status_label = QLabel("")
+        self.simple_mode_status_label.setProperty("muted", "true")
+        tlay.addWidget(self.simple_mode_status_label)
+
+        hint = QLabel(
+            "Tip: you can always come back to Simple Mode from Settings."
+        )
+        hint.setProperty("muted", "true")
+        hint.setWordWrap(True)
+        tlay.addWidget(hint)
+
+        parent_layout.addWidget(toggle_card)
+
+        # ===== Sources card =====
+        src_card = _Card()
+        slay = _vbox(14, 6)
+        src_card.setLayout(slay)
+
+        src_header = QLabel("SPS Sources")
+        f = src_header.font(); f.setBold(True); f.setPointSize(12)
+        src_header.setFont(f)
+        slay.addWidget(src_header)
+        slay.addWidget(self._muted_label("Detected from the active VRChat avatar."))
+
+        sources_host = QWidget()
+        self.simple_mode_sources_layout = _vbox(0, 3)
+        sources_host.setLayout(self.simple_mode_sources_layout)
+        slay.addWidget(sources_host)
+
+        parent_layout.addWidget(src_card)
+
+        # ===== Toys card =====
+        toys_card = _Card()
+        toylay = _vbox(14, 6)
+        toys_card.setLayout(toylay)
+
+        toys_header = QLabel("Connected Toys")
+        f = toys_header.font(); f.setBold(True); f.setPointSize(12)
+        toys_header.setFont(f)
+        toylay.addWidget(toys_header)
+        toylay.addWidget(self._muted_label("Battery and test pulse for every toy in range."))
+
+        toys_host = QWidget()
+        self.simple_mode_toys_layout = _vbox(0, 4)
+        toys_host.setLayout(self.simple_mode_toys_layout)
+        toylay.addWidget(toys_host)
+
+        parent_layout.addWidget(toys_card)
+        parent_layout.addStretch(1)
+
+        # Initial paint.
+        self.refresh_simple_mode_view(force=True)
+
+    def _on_simple_mode_toggled(self, checked: bool):
+        if hasattr(self.controller, "set_simple_mode"):
+            self.controller.set_simple_mode(bool(checked))
+        # Keep the two mirror checkboxes (Simple Mode panel + Settings) in
+        # sync without re-firing the handler.
+        for cb in (self.simple_mode_toggle, self.simple_mode_settings_toggle):
+            if cb is not None and cb.isChecked() != bool(checked):
+                cb.blockSignals(True)
+                cb.setChecked(bool(checked))
+                cb.blockSignals(False)
+        self._apply_simple_mode_visibility()
+        # Jump to a view that's actually visible in the new sidebar — the
+        # Simple Mode entry disappears when the user turns it off, so we
+        # land them on Dashboard rather than an orphaned page.
+        if bool(checked):
+            self.select_view("Simple Mode")
+        else:
+            self.select_view("Dashboard")
+        self.refresh_simple_mode_view(force=True)
+
+    # When Simple Mode is on, hide every advanced nav button — only
+    # Simple Mode, Settings and Help remain. This is the "Just Works"
+    # onboarding mode where the user shouldn't be surprised by SteamVR,
+    # bHaptics, the OSC inspector, etc. before they've connected a toy.
+    _SIMPLE_MODE_HIDDEN_VIEWS = (
+        "Dashboard", "Device Routing", "SteamVR Device Comms",
+        "bHaptics", "OSC Inspector", "System Log",
+    )
+
+    def _apply_simple_mode_visibility(self):
+        on = bool(getattr(self.controller, "get_simple_mode", lambda: False)())
+        for name, btn in self.nav_buttons.items():
+            if name == "Simple Mode":
+                # Only present in the sidebar while Simple Mode is on.
+                # When off, the user re-enables it from Settings.
+                btn.setVisible(on)
+            elif name in self._SIMPLE_MODE_HIDDEN_VIEWS:
+                btn.setVisible(not on)
+            else:
+                btn.setVisible(True)
+
+    def _make_battery_label(self, level: Optional[float]) -> QLabel:
+        lbl = QLabel("")
+        lbl.setMinimumWidth(60)
+        self._apply_battery_text(lbl, level)
+        return lbl
+
+    def _apply_battery_text(self, lbl: QLabel, level: Optional[float]):
+        if level is None:
+            lbl.setText("🔋 --")
+            lbl.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+            return
+        try:
+            pct = int(float(level) * 100)
+        except (TypeError, ValueError):
+            lbl.setText("🔋 --")
+            lbl.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+            return
+        if pct > 50:
+            color = COLOR_SUCCESS
+        elif pct > 20:
+            color = COLOR_ALERT
+        else:
+            color = "#FF4444"
+        lbl.setText(f"🔋 {pct}%")
+        lbl.setStyleSheet(f"color: {color};")
+
+    def refresh_simple_mode_view(self, force: bool = False):
+        """Rebuild source + toy lists when the underlying data has changed.
+        Called from the periodic UI tick and after key controller events."""
+        if self.simple_mode_sources_layout is None or self.simple_mode_toys_layout is None:
+            return
+        ctl = self.controller
+
+        # Keep both mirror toggles in sync with the persisted flag.
+        desired = bool(getattr(ctl, "get_simple_mode", lambda: False)())
+        for cb in (self.simple_mode_toggle, self.simple_mode_settings_toggle):
+            if cb is not None and cb.isChecked() != desired:
+                cb.blockSignals(True)
+                cb.setChecked(desired)
+                cb.blockSignals(False)
+
+        # ---- Status line ----
+        if self.simple_mode_status_label is not None:
+            if ctl.get_simple_mode():
+                self.simple_mode_status_label.setText(
+                    "Simple Mode is ON — Device Routing profiles are bypassed."
+                )
+                self.simple_mode_status_label.setStyleSheet(f"color: {COLOR_SUCCESS};")
+            else:
+                self.simple_mode_status_label.setText(
+                    "Simple Mode is OFF — normal per-profile routing is active."
+                )
+                self.simple_mode_status_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+
+        # ---- Sources ----
+        sources = ctl.get_simple_mode_sources() if hasattr(ctl, "get_simple_mode_sources") else {}
+        orifices = tuple(sources.get("Orifices", []))
+        penetrators = tuple(sources.get("Penetrators", []))
+        sources_key = (orifices, penetrators)
+        if force or sources_key != self._simple_mode_last_sources:
+            self._simple_mode_last_sources = sources_key
+            _clear_layout(self.simple_mode_sources_layout)
+            if not orifices and not penetrators:
+                lbl = QLabel("No SPS sources detected. Load an avatar with OGB zones.")
+                lbl.setProperty("muted", "true")
+                self._repolish(lbl)
+                self.simple_mode_sources_layout.addWidget(lbl)
+            else:
+                if orifices:
+                    h = QLabel("Orifices")
+                    fh = h.font(); fh.setBold(True); h.setFont(fh)
+                    self.simple_mode_sources_layout.addWidget(h)
+                    for name in orifices:
+                        self.simple_mode_sources_layout.addWidget(QLabel(f"  • {name}"))
+                if penetrators:
+                    h = QLabel("Penetrators")
+                    fh = h.font(); fh.setBold(True); h.setFont(fh)
+                    self.simple_mode_sources_layout.addWidget(h)
+                    for name in penetrators:
+                        self.simple_mode_sources_layout.addWidget(QLabel(f"  • {name}"))
+
+        # ---- Toys ----
+        toys = ctl.get_simple_mode_toys() if hasattr(ctl, "get_simple_mode_toys") else []
+        toys_key = tuple((t["name"], t.get("motor_count", 0), t.get("connected", False)) for t in toys)
+        if force or toys_key != self._simple_mode_last_toys:
+            self._simple_mode_last_toys = toys_key
+            _clear_layout(self.simple_mode_toys_layout)
+            self.simple_mode_battery_labels.clear()
+            if not toys:
+                lbl = QLabel("No connected toys. Open Intiface and connect a device.")
+                lbl.setProperty("muted", "true")
+                self._repolish(lbl)
+                self.simple_mode_toys_layout.addWidget(lbl)
+            else:
+                for toy in toys:
+                    row = QFrame()
+                    row.setObjectName("chip")
+                    row_lay = _hbox(8, 8)
+                    row.setLayout(row_lay)
+
+                    name_lbl = QLabel(f"✓ {toy['name']}")
+                    name_lbl.setProperty("role", "success")
+                    self._repolish(name_lbl)
+                    row_lay.addWidget(name_lbl, 1)
+
+                    batt = self._make_battery_label(toy.get("battery"))
+                    row_lay.addWidget(batt)
+                    self.simple_mode_battery_labels[toy["name"]] = batt
+
+                    test_btn = QPushButton("Test")
+                    test_btn.setFixedHeight(BTN_HEIGHT_SMALL)
+                    test_btn.setProperty("role", "secondary")
+                    test_btn.clicked.connect(
+                        lambda _=False, n=toy["name"]: self.controller.test_toy(n)
+                    )
+                    row_lay.addWidget(test_btn)
+
+                    self.simple_mode_toys_layout.addWidget(row)
+        else:
+            # Refresh battery text on existing labels even if the toy list itself
+            # is unchanged — battery_update messages may have moved values.
+            for toy in toys:
+                lbl = self.simple_mode_battery_labels.get(toy["name"])
+                if lbl is not None:
+                    self._apply_battery_text(lbl, toy.get("battery"))
+
+    def update_simple_mode_battery(self, device_name: str, level: float):
+        """Live battery push from the controller. No-op if the label hasn't
+        been built yet (the next refresh tick will pick up the value from
+        the controller's cache)."""
+        lbl = self.simple_mode_battery_labels.get(device_name)
+        if lbl is not None:
+            self._apply_battery_text(lbl, level)
+
+    # ----------------------------------------------------------
     # Device Routing view
     # ----------------------------------------------------------
 
@@ -1752,6 +2180,27 @@ class OscGoesPurrrUI:
         title.setAlignment(Qt.AlignHCenter)
         parent_layout.addWidget(title)
 
+        # ---- Simple Mode Card ----
+        # Settings is the always-visible escape hatch back to Simple Mode
+        # when the user has turned it off and wants the stripped UI again.
+        sm_card = _Card()
+        sm_lay = _vbox(20, 6)
+        sm_card.setLayout(sm_lay)
+        hdr = QLabel("Simple Mode")
+        hdr.setObjectName("cardHeader")
+        sm_lay.addWidget(hdr)
+        sm_lay.addWidget(self._muted_label(
+            "Hides the advanced sidebar and routes every detected SPS source "
+            "to every connected toy with no per-toy configuration."
+        ))
+        self.simple_mode_settings_toggle = ToggleSwitch("Enable Simple Mode")
+        self.simple_mode_settings_toggle.setChecked(
+            bool(getattr(self.controller, "get_simple_mode", lambda: False)())
+        )
+        self.simple_mode_settings_toggle.toggled.connect(self._on_simple_mode_toggled)
+        sm_lay.addWidget(self.simple_mode_settings_toggle)
+        parent_layout.addWidget(sm_card)
+
         # ---- Network Bind Card ----
         net_card = _Card()
         net_lay = _vbox(20, 6)
@@ -1770,7 +2219,7 @@ class OscGoesPurrrUI:
         switch_lay = _hbox(0, 10)
         switch_row.setLayout(switch_lay)
         switch_lay.addWidget(self._bold_label("127.0.0.1 (Strict)"))
-        self.network_bind_switch = QCheckBox()
+        self.network_bind_switch = ToggleSwitch()
         self.network_bind_switch.setProperty("role", "switch")
         self.network_bind_switch.setChecked(bind_val)
         self.network_bind_switch.toggled.connect(
@@ -1796,7 +2245,7 @@ class OscGoesPurrrUI:
         hdr.setObjectName("cardHeader")
         conn_lay.addWidget(hdr)
 
-        self.auto_refresh_var = QCheckBox("Auto Refresh Devices")
+        self.auto_refresh_var = ToggleSwitch("Auto Refresh Devices")
         self.auto_refresh_var.setChecked(
             bool(self.controller.get_app_setting("auto_refresh", True))
         )
@@ -1805,7 +2254,7 @@ class OscGoesPurrrUI:
         )
         conn_lay.addWidget(self.auto_refresh_var)
 
-        self.auto_connect_var = QCheckBox("Auto Connect (Intiface)")
+        self.auto_connect_var = ToggleSwitch("Auto Connect (Intiface)")
         self.auto_connect_var.setChecked(
             bool(self.controller.get_app_setting("auto_connect", True))
         )
@@ -1814,7 +2263,7 @@ class OscGoesPurrrUI:
         )
         conn_lay.addWidget(self.auto_connect_var)
 
-        self.osc_auto_connect_var = QCheckBox("Auto Connect (VRChat OSC)")
+        self.osc_auto_connect_var = ToggleSwitch("Auto Connect (VRChat OSC)")
         self.osc_auto_connect_var.setChecked(
             bool(self.controller.get_app_setting("auto_connect_osc", True))
         )
@@ -1834,7 +2283,7 @@ class OscGoesPurrrUI:
         hdr.setObjectName("cardHeader")
         ql_lay.addWidget(hdr)
 
-        hide_console = QCheckBox("Hide Terminal Console")
+        hide_console = ToggleSwitch("Hide Terminal Console")
         hide_console.setProperty("role", "switch")
         hide_console.setChecked(
             bool(self.controller.get_app_setting("hide_console", True))
@@ -1847,7 +2296,7 @@ class OscGoesPurrrUI:
         hide_console.toggled.connect(on_hide_console)
         ql_lay.addWidget(hide_console)
 
-        tray = QCheckBox("Minimize to System Tray")
+        tray = ToggleSwitch("Minimize to System Tray")
         tray.setProperty("role", "switch")
         tray.setChecked(
             bool(self.controller.get_app_setting("minimize_to_tray", False))
@@ -1873,7 +2322,7 @@ class OscGoesPurrrUI:
         ))
 
         # Auto Connect — battery broadcaster also (re)scans SteamVR each tick.
-        self.steamvr_auto_connect_check_settings = QCheckBox("Auto Connect (SteamVR)")
+        self.steamvr_auto_connect_check_settings = ToggleSwitch("Auto Connect (SteamVR)")
         try:
             _status = self.controller.get_steamvr_status()
             initial_auto = bool(_status.get("auto_connect"))
@@ -1886,7 +2335,7 @@ class OscGoesPurrrUI:
         svr_lay.addWidget(self.steamvr_auto_connect_check_settings)
 
         # Start with SteamVR — registers the OpenVR app manifest.
-        self.steamvr_autostart_check_settings = QCheckBox("Start with SteamVR")
+        self.steamvr_autostart_check_settings = ToggleSwitch("Start with SteamVR")
         self.steamvr_autostart_check_settings.setChecked(initial_autostart)
         self.steamvr_autostart_check_settings.toggled.connect(self._on_steamvr_autostart_toggled)
         svr_lay.addWidget(self.steamvr_autostart_check_settings)
@@ -2182,7 +2631,7 @@ class OscGoesPurrrUI:
             header.addWidget(pulse_btn)
         lay.addLayout(header)
 
-        enabled = QCheckBox("Enabled")
+        enabled = ToggleSwitch("Enabled")
         enabled.setChecked(bool(cfg.get("enabled", True)))
         lay.addWidget(enabled)
 
@@ -2287,7 +2736,7 @@ class OscGoesPurrrUI:
         slay.addWidget(self.bhaptics_status_label)
 
         action_row = _hbox(0, 8)
-        self.bhaptics_auto_connect_check = QCheckBox("Auto Connect (bHaptics)")
+        self.bhaptics_auto_connect_check = ToggleSwitch("Auto Connect (bHaptics)")
         self.bhaptics_auto_connect_check.toggled.connect(self._on_bhaptics_auto_connect_toggled)
         action_row.addWidget(self.bhaptics_auto_connect_check)
 
@@ -2325,7 +2774,7 @@ class OscGoesPurrrUI:
             "over the ramp time. Catches contacts that latch on and never release."
         ))
         as_row = _hbox(0, 8)
-        self.bhaptics_antistuck_check = QCheckBox("Enabled")
+        self.bhaptics_antistuck_check = ToggleSwitch("Enabled")
         self.bhaptics_antistuck_check.toggled.connect(self._on_bhaptics_antistuck_changed)
         as_row.addWidget(self.bhaptics_antistuck_check)
 
@@ -2530,7 +2979,7 @@ class OscGoesPurrrUI:
         header.addStretch(1)
         lay.addLayout(header)
 
-        enabled = QCheckBox("Enabled")
+        enabled = ToggleSwitch("Enabled")
         enabled.setChecked(bool(cfg.get("enabled", True)))
         lay.addWidget(enabled)
 
@@ -2551,6 +3000,11 @@ class OscGoesPurrrUI:
         grid = _BHapticsDotGrid(node_count=nodes, cols=int(cols), rows=int(rows))
         self._bhaptics_grids[position] = grid
         lay.addWidget(grid)
+
+        # Debug: click-and-hold a dot to fire it at 100%. Routed through the
+        # controller so the router can max-merge it with the live OSC output.
+        grid.dotPressed.connect(lambda idx, pos=position: self.controller.set_bhaptics_manual_dot(pos, idx, 100))
+        grid.dotReleased.connect(lambda idx, pos=position: self.controller.set_bhaptics_manual_dot(pos, idx, None))
 
         def push(_=None):
             if self._is_updating_bhaptics:
@@ -2961,7 +3415,7 @@ Both consume the same data, so they stay in lockstep.
                 # All SPS is an additive override — toggling it on/off never
                 # touches the individual zone selections, so the user can
                 # temporarily switch to match-any and return to their saved set.
-                all_sps_cb = QCheckBox("All SPS (match any zone — overrides selections below)")
+                all_sps_cb = ToggleSwitch("All SPS (match any zone — overrides selections below)")
                 all_sps_cb.setChecked("All SPS" in current_selected)
 
                 def on_all_sps(checked):
@@ -2995,7 +3449,7 @@ Both consume the same data, so they stay in lockstep.
                 for zone in fresh_zones:
                     if zone == "None":
                         continue
-                    cb = QCheckBox(zone)
+                    cb = ToggleSwitch(zone)
                     cb.setChecked(zone in current_selected)
                     cb.toggled.connect(make_toggle(zone))
                     panel_lay.addWidget(cb)
@@ -3019,7 +3473,7 @@ Both consume the same data, so they stay in lockstep.
             filter_row.setLayout(filter_lay)
 
             def make_filter_cb(label, key, default):
-                cb = QCheckBox(label)
+                cb = ToggleSwitch(label)
                 cb.setChecked(
                     bool(self.controller.get_profile_config(device_name, key, default))
                 )
@@ -3280,7 +3734,7 @@ Both consume the same data, so they stay in lockstep.
         search.setPlaceholderText("Search avatar parameters...")
         lay.addWidget(search)
 
-        show_all = QCheckBox("Include non-avatar parameters (OGB/SPS, system, etc.)")
+        show_all = ToggleSwitch("Include non-avatar parameters (OGB/SPS, system, etc.)")
         lay.addWidget(show_all)
 
         tree = QTreeWidget()

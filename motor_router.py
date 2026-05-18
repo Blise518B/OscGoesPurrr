@@ -350,6 +350,51 @@ class MotorRouter:
                     best = contribution
         return best
 
+    def compute_simple_mode_value(self, all_params: Dict[str, Any]) -> float:
+        """Simple-mode max: return the strongest contribution across every
+        detected SPS zone, ignoring per-toy profile config. Touch + pen from
+        others are allowed; self-contact is excluded so the user doesn't get
+        unexpected output from their own contacts firing the gates."""
+        self._update_length_detectors(all_params)
+        # Synthetic config: allow everything except self, mirroring the
+        # default new-toy profile.
+        cfg = {
+            "motor_0_touch": True,
+            "motor_0_pen": True,
+            "motor_0_self": False,
+            "motor_0_others": True,
+        }
+        best = 0.0
+        for zone_type, zone_name in self._scan_zones(all_params):
+            contribution = self._zone_contribution(zone_type, zone_name, cfg, 0, all_params)
+            if contribution > best:
+                best = contribution
+        return best
+
+    def reevaluate_simple_mode(
+        self,
+        device_motor_counts: Dict[str, int],
+        all_params: Dict[str, Any],
+    ) -> List[Tuple[str, float, int]]:
+        """Simple-mode routing: push the same global SPS max value to every
+        connected device's every motor. Returns only entries whose target
+        value changed (same debounce semantics as `reevaluate_state`)."""
+        value = self.compute_simple_mode_value(all_params)
+        updates: List[Tuple[str, float, int]] = []
+        for device_name, motor_count in device_motor_counts.items():
+            for motor_idx in range(motor_count):
+                state_key = (device_name, motor_idx)
+                if self.last_outputs.get(state_key) != value:
+                    self.last_outputs[state_key] = value
+                    updates.append((device_name, value, motor_idx))
+        return updates
+
+    def reset_outputs(self) -> None:
+        """Forget last-output debounce state so the next recalc treats every
+        motor as changed. Used when switching routing modes so motors don't
+        get stuck at the previous mode's last value."""
+        self.last_outputs.clear()
+
     def reevaluate_state(
         self,
         active_profile: Dict[str, Any],

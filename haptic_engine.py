@@ -444,6 +444,27 @@ class HapticEngine:
         except Exception as e:
             self.push_ui_update(f"Vibration error: {e}")
 
+    async def _async_test_device(self, device_name: str, intensity: float = 0.4,
+                                 duration_s: float = 1.0):
+        """Pulse a single device's vibrate motors at `intensity` for `duration_s`,
+        then drop back to 0. Linear motors are intentionally skipped (same
+        rationale as Purr-Check)."""
+        if not self.buttplug_client or not self.is_connected:
+            return
+        try:
+            target = None
+            for device in self.buttplug_client.devices.values():
+                if device.name == device_name:
+                    target = device
+                    break
+            if target is None or not target.has_output(OutputType.VIBRATE):
+                return
+            await target.run_output(DeviceOutputCommand(OutputType.VIBRATE, intensity))
+            await asyncio.sleep(duration_s)
+            await target.run_output(DeviceOutputCommand(OutputType.VIBRATE, 0.0))
+        except Exception as e:
+            self.push_ui_update(f"Test toy error ({device_name}): {e}")
+
     async def _async_purr_check(self):
         """Test all devices by setting them to 0.1, waiting 1 second, then 0.
 

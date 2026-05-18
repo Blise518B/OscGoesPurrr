@@ -78,6 +78,12 @@ class OscGoesPurrrApp:
         
         # Dirty flag to debounce rapid OSC bundles
         self._needs_recalculation = False
+
+        # Cache of latest battery level per device (0..1). Populated from
+        # battery_update queue messages; surfaced via get_simple_mode_toys()
+        # so the Simple Mode panel can show a live battery icon next to each
+        # connected toy.
+        self._battery_cache: Dict[str, float] = {}
         
         # Initialize components in correct order
         self._setup_components()
@@ -218,7 +224,15 @@ class OscGoesPurrrApp:
                         # connected immediately.
                         self.ui.update_stored_devices_ui()
                     elif msg_type == "battery_update":
+                        try:
+                            self._battery_cache[data["device_name"]] = float(data["level"])
+                        except (TypeError, ValueError):
+                            pass
                         self.ui.update_battery_label(data["device_name"], data["level"])
+                        # Push the same value into the Simple Mode panel if it
+                        # exposes a hook for live battery refresh.
+                        if hasattr(self.ui, "update_simple_mode_battery"):
+                            self.ui.update_simple_mode_battery(data["device_name"], data["level"])
                     elif msg_type == "device_removed":
                         device_name = data
                         self.log_message(f"Toy disconnected: {device_name}")
@@ -421,14 +435,20 @@ class OscGoesPurrrApp:
 
         Reads from whichever profile the manager considers *active* — an avatar
         profile when the current VRChat avatar has one bound, otherwise the
-        selected global profile.
+        selected global profile. In Simple Mode, profile config is bypassed
+        and every connected motor gets the same global SPS max value.
         """
         if not (hasattr(self, 'motor_router') and hasattr(self, 'osc_manager')):
             return
-        active = self.profile_manager.get_active_profile_dict()
-        if active is None:
-            return
-        updates = self.motor_router.reevaluate_state(active, store.get_all_parameters())
+        params = store.get_all_parameters()
+        if self.get_app_setting("simple_mode", False):
+            motor_counts = self.get_device_motor_counts()
+            updates = self.motor_router.reevaluate_simple_mode(motor_counts, params)
+        else:
+            active = self.profile_manager.get_active_profile_dict()
+            if active is None:
+                return
+            updates = self.motor_router.reevaluate_state(active, params)
         for device_name, target_val, motor_idx in updates:
             self.thread_queue.put(("osc_haptic_update", (device_name, target_val, motor_idx)))
 
@@ -496,6 +516,12 @@ class OscGoesPurrrApp:
 
             # Push to the UI as a list of (text, color) tuples
             self.ui.update_debugger_display(debug_data)
+
+        # Refresh the Simple Mode panel on the same cadence so newly connected
+        # toys, fresh battery readings and zone changes appear without waiting
+        # for a hard rebuild.
+        if hasattr(self.ui, "refresh_simple_mode_view"):
+            self.ui.refresh_simple_mode_view()
 
         # Schedule the next refresh (Throttled to save UI thread)
         self.ui.schedule_callback(UI_REFRESH_RATE_MS, self.refresh_debugger_ui)
@@ -585,6 +611,88 @@ class OscGoesPurrrApp:
                 future.result(timeout=3)
             except Exception as e:
                 self.log_message(f"Purr-Check failed: {e}")
+
+    def test_toy(self, device_name: str):
+        """Pulse a single toy for ~1 second. Used by the Simple Mode panel's
+        per-toy test button. Fire-and-forget so the UI never blocks."""
+        if not (self.async_loop and self.haptic_engine and self.haptic_engine.is_connected):
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self.haptic_engine._async_test_device(device_name),
+                self.async_loop,
+            )
+            self.log_message(f"Testing toy: {device_name}")
+        except Exception as e:
+            self.log_message(f"Test toy failed ({device_name}): {e}")
+
+    # ==================================================================
+    # Simple Mode Facade
+    # When enabled, every detected SPS source drives every connected toy
+    # with no per-toy profile config. Toggle, source list and toy list are
+    # surfaced through these methods so the UI never reaches into backend
+    # state directly.
+    # ==================================================================
+
+    def get_simple_mode(self) -> bool:
+        return bool(self.get_app_setting("simple_mode", False))
+
+    def set_simple_mode(self, enabled: bool):
+        enabled = bool(enabled)
+        if self.get_simple_mode() == enabled:
+            return
+        self.set_app_setting("simple_mode", enabled)
+        # Clear router debounce so the new mode's first tick actually emits
+        # values instead of being silently filtered as "unchanged".
+        if hasattr(self, "motor_router"):
+            self.motor_router.reset_outputs()
+        # When turning OFF, also send zeros to every motor so they don't
+        # hang at the last simple-mode value.
+        if not enabled and self.haptic_engine and self.haptic_engine.is_connected:
+            for device_name, motor_count in self.get_device_motor_counts().items():
+                for motor_idx in range(motor_count):
+                    self.thread_queue.put(("osc_haptic_update", (device_name, 0.0, motor_idx)))
+        self.log_message(f"Simple Mode {'enabled' if enabled else 'disabled'}")
+        # Rebuild device cards: the Device Routing view is now mostly
+        # decorative while Simple Mode is on, but no clear-out is needed.
+        self.force_recalculate()
+
+    def get_simple_mode_sources(self) -> Dict[str, List[str]]:
+        """Live snapshot of detected SPS zones — {'Orifices': [...],
+        'Penetrators': [...]}. Returns empty lists when no avatar is loaded."""
+        params = store.get_all_parameters()
+        orifices: set = set()
+        penetrators: set = set()
+        for path in params.keys():
+            parts = path.split("/")
+            if len(parts) >= 3 and parts[0] == "OGB":
+                category = parts[1]
+                zone_name = parts[2]
+                if category in ("Orifice", "Orf"):
+                    orifices.add(zone_name)
+                elif category in ("Penetrator", "Pen"):
+                    penetrators.add(zone_name)
+        return {
+            "Orifices": sorted(orifices),
+            "Penetrators": sorted(penetrators),
+        }
+
+    def get_simple_mode_toys(self) -> List[Dict[str, Any]]:
+        """Snapshot of connected toys for the Simple Mode panel.
+        Each entry: {'name': str, 'motor_count': int, 'connected': bool}."""
+        out: List[Dict[str, Any]] = []
+        if not self.haptic_engine:
+            return out
+        motor_counts = self.haptic_engine.get_motor_count_map()
+        for name in self.haptic_engine.list_connected_device_names():
+            out.append({
+                "name": name,
+                "motor_count": int(motor_counts.get(name, 1)),
+                "connected": True,
+                "battery": self._battery_cache.get(name),
+            })
+        out.sort(key=lambda d: d["name"].lower())
+        return out
     
     def toggle_network_bind(self, value: bool):
         """Handle network bind toggle from Settings UI."""
@@ -1360,6 +1468,11 @@ class OscGoesPurrrApp:
 
     def set_bhaptics_device(self, position: str, cfg: Dict[str, Any]) -> None:
         self._bhaptics_settings().set_device(position, cfg)
+
+    def set_bhaptics_manual_dot(self, position: str, index: int, intensity) -> None:
+        """Debug-only: drive a single bHaptics dot at fixed intensity (or
+        None to release). Used by the UI's click-to-test grid."""
+        self.bhaptics_router.set_manual_override(position, index, intensity)
 
     def bhaptics_connect_now(self) -> bool:
         return self.bhaptics_engine.manual_connect()

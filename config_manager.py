@@ -36,7 +36,10 @@ DEFAULT_APP_SETTINGS = {
     "auto_connect_osc": True,
     "bind_all_interfaces": True,
     "hide_console": True,
-    "minimize_to_tray": False
+    "minimize_to_tray": False,
+    # Default ON so the first launch lands on the stripped Simple Mode panel.
+    # The user can disable it from the Simple Mode panel or Settings.
+    "simple_mode": True
 }
 
 # Ensure AppData directory exists
