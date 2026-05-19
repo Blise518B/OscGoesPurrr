@@ -22,36 +22,38 @@ from PySide6.QtWidgets import (
     QFrame, QScrollArea, QTextEdit, QPlainTextEdit, QSizePolicy, QSpacerItem,
     QDialog, QMessageBox, QTreeWidget, QTreeWidgetItem, QHeaderView,
     QButtonGroup, QStackedWidget, QTableWidget, QTableWidgetItem,
-    QAbstractItemView, QComboBox, QSpinBox, QDoubleSpinBox,
+    QAbstractItemView, QComboBox, QSpinBox, QDoubleSpinBox, QToolButton,
 )
+from ui import lovense_icons as _lovense_icons
 
 from constants import *
 from parameter_store import store
 
-
-# ============================================================
-# Helpers
-# ============================================================
-
-_TK_GEOM_RE = re.compile(r"^\s*(\d+)x(\d+)(?:\+(-?\d+)\+(-?\d+))?\s*$")
-
-
-def _parse_tk_geometry(geom: str):
-    """Parse a Tkinter-style geometry string into (w, h, x, y).
-    Returns None on failure. x/y may be None when not present."""
-    if not geom:
-        return None
-    m = _TK_GEOM_RE.match(geom)
-    if not m:
-        return None
-    w, h = int(m.group(1)), int(m.group(2))
-    x = int(m.group(3)) if m.group(3) is not None else None
-    y = int(m.group(4)) if m.group(4) is not None else None
-    return (w, h, x, y)
-
-
-def _format_tk_geometry(w: int, h: int, x: int, y: int) -> str:
-    return f"{w}x{h}+{x}+{y}"
+# Helper widgets, icons, layout utilities, text/geometry helpers extracted
+# into the `ui` package. Aliased here to keep the old private names the
+# rest of this file references (`_vbox`, `_icon_*`, `_BHapticsDotGrid`, etc.).
+from ui.geometry import parse_tk_geometry as _parse_tk_geometry
+from ui.geometry import format_tk_geometry as _format_tk_geometry
+from ui.layout_helpers import vbox as _vbox, hbox as _hbox, clear_layout as _clear_layout
+from ui.text_helpers import truncate as _truncate, html_escape as _html_escape
+from ui.icons import (
+    new_icon_pixmap as _new_icon_pixmap,
+    icon_pencil as _icon_pencil,
+    icon_copy as _icon_copy,
+    icon_paste as _icon_paste,
+    icon_trash as _icon_trash,
+    icon_check as _icon_check,
+    icon_cross as _icon_cross,
+)
+from ui.widgets import (
+    ToggleSwitch,
+    Invoker as _Invoker,
+    MainWindow as _MainWindow,
+    Card as _Card,
+    BHapticsDotGrid as _BHapticsDotGrid,
+    SliderProxy as _SliderProxy,
+    ProgressProxy as _ProgressProxy,
+)
 
 
 # ============================================================
@@ -408,475 +410,10 @@ QTableWidget::item {{
 """
 
 
-# ============================================================
-# ToggleSwitch — QCheckBox rendered as a sliding on/off switch
-# ============================================================
-
-class ToggleSwitch(QCheckBox):
-    """Drop-in QCheckBox replacement painted as a sliding toggle.
-
-    Off: knob on the left, red track. On: knob on the right, green track.
-    All QCheckBox APIs (isChecked, setChecked, toggled, stateChanged, …)
-    work unchanged — only the visual is replaced.
-    """
-
-    _TRACK_W = 40
-    _TRACK_H = 20
-    _KNOB_MARGIN = 2
-    _LABEL_SPACING = 8
-
-    _COLOR_OFF = QColor("#C0392B")
-    _COLOR_ON = QColor(COLOR_SUCCESS)
-    _COLOR_KNOB = QColor("#FFFFFF")
-    _COLOR_DISABLED_KNOB = QColor("#CCCCCC")
-
-    def __init__(self, text: str = "", parent=None):
-        super().__init__(text, parent)
-        self.setCursor(Qt.PointingHandCursor)
-
-    def sizeHint(self) -> QSize:
-        fm = self.fontMetrics()
-        text = self.text()
-        text_w = fm.horizontalAdvance(text) if text else 0
-        text_h = fm.height()
-        w = self._TRACK_W + (self._LABEL_SPACING + text_w if text else 0)
-        h = max(self._TRACK_H, text_h) + 2
-        return QSize(w, h)
-
-    def minimumSizeHint(self) -> QSize:
-        return self.sizeHint()
-
-    def hitButton(self, pos) -> bool:
-        return self.rect().contains(pos)
-
-    def paintEvent(self, event):  # noqa: N802 (Qt API)
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing, True)
-
-        checked = self.isChecked()
-        enabled = self.isEnabled()
-
-        track_y = (self.height() - self._TRACK_H) / 2
-        track_rect = QRectF(0.0, float(track_y),
-                            float(self._TRACK_W), float(self._TRACK_H))
-
-        bg = QColor(self._COLOR_ON if checked else self._COLOR_OFF)
-        if not enabled:
-            bg.setAlpha(110)
-
-        p.setPen(Qt.NoPen)
-        p.setBrush(QBrush(bg))
-        p.drawRoundedRect(track_rect, self._TRACK_H / 2.0, self._TRACK_H / 2.0)
-
-        knob_d = self._TRACK_H - 2 * self._KNOB_MARGIN
-        if checked:
-            knob_x = track_rect.right() - self._KNOB_MARGIN - knob_d
-        else:
-            knob_x = track_rect.left() + self._KNOB_MARGIN
-        knob_y = track_rect.top() + self._KNOB_MARGIN
-        knob_color = QColor(self._COLOR_KNOB if enabled else self._COLOR_DISABLED_KNOB)
-        p.setBrush(QBrush(knob_color))
-        p.drawEllipse(QRectF(float(knob_x), float(knob_y),
-                             float(knob_d), float(knob_d)))
-
-        text = self.text()
-        if text:
-            text_color = QColor(COLOR_TEXT)
-            if not enabled:
-                text_color.setAlpha(140)
-            p.setPen(text_color)
-            text_x = self._TRACK_W + self._LABEL_SPACING
-            p.drawText(
-                QRectF(float(text_x), 0.0,
-                       float(self.width() - text_x), float(self.height())),
-                int(Qt.AlignVCenter | Qt.AlignLeft),
-                text,
-            )
-        p.end()
-
-
-# ============================================================
-# Cross-thread invocation helper
-# ============================================================
-
-class _Invoker(QObject):
-    """Lives on the UI thread. Other threads can ask it to run callables
-    by emitting signals — signals are thread-safe and queued."""
-
-    _invoke = Signal(int, object)  # (delay_ms, callable)
-
-    def __init__(self):
-        super().__init__()
-        self._invoke.connect(self._on_invoke, Qt.QueuedConnection)
-
-    def schedule(self, delay_ms: int, func: Callable) -> None:
-        self._invoke.emit(int(delay_ms), func)
-
-    def _on_invoke(self, delay_ms: int, func: Callable) -> None:
-        if delay_ms <= 0:
-            func()
-        else:
-            QTimer.singleShot(delay_ms, func)
-
-
-# ============================================================
-# Main window subclass that intercepts the X button
-# ============================================================
-
-class _MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self._close_handler: Optional[Callable] = None
-        self._allow_close = False
-
-    def set_close_handler(self, cb: Callable) -> None:
-        self._close_handler = cb
-
-    def allow_close(self) -> None:
-        self._allow_close = True
-
-    def closeEvent(self, event):
-        if self._allow_close or self._close_handler is None:
-            event.accept()
-            return
-        # Hand control to the controller; it decides hide vs quit.
-        try:
-            self._close_handler()
-        except Exception:
-            event.accept()
-            return
-        event.ignore()
-
-
-# ============================================================
-# Small layout helpers
-# ============================================================
-
-def _vbox(margin=0, spacing=6) -> QVBoxLayout:
-    lay = QVBoxLayout()
-    lay.setContentsMargins(margin, margin, margin, margin)
-    lay.setSpacing(spacing)
-    return lay
-
-
-def _hbox(margin=0, spacing=6) -> QHBoxLayout:
-    lay = QHBoxLayout()
-    lay.setContentsMargins(margin, margin, margin, margin)
-    lay.setSpacing(spacing)
-    return lay
-
-
-def _clear_layout(layout):
-    """Remove and destroy every child of `layout`."""
-    if layout is None:
-        return
-    while layout.count():
-        item = layout.takeAt(0)
-        w = item.widget()
-        if w is not None:
-            w.setParent(None)
-            w.deleteLater()
-        else:
-            sub = item.layout()
-            if sub is not None:
-                _clear_layout(sub)
-                sub.deleteLater()
-
-
-# ============================================================
-# Vector icons — drawn at runtime so they read crisply at small
-# sizes and don't depend on emoji-font availability.
-# ============================================================
-
-def _new_icon_pixmap(size: int = 20) -> QPixmap:
-    pm = QPixmap(size, size)
-    pm.fill(Qt.transparent)
-    return pm
-
-
-def _icon_pencil(color: str = COLOR_TEXT, size: int = 20) -> QIcon:
-    """Edit pencil with a stronger outline."""
-    pm = _new_icon_pixmap(size)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    c = QColor(color)
-    p.setPen(QPen(c, 1.6))
-    p.setBrush(QBrush(c))
-    # Diagonal pencil body from (4,16) to (14,6) with a triangular tip at top-right.
-    body = QPolygonF([
-        QPointF(3.5, 14.5), QPointF(5.5, 16.5),
-        QPointF(14.0, 8.0), QPointF(12.0, 6.0),
-    ])
-    p.drawPolygon(body)
-    # Pencil tip
-    tip = QPolygonF([
-        QPointF(14.0, 8.0), QPointF(12.0, 6.0),
-        QPointF(16.5, 3.5),
-    ])
-    p.setBrush(QBrush(QColor("#FFD27A")))
-    p.drawPolygon(tip)
-    # Eraser end
-    p.setBrush(QBrush(QColor(color)))
-    eraser = QPolygonF([
-        QPointF(3.5, 14.5), QPointF(5.5, 16.5),
-        QPointF(3.5, 18.5), QPointF(1.5, 16.5),
-    ])
-    p.drawPolygon(eraser)
-    p.end()
-    return QIcon(pm)
-
-
-def _icon_copy(color: str = COLOR_TEXT, size: int = 20) -> QIcon:
-    """Two overlapping sheets of paper."""
-    pm = _new_icon_pixmap(size)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    c = QColor(color)
-    # Back sheet
-    p.setPen(QPen(c, 1.4))
-    p.setBrush(QBrush(QColor(COLOR_SURFACE)))
-    p.drawRoundedRect(QRectF(7.0, 3.0, 10.0, 12.0), 1.5, 1.5)
-    # Front sheet (overlapping, offset down-left)
-    p.setBrush(QBrush(QColor(COLOR_INPUT_BG)))
-    p.drawRoundedRect(QRectF(3.0, 6.5, 10.0, 12.0), 1.5, 1.5)
-    # A couple of lines on the front sheet for clarity
-    p.setPen(QPen(c, 1.0))
-    p.drawLine(QPointF(5.0, 10.0), QPointF(11.0, 10.0))
-    p.drawLine(QPointF(5.0, 13.0), QPointF(11.0, 13.0))
-    p.drawLine(QPointF(5.0, 16.0), QPointF(9.0, 16.0))
-    p.end()
-    return QIcon(pm)
-
-
-def _icon_paste(color: str = COLOR_TEXT, size: int = 20) -> QIcon:
-    """Clipboard with a down-arrow — paste-into-this-slot."""
-    pm = _new_icon_pixmap(size)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    c = QColor(color)
-    p.setPen(QPen(c, 1.4))
-    # Clipboard body
-    p.setBrush(QBrush(QColor(COLOR_SURFACE)))
-    p.drawRoundedRect(QRectF(4.0, 5.0, 12.0, 13.0), 1.5, 1.5)
-    # Clipboard clip
-    p.setBrush(QBrush(c))
-    p.drawRoundedRect(QRectF(7.0, 2.5, 6.0, 3.5), 1.0, 1.0)
-    # Down arrow indicating "paste here"
-    pen = QPen(c, 1.8)
-    pen.setCapStyle(Qt.RoundCap)
-    pen.setJoinStyle(Qt.RoundJoin)
-    p.setPen(pen)
-    p.setBrush(Qt.NoBrush)
-    p.drawLine(QPointF(10.0, 9.0), QPointF(10.0, 14.0))
-    p.drawPolyline(QPolygonF([
-        QPointF(7.5, 12.0), QPointF(10.0, 14.5), QPointF(12.5, 12.0),
-    ]))
-    p.end()
-    return QIcon(pm)
-
-
-def _icon_trash(color: str = COLOR_TEXT, size: int = 20) -> QIcon:
-    """Trapezoid-style trash can with a lid."""
-    pm = _new_icon_pixmap(size)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    c = QColor(color)
-    p.setPen(QPen(c, 1.5))
-    p.setBrush(QBrush(c))
-    # Lid
-    p.drawRoundedRect(QRectF(3.0, 4.5, 14.0, 2.0), 1.0, 1.0)
-    # Handle on top of lid
-    p.setBrush(Qt.NoBrush)
-    p.drawRoundedRect(QRectF(7.5, 2.5, 5.0, 2.0), 1.0, 1.0)
-    # Trapezoid body (wider at top, narrower at bottom)
-    body = QPolygonF([
-        QPointF(4.5, 7.0), QPointF(15.5, 7.0),
-        QPointF(14.5, 17.5), QPointF(5.5, 17.5),
-    ])
-    p.setBrush(QBrush(c))
-    p.drawPolygon(body)
-    # Vertical ribs (subtle contrast lines)
-    p.setPen(QPen(QColor(COLOR_BG), 1.0))
-    p.drawLine(QPointF(8.0, 9.0), QPointF(7.7, 16.0))
-    p.drawLine(QPointF(10.0, 9.0), QPointF(10.0, 16.0))
-    p.drawLine(QPointF(12.0, 9.0), QPointF(12.3, 16.0))
-    p.end()
-    return QIcon(pm)
-
-
-def _icon_check(color: str = COLOR_SUCCESS, size: int = 20) -> QIcon:
-    pm = _new_icon_pixmap(size)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    pen = QPen(QColor(color), 2.6)
-    pen.setCapStyle(Qt.RoundCap)
-    pen.setJoinStyle(Qt.RoundJoin)
-    p.setPen(pen)
-    p.drawPolyline(QPolygonF([
-        QPointF(3.5, 10.5), QPointF(8.5, 15.5), QPointF(16.5, 5.5),
-    ]))
-    p.end()
-    return QIcon(pm)
-
-
-def _icon_cross(color: str = COLOR_ALERT, size: int = 20) -> QIcon:
-    pm = _new_icon_pixmap(size)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    pen = QPen(QColor(color), 2.6)
-    pen.setCapStyle(Qt.RoundCap)
-    p.setPen(pen)
-    p.drawLine(QPointF(5.0, 5.0), QPointF(15.0, 15.0))
-    p.drawLine(QPointF(15.0, 5.0), QPointF(5.0, 15.0))
-    p.end()
-    return QIcon(pm)
-
-
-class _Card(QFrame):
-    """QFrame styled as a rounded card."""
-
-    def __init__(self, dark_bg: bool = False, parent=None):
-        super().__init__(parent)
-        self.setObjectName("cardDark" if dark_bg else "card")
-
-
-class _BHapticsDotGrid(QWidget):
-    """Live debug grid of dots for one bHaptics device.
-
-    Dots fill left-to-right, top-to-bottom — matching the dot-mode index
-    ordering bHaptics expects. Color interpolates red(0%) → yellow(50%) →
-    green(100%) so you can see which nodes are active and how hard.
-    """
-
-    DOT_PX = 18
-    SPACING = 6
-    PADDING = 4
-
-    # Debug click-to-test signals. Mouse press emits dotPressed(index) and
-    # dotReleased(prev_index_or_-1) so the controller can drive that single
-    # dot at 100% intensity while held. Drag across dots cleanly releases the
-    # previous index before pressing the new one.
-    dotPressed = Signal(int)
-    dotReleased = Signal(int)
-
-    def __init__(self, node_count: int, cols: int, rows: int, parent=None):
-        super().__init__(parent)
-        self.node_count = max(0, int(node_count))
-        self.cols = max(1, int(cols))
-        self.rows = max(1, int(rows))
-        self._values: List[int] = [0] * self.node_count
-        w = self.PADDING * 2 + self.cols * self.DOT_PX + (self.cols - 1) * self.SPACING
-        h = self.PADDING * 2 + self.rows * self.DOT_PX + (self.rows - 1) * self.SPACING
-        self.setFixedSize(int(w), int(h))
-        self._active_dot: int = -1
-        self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip("Click and hold a dot to fire it at 100% (debug test).")
-
-    def set_values(self, values):
-        """values: iterable of ints 0..100, length should match node_count.
-        None or shorter iterables get treated as all-zeros for missing slots."""
-        new_vals = [0] * self.node_count
-        if values:
-            for i, v in enumerate(values):
-                if i >= self.node_count:
-                    break
-                try:
-                    new_vals[i] = max(0, min(100, int(v)))
-                except (TypeError, ValueError):
-                    new_vals[i] = 0
-        if new_vals != self._values:
-            self._values = new_vals
-            self.update()
-
-    @staticmethod
-    def _color_for(value: int) -> QColor:
-        # Three-stop interpolation: 0 → red, 50 → yellow, 100 → green.
-        # Slightly dim red at 0 so off-nodes read as "off" not "alerting".
-        v = max(0, min(100, int(value)))
-        if v <= 50:
-            t = v / 50.0
-            r = int(180 + (255 - 180) * t)
-            g = int( 50 + (200 -  50) * t)
-            b = int( 50 + ( 50 -  50) * t)
-        else:
-            t = (v - 50) / 50.0
-            r = int(255 + ( 70 - 255) * t)
-            g = int(200 + (200 - 200) * t)
-            b = int( 50 + ( 70 -  50) * t)
-        return QColor(r, g, b)
-
-    def paintEvent(self, _ev):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing, True)
-        p.fillRect(self.rect(), QColor("#1A1A26"))
-        pen_off = QPen(QColor(80, 80, 100, 180))
-        pen_off.setWidth(1)
-        diameter = self.DOT_PX
-        for i in range(self.node_count):
-            col = i % self.cols
-            row = i // self.cols
-            if row >= self.rows:
-                break
-            x = self.PADDING + col * (diameter + self.SPACING)
-            y = self.PADDING + row * (diameter + self.SPACING)
-            value = self._values[i] if i < len(self._values) else 0
-            fill = self._color_for(value)
-            p.setPen(pen_off)
-            p.setBrush(QBrush(fill))
-            p.drawEllipse(x, y, diameter, diameter)
-        p.end()
-
-    def _dot_at(self, pos) -> int:
-        """Return the 0-based dot index at widget-local pos, or -1 if none."""
-        diameter = self.DOT_PX
-        x = pos.x()
-        y = pos.y()
-        for i in range(self.node_count):
-            col = i % self.cols
-            row = i // self.cols
-            if row >= self.rows:
-                break
-            dx = self.PADDING + col * (diameter + self.SPACING)
-            dy = self.PADDING + row * (diameter + self.SPACING)
-            if dx <= x <= dx + diameter and dy <= y <= dy + diameter:
-                return i
-        return -1
-
-    def _set_active(self, idx: int) -> None:
-        if idx == self._active_dot:
-            return
-        if self._active_dot >= 0:
-            self.dotReleased.emit(self._active_dot)
-        self._active_dot = idx
-        if idx >= 0:
-            self.dotPressed.emit(idx)
-
-    def mousePressEvent(self, ev):
-        if ev.button() == Qt.LeftButton:
-            self._set_active(self._dot_at(ev.position().toPoint()))
-            ev.accept()
-            return
-        super().mousePressEvent(ev)
-
-    def mouseMoveEvent(self, ev):
-        if ev.buttons() & Qt.LeftButton:
-            self._set_active(self._dot_at(ev.position().toPoint()))
-            ev.accept()
-            return
-        super().mouseMoveEvent(ev)
-
-    def mouseReleaseEvent(self, ev):
-        if ev.button() == Qt.LeftButton:
-            self._set_active(-1)
-            ev.accept()
-            return
-        super().mouseReleaseEvent(ev)
-
-    def leaveEvent(self, ev):
-        # If the mouse leaves while still held, release; if it re-enters we'll
-        # repress on mouseMove. Prevents a stuck dot when the user drags off.
-        self._set_active(-1)
-        super().leaveEvent(ev)
+# (ToggleSwitch / _Invoker / _MainWindow / _Card / _BHapticsDotGrid /
+# layout + icon helpers were moved into `ui/widgets.py`, `ui/icons.py`,
+# `ui/layout_helpers.py`, `ui/text_helpers.py`, `ui/geometry.py`. The
+# import-aliases at the top of this file preserve the underscore names.)
 
 
 # ============================================================
@@ -1021,7 +558,8 @@ class OscGoesPurrrUI:
 
         view_names = ["Dashboard", "Simple Mode", "Device Routing",
                       "SteamVR Device Comms", "bHaptics", "Hardware Monitor",
-                      "OSC Inspector", "System Log", "Settings", "Help"]
+                      "OSC Inspector", "OSC Diagnostics", "System Log",
+                      "Settings", "Help"]
         builders = {
             "Dashboard": self._build_dashboard_view,
             "Simple Mode": self._build_simple_mode_view,
@@ -1030,6 +568,7 @@ class OscGoesPurrrUI:
             "bHaptics": self._build_bhaptics_view,
             "Hardware Monitor": self._build_hardware_monitor_view,
             "OSC Inspector": self._build_network_debug_view,
+            "OSC Diagnostics": self._build_osc_diagnostics_view,
             "System Log": self._build_system_log_view,
             "Settings": self._build_settings_view,
             "Help": self._build_help_view,
@@ -1097,7 +636,8 @@ class OscGoesPurrrUI:
 
         nav_buttons = ["Dashboard", "Simple Mode", "Device Routing",
                        "SteamVR Device Comms", "bHaptics", "Hardware Monitor",
-                       "OSC Inspector", "System Log", "Settings", "Help"]
+                       "OSC Inspector", "OSC Diagnostics", "System Log",
+                       "Settings", "Help"]
         for name in nav_buttons:
             btn = QPushButton(name)
             btn.setProperty("role", "nav")
@@ -2247,6 +1787,315 @@ class OscGoesPurrrUI:
         parent_layout.addWidget(legacy_card, 1)
 
     # ----------------------------------------------------------
+    # OSC Diagnostics view
+    #
+    # One-stop debug page for the "VRChat says connected but no
+    # parameters arrive" failure mode. Shows live packet rate, all
+    # port/socket bindings, every non-VRChat OSCQuery client we've seen
+    # (the prime suspect when this happens), and a scrollable feed of
+    # recent OSC events from the manager's ring buffer.
+    # ----------------------------------------------------------
+
+    def _build_osc_diagnostics_view(self, parent_layout: QVBoxLayout):
+        title = QLabel("OSC Diagnostics")
+        title.setObjectName("viewTitle")
+        title.setAlignment(Qt.AlignHCenter)
+        parent_layout.addWidget(title)
+
+        intro = QLabel(
+            "Live OSC connection diagnostics. If VRChat says we're connected "
+            "but parameters are not updating, this page will tell you why. "
+            "The most common cause is another OSC app (VRCOSC, OscGoesBrrr, "
+            "etc.) that VRChat is routing to instead — those clients show up "
+            "in the 'Other OSCQuery clients seen' card below."
+        )
+        intro.setWordWrap(True)
+        intro.setProperty("muted", True)
+        parent_layout.addWidget(intro)
+
+        # --- Top row: live status + packet counters -------------------
+        top_card = _Card()
+        top_lay = _vbox(14, 8)
+        top_card.setLayout(top_lay)
+
+        header = QLabel("Live status")
+        header.setObjectName("cardHeader")
+        top_lay.addWidget(header)
+
+        # Big status banner: green when packets are flowing, yellow when
+        # connected but silent (the failure mode), red when disconnected.
+        self.diag_status_banner = QLabel("—")
+        font = self.diag_status_banner.font()
+        font.setPointSize(16)
+        font.setBold(True)
+        self.diag_status_banner.setFont(font)
+        self.diag_status_banner.setAlignment(Qt.AlignHCenter)
+        top_lay.addWidget(self.diag_status_banner)
+
+        # Grid of labelled counters. Stored on `self` so the refresh tick
+        # can update each one in place without rebuilding the page.
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(20)
+        grid.setVerticalSpacing(6)
+
+        def add_row(row: int, label_text: str, attr: str) -> None:
+            lbl = QLabel(label_text)
+            lbl.setProperty("muted", True)
+            grid.addWidget(lbl, row, 0, Qt.AlignRight)
+            value = QLabel("—")
+            value_font = QFont("Consolas")
+            value_font.setStyleHint(QFont.Monospace)
+            value.setFont(value_font)
+            grid.addWidget(value, row, 1, Qt.AlignLeft)
+            setattr(self, attr, value)
+
+        add_row(0, "Connection:", "diag_connection_lbl")
+        add_row(1, "Session age:", "diag_session_age_lbl")
+        add_row(2, "Packets handled:", "diag_packets_lbl")
+        add_row(3, "Time since last packet:", "diag_last_pkt_lbl")
+        add_row(4, "Phonebook GETs received:", "diag_phonebook_lbl")
+        add_row(5, "Handler exceptions:", "diag_handler_exc_lbl")
+        add_row(6, "Last handler error:", "diag_last_err_lbl")
+        add_row(7, "mDNS service name:", "diag_mdns_name_lbl")
+        add_row(8, "mDNS re-publishes:", "diag_mdns_rereg_lbl")
+        add_row(9, "HTTP raw connections:", "diag_http_raw_lbl")
+        top_lay.addLayout(grid)
+
+        # Action buttons.
+        btn_row = _hbox(0, 8)
+        dump_btn = QPushButton("Dump diagnostics to log")
+        dump_btn.setToolTip(
+            "Write the full diagnostic dict to the System Log (sidebar) "
+            "and the persistent file log."
+        )
+        dump_btn.clicked.connect(self.controller.log_osc_diagnostics)
+        btn_row.addWidget(dump_btn)
+
+        rehandshake_btn = QPushButton("Force re-handshake")
+        rehandshake_btn.setProperty("role", "secondary")
+        rehandshake_btn.setToolTip(
+            "Re-poll VRChat's OSCQuery endpoint and resend our handshake "
+            "ping. Try this FIRST when packets stop flowing."
+        )
+        rehandshake_btn.clicked.connect(self.controller.force_osc_rehandshake)
+        btn_row.addWidget(rehandshake_btn)
+
+        rereg_btn = QPushButton("Re-publish mDNS")
+        rereg_btn.setProperty("role", "secondary")
+        rereg_btn.setToolTip(
+            "Unregister our mDNS advertisement and re-advertise under a fresh "
+            "unique name. Forces VRChat to treat us as a brand-new OSC client. "
+            "Try this if 'Force re-handshake' doesn't help."
+        )
+        rereg_btn.clicked.connect(self.controller.force_osc_reregister_mdns)
+        btn_row.addWidget(rereg_btn)
+
+        open_log_btn = QPushButton("Open log folder")
+        open_log_btn.setProperty("role", "secondary")
+        open_log_btn.setToolTip(
+            "Open %APPDATA%/OscGoesPurrr in Explorer. The persistent OSC "
+            "diagnostics log lives here as osc_diagnostics.log."
+        )
+        open_log_btn.clicked.connect(self.controller.open_osc_log_folder)
+        btn_row.addWidget(open_log_btn)
+
+        btn_row.addStretch(1)
+        top_lay.addLayout(btn_row)
+
+        parent_layout.addWidget(top_card)
+
+        # --- Ports + socket binding ------------------------------------
+        ports_card = _Card()
+        ports_lay = _vbox(14, 6)
+        ports_card.setLayout(ports_lay)
+        ports_header = QLabel("Ports & sockets")
+        ports_header.setObjectName("cardHeader")
+        ports_lay.addWidget(ports_header)
+
+        ports_grid = QGridLayout()
+        ports_grid.setHorizontalSpacing(20)
+        ports_grid.setVerticalSpacing(4)
+
+        def add_port_row(row: int, label_text: str, attr: str) -> None:
+            lbl = QLabel(label_text)
+            lbl.setProperty("muted", True)
+            ports_grid.addWidget(lbl, row, 0, Qt.AlignRight)
+            value = QLabel("—")
+            value_font = QFont("Consolas")
+            value_font.setStyleHint(QFont.Monospace)
+            value.setFont(value_font)
+            ports_grid.addWidget(value, row, 1, Qt.AlignLeft)
+            setattr(self, attr, value)
+
+        add_port_row(0, "Our UDP listen port:", "diag_our_listen_lbl")
+        add_port_row(1, "Our UDP socket bound to:", "diag_udp_bound_lbl")
+        add_port_row(2, "Our HTTP phonebook port:", "diag_our_http_lbl")
+        add_port_row(3, "VRChat OSC port:", "diag_vrc_osc_lbl")
+        add_port_row(4, "VRChat OSCQuery HTTP port:", "diag_vrc_http_lbl")
+        add_port_row(5, "VRChat IP:", "diag_vrc_ip_lbl")
+        ports_lay.addLayout(ports_grid)
+
+        parent_layout.addWidget(ports_card)
+
+        # --- Other OSCQuery clients ------------------------------------
+        clients_card = _Card()
+        clients_lay = _vbox(14, 6)
+        clients_card.setLayout(clients_lay)
+        clients_header = QLabel("Other OSCQuery clients seen")
+        clients_header.setObjectName("cardHeader")
+        clients_lay.addWidget(clients_header)
+
+        clients_note = QLabel(
+            "Apps that advertised themselves on mDNS. VRChat may be sending "
+            "your parameters to one of these instead of us. Close them and "
+            "reconnect, or use VRChat → Settings → OSC → Reset."
+        )
+        clients_note.setWordWrap(True)
+        clients_note.setProperty("muted", True)
+        clients_lay.addWidget(clients_note)
+
+        self.diag_clients_text = QPlainTextEdit()
+        self.diag_clients_text.setReadOnly(True)
+        clients_font = QFont("Consolas")
+        clients_font.setStyleHint(QFont.Monospace)
+        clients_font.setPointSize(10)
+        self.diag_clients_text.setFont(clients_font)
+        self.diag_clients_text.setMaximumHeight(140)
+        self.diag_clients_text.setPlainText("(none seen yet)")
+        clients_lay.addWidget(self.diag_clients_text)
+
+        parent_layout.addWidget(clients_card)
+
+        # --- Event log -------------------------------------------------
+        events_card = _Card()
+        events_lay = _vbox(14, 6)
+        events_card.setLayout(events_lay)
+        events_header = QLabel("Recent OSC events")
+        events_header.setObjectName("cardHeader")
+        events_lay.addWidget(events_header)
+
+        events_note = QLabel(
+            "Last 200 OSC manager events: mDNS state changes, handshake, "
+            "health-check failures, silent-connection warnings."
+        )
+        events_note.setWordWrap(True)
+        events_note.setProperty("muted", True)
+        events_lay.addWidget(events_note)
+
+        self.diag_events_text = QPlainTextEdit()
+        self.diag_events_text.setReadOnly(True)
+        events_font = QFont("Consolas")
+        events_font.setStyleHint(QFont.Monospace)
+        events_font.setPointSize(10)
+        self.diag_events_text.setFont(events_font)
+        events_lay.addWidget(self.diag_events_text, 1)
+
+        parent_layout.addWidget(events_card, 1)
+
+        # Track how many events we last rendered so the refresh tick
+        # only redraws when new ones have arrived (cheap text equality
+        # check would scan the whole buffer otherwise).
+        self._diag_last_event_count = 0
+        self._diag_last_clients_signature = None
+
+    def refresh_osc_diagnostics_view(self) -> None:
+        """Pulled by the main UI refresh tick. Idempotent — safe to call
+        even when the panel hasn't been built yet (no-op if labels missing)."""
+        if not getattr(self, "diag_status_banner", None):
+            return
+
+        # Only refresh the labels when the user is actually looking at
+        # the page. Saves a controller call every 100 ms otherwise.
+        current = self.main_stack.currentWidget() if self.main_stack else None
+        if current is not self.views.get("OSC Diagnostics"):
+            return
+
+        diag = self.controller.get_osc_diagnostics() or {}
+        if not diag:
+            self.diag_status_banner.setText("OSC manager not running")
+            self.diag_status_banner.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+            return
+
+        is_conn = bool(diag.get("is_connected"))
+        last_age = diag.get("last_packet_age_s")
+        session_age = diag.get("session_age_s")
+        pkts = int(diag.get("packets_handled", 0) or 0)
+        phonebook = int(diag.get("phonebook_GETs", 0) or 0)
+        handler_exc = int(diag.get("handler_exceptions", 0) or 0)
+
+        # --- Banner ---------------------------------------------------
+        if not is_conn:
+            self.diag_status_banner.setText("✕  DISCONNECTED")
+            self.diag_status_banner.setStyleSheet(f"color: {COLOR_ALERT};")
+        elif last_age is None and pkts == 0:
+            self.diag_status_banner.setText("⏳  CONNECTED — waiting for first packet…")
+            self.diag_status_banner.setStyleSheet(f"color: {COLOR_TEXT};")
+        elif last_age is not None and last_age > 15.0:
+            self.diag_status_banner.setText(
+                f"⚠  CONNECTED but SILENT for {last_age:.1f}s — VRChat is not sending us packets"
+            )
+            self.diag_status_banner.setStyleSheet("color: #FFB73D;")
+        else:
+            self.diag_status_banner.setText("✓  CONNECTED — packets flowing")
+            self.diag_status_banner.setStyleSheet(f"color: {COLOR_SUCCESS};")
+
+        # --- Live counters --------------------------------------------
+        self.diag_connection_lbl.setText("connected" if is_conn else "disconnected")
+        self.diag_session_age_lbl.setText(
+            f"{session_age:.1f} s" if session_age is not None else "—"
+        )
+        self.diag_packets_lbl.setText(str(pkts))
+        if last_age is None:
+            self.diag_last_pkt_lbl.setText("never received any")
+        else:
+            self.diag_last_pkt_lbl.setText(f"{last_age:.1f} s")
+        self.diag_phonebook_lbl.setText(str(phonebook))
+        self.diag_handler_exc_lbl.setText(str(handler_exc))
+        last_err = diag.get("last_handler_error") or "(none)"
+        self.diag_last_err_lbl.setText(str(last_err))
+        self.diag_mdns_name_lbl.setText(str(diag.get("mdns_service_name") or "—"))
+        self.diag_mdns_rereg_lbl.setText(str(diag.get("mdns_rereg_count", 0)))
+        self.diag_http_raw_lbl.setText(str(diag.get("http_raw_connections", 0)))
+
+        # --- Ports ----------------------------------------------------
+        self.diag_our_listen_lbl.setText(str(diag.get("our_listen_port") or "—"))
+        bound = diag.get("udp_socket_bound")
+        self.diag_udp_bound_lbl.setText(
+            f"{bound[0]}:{bound[1]}" if bound else "—"
+        )
+        self.diag_our_http_lbl.setText(str(diag.get("our_http_phonebook_port") or "—"))
+        self.diag_vrc_osc_lbl.setText(str(diag.get("vrc_osc_port") or "—"))
+        self.diag_vrc_http_lbl.setText(str(diag.get("vrc_http_port") or "—"))
+        self.diag_vrc_ip_lbl.setText(str(diag.get("vrc_ip") or "—"))
+
+        # --- Other clients --------------------------------------------
+        clients = self.controller.get_osc_other_clients() or {}
+        signature = tuple(sorted(
+            (k, v.get("present"), v.get("port")) for k, v in clients.items()
+        ))
+        if signature != self._diag_last_clients_signature:
+            self._diag_last_clients_signature = signature
+            if not clients:
+                self.diag_clients_text.setPlainText("(none seen yet)")
+            else:
+                lines = []
+                for name, info in clients.items():
+                    state = "ACTIVE" if info.get("present") else "gone"
+                    port = info.get("port")
+                    lines.append(f"[{state:>6}]  {name}  port={port}")
+                self.diag_clients_text.setPlainText("\n".join(lines))
+
+        # --- Event log ------------------------------------------------
+        events = self.controller.get_osc_event_log() or []
+        if len(events) != self._diag_last_event_count:
+            self._diag_last_event_count = len(events)
+            self.diag_events_text.setPlainText("\n".join(events))
+            # Keep the view scrolled to the bottom so the newest event is
+            # always visible — like a live tail.
+            scrollbar = self.diag_events_text.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+
+    # ----------------------------------------------------------
     # System Log view
     # ----------------------------------------------------------
 
@@ -2554,6 +2403,43 @@ class OscGoesPurrrUI:
             plat.addLayout(row)
         parent_layout.addWidget(pat_card)
 
+        # ---- Anti-stuck card (two-timer model, VRC-Haptic-Pancake parity) ----
+        as_card = _Card()
+        aslay = _vbox(14, 8)
+        as_card.setLayout(aslay)
+        as_hdr = QLabel("Anti-stuck")
+        as_hdr.setObjectName("sectionTitle")
+        aslay.addWidget(as_hdr)
+        aslay.addWidget(self._muted_label(
+            "VRChat only sends OSC on parameter change. If the sender stops "
+            "(avatar swap, partner leaves), the last value would vibrate "
+            "forever. The active timeout clears mid-range stuck values; the "
+            "peaked timeout clears saturated (100%) values, which usually "
+            "represent a legitimate hold and get a longer fuse."
+        ))
+        as_row = _hbox(0, 8)
+        self.steamvr_antistuck_check = ToggleSwitch("Enabled")
+        self.steamvr_antistuck_check.toggled.connect(self._on_steamvr_antistuck_changed)
+        as_row.addWidget(self.steamvr_antistuck_check)
+        as_row.addSpacing(12)
+
+        as_row.addWidget(QLabel("Active timeout (s)"))
+        self.steamvr_antistuck_active_spin = QSpinBox()
+        self.steamvr_antistuck_active_spin.setRange(1, 600)
+        self.steamvr_antistuck_active_spin.setValue(7)
+        self.steamvr_antistuck_active_spin.valueChanged.connect(self._on_steamvr_antistuck_changed)
+        as_row.addWidget(self.steamvr_antistuck_active_spin)
+
+        as_row.addWidget(QLabel("Peaked timeout (s)"))
+        self.steamvr_antistuck_peaked_spin = QSpinBox()
+        self.steamvr_antistuck_peaked_spin.setRange(1, 600)
+        self.steamvr_antistuck_peaked_spin.setValue(15)
+        self.steamvr_antistuck_peaked_spin.valueChanged.connect(self._on_steamvr_antistuck_changed)
+        as_row.addWidget(self.steamvr_antistuck_peaked_spin)
+        as_row.addStretch(1)
+        aslay.addLayout(as_row)
+        parent_layout.addWidget(as_card)
+
         # ---- Tracker list card ----
         list_card = _Card(dark_bg=True)
         llay = _vbox(10, 6)
@@ -2641,6 +2527,15 @@ class OscGoesPurrrUI:
             return
         self.controller.set_steamvr_battery_interval(float(value))
 
+    def _on_steamvr_antistuck_changed(self, *_):
+        if self._is_updating_steamvr:
+            return
+        self.controller.set_steamvr_no_data(
+            self.steamvr_antistuck_check.isChecked(),
+            int(self.steamvr_antistuck_active_spin.value()),
+            int(self.steamvr_antistuck_peaked_spin.value()),
+        )
+
     def _refresh_steamvr_status_only(self):
         # Cheap refresh: status bar only, no list rebuild.
         try:
@@ -2689,6 +2584,19 @@ class OscGoesPurrrUI:
             self.steamvr_battery_interval_spin.setValue(int(round(float(status.get("battery_interval_s", 5)))))
         except Exception:
             pass
+
+        nd = status.get("no_data") or {}
+        if hasattr(self, "steamvr_antistuck_check") and nd:
+            try:
+                self.steamvr_antistuck_check.setChecked(bool(nd.get("enabled", True)))
+                active = int(nd.get("timeout_active_s", 7))
+                peaked = int(nd.get("timeout_peaked_s", nd.get("timeout_s", 15)))
+                if self.steamvr_antistuck_active_spin.value() != active:
+                    self.steamvr_antistuck_active_spin.setValue(active)
+                if self.steamvr_antistuck_peaked_spin.value() != peaked:
+                    self.steamvr_antistuck_peaked_spin.setValue(peaked)
+            except Exception:
+                pass
 
     def _apply_steamvr_patterns(self, patterns):
         for idx, widgets in enumerate(self.steamvr_pattern_widgets):
@@ -2837,7 +2745,11 @@ class OscGoesPurrrUI:
     _is_updating_bhaptics = False
 
     # Per-position dot widgets, refreshed by _refresh_bhaptics_grids.
+    # `_bhaptics_grids` holds the OUTPUT grid (post anti-stuck, post override —
+    # what's actually sent to the device, and what the click-to-test interacts
+    # with). `_bhaptics_raw_grids` holds the RAW input mirror.
     _bhaptics_grids: Dict[str, "_BHapticsDotGrid"] = {}
+    _bhaptics_raw_grids: Dict[str, "_BHapticsDotGrid"] = {}
 
     # Tracks the last set of detected device positions so the device list
     # only rebuilds when the avatar's bHaptics-capable set actually changes.
@@ -2965,8 +2877,11 @@ class OscGoesPurrrUI:
             return
         try:
             snap = self.controller.get_bhaptics_snapshot()
+            raw_snap = self.controller.get_bhaptics_raw_snapshot()
         except Exception:
             return
+        for pos, raw_grid in self._bhaptics_raw_grids.items():
+            raw_grid.set_values(raw_snap.get(pos))
         for pos, grid in self._bhaptics_grids.items():
             grid.set_values(snap.get(pos))
 
@@ -3071,6 +2986,7 @@ class OscGoesPurrrUI:
         # deleted; clearing the dict prevents the fast timer from touching
         # already-deleted Qt objects.
         self._bhaptics_grids = {}
+        self._bhaptics_raw_grids = {}
         while self.bhaptics_device_list_layout.count():
             item = self.bhaptics_device_list_layout.takeAt(0)
             w = item.widget()
@@ -3089,7 +3005,11 @@ class OscGoesPurrrUI:
             return
 
         for d in visible:
-            self.bhaptics_device_list_layout.addWidget(self._build_bhaptics_device_card(d))
+            # Left-align so the maxWidth-capped cards sit flush instead of
+            # centering with empty space on both sides.
+            self.bhaptics_device_list_layout.addWidget(
+                self._build_bhaptics_device_card(d), 0, Qt.AlignLeft
+            )
         self.bhaptics_device_list_layout.addStretch(1)
 
     def _build_bhaptics_device_card(self, d: dict) -> QFrame:
@@ -3098,6 +3018,11 @@ class OscGoesPurrrUI:
         nodes = int(d.get("node_count", 0))
 
         card = _Card()
+        # Cap card width so the device list reads as a column of compact cards
+        # instead of stretching with the window. The two side-by-side dot grids
+        # are the widest required element (vest = ~220 px); 480 fits them plus
+        # the intensity slider with comfortable padding.
+        card.setMaximumWidth(480)
         lay = _vbox(12, 6)
         card.setLayout(lay)
 
@@ -3119,21 +3044,53 @@ class OscGoesPurrrUI:
         slider = QSlider(Qt.Horizontal)
         slider.setRange(0, 100)
         slider.setValue(int(cfg.get("intensity", 100)))
+        # Cap the slider so it doesn't blow the card width up on wide windows;
+        # 240 px is plenty of resolution for a 0-100 control.
+        slider.setMaximumWidth(240)
         intensity_row.addWidget(slider, 1)
         intensity_label = QLabel(f"{slider.value()}%")
         intensity_label.setMinimumWidth(40)
         intensity_row.addWidget(intensity_label)
+        intensity_row.addStretch(1)
         lay.addLayout(intensity_row)
 
-        # Live debug grid: dots colored red(0)→yellow(50)→green(100), laid out
-        # in the same orientation as the physical bHaptics device.
+        # Live debug grids: dots colored red(0)→yellow(50)→green(100), laid out
+        # in the same orientation as the physical bHaptics device. Two side-by-
+        # side views — left is the raw OSC input, right is the actual output
+        # after anti-stuck ramping and manual overrides. Comparing them makes
+        # it obvious when anti-stuck is masking a real signal or when a test
+        # override is winning over OSC.
         cols, rows = d.get("grid", (nodes, 1))
+        grids_row = _hbox(0, 12)
+
+        raw_col = _vbox(0, 4)
+        raw_lbl = QLabel("Raw input")
+        raw_lbl.setProperty("role", "muted")
+        raw_lbl.setAlignment(Qt.AlignHCenter)
+        raw_col.addWidget(raw_lbl)
+        raw_grid = _BHapticsDotGrid(
+            node_count=nodes, cols=int(cols), rows=int(rows), interactive=False
+        )
+        self._bhaptics_raw_grids[position] = raw_grid
+        raw_col.addWidget(raw_grid, 0, Qt.AlignHCenter)
+        grids_row.addLayout(raw_col)
+
+        out_col = _vbox(0, 4)
+        out_lbl = QLabel("Output (anti-stuck applied)")
+        out_lbl.setProperty("role", "muted")
+        out_lbl.setAlignment(Qt.AlignHCenter)
+        out_col.addWidget(out_lbl)
         grid = _BHapticsDotGrid(node_count=nodes, cols=int(cols), rows=int(rows))
         self._bhaptics_grids[position] = grid
-        lay.addWidget(grid)
+        out_col.addWidget(grid, 0, Qt.AlignHCenter)
+        grids_row.addLayout(out_col)
 
-        # Debug: click-and-hold a dot to fire it at 100%. Routed through the
-        # controller so the router can max-merge it with the live OSC output.
+        lay.addLayout(grids_row)
+
+        # Debug: click-and-hold a dot on the output grid to fire it at 100%.
+        # Routed through the controller so the router can max-merge it with
+        # the live OSC output. The raw grid stays non-interactive — it only
+        # mirrors what's actually coming in over OSC.
         grid.dotPressed.connect(lambda idx, pos=position: self.controller.set_bhaptics_manual_dot(pos, idx, 100))
         grid.dotReleased.connect(lambda idx, pos=position: self.controller.set_bhaptics_manual_dot(pos, idx, None))
 
@@ -3286,9 +3243,12 @@ class OscGoesPurrrUI:
         addr_grid.addWidget(QLabel("Stat"), 0, 0)
         addr_grid.addWidget(QLabel("Send"), 0, 1)
         addr_grid.addWidget(QLabel("Parameter Name"), 0, 2)
+        addr_grid.addWidget(QLabel("Type"), 0, 3)
+        addr_grid.addWidget(QLabel("Last Sent Value"), 0, 4)
 
         self.hwmon_addr_edits: Dict[str, QLineEdit] = {}
         self.hwmon_send_checks: Dict[str, QCheckBox] = {}
+        self.hwmon_last_sent_labels: Dict[str, QLabel] = {}
         for r, (key, label, _kind) in enumerate(self._HWMON_STATS, start=1):
             addr_grid.addWidget(QLabel(label), r, 0)
 
@@ -3305,6 +3265,21 @@ class OscGoesPurrrUI:
             )
             addr_grid.addWidget(edit, r, 2)
             self.hwmon_addr_edits[key] = edit
+
+            # Type column — every stat is transmitted as a float.
+            type_lbl = QLabel("float")
+            type_lbl.setProperty("muted", "true")
+            type_lbl.setAlignment(Qt.AlignCenter)
+            addr_grid.addWidget(type_lbl, r, 3)
+
+            # Last Sent Value column — updated on each refresh tick.
+            sent_lbl = QLabel("--")
+            sent_lbl.setAlignment(Qt.AlignCenter)
+            sent_font = QFont("Consolas")
+            sent_font.setStyleHint(QFont.Monospace)
+            sent_lbl.setFont(sent_font)
+            addr_grid.addWidget(sent_lbl, r, 4)
+            self.hwmon_last_sent_labels[key] = sent_lbl
 
         addr_grid.setColumnStretch(2, 1)
         addr_lay.addLayout(addr_grid)
@@ -3366,7 +3341,8 @@ class OscGoesPurrrUI:
         stats = status.get("stats", {}) or {}
         settings = status.get("settings", {}) or {}
 
-        # Live values
+        # Live values + last-sent OSC payload
+        last_sent = stats.get("last_sent_values", {}) or {}
         for key, _label, kind in self._HWMON_STATS:
             val = stats.get(key)
             lbl = self.hwmon_value_labels.get(key)
@@ -3383,6 +3359,14 @@ class OscGoesPurrrUI:
                     pb.setValue(max(0, min(100, int(round(float(val or 0))))))
                 except (TypeError, ValueError):
                     pb.setValue(0)
+            # Last Sent Value column — shows the actual OSC payload.
+            sent_lbl = self.hwmon_last_sent_labels.get(key)
+            if sent_lbl is not None:
+                sent_val = last_sent.get(key)
+                if sent_val is None:
+                    sent_lbl.setText("--")
+                else:
+                    sent_lbl.setText(f"{float(sent_val):.4f}")
 
         # GPU name / status footer
         gpu_name = stats.get("gpu_name")
@@ -3726,6 +3710,18 @@ Both consume the same data, so they stay in lockstep.
         header_lay = _hbox(0, 8)
         header.setLayout(header_lay)
 
+        icon_button = QToolButton()
+        icon_button.setObjectName("lovenseIcon")
+        icon_button.setAutoRaise(True)
+        icon_button.setIconSize(QSize(32, 32))
+        icon_button.setFixedSize(QSize(38, 38))
+        icon_button.setCursor(Qt.PointingHandCursor)
+        icon_button.clicked.connect(
+            lambda _=False, n=device_name, b=icon_button: self._on_lovense_icon_clicked(n, b)
+        )
+        self._apply_lovense_icon(device_name, icon_button)
+        header_lay.addWidget(icon_button)
+
         status_icon = "✓" if is_connected else "⚠"
         name_label = QLabel(f"{status_icon} {device_name}")
         name_label.setObjectName("deviceName")
@@ -3878,7 +3874,14 @@ Both consume the same data, so they stay in lockstep.
                     panel.setVisible(False)
                     btn.setText(zone_btn_text(state["value"]))
 
-            zone_btn.clicked.connect(lambda _=False: toggle_zone_panel())
+            # Bind `toggle_zone_panel` via a default arg so each button keeps
+            # its own iteration's closure. Without this, every motor's button
+            # resolved the name `toggle_zone_panel` at click time and got the
+            # LAST iteration's version — so clicking motor 0's "Select Zones"
+            # expanded motor 1's panel and motor 0 was unreachable.
+            zone_btn.clicked.connect(
+                lambda _=False, tog=toggle_zone_panel: tog()
+            )
 
             # Interaction filter checkboxes
             filter_row = QWidget()
@@ -4001,8 +4004,41 @@ Both consume the same data, so they stay in lockstep.
             "status_label": name_label,
             "battery_label": battery_label,
             "delete_button": delete_button,
+            "icon_button": icon_button,
             "motors": motor_vars,
         }
+
+    # ----------------------------------------------------------
+    # Lovense product icon (auto-detect + manual override)
+    # ----------------------------------------------------------
+
+    def _apply_lovense_icon(self, device_name: str, button: "QToolButton") -> None:
+        """Refresh the icon button to reflect current override / auto-detect state."""
+        override = self.controller.get_profile_config(device_name, "icon_override", None)
+        key = _lovense_icons.resolve_key(device_name, override)
+        pixmap = _lovense_icons.load_pixmap(key, size=32, circular=True) if key else None
+        if pixmap is not None:
+            button.setIcon(QIcon(pixmap))
+            button.setIconSize(QSize(32, 32))
+            tip = f"{_lovense_icons.display_name(key)} — click to change"
+        else:
+            button.setIcon(QIcon())
+            button.setText("?")
+            tip = "No icon — click to pick one"
+        button.setToolTip(tip)
+
+    def _on_lovense_icon_clicked(self, device_name: str, button: "QToolButton") -> None:
+        current_override = self.controller.get_profile_config(
+            device_name, "icon_override", None
+        )
+        result = _lovense_icons.pick_icon(self.window, device_name, current_override)
+        if result is _lovense_icons.PICK_CANCELLED:
+            return
+        # PICK_AUTO  -> None ; PICK_NONE -> "" ; "<key>" -> "<key>"
+        self.controller.update_device_config(device_name, "icon_override", result)
+        if hasattr(self.controller, "save_profiles"):
+            self.controller.save_profiles()
+        self._apply_lovense_icon(device_name, button)
 
     def _make_segmented(self, options: List[str], current: str,
                         on_change: Callable[[str], None]) -> QWidget:
@@ -4716,51 +4752,6 @@ Both consume the same data, so they stay in lockstep.
         return self.window
 
 
-# ============================================================
-# Slider / progress wrappers that accept floats 0.0-1.0 like CTk.
-# ============================================================
-
-class _SliderProxy:
-    def __init__(self, slider: QSlider):
-        self._slider = slider
-
-    def set(self, value: float):
-        v = max(0, min(1000, int(round(float(value) * 1000))))
-        # blockSignals so programmatic updates don't echo back through the controller.
-        self._slider.blockSignals(True)
-        self._slider.setValue(v)
-        self._slider.blockSignals(False)
-
-    def get(self) -> float:
-        return self._slider.value() / 1000.0
-
-
-class _ProgressProxy:
-    def __init__(self, bar: QProgressBar):
-        self._bar = bar
-
-    def set(self, value: float):
-        v = max(0, min(1000, int(round(float(value) * 1000))))
-        self._bar.setValue(v)
-
-    def get(self) -> float:
-        return self._bar.value() / 1000.0
-
-
-def _truncate(text: str, max_chars: int) -> str:
-    """Return text shortened to `max_chars` with an ellipsis."""
-    if text is None:
-        return ""
-    text = str(text)
-    if len(text) <= max_chars:
-        return text
-    return text[: max(0, max_chars - 1)] + "…"
-
-
-def _html_escape(s: str) -> str:
-    return (
-        s.replace("&", "&amp;")
-         .replace("<", "&lt;")
-         .replace(">", "&gt;")
-         .replace(" ", "&nbsp;")
-    )
+# (_SliderProxy / _ProgressProxy / _truncate / _html_escape now live in
+# `ui/widgets.py` and `ui/text_helpers.py`. The import-aliases at the top
+# of this file preserve the underscore names.)

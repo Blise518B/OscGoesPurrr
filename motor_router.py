@@ -1,6 +1,37 @@
 import fnmatch
 from typing import Dict, List, Tuple, Any, Optional, Set
 from utilities import normalize_osc_value
+from parameter_store import store as _global_store
+
+_GLOB_CHARS = frozenset("*?[")
+
+
+def _has_glob(addr: str) -> bool:
+    return any(c in _GLOB_CHARS for c in addr)
+
+
+def _clean_custom_addr(addr: str) -> str:
+    """Strip VRChat's `/avatar/parameters/` prefix or a bare leading slash so
+    the address matches the parameter_store's normalized keys."""
+    if addr.startswith("/avatar/parameters/"):
+        return addr[len("/avatar/parameters/"):]
+    if addr.startswith("/"):
+        return addr[1:]
+    return addr
+
+
+def _classify_zone_path(path: str) -> Optional[Tuple[str, str]]:
+    """Standalone version of `ParameterStore._classify_zone` for the rare
+    fallback when the global store isn't reachable (tests)."""
+    parts = path.split("/", 3)
+    if len(parts) >= 3 and parts[0] == "OGB":
+        category = parts[1]
+        zone_name = parts[2]
+        if category in ("Orifice", "Orf"):
+            return ("Orf", zone_name)
+        if category in ("Penetrator", "Pen"):
+            return ("Pen", zone_name)
+    return None
 
 
 class GameDeviceLengthDetector:
@@ -105,6 +136,13 @@ class MotorRouter:
         self.last_outputs: Dict[tuple, float] = {}
         # Per-zone length detectors keyed by ("Orf"|"Pen", zone_name, "self"|"others").
         self._length_detectors: Dict[Tuple[str, str, str], GameDeviceLengthDetector] = {}
+        # Compiled per-motor config cache.
+        #   key: (id(profile_dict), device_name, motor_idx, profile_token)
+        #   val: pre-parsed addresses/zone names so the per-tick hot path doesn't
+        #        re-split strings or re-walk the raw config dict for every motor.
+        # `profile_token` is an opaque marker (currently a snapshot of the keys
+        # we actually read) so a profile mutation safely invalidates the cache.
+        self._compiled_cfg: Dict[Tuple[int, str, int, tuple], Dict[str, Any]] = {}
 
     # ------------------------------------------------------------------ helpers
     def _get_param(self, all_params: Dict[str, Any], path: str) -> Optional[float]:
@@ -135,27 +173,37 @@ class MotorRouter:
             self._length_detectors[key] = det
         return det
 
-    def _scan_zones(self, all_params: Dict[str, Any]) -> Set[Tuple[str, str]]:
-        """Return the set of (zone_type, zone_name) tuples present in the params."""
-        zones: Set[Tuple[str, str]] = set()
-        for path in all_params.keys():
-            parts = path.split("/")
-            if len(parts) >= 3 and parts[0] == "OGB":
-                category = parts[1]
-                zone_name = parts[2]
-                if category in ("Orifice", "Orf"):
-                    zones.add(("Orf", zone_name))
-                elif category in ("Penetrator", "Pen"):
-                    zones.add(("Pen", zone_name))
-        return zones
+    def _get_zone_tuples(self, all_params: Dict[str, Any],
+                         zones_override: Optional[Set[Tuple[str, str]]] = None
+                         ) -> Set[Tuple[str, str]]:
+        """Return the set of (zone_type, zone_name) tuples present in the params.
 
-    def _update_length_detectors(self, all_params: Dict[str, Any]) -> None:
+        Prefers the precomputed set the caller passed in (from
+        `parameter_store.snapshot()`), falling back to the global store, and
+        finally to a direct scan of `all_params` when running standalone (tests).
+        """
+        if zones_override is not None:
+            return zones_override
+        try:
+            return _global_store.get_zone_tuples()
+        except Exception:
+            pass
+        # Test/standalone path — derive on the fly.
+        out: Set[Tuple[str, str]] = set()
+        for path in all_params.keys():
+            zone = _classify_zone_path(path)
+            if zone is not None:
+                out.add(zone)
+        return out
+
+    def _update_length_detectors(self, all_params: Dict[str, Any],
+                                 zones: Set[Tuple[str, str]]) -> None:
         """Refresh per-zone length calibrations from the live OSC parameters.
 
         Done once per re-evaluation regardless of the user's filter flags so the
         calibration stays accurate even while penetration is disabled.
         """
-        for zone_type, zone_name in self._scan_zones(all_params):
+        for zone_type, zone_name in zones:
             # Only orifices actually receive new-pen proximity readings.
             if zone_type != "Orf":
                 continue
@@ -294,21 +342,42 @@ class MotorRouter:
             return 0.0
         return max(normalize_osc_value(v) for v in contributions)
 
-    # ------------------------------------------------------------------ public
-    def _calculate_motor_target(
+    def _compile_motor_config(
         self,
+        profile_dict: Dict[str, Any],
         device_name: str,
         motor_idx: int,
         config: Dict[str, Any],
-        all_params: Dict[str, Any],
-    ) -> float:
-        target_val = 0.0
+    ) -> Dict[str, Any]:
+        """Pre-parse the per-motor config (custom address list split into
+        literal vs glob buckets, allowed-zone names parsed out of the comma
+        string) so the per-tick hot path doesn't redo this work for every
+        connected motor.
 
-        # --- 1. Custom Override Addresses --------------------------------------------
-        # `osc_addresses[motor_idx]` may be a list of addresses (current format)
-        # or a single string (legacy format). Each address contributes; max wins.
+        Cache key includes a `profile_token` built from the small set of
+        fields we actually read, so an in-place edit to the profile dict
+        (e.g. the user toggling a checkbox) safely invalidates the entry.
+        """
+        addr_zone_key = f"motor_{motor_idx}_zones"
+        addr_legacy_key = f"motor_{motor_idx}_zone"
         osc_addresses = config.get("osc_addresses", {})
-        raw_entry = osc_addresses.get(str(motor_idx), [])
+        raw_entry = osc_addresses.get(str(motor_idx))
+        zones_str = config.get(addr_zone_key, config.get(addr_legacy_key, ""))
+
+        # Cheap fingerprint of the inputs that drive the compiled value.
+        token = (
+            id(osc_addresses) if isinstance(osc_addresses, dict) else None,
+            len(raw_entry) if isinstance(raw_entry, (list, str)) else 0,
+            raw_entry if isinstance(raw_entry, str) else (
+                tuple(raw_entry) if isinstance(raw_entry, list) else ()
+            ),
+            zones_str,
+        )
+        cache_key = (id(profile_dict), device_name, motor_idx, token)
+        cached = self._compiled_cfg.get(cache_key)
+        if cached is not None:
+            return cached
+
         if isinstance(raw_entry, str):
             custom_list = [raw_entry]
         elif isinstance(raw_entry, list):
@@ -316,46 +385,109 @@ class MotorRouter:
         else:
             custom_list = []
 
+        literals: List[str] = []
+        globs: List[str] = []
         for custom_addr in custom_list:
             if not isinstance(custom_addr, str):
                 continue
-            custom_addr = custom_addr.strip()
-            if not custom_addr:
+            cleaned = _clean_custom_addr(custom_addr.strip())
+            if not cleaned:
                 continue
-            if custom_addr.startswith("/avatar/parameters/"):
-                custom_addr = custom_addr.replace("/avatar/parameters/", "")
-            elif custom_addr.startswith("/"):
-                custom_addr = custom_addr[1:]
+            (globs if _has_glob(cleaned) else literals).append(cleaned)
 
+        if isinstance(zones_str, str):
+            allowed_zones = [
+                z.strip() for z in zones_str.split(",")
+                if z.strip() and z.strip() != "None"
+            ]
+        else:
+            allowed_zones = []
+        allowed_zone_set = set(allowed_zones)
+
+        compiled = {
+            "literals": literals,
+            "globs": globs,
+            "allowed_zones": allowed_zone_set,
+            "is_all_sps": "All SPS" in allowed_zone_set,
+            "has_zone_filter": bool(allowed_zone_set),
+        }
+        # Bound the cache so a long-running session with lots of profile
+        # edits doesn't grow it forever. 256 entries covers a worst-case
+        # of dozens of motors across several profiles.
+        if len(self._compiled_cfg) > 256:
+            self._compiled_cfg.clear()
+        self._compiled_cfg[cache_key] = compiled
+        return compiled
+
+    # ------------------------------------------------------------------ public
+    def _calculate_motor_target(
+        self,
+        device_name: str,
+        motor_idx: int,
+        config: Dict[str, Any],
+        all_params: Dict[str, Any],
+        zones: Set[Tuple[str, str]],
+        profile_dict: Optional[Dict[str, Any]] = None,
+    ) -> float:
+        target_val = 0.0
+
+        compiled = self._compile_motor_config(
+            profile_dict if profile_dict is not None else config,
+            device_name, motor_idx, config,
+        )
+
+        # --- 1. Custom Override Addresses --------------------------------------------
+        # Literal addresses get an O(1) dict lookup; globs fall back to the
+        # fnmatch sweep over all params. Each contribution feeds max().
+        for literal in compiled["literals"]:
+            param_val = all_params.get(literal)
+            if param_val is None:
+                continue
+            try:
+                v = float(param_val)
+            except (ValueError, TypeError):
+                continue
+            cand = normalize_osc_value(v)
+            if cand > target_val:
+                target_val = cand
+
+        if compiled["globs"]:
             for param_name, param_val in all_params.items():
-                if param_name == custom_addr or fnmatch.fnmatch(param_name, custom_addr):
-                    try:
-                        v = float(param_val)
-                        target_val = max(target_val, normalize_osc_value(v))
-                    except (ValueError, TypeError):
-                        pass
+                if not any(fnmatch.fnmatch(param_name, g) for g in compiled["globs"]):
+                    continue
+                try:
+                    v = float(param_val)
+                except (ValueError, TypeError):
+                    continue
+                cand = normalize_osc_value(v)
+                if cand > target_val:
+                    target_val = cand
 
         # --- 2. SPS Zones ------------------------------------------------------------
-        zones_str = config.get(f"motor_{motor_idx}_zones", config.get(f"motor_{motor_idx}_zone", ""))
-        allowed_zones = [z.strip() for z in zones_str.split(",") if z.strip() and z.strip() != "None"]
-        if not allowed_zones:
+        if not compiled["has_zone_filter"]:
             return target_val
 
-        is_all_sps = "All SPS" in allowed_zones
+        is_all_sps = compiled["is_all_sps"]
+        allowed_zone_set = compiled["allowed_zones"]
         best = target_val
-        for zone_type, zone_name in self._scan_zones(all_params):
-            if is_all_sps or zone_name in allowed_zones:
+        for zone_type, zone_name in zones:
+            if is_all_sps or zone_name in allowed_zone_set:
                 contribution = self._zone_contribution(zone_type, zone_name, config, motor_idx, all_params)
                 if contribution > best:
                     best = contribution
         return best
 
-    def compute_simple_mode_value(self, all_params: Dict[str, Any]) -> float:
+    def compute_simple_mode_value(
+        self,
+        all_params: Dict[str, Any],
+        zones: Optional[Set[Tuple[str, str]]] = None,
+    ) -> float:
         """Simple-mode max: return the strongest contribution across every
         detected SPS zone, ignoring per-toy profile config. Touch + pen from
         others are allowed; self-contact is excluded so the user doesn't get
         unexpected output from their own contacts firing the gates."""
-        self._update_length_detectors(all_params)
+        zones = self._get_zone_tuples(all_params, zones)
+        self._update_length_detectors(all_params, zones)
         # Synthetic config: allow everything except self, mirroring the
         # default new-toy profile.
         cfg = {
@@ -365,7 +497,7 @@ class MotorRouter:
             "motor_0_others": True,
         }
         best = 0.0
-        for zone_type, zone_name in self._scan_zones(all_params):
+        for zone_type, zone_name in zones:
             contribution = self._zone_contribution(zone_type, zone_name, cfg, 0, all_params)
             if contribution > best:
                 best = contribution
@@ -375,11 +507,13 @@ class MotorRouter:
         self,
         device_motor_counts: Dict[str, int],
         all_params: Dict[str, Any],
+        zones: Optional[Set[Tuple[str, str]]] = None,
     ) -> List[Tuple[str, float, int]]:
         """Simple-mode routing: push the same global SPS max value to every
         connected device's every motor. Returns only entries whose target
         value changed (same debounce semantics as `reevaluate_state`)."""
-        value = self.compute_simple_mode_value(all_params)
+        zones = self._get_zone_tuples(all_params, zones)
+        value = self.compute_simple_mode_value(all_params, zones=zones)
         updates: List[Tuple[str, float, int]] = []
         for device_name, motor_count in device_motor_counts.items():
             for motor_idx in range(motor_count):
@@ -399,17 +533,22 @@ class MotorRouter:
         self,
         active_profile: Dict[str, Any],
         all_params: Dict[str, Any],
+        zones: Optional[Set[Tuple[str, str]]] = None,
     ) -> List[Tuple[str, float, int]]:
         """Recalculate motor outputs for every configured device/motor based on the
         live Shadow State, returning only entries whose target value changed."""
+        zones = self._get_zone_tuples(all_params, zones)
         # Refresh length calibrations first so all motor calculations see fresh state.
-        self._update_length_detectors(all_params)
+        self._update_length_detectors(all_params, zones)
 
         updates: List[Tuple[str, float, int]] = []
         for device_name, config in active_profile.items():
             motor_count = config.get("motor_count", 0)
             for motor_idx in range(motor_count):
-                target_val = self._calculate_motor_target(device_name, motor_idx, config, all_params)
+                target_val = self._calculate_motor_target(
+                    device_name, motor_idx, config, all_params,
+                    zones=zones, profile_dict=active_profile,
+                )
 
                 state_key = (device_name, motor_idx)
                 if self.last_outputs.get(state_key) != target_val:
