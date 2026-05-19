@@ -24,6 +24,9 @@ STEAMVR_SETTINGS_FILE = APPDATA_DIR / "steamvr_settings.json"
 # bHaptics settings file path (Player connection, per-device enable + intensity)
 BHAPTICS_SETTINGS_FILE = APPDATA_DIR / "bhaptics_settings.json"
 
+# Hardware monitor settings file path (CPU/RAM/GPU OSC broadcaster)
+HARDWARE_MONITOR_SETTINGS_FILE = APPDATA_DIR / "hardware_monitor_settings.json"
+
 # Known devices file path — global registry of every toy that's ever been
 # connected, independent of any profile. Lets new/empty profiles still show
 # previously-seen toys with default settings.
@@ -36,7 +39,19 @@ DEFAULT_APP_SETTINGS = {
     "auto_connect_osc": True,
     "bind_all_interfaces": True,
     "hide_console": True,
-    "minimize_to_tray": False
+    "minimize_to_tray": False,
+    # Default ON so the first launch lands on the stripped Simple Mode panel.
+    # The user can disable it from the Simple Mode panel or Settings.
+    "simple_mode": True,
+    # Feature toggles — turn off subsystems the user doesn't need so their
+    # background threads / OSC traffic don't run. All default ON to match
+    # pre-toggle behaviour.
+    "feature_osc_inspector": True,
+    "feature_bhaptics": True,
+    "feature_hardware_monitor": True,
+    "feature_steamvr_haptics": True,
+    "feature_steamvr_battery": True,
+    "feature_intiface": True,
 }
 
 # Ensure AppData directory exists
@@ -105,7 +120,11 @@ class SteamVRSettingsManager:
         "autostart_with_steamvr": False,
         "auto_connect_steamvr": True,
         "no_data_enabled": True,
-        "no_data_timeout_s": 15,
+        # Two-timer anti-stuck (ported from VRC-Haptic-Pancake): mid-range
+        # values are cleared faster than saturated (==1.0) ones, since a
+        # legitimate full-contact hold is more common than a stuck mid value.
+        "no_data_timeout_active_s": 7,
+        "no_data_timeout_peaked_s": 15,
         "battery_poll_interval_s": 5.0,
         "patterns": [
             {"pattern": "Linear",   "str_min": 0,  "str_max": 80, "speed": 4},   # PROXIMITY
@@ -161,14 +180,30 @@ class SteamVRSettingsManager:
         self._save()
 
     def get_no_data(self) -> Dict[str, Any]:
+        # Backward-compat: older configs only stored `no_data_timeout_s`. Use
+        # it as the peaked timeout (the original semantics) and derive a
+        # reasonable active timeout if nothing newer is set.
+        legacy = self.settings.get("no_data_timeout_s")
+        peaked = self.settings.get("no_data_timeout_peaked_s",
+                                   legacy if legacy is not None else 15)
+        active = self.settings.get("no_data_timeout_active_s",
+                                   max(1, int(int(peaked) * 7 / 15)))
         return {
             "enabled": bool(self.settings.get("no_data_enabled", True)),
-            "timeout_s": int(self.settings.get("no_data_timeout_s", 15)),
+            "timeout_active_s": int(active),
+            "timeout_peaked_s": int(peaked),
+            # Keep the legacy key in the response so any old consumer that
+            # reads `timeout_s` keeps working (we use the peaked value).
+            "timeout_s": int(peaked),
         }
 
-    def set_no_data(self, enabled: bool, timeout_s: int) -> None:
+    def set_no_data(self, enabled: bool, timeout_active_s: int,
+                    timeout_peaked_s: int) -> None:
         self.settings["no_data_enabled"] = bool(enabled)
-        self.settings["no_data_timeout_s"] = int(timeout_s)
+        self.settings["no_data_timeout_active_s"] = int(timeout_active_s)
+        self.settings["no_data_timeout_peaked_s"] = int(timeout_peaked_s)
+        # Mirror to the legacy key so a downgrade still finds a sane value.
+        self.settings["no_data_timeout_s"] = int(timeout_peaked_s)
         self._save()
 
     def get_battery_interval(self) -> float:
@@ -348,6 +383,142 @@ class BHapticsSettingsManager:
         self._save()
 
 
+class HardwareMonitorSettingsManager:
+    """Persists Hardware Monitor settings: master toggle, poll rate, GPU enable,
+    per-stat send toggles, and per-stat OSC address overrides. Output is sent
+    over the existing VRChat OSC client so any VRChat avatar parameter can
+    receive the values."""
+
+    # User-facing parameter names. The VRChat /avatar/parameters/ prefix is
+    # hidden from the user and re-added at send time by the engine.
+    _DEFAULT_ADDRESSES: Dict[str, str] = {
+        "cpu_percent":   "HW_CPU",
+        "ram_used_gb":   "HW_RAM_Used",
+        "ram_total_gb":  "HW_RAM_Total",
+        "gpu_percent":   "HW_GPU",
+        "vram_used_gb":  "HW_VRAM_Used",
+        "vram_total_gb": "HW_VRAM_Total",
+    }
+
+    @staticmethod
+    def _strip_param_prefix(name: str) -> str:
+        """Migration helper: older configs and any user paste that includes
+        '/avatar/parameters/' gets normalised to the bare parameter name."""
+        s = str(name or "").strip()
+        if s.startswith("/avatar/parameters/"):
+            s = s[len("/avatar/parameters/"):]
+        return s.lstrip("/")
+
+    _DEFAULT_TOGGLES: Dict[str, bool] = {
+        "cpu_percent":   True,
+        "ram_used_gb":   True,
+        "ram_total_gb":  True,
+        "gpu_percent":   True,
+        "vram_used_gb":  True,
+        "vram_total_gb": True,
+    }
+
+    DEFAULTS: Dict[str, Any] = {
+        "enabled": False,
+        "send_osc": True,
+        "gpu_enabled": True,
+        "poll_rate_s": 2.0,
+        "addresses": _DEFAULT_ADDRESSES,
+        "send_toggles": _DEFAULT_TOGGLES,
+    }
+
+    def __init__(self):
+        self.settings: Dict[str, Any] = {}
+        self._load_or_create_defaults()
+
+    def _load_or_create_defaults(self) -> None:
+        if os.path.exists(HARDWARE_MONITOR_SETTINGS_FILE):
+            try:
+                with open(HARDWARE_MONITOR_SETTINGS_FILE, 'r') as f:
+                    loaded = json.load(f)
+                    if isinstance(loaded, dict):
+                        merged = {**self.DEFAULTS, **loaded}
+                        # Backfill any newly-added keys for forward-compat.
+                        addrs = dict(self._DEFAULT_ADDRESSES)
+                        for k, v in (loaded.get("addresses", {}) or {}).items():
+                            addrs[k] = self._strip_param_prefix(v) or self._DEFAULT_ADDRESSES.get(k, "")
+                        merged["addresses"] = addrs
+                        tgs = dict(self._DEFAULT_TOGGLES)
+                        tgs.update(loaded.get("send_toggles", {}) or {})
+                        merged["send_toggles"] = tgs
+                        self.settings = merged
+                        return
+            except (json.JSONDecodeError, IOError) as e:
+                print(f"Hardware monitor settings load error: {e}, using defaults")
+        self.settings = json.loads(json.dumps(self.DEFAULTS))
+        self._save()
+
+    def _save(self) -> None:
+        try:
+            with open(HARDWARE_MONITOR_SETTINGS_FILE, 'w') as f:
+                json.dump(self.settings, f, indent=2)
+        except IOError as e:
+            print(f"Hardware monitor settings save error: {e}")
+
+    def get_all(self) -> Dict[str, Any]:
+        # Return a shallow copy so callers can't mutate persisted state.
+        out = dict(self.settings)
+        out["addresses"] = dict(self.settings.get("addresses", {}))
+        out["send_toggles"] = dict(self.settings.get("send_toggles", {}))
+        return out
+
+    def get_enabled(self) -> bool:
+        return bool(self.settings.get("enabled", False))
+
+    def set_enabled(self, value: bool) -> None:
+        self.settings["enabled"] = bool(value)
+        self._save()
+
+    def get_send_osc(self) -> bool:
+        return bool(self.settings.get("send_osc", True))
+
+    def set_send_osc(self, value: bool) -> None:
+        self.settings["send_osc"] = bool(value)
+        self._save()
+
+    def get_gpu_enabled(self) -> bool:
+        return bool(self.settings.get("gpu_enabled", True))
+
+    def set_gpu_enabled(self, value: bool) -> None:
+        self.settings["gpu_enabled"] = bool(value)
+        self._save()
+
+    def get_poll_rate(self) -> float:
+        try:
+            return max(0.25, float(self.settings.get("poll_rate_s", 2.0)))
+        except (TypeError, ValueError):
+            return 2.0
+
+    def set_poll_rate(self, seconds: float) -> None:
+        try:
+            self.settings["poll_rate_s"] = max(0.25, float(seconds))
+        except (TypeError, ValueError):
+            self.settings["poll_rate_s"] = 2.0
+        self._save()
+
+    def get_address(self, key: str) -> str:
+        return str(self.settings.get("addresses", {}).get(key, self._DEFAULT_ADDRESSES.get(key, "")))
+
+    def set_address(self, key: str, address: str) -> None:
+        addrs = self.settings.setdefault("addresses", {})
+        clean = self._strip_param_prefix(address)
+        addrs[key] = clean or self._DEFAULT_ADDRESSES.get(key, "")
+        self._save()
+
+    def get_send_toggle(self, key: str) -> bool:
+        return bool(self.settings.get("send_toggles", {}).get(key, True))
+
+    def set_send_toggle(self, key: str, value: bool) -> None:
+        toggles = self.settings.setdefault("send_toggles", {})
+        toggles[key] = bool(value)
+        self._save()
+
+
 class KnownDevicesRegistry:
     """Global registry of every toy that's ever been connected.
 
@@ -449,6 +620,7 @@ class ProfileManager:
         self.app_settings = AppSettingsManager()
         self.steamvr_settings = SteamVRSettingsManager()
         self.bhaptics_settings = BHapticsSettingsManager()
+        self.hardware_monitor_settings = HardwareMonitorSettingsManager()
         self.known_devices = KnownDevicesRegistry()
         self._load_or_create_default()
 

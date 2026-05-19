@@ -25,16 +25,21 @@ from haptic_engine import HapticEngine
 from vrchat_osc import VRChatOSCManager
 from motor_router import MotorRouter
 from parameter_store import store
-from steamvr_engine import SteamVREngine, TrackerConfig as SteamVRTrackerConfig, PatternConfig as SteamVRPatternConfig
+from steamvr_engine import SteamVREngine
 from steamvr_router import SteamVRRouter, SteamVRBatteryBroadcaster
-from bhaptics_engine import BHapticsEngine, DeviceConfig as BHapticsDeviceConfig
-from bhaptics_router import BHapticsRouter, device_table as bhaptics_device_table, display_name as bhaptics_display_name, grid_layout as bhaptics_grid_layout, detected_positions as bhaptics_detected_positions
+from bhaptics_engine import BHapticsEngine
+from bhaptics_router import BHapticsRouter
+from hardware_monitor import HardwareMonitorEngine
 from constants import *
 from utilities import value_to_hex_color, toggle_windows_console, create_default_icon
 from version import __version__
 
+# Per-engine facade mixins extend the controller's call surface without
+# bloating main.py — each mixin's docstring covers its assumed attributes.
+from controllers import SteamVRFacade, BHapticsFacade, HardwareMonitorFacade
 
-class OscGoesPurrrApp:
+
+class OscGoesPurrrApp(SteamVRFacade, BHapticsFacade, HardwareMonitorFacade):
     def __init__(self):
         self.async_loop: asyncio.AbstractEventLoop = None
         
@@ -62,6 +67,10 @@ class OscGoesPurrrApp:
         # Haptic Engine - async hardware interface (single source of truth for connection state)
         self.haptic_engine: Optional[HapticEngine] = None
         
+        # Signal raised by the async worker thread once its event loop is
+        # bound; replaces the old polling-sleep startup race.
+        self._loop_ready = threading.Event()
+
         # Auto-refresh state - loaded from config in _setup_components
         self.auto_refresh_enabled = True
         self._auto_refresh_task = None  # For storing the periodic scan task
@@ -78,6 +87,12 @@ class OscGoesPurrrApp:
         
         # Dirty flag to debounce rapid OSC bundles
         self._needs_recalculation = False
+
+        # Cache of latest battery level per device (0..1). Populated from
+        # battery_update queue messages; surfaced via get_simple_mode_toys()
+        # so the Simple Mode panel can show a live battery icon next to each
+        # connected toy.
+        self._battery_cache: Dict[str, float] = {}
         
         # Initialize components in correct order
         self._setup_components()
@@ -122,6 +137,14 @@ class OscGoesPurrrApp:
             engine=self.bhaptics_engine,
             get_device_configs=self._bhaptics_get_device_configs,
             get_antistuck=self._bhaptics_get_antistuck,
+        )
+
+        # Hardware Monitor — broadcasts system stats (CPU/RAM/GPU/VRAM) to
+        # VRChat over OSC. Off by default; opt-in via the Hardware Monitor
+        # panel. Runs its own poll thread and never touches the UI directly.
+        self.hardware_monitor = HardwareMonitorEngine(
+            get_config=self._hardware_monitor_get_config,
+            send_osc=self._hardware_monitor_send_osc,
         )
 
         # Instantiate VRChat OSC Manager
@@ -169,93 +192,156 @@ class OscGoesPurrrApp:
             # Create new event loop for this thread
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            
+
             self.async_loop = loop
-            
+            # Tell the main thread the loop is ready; `run()` waits on this
+            # instead of polling-sleeping until self.async_loop becomes non-None.
+            self._loop_ready.set()
+
             try:
                 # Run the haptic engine async worker (main hardware loop)
                 loop.run_until_complete(self.haptic_engine.async_worker())
             finally:
                 loop.close()
-        
+
         # Start async thread
         self.async_thread = threading.Thread(target=run_loop, daemon=True)
         self.async_thread.start()
     
+    # Cap how many queue messages we drain per tick. Under an OSC storm this
+    # keeps the UI thread responsive — anything not drained this tick gets
+    # picked up on the next 100 ms poll.
+    _QUEUE_BATCH_CAP = 500
+
     def process_async_queue(self):
-        """Process messages from queue (called from main thread)"""
+        """Process messages from queue (called from main thread).
+
+        Drains up to `_QUEUE_BATCH_CAP` messages per tick. Consecutive
+        `osc_haptic_update` messages for the same `(device, motor)` are
+        coalesced — only the most recent target value matters for hardware,
+        so we drop the stale ones and dispatch a single command per motor.
+        """
+        # Collect-and-coalesce phase. We need to preserve relative order of
+        # non-haptic events, so haptic updates land in a side dict keyed by
+        # (device, motor) and replay at the end. Sequence preservation matters
+        # for stuff like `connection_status` → `devices_found`.
         try:
-            while True:
+            haptic_latest: Dict[tuple, tuple] = {}
+            ordered_events: List[tuple] = []
+            drained = 0
+            while drained < self._QUEUE_BATCH_CAP:
                 msg = self.thread_queue.get_nowait()
-                
-                if isinstance(msg, tuple):
-                    msg_type, data = msg
-                    
-                    if msg_type == "ui_update":
-                        self.ui.log_message(data)
-                    elif msg_type == "connection_status":
-                        connected, server = data
-                        # Route through the controller method (NOT directly to UI) --
-                        # the controller method is what restarts the auto-reconnect
-                        # loop when `connected` is False. Calling self.ui directly
-                        # only repainted the status label and left the engine state
-                        # in limbo with no retries.
-                        self.update_connection_status(connected, server)
-                    elif msg_type == "devices_found":
-                        # Update the global known-toys registry so future
-                        # empty profiles still see these toys.
-                        for _info in (data.values() if isinstance(data, dict) else []):
-                            if isinstance(_info, dict):
-                                self.profile_manager.known_devices.register(
-                                    _info.get("name", ""),
-                                    int(_info.get("motor_count", 1)),
-                                    _info.get("motor_kinds"),
-                                )
-                        self.ui.build_device_list_ui(data)
-                        self._sync_linear_configs(data)
-                        # Re-evaluate the green-check vs yellow-warning icons on
-                        # every stored device frame so reconnects flip back to
-                        # connected immediately.
-                        self.ui.update_stored_devices_ui()
-                    elif msg_type == "battery_update":
-                        self.ui.update_battery_label(data["device_name"], data["level"])
-                    elif msg_type == "device_removed":
-                        device_name = data
-                        self.log_message(f"Toy disconnected: {device_name}")
-                        # Frame stays (the device is "stored"); just flip its
-                        # connection-status icon from green to yellow.
-                        self.ui.update_stored_devices_ui()
-                    elif msg_type == "stored_devices_refresh":
-                        self.ui.build_stored_devices_ui()
-                    elif msg_type == "osc_status":
-                        is_connected, port = data
-                        self.ui.update_osc_status(is_connected, port)
-                        if is_connected:
-                            self.ui.log_message(f"VRChat OSC Connected! Listening on port {port}")
-                            # /avatar/change fires only when the avatar loads.
-                            # If we connected mid-session we'll never see it,
-                            # so probe the OSCQuery HTTP node for the current
-                            # value as soon as the OSCQuery handshake settles.
-                            self._schedule_avatar_id_probe()
-                        else:
-                            self.ui.log_message("VRChat OSC Disconnected. Waiting for VRChat to come back...")
-                    elif msg_type == "osc_haptic_update":
-                        device_name, val_float, motor_index = data
-                        # This is now safely running on the Main UI thread!
-                        self.update_device_target(device_name, val_float, motor_index)
-                    elif msg_type == "ui_slider_update":
-                        device_name, value, motor_idx = data
-                        self._is_updating_ui = True  # Lock the UI to prevent echo loops
-                        try:
-                            # Tell the UI to handle its own widgets
-                            self.ui.update_device_visuals(device_name, motor_idx, value)
-                        finally:
-                            self._is_updating_ui = False  # Unlock
-                    elif msg_type == "avatar_change":
-                        self._on_avatar_change(data)
-                        
+                drained += 1
+                if isinstance(msg, tuple) and len(msg) == 2 and msg[0] == "osc_haptic_update":
+                    device_name, val_float, motor_index = msg[1]
+                    haptic_latest[(device_name, motor_index)] = (device_name, val_float, motor_index)
+                    continue
+                ordered_events.append(msg)
         except queue.Empty:
-            pass  # No more messages in queue
+            pass
+
+        for msg in ordered_events:
+            if not isinstance(msg, tuple):
+                continue
+            msg_type, data = msg
+
+            if msg_type == "ui_update":
+                self.ui.log_message(data)
+            elif msg_type == "connection_status":
+                connected, server = data
+                # Route through the controller method (NOT directly to UI) --
+                # the controller method is what restarts the auto-reconnect
+                # loop when `connected` is False. Calling self.ui directly
+                # only repainted the status label and left the engine state
+                # in limbo with no retries.
+                self.update_connection_status(connected, server)
+            elif msg_type == "devices_found":
+                # Update the global known-toys registry so future
+                # empty profiles still see these toys.
+                for _info in (data.values() if isinstance(data, dict) else []):
+                    if isinstance(_info, dict):
+                        self.profile_manager.known_devices.register(
+                            _info.get("name", ""),
+                            int(_info.get("motor_count", 1)),
+                            _info.get("motor_kinds"),
+                        )
+                self.ui.build_device_list_ui(data)
+                self._sync_linear_configs(data)
+                # Re-evaluate the green-check vs yellow-warning icons on
+                # every stored device frame so reconnects flip back to
+                # connected immediately.
+                self.ui.update_stored_devices_ui()
+            elif msg_type == "battery_update":
+                try:
+                    self._battery_cache[data["device_name"]] = float(data["level"])
+                except (TypeError, ValueError):
+                    pass
+                self.ui.update_battery_label(data["device_name"], data["level"])
+                # Push the same value into the Simple Mode panel if it
+                # exposes a hook for live battery refresh.
+                if hasattr(self.ui, "update_simple_mode_battery"):
+                    self.ui.update_simple_mode_battery(data["device_name"], data["level"])
+            elif msg_type == "device_removed":
+                device_name = data
+                self.log_message(f"Toy disconnected: {device_name}")
+                # Frame stays (the device is "stored"); just flip its
+                # connection-status icon from green to yellow.
+                self.ui.update_stored_devices_ui()
+            elif msg_type == "stored_devices_refresh":
+                self.ui.build_stored_devices_ui()
+            elif msg_type == "osc_status":
+                is_connected, port = data
+                self.ui.update_osc_status(is_connected, port)
+                if is_connected:
+                    self.ui.log_message(f"VRChat OSC Connected! Listening on port {port}")
+                    # Dump full diagnostics on every connect so the user has
+                    # a clean baseline (which ports were chosen, etc.) in the
+                    # log when a future silent-connection failure happens.
+                    try:
+                        diag = self.osc_manager.get_diagnostics() if self.osc_manager else {}
+                        self.ui.log_message(
+                            f"OSC diag: our_listen={diag.get('our_listen_port')} "
+                            f"our_http={diag.get('our_http_phonebook_port')} "
+                            f"vrc_http={diag.get('vrc_http_port')} "
+                            f"vrc_osc={diag.get('vrc_osc_port')} "
+                            f"udp_socket={diag.get('udp_socket_bound')}"
+                        )
+                    except Exception:
+                        pass
+                    # /avatar/change fires only when the avatar loads.
+                    # If we connected mid-session we'll never see it,
+                    # so probe the OSCQuery HTTP node for the current
+                    # value as soon as the OSCQuery handshake settles.
+                    self._schedule_avatar_id_probe()
+                else:
+                    self.ui.log_message("VRChat OSC Disconnected. Waiting for VRChat to come back...")
+                    # Dump diagnostics so we can see whether packets ever
+                    # arrived this session.
+                    try:
+                        diag = self.osc_manager.get_diagnostics() if self.osc_manager else {}
+                        self.ui.log_message(
+                            f"OSC diag at disconnect: packets_handled={diag.get('packets_handled')} "
+                            f"phonebook_GETs={diag.get('phonebook_GETs')} "
+                            f"handler_exc={diag.get('handler_exceptions')} "
+                            f"session_age_s={diag.get('session_age_s')}"
+                        )
+                    except Exception:
+                        pass
+            elif msg_type == "ui_slider_update":
+                device_name, value, motor_idx = data
+                self._is_updating_ui = True  # Lock the UI to prevent echo loops
+                try:
+                    # Tell the UI to handle its own widgets
+                    self.ui.update_device_visuals(device_name, motor_idx, value)
+                finally:
+                    self._is_updating_ui = False  # Unlock
+            elif msg_type == "avatar_change":
+                self._on_avatar_change(data)
+
+        # Dispatch the coalesced haptic targets last — one command per motor
+        # carrying the freshest value.
+        for device_name, val_float, motor_index in haptic_latest.values():
+            self.update_device_target(device_name, val_float, motor_index)
     
     def log_message(self, message: str):
         """Add a message to the log text box (main thread only)"""
@@ -277,7 +363,7 @@ class OscGoesPurrrApp:
         """Update connection UI elements (main thread only)"""
         # Sync with haptic engine (haptic_engine.is_connected is now the single source of truth)
         if self.haptic_engine:
-            self.haptic_engine.is_connected = connected
+            self.haptic_engine.mark_connected(connected)
         
         # Update UI via ui component
         self.ui.update_connection_status(connected, server)
@@ -290,7 +376,7 @@ class OscGoesPurrrApp:
                     self.async_loop
                 )
             except Exception as e:
-                pass
+                self.log_message(f"Auto-reconnect restart failed: {e}")
     
     def toggle_auto_connect(self):
         """Handle auto-connect checkbox toggle from UI"""
@@ -323,23 +409,36 @@ class OscGoesPurrrApp:
     async def _async_attempt_connection(self):
         """Attempt to connect to Intiface once. Returns True if successful."""
         try:
-            await self.haptic_engine._async_connect()
+            await self.haptic_engine.async_connect()
             return True
         except Exception as e:
             self.log_message(f"Connection attempt failed: {e}")
             return False
     
     async def _async_auto_connect_loop(self):
-        """Background task that retries connection every 2 seconds"""
-        while self.auto_connect_enabled and not self.haptic_engine.is_connected:
-            await asyncio.sleep(2.0)
-            if self.auto_connect_enabled and not self.haptic_engine.is_connected:
-                try:
-                    success = await self._async_attempt_connection()
-                    if success:
-                        self.log_message("Auto-connect: Successfully connected!")
-                except Exception as e:
-                    pass  # Errors are logged in _async_attempt_connection
+        """Background task that retries connection every 2 seconds.
+
+        First attempt fires immediately so a freshly-launched Intiface gets
+        picked up without the 2-second sleep delay; subsequent retries pace
+        themselves between attempts.
+        """
+        first_iteration = True
+        while (self.auto_connect_enabled
+               and self.get_feature_enabled("feature_intiface")
+               and not self.haptic_engine.is_connected):
+            if not first_iteration:
+                await asyncio.sleep(2.0)
+            first_iteration = False
+            if not (self.auto_connect_enabled
+                    and self.get_feature_enabled("feature_intiface")
+                    and not self.haptic_engine.is_connected):
+                break
+            try:
+                success = await self._async_attempt_connection()
+                if success:
+                    self.log_message("Auto-connect: Successfully connected!")
+            except Exception:
+                pass  # Errors are logged in _async_attempt_connection
     
     def get_connected_device_names(self) -> set:
         """Get set of currently connected device names"""
@@ -399,10 +498,225 @@ class OscGoesPurrrApp:
     def set_app_setting(self, key: str, value: Any):
         """Facade method for UI to safely update app settings."""
         self.profile_manager.app_settings.set(key, value)
+
+    # ==================================================================
+    # Feature toggles — Settings → Features panel uses these to gate the
+    # expensive background subsystems (bHaptics, Hardware Monitor, SteamVR
+    # haptics/battery, OSC Inspector). Each toggle starts/stops the matching
+    # engine so disabled features actually free their threads.
+    # ==================================================================
+
+    FEATURE_KEYS = (
+        "feature_osc_inspector",
+        "feature_bhaptics",
+        "feature_hardware_monitor",
+        "feature_steamvr_haptics",
+        "feature_steamvr_battery",
+        "feature_intiface",
+    )
+
+    def get_feature_enabled(self, key: str) -> bool:
+        return bool(self.get_app_setting(key, True))
+
+    def get_feature_flags(self) -> Dict[str, bool]:
+        return {k: self.get_feature_enabled(k) for k in self.FEATURE_KEYS}
+
+    def set_feature_enabled(self, key: str, enabled: bool) -> None:
+        enabled = bool(enabled)
+        self.set_app_setting(key, enabled)
+        try:
+            self._apply_feature_state(key, enabled)
+        except Exception as e:
+            self.log_message(f"Feature toggle '{key}' apply error: {e}")
+        # Sync the sidebar visibility so disabled features hide their nav entry.
+        if self.ui is not None:
+            try:
+                self.ui.apply_feature_visibility()
+            except Exception:
+                pass
+
+    def _apply_feature_state(self, key: str, enabled: bool) -> None:
+        """Start or stop the background subsystem behind a feature toggle."""
+        if key == "feature_bhaptics":
+            if enabled:
+                try:
+                    self.bhaptics_engine.start()
+                    self.bhaptics_router.start()
+                except Exception as e:
+                    self.log_message(f"bHaptics start failed: {e}")
+            else:
+                try:
+                    self.bhaptics_router.stop()
+                    self.bhaptics_engine.stop()
+                except Exception:
+                    pass
+        elif key == "feature_hardware_monitor":
+            if enabled:
+                try:
+                    self.hardware_monitor.start()
+                except Exception as e:
+                    self.log_message(f"Hardware monitor start failed: {e}")
+            else:
+                try:
+                    self.hardware_monitor.stop()
+                except Exception:
+                    pass
+        elif key == "feature_steamvr_haptics":
+            if enabled:
+                try:
+                    self.steamvr_router.start()
+                except Exception as e:
+                    self.log_message(f"SteamVR haptics start failed: {e}")
+            else:
+                try:
+                    self.steamvr_router.stop()
+                except Exception:
+                    pass
+        elif key == "feature_steamvr_battery":
+            if enabled:
+                try:
+                    self.steamvr_battery.start()
+                except Exception as e:
+                    self.log_message(f"SteamVR battery start failed: {e}")
+            else:
+                try:
+                    self.steamvr_battery.stop()
+                except Exception:
+                    pass
+        elif key == "feature_osc_inspector":
+            # Pure UI / debug feature — refresh loop checks the flag itself.
+            pass
+        elif key == "feature_intiface":
+            # Intiface toy communication. Turning it off disconnects any
+            # active session and the auto-connect loop short-circuits on the
+            # flag, so no reconnection happens until the user re-enables it.
+            if enabled:
+                if (self.auto_connect_enabled
+                        and self.haptic_engine
+                        and not self.haptic_engine.is_connected
+                        and self.async_loop):
+                    try:
+                        self._auto_connect_task = asyncio.run_coroutine_threadsafe(
+                            self._async_auto_connect_loop(),
+                            self.async_loop,
+                        )
+                    except Exception as e:
+                        self.log_message(f"Intiface auto-connect restart failed: {e}")
+            else:
+                if (self.haptic_engine
+                        and self.haptic_engine.is_connected
+                        and self.async_loop):
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            self.haptic_engine.async_disconnect(),
+                            self.async_loop,
+                        )
+                    except Exception as e:
+                        self.log_message(f"Intiface disconnect failed: {e}")
     
     def get_detected_zones(self) -> Dict[str, List[str]]:
         """Facade method for UI to safely read detected zones from the Central Store."""
         return store.get_detected_zones()
+
+    def get_osc_diagnostics(self) -> Dict[str, Any]:
+        """Facade: dump VRChat OSC manager diagnostics. Empty dict when the
+        manager isn't running yet. UI panels (or the user manually triggering
+        a dump) can show this to debug the 'connected but silent' failure."""
+        if not getattr(self, "osc_manager", None):
+            return {}
+        try:
+            return self.osc_manager.get_diagnostics()
+        except Exception as e:
+            return {"error": f"{type(e).__name__}: {e}"}
+
+    def log_osc_diagnostics(self) -> None:
+        """Dump the OSC diagnostics dict to the in-app log on demand.
+        Useful while reproducing the silent-connection bug."""
+        diag = self.get_osc_diagnostics()
+        if not diag:
+            self.log_message("OSC diag: manager not running")
+            return
+        self.log_message(
+            "OSC diag: " + ", ".join(f"{k}={v}" for k, v in diag.items())
+        )
+
+    def get_osc_event_log(self) -> List[str]:
+        """Facade: snapshot of the OSC manager's event ring buffer."""
+        mgr = getattr(self, "osc_manager", None)
+        if mgr is None:
+            return []
+        try:
+            return mgr.get_event_log()
+        except Exception:
+            return []
+
+    def get_osc_other_clients(self) -> Dict[str, Dict[str, Any]]:
+        """Facade: which non-VRChat OSCQuery clients have we seen this session."""
+        mgr = getattr(self, "osc_manager", None)
+        if mgr is None:
+            return {}
+        try:
+            return mgr.get_other_clients()
+        except Exception:
+            return {}
+
+    def force_osc_rehandshake(self) -> None:
+        """Facade: manually fire a re-poll of VRChat's OSCQuery endpoint and
+        a fresh handshake ping. Wired to the 'Force re-handshake' button on
+        the OSC Diagnostics panel — try this when packets stop flowing and
+        you don't want to flip Disconnect/Connect to test if VRChat will
+        resume sending."""
+        mgr = getattr(self, "osc_manager", None)
+        if mgr is None:
+            self.log_message("Force re-handshake: OSC manager not running")
+            return
+        self.log_message("Force re-handshake: re-polling VRChat OSCQuery...")
+        try:
+            mgr._reprobe_silent_connection()
+        except Exception as e:
+            self.log_message(f"Force re-handshake failed: {type(e).__name__}: {e}")
+
+    def force_osc_reregister_mdns(self) -> None:
+        """Facade: rip our mDNS advertisement and re-publish under a fresh
+        unique name. The strongest non-destructive recovery for the
+        'connected but silent' bug — forces VRChat's OSCQuery client cache
+        to enumerate us as a brand-new client and re-query our phonebook.
+        Wired to the 'Re-publish mDNS' button on the Diagnostics panel."""
+        mgr = getattr(self, "osc_manager", None)
+        if mgr is None:
+            self.log_message("Re-publish mDNS: OSC manager not running")
+            return
+        self.log_message("Re-publish mDNS: unregistering and re-advertising under a fresh name...")
+        try:
+            ok = mgr.reregister_mdns()
+            if ok:
+                self.log_message("Re-publish mDNS: done. Wait ~5s for VRChat to re-query us.")
+            else:
+                self.log_message("Re-publish mDNS: completed with errors — see OSC Diagnostics log.")
+        except Exception as e:
+            self.log_message(f"Re-publish mDNS failed: {type(e).__name__}: {e}")
+
+    def open_osc_log_folder(self) -> None:
+        """Facade: open the directory containing the persistent OSC log file
+        in the system file explorer. Wired to the 'Open log folder' button."""
+        mgr = getattr(self, "osc_manager", None)
+        path = mgr.get_log_file_path() if mgr is not None else None
+        if not path:
+            self.log_message("Open log folder: no log path available (appdata denied?)")
+            return
+        try:
+            import os as _os
+            import subprocess as _subp
+            folder = _os.path.dirname(path)
+            self.log_message(f"OSC log file: {path}")
+            if _os.name == "nt":
+                _os.startfile(folder)  # type: ignore[attr-defined]
+            else:
+                # Fallback for non-Windows; this app targets Windows but
+                # keep it from crashing if someone runs it elsewhere.
+                _subp.Popen(["xdg-open", folder])
+        except Exception as e:
+            self.log_message(f"Open log folder failed: {type(e).__name__}: {e}")
     
     def update_device_config(self, device_name: str, key: str, value):
         """Update a config value for a device in current profile using profile_manager"""
@@ -421,14 +735,20 @@ class OscGoesPurrrApp:
 
         Reads from whichever profile the manager considers *active* — an avatar
         profile when the current VRChat avatar has one bound, otherwise the
-        selected global profile.
+        selected global profile. In Simple Mode, profile config is bypassed
+        and every connected motor gets the same global SPS max value.
         """
         if not (hasattr(self, 'motor_router') and hasattr(self, 'osc_manager')):
             return
-        active = self.profile_manager.get_active_profile_dict()
-        if active is None:
-            return
-        updates = self.motor_router.reevaluate_state(active, store.get_all_parameters())
+        params, _version, zones = store.snapshot()
+        if self.get_app_setting("simple_mode", False):
+            motor_counts = self.get_device_motor_counts()
+            updates = self.motor_router.reevaluate_simple_mode(motor_counts, params, zones=zones)
+        else:
+            active = self.profile_manager.get_active_profile_dict()
+            if active is None:
+                return
+            updates = self.motor_router.reevaluate_state(active, params, zones=zones)
         for device_name, target_val, motor_idx in updates:
             self.thread_queue.put(("osc_haptic_update", (device_name, target_val, motor_idx)))
 
@@ -496,6 +816,16 @@ class OscGoesPurrrApp:
 
             # Push to the UI as a list of (text, color) tuples
             self.ui.update_debugger_display(debug_data)
+
+        # Refresh the Simple Mode panel on the same cadence so newly connected
+        # toys, fresh battery readings and zone changes appear without waiting
+        # for a hard rebuild.
+        if hasattr(self.ui, "refresh_simple_mode_view"):
+            self.ui.refresh_simple_mode_view()
+        # The diagnostics panel self-skips when it isn't the active view,
+        # so this is cheap when the user is elsewhere.
+        if hasattr(self.ui, "refresh_osc_diagnostics_view"):
+            self.ui.refresh_osc_diagnostics_view()
 
         # Schedule the next refresh (Throttled to save UI thread)
         self.ui.schedule_callback(UI_REFRESH_RATE_MS, self.refresh_debugger_ui)
@@ -579,12 +909,94 @@ class OscGoesPurrrApp:
         if self.async_loop and self.haptic_engine and self.haptic_engine.is_connected:
             try:
                 future = asyncio.run_coroutine_threadsafe(
-                    self.haptic_engine._async_purr_check(),
+                    self.haptic_engine.async_purr_check(),
                     self.async_loop
                 )
                 future.result(timeout=3)
             except Exception as e:
                 self.log_message(f"Purr-Check failed: {e}")
+
+    def test_toy(self, device_name: str):
+        """Pulse a single toy for ~1 second. Used by the Simple Mode panel's
+        per-toy test button. Fire-and-forget so the UI never blocks."""
+        if not (self.async_loop and self.haptic_engine and self.haptic_engine.is_connected):
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self.haptic_engine.async_test_device(device_name),
+                self.async_loop,
+            )
+            self.log_message(f"Testing toy: {device_name}")
+        except Exception as e:
+            self.log_message(f"Test toy failed ({device_name}): {e}")
+
+    # ==================================================================
+    # Simple Mode Facade
+    # When enabled, every detected SPS source drives every connected toy
+    # with no per-toy profile config. Toggle, source list and toy list are
+    # surfaced through these methods so the UI never reaches into backend
+    # state directly.
+    # ==================================================================
+
+    def get_simple_mode(self) -> bool:
+        return bool(self.get_app_setting("simple_mode", False))
+
+    def set_simple_mode(self, enabled: bool):
+        enabled = bool(enabled)
+        if self.get_simple_mode() == enabled:
+            return
+        self.set_app_setting("simple_mode", enabled)
+        # Clear router debounce so the new mode's first tick actually emits
+        # values instead of being silently filtered as "unchanged".
+        if hasattr(self, "motor_router"):
+            self.motor_router.reset_outputs()
+        # When turning OFF, also send zeros to every motor so they don't
+        # hang at the last simple-mode value.
+        if not enabled and self.haptic_engine and self.haptic_engine.is_connected:
+            for device_name, motor_count in self.get_device_motor_counts().items():
+                for motor_idx in range(motor_count):
+                    self.thread_queue.put(("osc_haptic_update", (device_name, 0.0, motor_idx)))
+        self.log_message(f"Simple Mode {'enabled' if enabled else 'disabled'}")
+        # Rebuild device cards: the Device Routing view is now mostly
+        # decorative while Simple Mode is on, but no clear-out is needed.
+        self.force_recalculate()
+
+    def get_simple_mode_sources(self) -> Dict[str, List[str]]:
+        """Live snapshot of detected SPS zones — {'Orifices': [...],
+        'Penetrators': [...]}. Returns empty lists when no avatar is loaded."""
+        params = store.get_all_parameters()
+        orifices: set = set()
+        penetrators: set = set()
+        for path in params.keys():
+            parts = path.split("/")
+            if len(parts) >= 3 and parts[0] == "OGB":
+                category = parts[1]
+                zone_name = parts[2]
+                if category in ("Orifice", "Orf"):
+                    orifices.add(zone_name)
+                elif category in ("Penetrator", "Pen"):
+                    penetrators.add(zone_name)
+        return {
+            "Orifices": sorted(orifices),
+            "Penetrators": sorted(penetrators),
+        }
+
+    def get_simple_mode_toys(self) -> List[Dict[str, Any]]:
+        """Snapshot of connected toys for the Simple Mode panel.
+        Each entry: {'name': str, 'motor_count': int, 'connected': bool}."""
+        out: List[Dict[str, Any]] = []
+        if not self.haptic_engine:
+            return out
+        motor_counts = self.haptic_engine.get_motor_count_map()
+        for name in self.haptic_engine.list_connected_device_names():
+            out.append({
+                "name": name,
+                "motor_count": int(motor_counts.get(name, 1)),
+                "connected": True,
+                "battery": self._battery_cache.get(name),
+            })
+        out.sort(key=lambda d: d["name"].lower())
+        return out
     
     def toggle_network_bind(self, value: bool):
         """Handle network bind toggle from Settings UI."""
@@ -950,7 +1362,7 @@ class OscGoesPurrrApp:
         """Facade: keep the haptic engine's connection flag in sync with the
         VRChat OSC link. Setter-only so the UI never holds the object."""
         if hasattr(self, 'haptic_engine') and self.haptic_engine:
-            self.haptic_engine.is_connected = connected
+            self.haptic_engine.mark_connected(connected)
 
     def toggle_osc_connection(self):
         """Toggles the VRChat OSC connection on and off safely (non-blocking)."""
@@ -1083,7 +1495,15 @@ class OscGoesPurrrApp:
         """Handle connection button click - connects/disconnects from main thread"""
         if not self.haptic_engine or not self.async_loop:
             return
-            
+
+        # Refuse to dial out when the Intiface feature has been turned off in
+        # Settings → Features. (Disconnect still works so the user can hang
+        # up an active session even if they then disable the feature.)
+        if (not self.haptic_engine.is_connected
+                and not self.get_feature_enabled("feature_intiface")):
+            self.log_message("Intiface feature is disabled in Settings → Features.")
+            return
+
         # Use haptic_engine.is_connected directly as the source of truth
         if not self.haptic_engine.is_connected:
             # Connect when clicked (if not already connected)
@@ -1091,7 +1511,7 @@ class OscGoesPurrrApp:
                 self.log_message("Connecting to Intiface...")
                 # Schedule the async connect to run in the async thread
                 future = asyncio.run_coroutine_threadsafe(
-                    self.haptic_engine._async_connect(),
+                    self.haptic_engine.async_connect(),
                     self.async_loop
                 )
                 # Wait for result with a timeout
@@ -1115,7 +1535,7 @@ class OscGoesPurrrApp:
             # Disconnect when clicked (if connected)
             try:
                 future = asyncio.run_coroutine_threadsafe(
-                    self.haptic_engine._async_disconnect(),
+                    self.haptic_engine.async_disconnect(),
                     self.async_loop
                 )
                 future.result(timeout=2)
@@ -1197,190 +1617,36 @@ class OscGoesPurrrApp:
         except Exception:
             pass
 
+        try:
+            self.hardware_monitor.stop()
+        except Exception:
+            pass
+
         self.ui.shutdown()
 
-    # ==================================================================
-    # SteamVR Haptics Facade
-    # The UI and other backend services must go through these methods —
-    # they MUST NOT touch self.steamvr_engine / self.steamvr_router /
-    # self.profile_manager.steamvr_settings directly.
-    # ==================================================================
-
-    def _steamvr_settings(self):
-        return self.profile_manager.steamvr_settings
-
-    def _steamvr_get_tracker_config(self, serial: str) -> SteamVRTrackerConfig:
-        return SteamVRTrackerConfig.from_dict(self._steamvr_settings().get_tracker(serial))
-
-    def _steamvr_get_all_tracker_configs(self) -> Dict[str, SteamVRTrackerConfig]:
-        return {
-            serial: SteamVRTrackerConfig.from_dict(d)
-            for serial, d in self._steamvr_settings().get_tracker_dict().items()
-        }
-
-    def _steamvr_get_pattern_configs(self) -> List[SteamVRPatternConfig]:
-        return [SteamVRPatternConfig.from_dict(d) for d in self._steamvr_settings().get_patterns()]
-
-    def _steamvr_get_no_data(self) -> Dict[str, Any]:
-        return self._steamvr_settings().get_no_data()
-
-    def _steamvr_get_battery_interval(self) -> float:
-        return float(self._steamvr_settings().get_battery_interval())
-
-    def _steamvr_get_auto_connect(self) -> bool:
-        return self._steamvr_settings().get_auto_connect()
-
-    def _steamvr_send_osc(self, address: str, value: float) -> None:
-        # Reuse the existing outbound VRChat client (already targets the
-        # discovered OSCQuery port). No-op if VRChat isn't connected.
-        if not self.osc_manager or not getattr(self.osc_manager, "is_connected", False):
-            return
-        try:
-            self.osc_manager.send_parameter(address, float(value), ignore_rate_limit=True)
-        except Exception as e:
-            self.log_message(f"SteamVR battery OSC send failed ({address}): {e}")
-
-    def get_steamvr_status(self) -> Dict[str, Any]:
-        """Snapshot for the UI: runtime alive, device list, autostart, manifest reg."""
-        devices = self.steamvr_engine.snapshot_devices()
-        return {
-            "available": self.steamvr_engine.is_available,
-            "alive": self.steamvr_engine.is_alive,
-            "bundled": self.steamvr_engine.is_app_bundled,
-            "autostart": self._steamvr_settings().get_autostart(),
-            "auto_connect": self._steamvr_settings().get_auto_connect(),
-            "registered": self.steamvr_engine.is_registered() if self.steamvr_engine.is_alive else False,
-            "battery_interval_s": self._steamvr_get_battery_interval(),
-            "trackers": [
-                {
-                    "serial": d.serial,
-                    "model": d.model,
-                    "device_class": d.device_class,
-                    "supports_haptics": d.supports_haptics,
-                    "battery": self.steamvr_engine.battery_for(d.serial),
-                    "config": self._steamvr_settings().get_tracker(d.serial),
-                }
-                for d in devices
-            ],
-        }
-
-    def refresh_steamvr_trackers(self) -> int:
-        devices = self.steamvr_engine.refresh_devices(quiet=False)
-        return len(devices)
-
-    def pulse_steamvr_tracker(self, serial: str, length_ms: int = 500) -> None:
-        self.steamvr_engine.pulse_test(serial, length_ms)
-
-    def set_steamvr_tracker_config(self, serial: str, cfg: Dict[str, Any]) -> None:
-        self._steamvr_settings().set_tracker(serial, cfg)
-
-    def set_steamvr_autostart(self, enabled: bool) -> None:
-        self._steamvr_settings().set_autostart(enabled)
-        try:
-            self.steamvr_engine.setup_autostart(enabled)
-        except Exception as e:
-            self.log_message(f"SteamVR autostart toggle failed: {e}")
-
-    def set_steamvr_pattern(self, index: int, pattern_dict: Dict[str, Any]) -> None:
-        self._steamvr_settings().set_pattern(index, pattern_dict)
-
-    def get_steamvr_pattern_configs(self) -> List[Dict[str, Any]]:
-        return list(self._steamvr_settings().get_patterns())
-
-    def get_steamvr_no_data(self) -> Dict[str, Any]:
-        return self._steamvr_settings().get_no_data()
-
-    def set_steamvr_no_data(self, enabled: bool, timeout_s: int) -> None:
-        self._steamvr_settings().set_no_data(enabled, timeout_s)
-
-    def set_steamvr_battery_interval(self, seconds: float) -> None:
-        self._steamvr_settings().set_battery_interval(seconds)
-        self.steamvr_battery.set_interval(seconds)
-
-    def set_steamvr_auto_connect(self, enabled: bool) -> None:
-        self._steamvr_settings().set_auto_connect(enabled)
-        # If just turned on, try one immediate refresh so the UI updates quickly.
-        if enabled:
-            try:
-                self.steamvr_engine.refresh_devices(quiet=True)
-            except Exception:
-                pass
-
-    # ==================================================================
-    # bHaptics Facade
-    # ==================================================================
-
-    def _bhaptics_settings(self):
-        return self.profile_manager.bhaptics_settings
-
-    def _bhaptics_get_auto_connect(self) -> bool:
-        return self._bhaptics_settings().get_auto_connect()
-
-    def _bhaptics_get_device_configs(self) -> Dict[str, BHapticsDeviceConfig]:
-        raw = self._bhaptics_settings().get_devices()
-        return {pos: BHapticsDeviceConfig.from_dict(d) for pos, d in raw.items()}
-
-    def _bhaptics_get_antistuck(self) -> Dict[str, Any]:
-        return self._bhaptics_settings().get_antistuck()
-
-    def get_bhaptics_status(self) -> Dict[str, Any]:
-        s = self._bhaptics_settings()
-        detected = bhaptics_detected_positions(store.get_all_parameters())
-        return {
-            "available": self.bhaptics_engine.is_available,
-            "connected": self.bhaptics_engine.is_connected,
-            "last_error": self.bhaptics_engine.last_error,
-            "auto_connect": s.get_auto_connect(),
-            "host": s.get_host(),
-            "port": s.get_port(),
-            "antistuck": s.get_antistuck(),
-            "devices": [
-                {
-                    "position": pos,
-                    "display_name": bhaptics_display_name(pos),
-                    "node_count": count,
-                    "grid": bhaptics_grid_layout(pos),  # (cols, rows)
-                    "config": s.get_device(pos),
-                    "detected": pos in detected,
-                }
-                for pos, _slot, count in bhaptics_device_table()
-            ],
-        }
-
-    def get_bhaptics_snapshot(self) -> Dict[str, List[int]]:
-        """Live per-device dot intensities (0-100). Used by the debug grid."""
-        return self.bhaptics_router.get_snapshot()
-
-    def set_bhaptics_auto_connect(self, enabled: bool) -> None:
-        self._bhaptics_settings().set_auto_connect(enabled)
-
-    def set_bhaptics_endpoint(self, host: str, port: int) -> None:
-        self._bhaptics_settings().set_endpoint(host, port)
-        self.bhaptics_engine.set_endpoint(host, port)
-
-    def set_bhaptics_device(self, position: str, cfg: Dict[str, Any]) -> None:
-        self._bhaptics_settings().set_device(position, cfg)
-
-    def bhaptics_connect_now(self) -> bool:
-        return self.bhaptics_engine.manual_connect()
-
-    def set_bhaptics_antistuck(self, enabled: bool, hold_s: float, ramp_s: float) -> None:
-        self._bhaptics_settings().set_antistuck(enabled, hold_s, ramp_s)
+    # Engine-specific facade methods live in `controllers/` mixin modules:
+    #   - SteamVRFacade            (SteamVR haptics + battery)
+    #   - BHapticsFacade           (bHaptics player dot grid)
+    #   - HardwareMonitorFacade    (CPU/RAM/GPU OSC broadcaster)
+    # The mixins assume `self.profile_manager`, the engine attributes, and
+    # `self.osc_manager` exist on the host controller.
 
     def run(self):
         """Start the Three-Pillar application"""
         # Start async loop in background thread
         self.start_async_loop()
 
-        # Wait for async_loop to be ready (race condition: thread needs time to set self.async_loop)
-        import time
-        timeout = 5.0
-        start_time = time.time()
-        while self.async_loop is None and (time.time() - start_time) < timeout:
-            time.sleep(0.05)
+        # Wait for the worker thread to publish its event loop, with a timeout
+        # so a stuck worker doesn't hang startup forever.
+        if not self._loop_ready.wait(timeout=5.0):
+            self.log_message("Async worker did not start within 5s; continuing anyway")
 
-        # Start auto-connect if enabled (single source of truth is haptic_engine.is_connected)
-        if self.auto_connect_enabled and not self.haptic_engine.is_connected and self.async_loop:
+        # Start auto-connect if enabled (single source of truth is haptic_engine.is_connected).
+        # Skip when the Intiface feature has been disabled in Settings → Features.
+        if (self.auto_connect_enabled
+                and self.get_feature_enabled("feature_intiface")
+                and not self.haptic_engine.is_connected
+                and self.async_loop):
             try:
                 self._auto_connect_task = asyncio.run_coroutine_threadsafe(
                     self._async_auto_connect_loop(),
@@ -1411,19 +1677,35 @@ class OscGoesPurrrApp:
 
         # Start SteamVR Haptics router. Engine init is deferred to first refresh
         # — the router itself is cheap and just polls the parameter store.
-        try:
-            self.steamvr_router.start()
-            self.steamvr_battery.start()
-        except Exception as e:
-            self.log_message(f"SteamVR router/broadcaster failed to start: {e}")
+        # Each half (haptics / battery) is gated by its own feature toggle so
+        # users who only want one side don't pay for the other.
+        if self.get_feature_enabled("feature_steamvr_haptics"):
+            try:
+                self.steamvr_router.start()
+            except Exception as e:
+                self.log_message(f"SteamVR haptics router failed to start: {e}")
+        if self.get_feature_enabled("feature_steamvr_battery"):
+            try:
+                self.steamvr_battery.start()
+            except Exception as e:
+                self.log_message(f"SteamVR battery broadcaster failed to start: {e}")
 
         # Start bHaptics engine + router. Engine's reconnect thread sits
         # idle when auto-connect is off.
-        try:
-            self.bhaptics_engine.start()
-            self.bhaptics_router.start()
-        except Exception as e:
-            self.log_message(f"bHaptics startup failed: {e}")
+        if self.get_feature_enabled("feature_bhaptics"):
+            try:
+                self.bhaptics_engine.start()
+                self.bhaptics_router.start()
+            except Exception as e:
+                self.log_message(f"bHaptics startup failed: {e}")
+
+        # Hardware monitor thread is gated by its feature toggle so the OSC
+        # broadcast + polling thread don't run when the user has no use for it.
+        if self.get_feature_enabled("feature_hardware_monitor"):
+            try:
+                self.hardware_monitor.start()
+            except Exception as e:
+                self.log_message(f"Hardware monitor startup failed: {e}")
 
         # Apply saved SteamVR autostart on boot (no-op if SteamVR is offline).
         if self.profile_manager.steamvr_settings.get_autostart():

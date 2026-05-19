@@ -22,36 +22,38 @@ from PySide6.QtWidgets import (
     QFrame, QScrollArea, QTextEdit, QPlainTextEdit, QSizePolicy, QSpacerItem,
     QDialog, QMessageBox, QTreeWidget, QTreeWidgetItem, QHeaderView,
     QButtonGroup, QStackedWidget, QTableWidget, QTableWidgetItem,
-    QAbstractItemView, QComboBox, QSpinBox, QDoubleSpinBox,
+    QAbstractItemView, QComboBox, QSpinBox, QDoubleSpinBox, QToolButton,
 )
+from ui import lovense_icons as _lovense_icons
 
 from constants import *
 from parameter_store import store
 
-
-# ============================================================
-# Helpers
-# ============================================================
-
-_TK_GEOM_RE = re.compile(r"^\s*(\d+)x(\d+)(?:\+(-?\d+)\+(-?\d+))?\s*$")
-
-
-def _parse_tk_geometry(geom: str):
-    """Parse a Tkinter-style geometry string into (w, h, x, y).
-    Returns None on failure. x/y may be None when not present."""
-    if not geom:
-        return None
-    m = _TK_GEOM_RE.match(geom)
-    if not m:
-        return None
-    w, h = int(m.group(1)), int(m.group(2))
-    x = int(m.group(3)) if m.group(3) is not None else None
-    y = int(m.group(4)) if m.group(4) is not None else None
-    return (w, h, x, y)
-
-
-def _format_tk_geometry(w: int, h: int, x: int, y: int) -> str:
-    return f"{w}x{h}+{x}+{y}"
+# Helper widgets, icons, layout utilities, text/geometry helpers extracted
+# into the `ui` package. Aliased here to keep the old private names the
+# rest of this file references (`_vbox`, `_icon_*`, `_BHapticsDotGrid`, etc.).
+from ui.geometry import parse_tk_geometry as _parse_tk_geometry
+from ui.geometry import format_tk_geometry as _format_tk_geometry
+from ui.layout_helpers import vbox as _vbox, hbox as _hbox, clear_layout as _clear_layout
+from ui.text_helpers import truncate as _truncate, html_escape as _html_escape
+from ui.icons import (
+    new_icon_pixmap as _new_icon_pixmap,
+    icon_pencil as _icon_pencil,
+    icon_copy as _icon_copy,
+    icon_paste as _icon_paste,
+    icon_trash as _icon_trash,
+    icon_check as _icon_check,
+    icon_cross as _icon_cross,
+)
+from ui.widgets import (
+    ToggleSwitch,
+    Invoker as _Invoker,
+    MainWindow as _MainWindow,
+    Card as _Card,
+    BHapticsDotGrid as _BHapticsDotGrid,
+    SliderProxy as _SliderProxy,
+    ProgressProxy as _ProgressProxy,
+)
 
 
 # ============================================================
@@ -408,326 +410,10 @@ QTableWidget::item {{
 """
 
 
-# ============================================================
-# Cross-thread invocation helper
-# ============================================================
-
-class _Invoker(QObject):
-    """Lives on the UI thread. Other threads can ask it to run callables
-    by emitting signals — signals are thread-safe and queued."""
-
-    _invoke = Signal(int, object)  # (delay_ms, callable)
-
-    def __init__(self):
-        super().__init__()
-        self._invoke.connect(self._on_invoke, Qt.QueuedConnection)
-
-    def schedule(self, delay_ms: int, func: Callable) -> None:
-        self._invoke.emit(int(delay_ms), func)
-
-    def _on_invoke(self, delay_ms: int, func: Callable) -> None:
-        if delay_ms <= 0:
-            func()
-        else:
-            QTimer.singleShot(delay_ms, func)
-
-
-# ============================================================
-# Main window subclass that intercepts the X button
-# ============================================================
-
-class _MainWindow(QMainWindow):
-    def __init__(self):
-        super().__init__()
-        self._close_handler: Optional[Callable] = None
-        self._allow_close = False
-
-    def set_close_handler(self, cb: Callable) -> None:
-        self._close_handler = cb
-
-    def allow_close(self) -> None:
-        self._allow_close = True
-
-    def closeEvent(self, event):
-        if self._allow_close or self._close_handler is None:
-            event.accept()
-            return
-        # Hand control to the controller; it decides hide vs quit.
-        try:
-            self._close_handler()
-        except Exception:
-            event.accept()
-            return
-        event.ignore()
-
-
-# ============================================================
-# Small layout helpers
-# ============================================================
-
-def _vbox(margin=0, spacing=6) -> QVBoxLayout:
-    lay = QVBoxLayout()
-    lay.setContentsMargins(margin, margin, margin, margin)
-    lay.setSpacing(spacing)
-    return lay
-
-
-def _hbox(margin=0, spacing=6) -> QHBoxLayout:
-    lay = QHBoxLayout()
-    lay.setContentsMargins(margin, margin, margin, margin)
-    lay.setSpacing(spacing)
-    return lay
-
-
-def _clear_layout(layout):
-    """Remove and destroy every child of `layout`."""
-    if layout is None:
-        return
-    while layout.count():
-        item = layout.takeAt(0)
-        w = item.widget()
-        if w is not None:
-            w.setParent(None)
-            w.deleteLater()
-        else:
-            sub = item.layout()
-            if sub is not None:
-                _clear_layout(sub)
-                sub.deleteLater()
-
-
-# ============================================================
-# Vector icons — drawn at runtime so they read crisply at small
-# sizes and don't depend on emoji-font availability.
-# ============================================================
-
-def _new_icon_pixmap(size: int = 20) -> QPixmap:
-    pm = QPixmap(size, size)
-    pm.fill(Qt.transparent)
-    return pm
-
-
-def _icon_pencil(color: str = COLOR_TEXT, size: int = 20) -> QIcon:
-    """Edit pencil with a stronger outline."""
-    pm = _new_icon_pixmap(size)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    c = QColor(color)
-    p.setPen(QPen(c, 1.6))
-    p.setBrush(QBrush(c))
-    # Diagonal pencil body from (4,16) to (14,6) with a triangular tip at top-right.
-    body = QPolygonF([
-        QPointF(3.5, 14.5), QPointF(5.5, 16.5),
-        QPointF(14.0, 8.0), QPointF(12.0, 6.0),
-    ])
-    p.drawPolygon(body)
-    # Pencil tip
-    tip = QPolygonF([
-        QPointF(14.0, 8.0), QPointF(12.0, 6.0),
-        QPointF(16.5, 3.5),
-    ])
-    p.setBrush(QBrush(QColor("#FFD27A")))
-    p.drawPolygon(tip)
-    # Eraser end
-    p.setBrush(QBrush(QColor(color)))
-    eraser = QPolygonF([
-        QPointF(3.5, 14.5), QPointF(5.5, 16.5),
-        QPointF(3.5, 18.5), QPointF(1.5, 16.5),
-    ])
-    p.drawPolygon(eraser)
-    p.end()
-    return QIcon(pm)
-
-
-def _icon_copy(color: str = COLOR_TEXT, size: int = 20) -> QIcon:
-    """Two overlapping sheets of paper."""
-    pm = _new_icon_pixmap(size)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    c = QColor(color)
-    # Back sheet
-    p.setPen(QPen(c, 1.4))
-    p.setBrush(QBrush(QColor(COLOR_SURFACE)))
-    p.drawRoundedRect(QRectF(7.0, 3.0, 10.0, 12.0), 1.5, 1.5)
-    # Front sheet (overlapping, offset down-left)
-    p.setBrush(QBrush(QColor(COLOR_INPUT_BG)))
-    p.drawRoundedRect(QRectF(3.0, 6.5, 10.0, 12.0), 1.5, 1.5)
-    # A couple of lines on the front sheet for clarity
-    p.setPen(QPen(c, 1.0))
-    p.drawLine(QPointF(5.0, 10.0), QPointF(11.0, 10.0))
-    p.drawLine(QPointF(5.0, 13.0), QPointF(11.0, 13.0))
-    p.drawLine(QPointF(5.0, 16.0), QPointF(9.0, 16.0))
-    p.end()
-    return QIcon(pm)
-
-
-def _icon_paste(color: str = COLOR_TEXT, size: int = 20) -> QIcon:
-    """Clipboard with a down-arrow — paste-into-this-slot."""
-    pm = _new_icon_pixmap(size)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    c = QColor(color)
-    p.setPen(QPen(c, 1.4))
-    # Clipboard body
-    p.setBrush(QBrush(QColor(COLOR_SURFACE)))
-    p.drawRoundedRect(QRectF(4.0, 5.0, 12.0, 13.0), 1.5, 1.5)
-    # Clipboard clip
-    p.setBrush(QBrush(c))
-    p.drawRoundedRect(QRectF(7.0, 2.5, 6.0, 3.5), 1.0, 1.0)
-    # Down arrow indicating "paste here"
-    pen = QPen(c, 1.8)
-    pen.setCapStyle(Qt.RoundCap)
-    pen.setJoinStyle(Qt.RoundJoin)
-    p.setPen(pen)
-    p.setBrush(Qt.NoBrush)
-    p.drawLine(QPointF(10.0, 9.0), QPointF(10.0, 14.0))
-    p.drawPolyline(QPolygonF([
-        QPointF(7.5, 12.0), QPointF(10.0, 14.5), QPointF(12.5, 12.0),
-    ]))
-    p.end()
-    return QIcon(pm)
-
-
-def _icon_trash(color: str = COLOR_TEXT, size: int = 20) -> QIcon:
-    """Trapezoid-style trash can with a lid."""
-    pm = _new_icon_pixmap(size)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    c = QColor(color)
-    p.setPen(QPen(c, 1.5))
-    p.setBrush(QBrush(c))
-    # Lid
-    p.drawRoundedRect(QRectF(3.0, 4.5, 14.0, 2.0), 1.0, 1.0)
-    # Handle on top of lid
-    p.setBrush(Qt.NoBrush)
-    p.drawRoundedRect(QRectF(7.5, 2.5, 5.0, 2.0), 1.0, 1.0)
-    # Trapezoid body (wider at top, narrower at bottom)
-    body = QPolygonF([
-        QPointF(4.5, 7.0), QPointF(15.5, 7.0),
-        QPointF(14.5, 17.5), QPointF(5.5, 17.5),
-    ])
-    p.setBrush(QBrush(c))
-    p.drawPolygon(body)
-    # Vertical ribs (subtle contrast lines)
-    p.setPen(QPen(QColor(COLOR_BG), 1.0))
-    p.drawLine(QPointF(8.0, 9.0), QPointF(7.7, 16.0))
-    p.drawLine(QPointF(10.0, 9.0), QPointF(10.0, 16.0))
-    p.drawLine(QPointF(12.0, 9.0), QPointF(12.3, 16.0))
-    p.end()
-    return QIcon(pm)
-
-
-def _icon_check(color: str = COLOR_SUCCESS, size: int = 20) -> QIcon:
-    pm = _new_icon_pixmap(size)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    pen = QPen(QColor(color), 2.6)
-    pen.setCapStyle(Qt.RoundCap)
-    pen.setJoinStyle(Qt.RoundJoin)
-    p.setPen(pen)
-    p.drawPolyline(QPolygonF([
-        QPointF(3.5, 10.5), QPointF(8.5, 15.5), QPointF(16.5, 5.5),
-    ]))
-    p.end()
-    return QIcon(pm)
-
-
-def _icon_cross(color: str = COLOR_ALERT, size: int = 20) -> QIcon:
-    pm = _new_icon_pixmap(size)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    pen = QPen(QColor(color), 2.6)
-    pen.setCapStyle(Qt.RoundCap)
-    p.setPen(pen)
-    p.drawLine(QPointF(5.0, 5.0), QPointF(15.0, 15.0))
-    p.drawLine(QPointF(15.0, 5.0), QPointF(5.0, 15.0))
-    p.end()
-    return QIcon(pm)
-
-
-class _Card(QFrame):
-    """QFrame styled as a rounded card."""
-
-    def __init__(self, dark_bg: bool = False, parent=None):
-        super().__init__(parent)
-        self.setObjectName("cardDark" if dark_bg else "card")
-
-
-class _BHapticsDotGrid(QWidget):
-    """Live debug grid of dots for one bHaptics device.
-
-    Dots fill left-to-right, top-to-bottom — matching the dot-mode index
-    ordering bHaptics expects. Color interpolates red(0%) → yellow(50%) →
-    green(100%) so you can see which nodes are active and how hard.
-    """
-
-    DOT_PX = 18
-    SPACING = 6
-    PADDING = 4
-
-    def __init__(self, node_count: int, cols: int, rows: int, parent=None):
-        super().__init__(parent)
-        self.node_count = max(0, int(node_count))
-        self.cols = max(1, int(cols))
-        self.rows = max(1, int(rows))
-        self._values: List[int] = [0] * self.node_count
-        w = self.PADDING * 2 + self.cols * self.DOT_PX + (self.cols - 1) * self.SPACING
-        h = self.PADDING * 2 + self.rows * self.DOT_PX + (self.rows - 1) * self.SPACING
-        self.setFixedSize(int(w), int(h))
-
-    def set_values(self, values):
-        """values: iterable of ints 0..100, length should match node_count.
-        None or shorter iterables get treated as all-zeros for missing slots."""
-        new_vals = [0] * self.node_count
-        if values:
-            for i, v in enumerate(values):
-                if i >= self.node_count:
-                    break
-                try:
-                    new_vals[i] = max(0, min(100, int(v)))
-                except (TypeError, ValueError):
-                    new_vals[i] = 0
-        if new_vals != self._values:
-            self._values = new_vals
-            self.update()
-
-    @staticmethod
-    def _color_for(value: int) -> QColor:
-        # Three-stop interpolation: 0 → red, 50 → yellow, 100 → green.
-        # Slightly dim red at 0 so off-nodes read as "off" not "alerting".
-        v = max(0, min(100, int(value)))
-        if v <= 50:
-            t = v / 50.0
-            r = int(180 + (255 - 180) * t)
-            g = int( 50 + (200 -  50) * t)
-            b = int( 50 + ( 50 -  50) * t)
-        else:
-            t = (v - 50) / 50.0
-            r = int(255 + ( 70 - 255) * t)
-            g = int(200 + (200 - 200) * t)
-            b = int( 50 + ( 70 -  50) * t)
-        return QColor(r, g, b)
-
-    def paintEvent(self, _ev):
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing, True)
-        p.fillRect(self.rect(), QColor("#1A1A26"))
-        pen_off = QPen(QColor(80, 80, 100, 180))
-        pen_off.setWidth(1)
-        diameter = self.DOT_PX
-        for i in range(self.node_count):
-            col = i % self.cols
-            row = i // self.cols
-            if row >= self.rows:
-                break
-            x = self.PADDING + col * (diameter + self.SPACING)
-            y = self.PADDING + row * (diameter + self.SPACING)
-            value = self._values[i] if i < len(self._values) else 0
-            fill = self._color_for(value)
-            p.setPen(pen_off)
-            p.setBrush(QBrush(fill))
-            p.drawEllipse(x, y, diameter, diameter)
-        p.end()
+# (ToggleSwitch / _Invoker / _MainWindow / _Card / _BHapticsDotGrid /
+# layout + icon helpers were moved into `ui/widgets.py`, `ui/icons.py`,
+# `ui/layout_helpers.py`, `ui/text_helpers.py`, `ui/geometry.py`. The
+# import-aliases at the top of this file preserve the underscore names.)
 
 
 # ============================================================
@@ -751,6 +437,10 @@ class OscGoesPurrrUI:
         # Main window (intercepts X-button close).
         self.window: _MainWindow = _MainWindow()
         self.window.setObjectName("root")
+        # Explicit small minimum so the user can resize the window down — the
+        # sidebar is fixed at SIDEBAR_WIDTH so we keep at least that plus a
+        # bit of breathing room for the scrollable content area.
+        self.window.setMinimumSize(SIDEBAR_WIDTH + 200, 360)
         self.window.resize(1100, 700)
 
         # Set application icon for window title bar and taskbar.
@@ -787,6 +477,7 @@ class OscGoesPurrrUI:
         self.osc_status_label: Optional[QLabel] = None
         self.osc_port_label: Optional[QLabel] = None
         self.osc_connection_button: Optional[QPushButton] = None
+        self.intiface_sidebar_section: Optional[QWidget] = None
 
         # Settings checkboxes (referenced by facade getters)
         self.auto_connect_var: Optional[QCheckBox] = None
@@ -825,6 +516,19 @@ class OscGoesPurrrUI:
         self.avatar_new_btn: Optional[QPushButton] = None
         self.avatar_manage_btn: Optional[QPushButton] = None
 
+        # Simple Mode view widgets
+        self.simple_mode_toggle: Optional[QCheckBox] = None
+        self.simple_mode_settings_toggle: Optional[QCheckBox] = None
+        self.simple_mode_status_label: Optional[QLabel] = None
+        self.simple_mode_sources_layout: Optional[QVBoxLayout] = None
+        self.simple_mode_toys_layout: Optional[QVBoxLayout] = None
+        # Battery labels keyed by device name so live battery_update messages
+        # can refresh them without rebuilding the whole toy list.
+        self.simple_mode_battery_labels: Dict[str, QLabel] = {}
+        # Cached snapshot used to skip rebuilds when nothing changed.
+        self._simple_mode_last_sources: Optional[tuple] = None
+        self._simple_mode_last_toys: Optional[tuple] = None
+
         # Build the UI tree.
         self.setup_ui()
 
@@ -843,19 +547,28 @@ class OscGoesPurrrUI:
         self.sidebar_frame.setFixedWidth(SIDEBAR_WIDTH)
         root_layout.addWidget(self.sidebar_frame)
 
-        # Main content area (stacked views)
+        # Main content area (stacked views). Each page sits inside its own
+        # QScrollArea so the window can shrink below the page's natural size
+        # without Qt locking the central widget. Form-style pages also get a
+        # max-width cap so they hug the left side on wide monitors instead of
+        # stretching buttons across 4K — data-heavy pages (tables, logs,
+        # device routing) stay full-width.
         self.main_stack = QStackedWidget()
         root_layout.addWidget(self.main_stack, 1)
 
-        # Build all views into the stack.
-        view_names = ["Dashboard", "Device Routing", "SteamVR Device Comms",
-                      "bHaptics", "OSC Inspector", "System Log", "Settings", "Help"]
+        view_names = ["Dashboard", "Simple Mode", "Device Routing",
+                      "SteamVR Device Comms", "bHaptics", "Hardware Monitor",
+                      "OSC Inspector", "OSC Diagnostics", "System Log",
+                      "Settings", "Help"]
         builders = {
             "Dashboard": self._build_dashboard_view,
+            "Simple Mode": self._build_simple_mode_view,
             "Device Routing": self._build_device_routing_view,
             "SteamVR Device Comms": self._build_steamvr_view,
             "bHaptics": self._build_bhaptics_view,
+            "Hardware Monitor": self._build_hardware_monitor_view,
             "OSC Inspector": self._build_network_debug_view,
+            "OSC Diagnostics": self._build_osc_diagnostics_view,
             "System Log": self._build_system_log_view,
             "Settings": self._build_settings_view,
             "Help": self._build_help_view,
@@ -865,11 +578,44 @@ class OscGoesPurrrUI:
             page_lay = _vbox(20, 12)
             page.setLayout(page_lay)
             builders[name](page_lay)
-            self.views[name] = page
-            self.main_stack.addWidget(page)
+            # self.views stores the *wrapper* (scroll area) that's actually
+            # in the stack, since select_view / visibility checks compare
+            # against main_stack.currentWidget().
+            wrapper = self._wrap_page(name, page)
+            self.views[name] = wrapper
+            self.main_stack.addWidget(wrapper)
 
         self.window.setCentralWidget(root)
-        self.select_view("Dashboard")
+
+        # Simple Mode hides the advanced nav buttons. On boot, follow the
+        # persisted setting — first-time users that enabled Simple Mode see
+        # the stripped-down sidebar with Simple Mode pre-selected.
+        # apply_feature_visibility() also hides the Intiface sidebar block
+        # when that feature flag is off, so call it (it delegates to the
+        # simple-mode pass).
+        self.apply_feature_visibility()
+        if bool(getattr(self.controller, "get_simple_mode", lambda: False)()):
+            self.select_view("Simple Mode")
+        else:
+            self.select_view("Dashboard")
+
+    # ----------------------------------------------------------
+    # Page wrapping (scroll area + optional max-width left-align)
+    # ----------------------------------------------------------
+
+    def _wrap_page(self, name: str, page: QWidget) -> QScrollArea:
+        """Wrap a built page widget in a QScrollArea so it can shrink below
+        its natural width without locking the window above the page minimum.
+        Content fills the full available viewport width — Qt's normal layout
+        behaviour resizes the page to the scroll area's viewport, so cards
+        and buttons grow to use the whole window."""
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll.setWidget(page)
+        return scroll
 
     # ----------------------------------------------------------
     # Sidebar
@@ -888,8 +634,10 @@ class OscGoesPurrrUI:
         lay.addWidget(title)
         lay.addSpacing(20)
 
-        nav_buttons = ["Dashboard", "Device Routing", "SteamVR Device Comms",
-                       "bHaptics", "OSC Inspector", "System Log", "Settings", "Help"]
+        nav_buttons = ["Dashboard", "Simple Mode", "Device Routing",
+                       "SteamVR Device Comms", "bHaptics", "Hardware Monitor",
+                       "OSC Inspector", "OSC Diagnostics", "System Log",
+                       "Settings", "Help"]
         for name in nav_buttons:
             btn = QPushButton(name)
             btn.setProperty("role", "nav")
@@ -921,25 +669,32 @@ class OscGoesPurrrUI:
         lay.addWidget(self.osc_connection_button)
         lay.addSpacing(8)
 
-        # Separator
+        # --- Intiface Central Section ---
+        # Wrapped in a container so the whole block (separator + title +
+        # status + button) hides cleanly when the Intiface feature is off.
+        self.intiface_sidebar_section = QWidget()
+        intiface_lay = _vbox(0, 6)
+        self.intiface_sidebar_section.setLayout(intiface_lay)
+
         sep = QFrame()
         sep.setObjectName("separator")
-        lay.addWidget(sep)
-        lay.addSpacing(8)
+        intiface_lay.addWidget(sep)
+        intiface_lay.addSpacing(8)
 
-        # --- Intiface Central Section ---
-        lay.addWidget(self._sidebar_section_title("Intiface Central"))
+        intiface_lay.addWidget(self._sidebar_section_title("Intiface Central"))
 
         self.status_label = QLabel("Status: Disconnected")
         self.status_label.setProperty("role", "alert")
         self.status_label.setAlignment(Qt.AlignHCenter)
-        lay.addWidget(self.status_label)
+        intiface_lay.addWidget(self.status_label)
 
         self.connection_button = QPushButton("Connect to Intiface")
         self.connection_button.setMinimumHeight(BTN_HEIGHT_LARGE)
         self.connection_button.clicked.connect(self.controller.connect_to_intiface)
-        lay.addWidget(self.connection_button)
-        lay.addSpacing(8)
+        intiface_lay.addWidget(self.connection_button)
+        intiface_lay.addSpacing(8)
+
+        lay.addWidget(self.intiface_sidebar_section)
 
         return sidebar
 
@@ -1605,6 +1360,313 @@ class OscGoesPurrrUI:
         entry.setFocus()
 
     # ----------------------------------------------------------
+    # Simple Mode view
+    # ----------------------------------------------------------
+
+    def _build_simple_mode_view(self, parent_layout: QVBoxLayout):
+        title = QLabel("Simple Mode")
+        title.setObjectName("viewTitle")
+        title.setAlignment(Qt.AlignHCenter)
+        parent_layout.addWidget(title)
+
+        # ===== Toggle card =====
+        toggle_card = _Card()
+        tlay = _vbox(14, 8)
+        toggle_card.setLayout(tlay)
+
+        self.simple_mode_toggle = ToggleSwitch("Enable Simple Mode")
+        f = self.simple_mode_toggle.font(); f.setBold(True); f.setPointSize(13)
+        self.simple_mode_toggle.setFont(f)
+        self.simple_mode_toggle.setChecked(bool(self.controller.get_simple_mode()))
+        self.simple_mode_toggle.toggled.connect(self._on_simple_mode_toggled)
+        tlay.addWidget(self.simple_mode_toggle)
+
+        tlay.addWidget(self._muted_label(
+            "Routes every detected SPS source to every connected toy with no "
+            "per-toy configuration. Profiles are ignored while this is on."
+        ))
+
+        self.simple_mode_status_label = QLabel("")
+        self.simple_mode_status_label.setProperty("muted", "true")
+        tlay.addWidget(self.simple_mode_status_label)
+
+        hint = QLabel(
+            "Tip: you can always come back to Simple Mode from Settings."
+        )
+        hint.setProperty("muted", "true")
+        hint.setWordWrap(True)
+        tlay.addWidget(hint)
+
+        parent_layout.addWidget(toggle_card)
+
+        # ===== Sources card =====
+        src_card = _Card()
+        slay = _vbox(14, 6)
+        src_card.setLayout(slay)
+
+        src_header = QLabel("SPS Sources")
+        f = src_header.font(); f.setBold(True); f.setPointSize(12)
+        src_header.setFont(f)
+        slay.addWidget(src_header)
+        slay.addWidget(self._muted_label("Detected from the active VRChat avatar."))
+
+        sources_host = QWidget()
+        self.simple_mode_sources_layout = _vbox(0, 3)
+        sources_host.setLayout(self.simple_mode_sources_layout)
+        slay.addWidget(sources_host)
+
+        parent_layout.addWidget(src_card)
+
+        # ===== Toys card =====
+        toys_card = _Card()
+        toylay = _vbox(14, 6)
+        toys_card.setLayout(toylay)
+
+        toys_header = QLabel("Connected Toys")
+        f = toys_header.font(); f.setBold(True); f.setPointSize(12)
+        toys_header.setFont(f)
+        toylay.addWidget(toys_header)
+        toylay.addWidget(self._muted_label("Battery and test pulse for every toy in range."))
+
+        toys_host = QWidget()
+        self.simple_mode_toys_layout = _vbox(0, 4)
+        toys_host.setLayout(self.simple_mode_toys_layout)
+        toylay.addWidget(toys_host)
+
+        parent_layout.addWidget(toys_card)
+        parent_layout.addStretch(1)
+
+        # Initial paint.
+        self.refresh_simple_mode_view(force=True)
+
+    def _on_simple_mode_toggled(self, checked: bool):
+        if hasattr(self.controller, "set_simple_mode"):
+            self.controller.set_simple_mode(bool(checked))
+        # Keep the two mirror checkboxes (Simple Mode panel + Settings) in
+        # sync without re-firing the handler.
+        for cb in (self.simple_mode_toggle, self.simple_mode_settings_toggle):
+            if cb is not None and cb.isChecked() != bool(checked):
+                cb.blockSignals(True)
+                cb.setChecked(bool(checked))
+                cb.blockSignals(False)
+        self._apply_simple_mode_visibility()
+        # Jump to a view that's actually visible in the new sidebar — the
+        # Simple Mode entry disappears when the user turns it off, so we
+        # land them on Dashboard rather than an orphaned page.
+        if bool(checked):
+            self.select_view("Simple Mode")
+        else:
+            self.select_view("Dashboard")
+        self.refresh_simple_mode_view(force=True)
+
+    # When Simple Mode is on, hide every advanced nav button — only
+    # Simple Mode, Settings and Help remain. This is the "Just Works"
+    # onboarding mode where the user shouldn't be surprised by SteamVR,
+    # bHaptics, the OSC inspector, etc. before they've connected a toy.
+    _SIMPLE_MODE_HIDDEN_VIEWS = (
+        "Dashboard", "Device Routing", "SteamVR Device Comms",
+        "bHaptics", "Hardware Monitor", "OSC Inspector", "System Log",
+    )
+
+    # Sidebar entries gated by Settings → Features. A view is hidden if any
+    # of its required feature flags is off. "SteamVR Device Comms" is shown
+    # when either haptics OR battery is enabled — both halves live in that
+    # one view.
+    _FEATURE_VIEW_REQUIREMENTS = {
+        "bHaptics":              ("feature_bhaptics",),
+        "Hardware Monitor":      ("feature_hardware_monitor",),
+        "OSC Inspector":         ("feature_osc_inspector",),
+        "SteamVR Device Comms":  ("feature_steamvr_haptics", "feature_steamvr_battery"),
+        # Device Routing is entirely about Intiface toy motor mapping, so hide
+        # it when the user has turned Intiface off.
+        "Device Routing":        ("feature_intiface",),
+    }
+
+    def _feature_allows_view(self, view_name: str) -> bool:
+        reqs = self._FEATURE_VIEW_REQUIREMENTS.get(view_name)
+        if not reqs:
+            return True
+        get = getattr(self.controller, "get_feature_enabled", None)
+        if get is None:
+            return True
+        # SteamVR view needs either half on; other views need their single flag.
+        if view_name == "SteamVR Device Comms":
+            return any(bool(get(k)) for k in reqs)
+        return all(bool(get(k)) for k in reqs)
+
+    def apply_feature_visibility(self):
+        """Re-evaluate sidebar visibility after a feature toggle changes."""
+        # Hide the Intiface connect block when that feature is off.
+        if self.intiface_sidebar_section is not None:
+            get = getattr(self.controller, "get_feature_enabled", None)
+            on = bool(get("feature_intiface")) if get else True
+            self.intiface_sidebar_section.setVisible(on)
+        self._apply_simple_mode_visibility()
+
+    def _apply_simple_mode_visibility(self):
+        on = bool(getattr(self.controller, "get_simple_mode", lambda: False)())
+        for name, btn in self.nav_buttons.items():
+            if name == "Simple Mode":
+                # Only present in the sidebar while Simple Mode is on.
+                # When off, the user re-enables it from Settings.
+                btn.setVisible(on)
+                continue
+            # Feature-gated views disappear entirely when their toggle is off,
+            # regardless of Simple Mode state.
+            if not self._feature_allows_view(name):
+                btn.setVisible(False)
+                continue
+            if name in self._SIMPLE_MODE_HIDDEN_VIEWS:
+                btn.setVisible(not on)
+            else:
+                btn.setVisible(True)
+        # If the currently-shown view just got hidden, fall back to Dashboard
+        # (or Simple Mode when that's the only visible option).
+        current = self.main_stack.currentWidget() if self.main_stack else None
+        if current is not None:
+            for name, page in self.views.items():
+                if page is current and not self.nav_buttons.get(name, None) is None:
+                    btn = self.nav_buttons.get(name)
+                    if btn is not None and not btn.isVisible():
+                        fallback = "Simple Mode" if on else "Dashboard"
+                        self.select_view(fallback)
+                    break
+
+    def _make_battery_label(self, level: Optional[float]) -> QLabel:
+        lbl = QLabel("")
+        lbl.setMinimumWidth(60)
+        self._apply_battery_text(lbl, level)
+        return lbl
+
+    def _apply_battery_text(self, lbl: QLabel, level: Optional[float]):
+        if level is None:
+            lbl.setText("🔋 --")
+            lbl.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+            return
+        try:
+            pct = int(float(level) * 100)
+        except (TypeError, ValueError):
+            lbl.setText("🔋 --")
+            lbl.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+            return
+        if pct > 50:
+            color = COLOR_SUCCESS
+        elif pct > 20:
+            color = COLOR_ALERT
+        else:
+            color = "#FF4444"
+        lbl.setText(f"🔋 {pct}%")
+        lbl.setStyleSheet(f"color: {color};")
+
+    def refresh_simple_mode_view(self, force: bool = False):
+        """Rebuild source + toy lists when the underlying data has changed.
+        Called from the periodic UI tick and after key controller events."""
+        if self.simple_mode_sources_layout is None or self.simple_mode_toys_layout is None:
+            return
+        ctl = self.controller
+
+        # Keep both mirror toggles in sync with the persisted flag.
+        desired = bool(getattr(ctl, "get_simple_mode", lambda: False)())
+        for cb in (self.simple_mode_toggle, self.simple_mode_settings_toggle):
+            if cb is not None and cb.isChecked() != desired:
+                cb.blockSignals(True)
+                cb.setChecked(desired)
+                cb.blockSignals(False)
+
+        # ---- Status line ----
+        if self.simple_mode_status_label is not None:
+            if ctl.get_simple_mode():
+                self.simple_mode_status_label.setText(
+                    "Simple Mode is ON — Device Routing profiles are bypassed."
+                )
+                self.simple_mode_status_label.setStyleSheet(f"color: {COLOR_SUCCESS};")
+            else:
+                self.simple_mode_status_label.setText(
+                    "Simple Mode is OFF — normal per-profile routing is active."
+                )
+                self.simple_mode_status_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+
+        # ---- Sources ----
+        sources = ctl.get_simple_mode_sources() if hasattr(ctl, "get_simple_mode_sources") else {}
+        orifices = tuple(sources.get("Orifices", []))
+        penetrators = tuple(sources.get("Penetrators", []))
+        sources_key = (orifices, penetrators)
+        if force or sources_key != self._simple_mode_last_sources:
+            self._simple_mode_last_sources = sources_key
+            _clear_layout(self.simple_mode_sources_layout)
+            if not orifices and not penetrators:
+                lbl = QLabel("No SPS sources detected. Load an avatar with OGB zones.")
+                lbl.setProperty("muted", "true")
+                self._repolish(lbl)
+                self.simple_mode_sources_layout.addWidget(lbl)
+            else:
+                if orifices:
+                    h = QLabel("Orifices")
+                    fh = h.font(); fh.setBold(True); h.setFont(fh)
+                    self.simple_mode_sources_layout.addWidget(h)
+                    for name in orifices:
+                        self.simple_mode_sources_layout.addWidget(QLabel(f"  • {name}"))
+                if penetrators:
+                    h = QLabel("Penetrators")
+                    fh = h.font(); fh.setBold(True); h.setFont(fh)
+                    self.simple_mode_sources_layout.addWidget(h)
+                    for name in penetrators:
+                        self.simple_mode_sources_layout.addWidget(QLabel(f"  • {name}"))
+
+        # ---- Toys ----
+        toys = ctl.get_simple_mode_toys() if hasattr(ctl, "get_simple_mode_toys") else []
+        toys_key = tuple((t["name"], t.get("motor_count", 0), t.get("connected", False)) for t in toys)
+        if force or toys_key != self._simple_mode_last_toys:
+            self._simple_mode_last_toys = toys_key
+            _clear_layout(self.simple_mode_toys_layout)
+            self.simple_mode_battery_labels.clear()
+            if not toys:
+                lbl = QLabel("No connected toys. Open Intiface and connect a device.")
+                lbl.setProperty("muted", "true")
+                self._repolish(lbl)
+                self.simple_mode_toys_layout.addWidget(lbl)
+            else:
+                for toy in toys:
+                    row = QFrame()
+                    row.setObjectName("chip")
+                    row_lay = _hbox(8, 8)
+                    row.setLayout(row_lay)
+
+                    name_lbl = QLabel(f"✓ {toy['name']}")
+                    name_lbl.setProperty("role", "success")
+                    self._repolish(name_lbl)
+                    row_lay.addWidget(name_lbl, 1)
+
+                    batt = self._make_battery_label(toy.get("battery"))
+                    row_lay.addWidget(batt)
+                    self.simple_mode_battery_labels[toy["name"]] = batt
+
+                    test_btn = QPushButton("Test")
+                    test_btn.setFixedHeight(BTN_HEIGHT_SMALL)
+                    test_btn.setProperty("role", "secondary")
+                    test_btn.clicked.connect(
+                        lambda _=False, n=toy["name"]: self.controller.test_toy(n)
+                    )
+                    row_lay.addWidget(test_btn)
+
+                    self.simple_mode_toys_layout.addWidget(row)
+        else:
+            # Refresh battery text on existing labels even if the toy list itself
+            # is unchanged — battery_update messages may have moved values.
+            for toy in toys:
+                lbl = self.simple_mode_battery_labels.get(toy["name"])
+                if lbl is not None:
+                    self._apply_battery_text(lbl, toy.get("battery"))
+
+    def update_simple_mode_battery(self, device_name: str, level: float):
+        """Live battery push from the controller. No-op if the label hasn't
+        been built yet (the next refresh tick will pick up the value from
+        the controller's cache)."""
+        lbl = self.simple_mode_battery_labels.get(device_name)
+        if lbl is not None:
+            self._apply_battery_text(lbl, level)
+
+    # ----------------------------------------------------------
     # Device Routing view
     # ----------------------------------------------------------
 
@@ -1725,6 +1787,315 @@ class OscGoesPurrrUI:
         parent_layout.addWidget(legacy_card, 1)
 
     # ----------------------------------------------------------
+    # OSC Diagnostics view
+    #
+    # One-stop debug page for the "VRChat says connected but no
+    # parameters arrive" failure mode. Shows live packet rate, all
+    # port/socket bindings, every non-VRChat OSCQuery client we've seen
+    # (the prime suspect when this happens), and a scrollable feed of
+    # recent OSC events from the manager's ring buffer.
+    # ----------------------------------------------------------
+
+    def _build_osc_diagnostics_view(self, parent_layout: QVBoxLayout):
+        title = QLabel("OSC Diagnostics")
+        title.setObjectName("viewTitle")
+        title.setAlignment(Qt.AlignHCenter)
+        parent_layout.addWidget(title)
+
+        intro = QLabel(
+            "Live OSC connection diagnostics. If VRChat says we're connected "
+            "but parameters are not updating, this page will tell you why. "
+            "The most common cause is another OSC app (VRCOSC, OscGoesBrrr, "
+            "etc.) that VRChat is routing to instead — those clients show up "
+            "in the 'Other OSCQuery clients seen' card below."
+        )
+        intro.setWordWrap(True)
+        intro.setProperty("muted", True)
+        parent_layout.addWidget(intro)
+
+        # --- Top row: live status + packet counters -------------------
+        top_card = _Card()
+        top_lay = _vbox(14, 8)
+        top_card.setLayout(top_lay)
+
+        header = QLabel("Live status")
+        header.setObjectName("cardHeader")
+        top_lay.addWidget(header)
+
+        # Big status banner: green when packets are flowing, yellow when
+        # connected but silent (the failure mode), red when disconnected.
+        self.diag_status_banner = QLabel("—")
+        font = self.diag_status_banner.font()
+        font.setPointSize(16)
+        font.setBold(True)
+        self.diag_status_banner.setFont(font)
+        self.diag_status_banner.setAlignment(Qt.AlignHCenter)
+        top_lay.addWidget(self.diag_status_banner)
+
+        # Grid of labelled counters. Stored on `self` so the refresh tick
+        # can update each one in place without rebuilding the page.
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(20)
+        grid.setVerticalSpacing(6)
+
+        def add_row(row: int, label_text: str, attr: str) -> None:
+            lbl = QLabel(label_text)
+            lbl.setProperty("muted", True)
+            grid.addWidget(lbl, row, 0, Qt.AlignRight)
+            value = QLabel("—")
+            value_font = QFont("Consolas")
+            value_font.setStyleHint(QFont.Monospace)
+            value.setFont(value_font)
+            grid.addWidget(value, row, 1, Qt.AlignLeft)
+            setattr(self, attr, value)
+
+        add_row(0, "Connection:", "diag_connection_lbl")
+        add_row(1, "Session age:", "diag_session_age_lbl")
+        add_row(2, "Packets handled:", "diag_packets_lbl")
+        add_row(3, "Time since last packet:", "diag_last_pkt_lbl")
+        add_row(4, "Phonebook GETs received:", "diag_phonebook_lbl")
+        add_row(5, "Handler exceptions:", "diag_handler_exc_lbl")
+        add_row(6, "Last handler error:", "diag_last_err_lbl")
+        add_row(7, "mDNS service name:", "diag_mdns_name_lbl")
+        add_row(8, "mDNS re-publishes:", "diag_mdns_rereg_lbl")
+        add_row(9, "HTTP raw connections:", "diag_http_raw_lbl")
+        top_lay.addLayout(grid)
+
+        # Action buttons.
+        btn_row = _hbox(0, 8)
+        dump_btn = QPushButton("Dump diagnostics to log")
+        dump_btn.setToolTip(
+            "Write the full diagnostic dict to the System Log (sidebar) "
+            "and the persistent file log."
+        )
+        dump_btn.clicked.connect(self.controller.log_osc_diagnostics)
+        btn_row.addWidget(dump_btn)
+
+        rehandshake_btn = QPushButton("Force re-handshake")
+        rehandshake_btn.setProperty("role", "secondary")
+        rehandshake_btn.setToolTip(
+            "Re-poll VRChat's OSCQuery endpoint and resend our handshake "
+            "ping. Try this FIRST when packets stop flowing."
+        )
+        rehandshake_btn.clicked.connect(self.controller.force_osc_rehandshake)
+        btn_row.addWidget(rehandshake_btn)
+
+        rereg_btn = QPushButton("Re-publish mDNS")
+        rereg_btn.setProperty("role", "secondary")
+        rereg_btn.setToolTip(
+            "Unregister our mDNS advertisement and re-advertise under a fresh "
+            "unique name. Forces VRChat to treat us as a brand-new OSC client. "
+            "Try this if 'Force re-handshake' doesn't help."
+        )
+        rereg_btn.clicked.connect(self.controller.force_osc_reregister_mdns)
+        btn_row.addWidget(rereg_btn)
+
+        open_log_btn = QPushButton("Open log folder")
+        open_log_btn.setProperty("role", "secondary")
+        open_log_btn.setToolTip(
+            "Open %APPDATA%/OscGoesPurrr in Explorer. The persistent OSC "
+            "diagnostics log lives here as osc_diagnostics.log."
+        )
+        open_log_btn.clicked.connect(self.controller.open_osc_log_folder)
+        btn_row.addWidget(open_log_btn)
+
+        btn_row.addStretch(1)
+        top_lay.addLayout(btn_row)
+
+        parent_layout.addWidget(top_card)
+
+        # --- Ports + socket binding ------------------------------------
+        ports_card = _Card()
+        ports_lay = _vbox(14, 6)
+        ports_card.setLayout(ports_lay)
+        ports_header = QLabel("Ports & sockets")
+        ports_header.setObjectName("cardHeader")
+        ports_lay.addWidget(ports_header)
+
+        ports_grid = QGridLayout()
+        ports_grid.setHorizontalSpacing(20)
+        ports_grid.setVerticalSpacing(4)
+
+        def add_port_row(row: int, label_text: str, attr: str) -> None:
+            lbl = QLabel(label_text)
+            lbl.setProperty("muted", True)
+            ports_grid.addWidget(lbl, row, 0, Qt.AlignRight)
+            value = QLabel("—")
+            value_font = QFont("Consolas")
+            value_font.setStyleHint(QFont.Monospace)
+            value.setFont(value_font)
+            ports_grid.addWidget(value, row, 1, Qt.AlignLeft)
+            setattr(self, attr, value)
+
+        add_port_row(0, "Our UDP listen port:", "diag_our_listen_lbl")
+        add_port_row(1, "Our UDP socket bound to:", "diag_udp_bound_lbl")
+        add_port_row(2, "Our HTTP phonebook port:", "diag_our_http_lbl")
+        add_port_row(3, "VRChat OSC port:", "diag_vrc_osc_lbl")
+        add_port_row(4, "VRChat OSCQuery HTTP port:", "diag_vrc_http_lbl")
+        add_port_row(5, "VRChat IP:", "diag_vrc_ip_lbl")
+        ports_lay.addLayout(ports_grid)
+
+        parent_layout.addWidget(ports_card)
+
+        # --- Other OSCQuery clients ------------------------------------
+        clients_card = _Card()
+        clients_lay = _vbox(14, 6)
+        clients_card.setLayout(clients_lay)
+        clients_header = QLabel("Other OSCQuery clients seen")
+        clients_header.setObjectName("cardHeader")
+        clients_lay.addWidget(clients_header)
+
+        clients_note = QLabel(
+            "Apps that advertised themselves on mDNS. VRChat may be sending "
+            "your parameters to one of these instead of us. Close them and "
+            "reconnect, or use VRChat → Settings → OSC → Reset."
+        )
+        clients_note.setWordWrap(True)
+        clients_note.setProperty("muted", True)
+        clients_lay.addWidget(clients_note)
+
+        self.diag_clients_text = QPlainTextEdit()
+        self.diag_clients_text.setReadOnly(True)
+        clients_font = QFont("Consolas")
+        clients_font.setStyleHint(QFont.Monospace)
+        clients_font.setPointSize(10)
+        self.diag_clients_text.setFont(clients_font)
+        self.diag_clients_text.setMaximumHeight(140)
+        self.diag_clients_text.setPlainText("(none seen yet)")
+        clients_lay.addWidget(self.diag_clients_text)
+
+        parent_layout.addWidget(clients_card)
+
+        # --- Event log -------------------------------------------------
+        events_card = _Card()
+        events_lay = _vbox(14, 6)
+        events_card.setLayout(events_lay)
+        events_header = QLabel("Recent OSC events")
+        events_header.setObjectName("cardHeader")
+        events_lay.addWidget(events_header)
+
+        events_note = QLabel(
+            "Last 200 OSC manager events: mDNS state changes, handshake, "
+            "health-check failures, silent-connection warnings."
+        )
+        events_note.setWordWrap(True)
+        events_note.setProperty("muted", True)
+        events_lay.addWidget(events_note)
+
+        self.diag_events_text = QPlainTextEdit()
+        self.diag_events_text.setReadOnly(True)
+        events_font = QFont("Consolas")
+        events_font.setStyleHint(QFont.Monospace)
+        events_font.setPointSize(10)
+        self.diag_events_text.setFont(events_font)
+        events_lay.addWidget(self.diag_events_text, 1)
+
+        parent_layout.addWidget(events_card, 1)
+
+        # Track how many events we last rendered so the refresh tick
+        # only redraws when new ones have arrived (cheap text equality
+        # check would scan the whole buffer otherwise).
+        self._diag_last_event_count = 0
+        self._diag_last_clients_signature = None
+
+    def refresh_osc_diagnostics_view(self) -> None:
+        """Pulled by the main UI refresh tick. Idempotent — safe to call
+        even when the panel hasn't been built yet (no-op if labels missing)."""
+        if not getattr(self, "diag_status_banner", None):
+            return
+
+        # Only refresh the labels when the user is actually looking at
+        # the page. Saves a controller call every 100 ms otherwise.
+        current = self.main_stack.currentWidget() if self.main_stack else None
+        if current is not self.views.get("OSC Diagnostics"):
+            return
+
+        diag = self.controller.get_osc_diagnostics() or {}
+        if not diag:
+            self.diag_status_banner.setText("OSC manager not running")
+            self.diag_status_banner.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+            return
+
+        is_conn = bool(diag.get("is_connected"))
+        last_age = diag.get("last_packet_age_s")
+        session_age = diag.get("session_age_s")
+        pkts = int(diag.get("packets_handled", 0) or 0)
+        phonebook = int(diag.get("phonebook_GETs", 0) or 0)
+        handler_exc = int(diag.get("handler_exceptions", 0) or 0)
+
+        # --- Banner ---------------------------------------------------
+        if not is_conn:
+            self.diag_status_banner.setText("✕  DISCONNECTED")
+            self.diag_status_banner.setStyleSheet(f"color: {COLOR_ALERT};")
+        elif last_age is None and pkts == 0:
+            self.diag_status_banner.setText("⏳  CONNECTED — waiting for first packet…")
+            self.diag_status_banner.setStyleSheet(f"color: {COLOR_TEXT};")
+        elif last_age is not None and last_age > 15.0:
+            self.diag_status_banner.setText(
+                f"⚠  CONNECTED but SILENT for {last_age:.1f}s — VRChat is not sending us packets"
+            )
+            self.diag_status_banner.setStyleSheet("color: #FFB73D;")
+        else:
+            self.diag_status_banner.setText("✓  CONNECTED — packets flowing")
+            self.diag_status_banner.setStyleSheet(f"color: {COLOR_SUCCESS};")
+
+        # --- Live counters --------------------------------------------
+        self.diag_connection_lbl.setText("connected" if is_conn else "disconnected")
+        self.diag_session_age_lbl.setText(
+            f"{session_age:.1f} s" if session_age is not None else "—"
+        )
+        self.diag_packets_lbl.setText(str(pkts))
+        if last_age is None:
+            self.diag_last_pkt_lbl.setText("never received any")
+        else:
+            self.diag_last_pkt_lbl.setText(f"{last_age:.1f} s")
+        self.diag_phonebook_lbl.setText(str(phonebook))
+        self.diag_handler_exc_lbl.setText(str(handler_exc))
+        last_err = diag.get("last_handler_error") or "(none)"
+        self.diag_last_err_lbl.setText(str(last_err))
+        self.diag_mdns_name_lbl.setText(str(diag.get("mdns_service_name") or "—"))
+        self.diag_mdns_rereg_lbl.setText(str(diag.get("mdns_rereg_count", 0)))
+        self.diag_http_raw_lbl.setText(str(diag.get("http_raw_connections", 0)))
+
+        # --- Ports ----------------------------------------------------
+        self.diag_our_listen_lbl.setText(str(diag.get("our_listen_port") or "—"))
+        bound = diag.get("udp_socket_bound")
+        self.diag_udp_bound_lbl.setText(
+            f"{bound[0]}:{bound[1]}" if bound else "—"
+        )
+        self.diag_our_http_lbl.setText(str(diag.get("our_http_phonebook_port") or "—"))
+        self.diag_vrc_osc_lbl.setText(str(diag.get("vrc_osc_port") or "—"))
+        self.diag_vrc_http_lbl.setText(str(diag.get("vrc_http_port") or "—"))
+        self.diag_vrc_ip_lbl.setText(str(diag.get("vrc_ip") or "—"))
+
+        # --- Other clients --------------------------------------------
+        clients = self.controller.get_osc_other_clients() or {}
+        signature = tuple(sorted(
+            (k, v.get("present"), v.get("port")) for k, v in clients.items()
+        ))
+        if signature != self._diag_last_clients_signature:
+            self._diag_last_clients_signature = signature
+            if not clients:
+                self.diag_clients_text.setPlainText("(none seen yet)")
+            else:
+                lines = []
+                for name, info in clients.items():
+                    state = "ACTIVE" if info.get("present") else "gone"
+                    port = info.get("port")
+                    lines.append(f"[{state:>6}]  {name}  port={port}")
+                self.diag_clients_text.setPlainText("\n".join(lines))
+
+        # --- Event log ------------------------------------------------
+        events = self.controller.get_osc_event_log() or []
+        if len(events) != self._diag_last_event_count:
+            self._diag_last_event_count = len(events)
+            self.diag_events_text.setPlainText("\n".join(events))
+            # Keep the view scrolled to the bottom so the newest event is
+            # always visible — like a live tail.
+            scrollbar = self.diag_events_text.verticalScrollBar()
+            scrollbar.setValue(scrollbar.maximum())
+
+    # ----------------------------------------------------------
     # System Log view
     # ----------------------------------------------------------
 
@@ -1752,6 +2123,27 @@ class OscGoesPurrrUI:
         title.setAlignment(Qt.AlignHCenter)
         parent_layout.addWidget(title)
 
+        # ---- Simple Mode Card ----
+        # Settings is the always-visible escape hatch back to Simple Mode
+        # when the user has turned it off and wants the stripped UI again.
+        sm_card = _Card()
+        sm_lay = _vbox(20, 6)
+        sm_card.setLayout(sm_lay)
+        hdr = QLabel("Simple Mode")
+        hdr.setObjectName("cardHeader")
+        sm_lay.addWidget(hdr)
+        sm_lay.addWidget(self._muted_label(
+            "Hides the advanced sidebar and routes every detected SPS source "
+            "to every connected toy with no per-toy configuration."
+        ))
+        self.simple_mode_settings_toggle = ToggleSwitch("Enable Simple Mode")
+        self.simple_mode_settings_toggle.setChecked(
+            bool(getattr(self.controller, "get_simple_mode", lambda: False)())
+        )
+        self.simple_mode_settings_toggle.toggled.connect(self._on_simple_mode_toggled)
+        sm_lay.addWidget(self.simple_mode_settings_toggle)
+        parent_layout.addWidget(sm_card)
+
         # ---- Network Bind Card ----
         net_card = _Card()
         net_lay = _vbox(20, 6)
@@ -1770,7 +2162,7 @@ class OscGoesPurrrUI:
         switch_lay = _hbox(0, 10)
         switch_row.setLayout(switch_lay)
         switch_lay.addWidget(self._bold_label("127.0.0.1 (Strict)"))
-        self.network_bind_switch = QCheckBox()
+        self.network_bind_switch = ToggleSwitch()
         self.network_bind_switch.setProperty("role", "switch")
         self.network_bind_switch.setChecked(bind_val)
         self.network_bind_switch.toggled.connect(
@@ -1796,7 +2188,7 @@ class OscGoesPurrrUI:
         hdr.setObjectName("cardHeader")
         conn_lay.addWidget(hdr)
 
-        self.auto_refresh_var = QCheckBox("Auto Refresh Devices")
+        self.auto_refresh_var = ToggleSwitch("Auto Refresh Devices")
         self.auto_refresh_var.setChecked(
             bool(self.controller.get_app_setting("auto_refresh", True))
         )
@@ -1805,7 +2197,7 @@ class OscGoesPurrrUI:
         )
         conn_lay.addWidget(self.auto_refresh_var)
 
-        self.auto_connect_var = QCheckBox("Auto Connect (Intiface)")
+        self.auto_connect_var = ToggleSwitch("Auto Connect (Intiface)")
         self.auto_connect_var.setChecked(
             bool(self.controller.get_app_setting("auto_connect", True))
         )
@@ -1814,7 +2206,7 @@ class OscGoesPurrrUI:
         )
         conn_lay.addWidget(self.auto_connect_var)
 
-        self.osc_auto_connect_var = QCheckBox("Auto Connect (VRChat OSC)")
+        self.osc_auto_connect_var = ToggleSwitch("Auto Connect (VRChat OSC)")
         self.osc_auto_connect_var.setChecked(
             bool(self.controller.get_app_setting("auto_connect_osc", True))
         )
@@ -1834,7 +2226,7 @@ class OscGoesPurrrUI:
         hdr.setObjectName("cardHeader")
         ql_lay.addWidget(hdr)
 
-        hide_console = QCheckBox("Hide Terminal Console")
+        hide_console = ToggleSwitch("Hide Terminal Console")
         hide_console.setProperty("role", "switch")
         hide_console.setChecked(
             bool(self.controller.get_app_setting("hide_console", True))
@@ -1847,7 +2239,7 @@ class OscGoesPurrrUI:
         hide_console.toggled.connect(on_hide_console)
         ql_lay.addWidget(hide_console)
 
-        tray = QCheckBox("Minimize to System Tray")
+        tray = ToggleSwitch("Minimize to System Tray")
         tray.setProperty("role", "switch")
         tray.setChecked(
             bool(self.controller.get_app_setting("minimize_to_tray", False))
@@ -1858,6 +2250,43 @@ class OscGoesPurrrUI:
         ql_lay.addWidget(tray)
 
         parent_layout.addWidget(ql_card)
+
+        # ---- Features Card ----
+        # Lets the user turn off subsystems they don't need. Disabling a
+        # feature hides its sidebar entry AND stops its background thread
+        # so the app doesn't pay for what it isn't using.
+        feat_card = _Card()
+        feat_lay = _vbox(20, 6)
+        feat_card.setLayout(feat_lay)
+
+        hdr = QLabel("Features")
+        hdr.setObjectName("cardHeader")
+        feat_lay.addWidget(hdr)
+        feat_lay.addWidget(self._muted_label(
+            "Turn off features you don't need. Disabled features hide their sidebar "
+            "entry and stop their background threads to save resources."
+        ))
+
+        feature_rows = (
+            ("feature_intiface",         "Intiface toy communication (Buttplug.io)"),
+            ("feature_bhaptics",         "bHaptics integration"),
+            ("feature_hardware_monitor", "Hardware Monitor (CPU / RAM / GPU stats)"),
+            ("feature_steamvr_haptics",  "SteamVR tracker haptics"),
+            ("feature_steamvr_battery",  "SteamVR battery → OSC broadcast"),
+            ("feature_osc_inspector",    "OSC Inspector (debug view)"),
+        )
+
+        self.feature_toggles: Dict[str, ToggleSwitch] = {}
+        for key, label in feature_rows:
+            tog = ToggleSwitch(label)
+            tog.setChecked(bool(self.controller.get_feature_enabled(key)))
+            tog.toggled.connect(
+                lambda checked, k=key: self.controller.set_feature_enabled(k, bool(checked))
+            )
+            feat_lay.addWidget(tog)
+            self.feature_toggles[key] = tog
+
+        parent_layout.addWidget(feat_card)
 
         # ---- SteamVR Card ----
         svr_card = _Card()
@@ -1873,7 +2302,7 @@ class OscGoesPurrrUI:
         ))
 
         # Auto Connect — battery broadcaster also (re)scans SteamVR each tick.
-        self.steamvr_auto_connect_check_settings = QCheckBox("Auto Connect (SteamVR)")
+        self.steamvr_auto_connect_check_settings = ToggleSwitch("Auto Connect (SteamVR)")
         try:
             _status = self.controller.get_steamvr_status()
             initial_auto = bool(_status.get("auto_connect"))
@@ -1886,7 +2315,7 @@ class OscGoesPurrrUI:
         svr_lay.addWidget(self.steamvr_auto_connect_check_settings)
 
         # Start with SteamVR — registers the OpenVR app manifest.
-        self.steamvr_autostart_check_settings = QCheckBox("Start with SteamVR")
+        self.steamvr_autostart_check_settings = ToggleSwitch("Start with SteamVR")
         self.steamvr_autostart_check_settings.setChecked(initial_autostart)
         self.steamvr_autostart_check_settings.toggled.connect(self._on_steamvr_autostart_toggled)
         svr_lay.addWidget(self.steamvr_autostart_check_settings)
@@ -1973,6 +2402,43 @@ class OscGoesPurrrUI:
             self.steamvr_pattern_widgets.append(widgets)
             plat.addLayout(row)
         parent_layout.addWidget(pat_card)
+
+        # ---- Anti-stuck card (two-timer model, VRC-Haptic-Pancake parity) ----
+        as_card = _Card()
+        aslay = _vbox(14, 8)
+        as_card.setLayout(aslay)
+        as_hdr = QLabel("Anti-stuck")
+        as_hdr.setObjectName("sectionTitle")
+        aslay.addWidget(as_hdr)
+        aslay.addWidget(self._muted_label(
+            "VRChat only sends OSC on parameter change. If the sender stops "
+            "(avatar swap, partner leaves), the last value would vibrate "
+            "forever. The active timeout clears mid-range stuck values; the "
+            "peaked timeout clears saturated (100%) values, which usually "
+            "represent a legitimate hold and get a longer fuse."
+        ))
+        as_row = _hbox(0, 8)
+        self.steamvr_antistuck_check = ToggleSwitch("Enabled")
+        self.steamvr_antistuck_check.toggled.connect(self._on_steamvr_antistuck_changed)
+        as_row.addWidget(self.steamvr_antistuck_check)
+        as_row.addSpacing(12)
+
+        as_row.addWidget(QLabel("Active timeout (s)"))
+        self.steamvr_antistuck_active_spin = QSpinBox()
+        self.steamvr_antistuck_active_spin.setRange(1, 600)
+        self.steamvr_antistuck_active_spin.setValue(7)
+        self.steamvr_antistuck_active_spin.valueChanged.connect(self._on_steamvr_antistuck_changed)
+        as_row.addWidget(self.steamvr_antistuck_active_spin)
+
+        as_row.addWidget(QLabel("Peaked timeout (s)"))
+        self.steamvr_antistuck_peaked_spin = QSpinBox()
+        self.steamvr_antistuck_peaked_spin.setRange(1, 600)
+        self.steamvr_antistuck_peaked_spin.setValue(15)
+        self.steamvr_antistuck_peaked_spin.valueChanged.connect(self._on_steamvr_antistuck_changed)
+        as_row.addWidget(self.steamvr_antistuck_peaked_spin)
+        as_row.addStretch(1)
+        aslay.addLayout(as_row)
+        parent_layout.addWidget(as_card)
 
         # ---- Tracker list card ----
         list_card = _Card(dark_bg=True)
@@ -2061,6 +2527,15 @@ class OscGoesPurrrUI:
             return
         self.controller.set_steamvr_battery_interval(float(value))
 
+    def _on_steamvr_antistuck_changed(self, *_):
+        if self._is_updating_steamvr:
+            return
+        self.controller.set_steamvr_no_data(
+            self.steamvr_antistuck_check.isChecked(),
+            int(self.steamvr_antistuck_active_spin.value()),
+            int(self.steamvr_antistuck_peaked_spin.value()),
+        )
+
     def _refresh_steamvr_status_only(self):
         # Cheap refresh: status bar only, no list rebuild.
         try:
@@ -2109,6 +2584,19 @@ class OscGoesPurrrUI:
             self.steamvr_battery_interval_spin.setValue(int(round(float(status.get("battery_interval_s", 5)))))
         except Exception:
             pass
+
+        nd = status.get("no_data") or {}
+        if hasattr(self, "steamvr_antistuck_check") and nd:
+            try:
+                self.steamvr_antistuck_check.setChecked(bool(nd.get("enabled", True)))
+                active = int(nd.get("timeout_active_s", 7))
+                peaked = int(nd.get("timeout_peaked_s", nd.get("timeout_s", 15)))
+                if self.steamvr_antistuck_active_spin.value() != active:
+                    self.steamvr_antistuck_active_spin.setValue(active)
+                if self.steamvr_antistuck_peaked_spin.value() != peaked:
+                    self.steamvr_antistuck_peaked_spin.setValue(peaked)
+            except Exception:
+                pass
 
     def _apply_steamvr_patterns(self, patterns):
         for idx, widgets in enumerate(self.steamvr_pattern_widgets):
@@ -2182,7 +2670,7 @@ class OscGoesPurrrUI:
             header.addWidget(pulse_btn)
         lay.addLayout(header)
 
-        enabled = QCheckBox("Enabled")
+        enabled = ToggleSwitch("Enabled")
         enabled.setChecked(bool(cfg.get("enabled", True)))
         lay.addWidget(enabled)
 
@@ -2257,7 +2745,11 @@ class OscGoesPurrrUI:
     _is_updating_bhaptics = False
 
     # Per-position dot widgets, refreshed by _refresh_bhaptics_grids.
+    # `_bhaptics_grids` holds the OUTPUT grid (post anti-stuck, post override —
+    # what's actually sent to the device, and what the click-to-test interacts
+    # with). `_bhaptics_raw_grids` holds the RAW input mirror.
     _bhaptics_grids: Dict[str, "_BHapticsDotGrid"] = {}
+    _bhaptics_raw_grids: Dict[str, "_BHapticsDotGrid"] = {}
 
     # Tracks the last set of detected device positions so the device list
     # only rebuilds when the avatar's bHaptics-capable set actually changes.
@@ -2287,7 +2779,7 @@ class OscGoesPurrrUI:
         slay.addWidget(self.bhaptics_status_label)
 
         action_row = _hbox(0, 8)
-        self.bhaptics_auto_connect_check = QCheckBox("Auto Connect (bHaptics)")
+        self.bhaptics_auto_connect_check = ToggleSwitch("Auto Connect (bHaptics)")
         self.bhaptics_auto_connect_check.toggled.connect(self._on_bhaptics_auto_connect_toggled)
         action_row.addWidget(self.bhaptics_auto_connect_check)
 
@@ -2325,7 +2817,7 @@ class OscGoesPurrrUI:
             "over the ramp time. Catches contacts that latch on and never release."
         ))
         as_row = _hbox(0, 8)
-        self.bhaptics_antistuck_check = QCheckBox("Enabled")
+        self.bhaptics_antistuck_check = ToggleSwitch("Enabled")
         self.bhaptics_antistuck_check.toggled.connect(self._on_bhaptics_antistuck_changed)
         as_row.addWidget(self.bhaptics_antistuck_check)
 
@@ -2385,8 +2877,11 @@ class OscGoesPurrrUI:
             return
         try:
             snap = self.controller.get_bhaptics_snapshot()
+            raw_snap = self.controller.get_bhaptics_raw_snapshot()
         except Exception:
             return
+        for pos, raw_grid in self._bhaptics_raw_grids.items():
+            raw_grid.set_values(raw_snap.get(pos))
         for pos, grid in self._bhaptics_grids.items():
             grid.set_values(snap.get(pos))
 
@@ -2491,6 +2986,7 @@ class OscGoesPurrrUI:
         # deleted; clearing the dict prevents the fast timer from touching
         # already-deleted Qt objects.
         self._bhaptics_grids = {}
+        self._bhaptics_raw_grids = {}
         while self.bhaptics_device_list_layout.count():
             item = self.bhaptics_device_list_layout.takeAt(0)
             w = item.widget()
@@ -2509,7 +3005,11 @@ class OscGoesPurrrUI:
             return
 
         for d in visible:
-            self.bhaptics_device_list_layout.addWidget(self._build_bhaptics_device_card(d))
+            # Left-align so the maxWidth-capped cards sit flush instead of
+            # centering with empty space on both sides.
+            self.bhaptics_device_list_layout.addWidget(
+                self._build_bhaptics_device_card(d), 0, Qt.AlignLeft
+            )
         self.bhaptics_device_list_layout.addStretch(1)
 
     def _build_bhaptics_device_card(self, d: dict) -> QFrame:
@@ -2518,6 +3018,11 @@ class OscGoesPurrrUI:
         nodes = int(d.get("node_count", 0))
 
         card = _Card()
+        # Cap card width so the device list reads as a column of compact cards
+        # instead of stretching with the window. The two side-by-side dot grids
+        # are the widest required element (vest = ~220 px); 480 fits them plus
+        # the intensity slider with comfortable padding.
+        card.setMaximumWidth(480)
         lay = _vbox(12, 6)
         card.setLayout(lay)
 
@@ -2530,7 +3035,7 @@ class OscGoesPurrrUI:
         header.addStretch(1)
         lay.addLayout(header)
 
-        enabled = QCheckBox("Enabled")
+        enabled = ToggleSwitch("Enabled")
         enabled.setChecked(bool(cfg.get("enabled", True)))
         lay.addWidget(enabled)
 
@@ -2539,18 +3044,55 @@ class OscGoesPurrrUI:
         slider = QSlider(Qt.Horizontal)
         slider.setRange(0, 100)
         slider.setValue(int(cfg.get("intensity", 100)))
+        # Cap the slider so it doesn't blow the card width up on wide windows;
+        # 240 px is plenty of resolution for a 0-100 control.
+        slider.setMaximumWidth(240)
         intensity_row.addWidget(slider, 1)
         intensity_label = QLabel(f"{slider.value()}%")
         intensity_label.setMinimumWidth(40)
         intensity_row.addWidget(intensity_label)
+        intensity_row.addStretch(1)
         lay.addLayout(intensity_row)
 
-        # Live debug grid: dots colored red(0)→yellow(50)→green(100), laid out
-        # in the same orientation as the physical bHaptics device.
+        # Live debug grids: dots colored red(0)→yellow(50)→green(100), laid out
+        # in the same orientation as the physical bHaptics device. Two side-by-
+        # side views — left is the raw OSC input, right is the actual output
+        # after anti-stuck ramping and manual overrides. Comparing them makes
+        # it obvious when anti-stuck is masking a real signal or when a test
+        # override is winning over OSC.
         cols, rows = d.get("grid", (nodes, 1))
+        grids_row = _hbox(0, 12)
+
+        raw_col = _vbox(0, 4)
+        raw_lbl = QLabel("Raw input")
+        raw_lbl.setProperty("role", "muted")
+        raw_lbl.setAlignment(Qt.AlignHCenter)
+        raw_col.addWidget(raw_lbl)
+        raw_grid = _BHapticsDotGrid(
+            node_count=nodes, cols=int(cols), rows=int(rows), interactive=False
+        )
+        self._bhaptics_raw_grids[position] = raw_grid
+        raw_col.addWidget(raw_grid, 0, Qt.AlignHCenter)
+        grids_row.addLayout(raw_col)
+
+        out_col = _vbox(0, 4)
+        out_lbl = QLabel("Output (anti-stuck applied)")
+        out_lbl.setProperty("role", "muted")
+        out_lbl.setAlignment(Qt.AlignHCenter)
+        out_col.addWidget(out_lbl)
         grid = _BHapticsDotGrid(node_count=nodes, cols=int(cols), rows=int(rows))
         self._bhaptics_grids[position] = grid
-        lay.addWidget(grid)
+        out_col.addWidget(grid, 0, Qt.AlignHCenter)
+        grids_row.addLayout(out_col)
+
+        lay.addLayout(grids_row)
+
+        # Debug: click-and-hold a dot on the output grid to fire it at 100%.
+        # Routed through the controller so the router can max-merge it with
+        # the live OSC output. The raw grid stays non-interactive — it only
+        # mirrors what's actually coming in over OSC.
+        grid.dotPressed.connect(lambda idx, pos=position: self.controller.set_bhaptics_manual_dot(pos, idx, 100))
+        grid.dotReleased.connect(lambda idx, pos=position: self.controller.set_bhaptics_manual_dot(pos, idx, None))
 
         def push(_=None):
             if self._is_updating_bhaptics:
@@ -2564,6 +3106,315 @@ class OscGoesPurrrUI:
         enabled.toggled.connect(push)
         slider.valueChanged.connect(push)
         return card
+
+    # ----------------------------------------------------------
+    # Hardware Monitor view
+    # ----------------------------------------------------------
+
+    _is_updating_hwmon = False
+
+    # Ordered list of stats shown on the page. Each tuple is
+    # (key, label, value_formatter). The same keys map to OSC addresses
+    # stored in HardwareMonitorSettingsManager.
+    _HWMON_STATS = (
+        ("cpu_percent",   "CPU",       "percent"),
+        ("ram_used_gb",   "RAM Used",  "gb"),
+        ("ram_total_gb",  "RAM Total", "gb"),
+        ("gpu_percent",   "GPU",       "percent"),
+        ("vram_used_gb",  "VRAM Used", "gb"),
+        ("vram_total_gb", "VRAM Total","gb"),
+    )
+
+    def _build_hardware_monitor_view(self, parent_layout: QVBoxLayout):
+        title = QLabel("Hardware Monitor")
+        title.setObjectName("viewTitle")
+        title.setAlignment(Qt.AlignHCenter)
+        parent_layout.addWidget(title)
+
+        parent_layout.addWidget(self._muted_label(
+            "Broadcasts your system stats (CPU, RAM, GPU, VRAM) to VRChat over OSC so an avatar "
+            "can display them. Percentages are sent as 0-1 floats; memory values are sent in GB. "
+            "GPU stats currently require an NVIDIA GPU (NVML)."
+        ))
+
+        # ---- Master settings card ----
+        cfg_card = _Card()
+        cfg_lay = _vbox(14, 8)
+        cfg_card.setLayout(cfg_lay)
+
+        cfg_hdr = QLabel("Settings")
+        cfg_hdr.setObjectName("sectionTitle")
+        cfg_lay.addWidget(cfg_hdr)
+
+        row1 = _hbox(0, 12)
+        self.hwmon_enabled_check = ToggleSwitch("Enabled")
+        self.hwmon_enabled_check.toggled.connect(self._on_hwmon_enabled_toggled)
+        row1.addWidget(self.hwmon_enabled_check)
+
+        self.hwmon_send_osc_check = ToggleSwitch("Send to VRChat (OSC)")
+        self.hwmon_send_osc_check.toggled.connect(self._on_hwmon_send_osc_toggled)
+        row1.addWidget(self.hwmon_send_osc_check)
+
+        self.hwmon_gpu_enabled_check = ToggleSwitch("Read GPU (NVIDIA NVML)")
+        self.hwmon_gpu_enabled_check.toggled.connect(self._on_hwmon_gpu_toggled)
+        row1.addWidget(self.hwmon_gpu_enabled_check)
+
+        row1.addStretch(1)
+        cfg_lay.addLayout(row1)
+
+        row2 = _hbox(0, 8)
+        row2.addWidget(QLabel("Poll rate (s)"))
+        self.hwmon_poll_rate_spin = QDoubleSpinBox()
+        self.hwmon_poll_rate_spin.setRange(0.25, 60.0)
+        self.hwmon_poll_rate_spin.setSingleStep(0.25)
+        self.hwmon_poll_rate_spin.setDecimals(2)
+        self.hwmon_poll_rate_spin.valueChanged.connect(self._on_hwmon_poll_rate_changed)
+        row2.addWidget(self.hwmon_poll_rate_spin)
+
+        row2.addSpacing(20)
+        self.hwmon_status_label = QLabel("")
+        self.hwmon_status_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+        row2.addWidget(self.hwmon_status_label)
+        row2.addStretch(1)
+        cfg_lay.addLayout(row2)
+
+        parent_layout.addWidget(cfg_card)
+
+        # ---- Live stats card ----
+        stats_card = _Card()
+        stats_lay = _vbox(14, 8)
+        stats_card.setLayout(stats_lay)
+
+        stats_hdr = QLabel("Live Stats")
+        stats_hdr.setObjectName("sectionTitle")
+        stats_lay.addWidget(stats_hdr)
+
+        self.hwmon_gpu_name_label = QLabel("GPU: --")
+        self.hwmon_gpu_name_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+        stats_lay.addWidget(self.hwmon_gpu_name_label)
+
+        # Each stat gets a row with: name, value, progress bar (for %).
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(14)
+        grid.setVerticalSpacing(8)
+        self.hwmon_value_labels: Dict[str, QLabel] = {}
+        self.hwmon_progress_bars: Dict[str, QProgressBar] = {}
+        for r, (key, label, kind) in enumerate(self._HWMON_STATS):
+            name_lbl = QLabel(label)
+            f = name_lbl.font(); f.setBold(True); name_lbl.setFont(f)
+            grid.addWidget(name_lbl, r, 0)
+
+            value_lbl = QLabel("--")
+            value_lbl.setMinimumWidth(140)
+            grid.addWidget(value_lbl, r, 1)
+            self.hwmon_value_labels[key] = value_lbl
+
+            if kind == "percent":
+                pb = QProgressBar()
+                pb.setRange(0, 100)
+                pb.setValue(0)
+                pb.setFixedHeight(14)
+                grid.addWidget(pb, r, 2)
+                self.hwmon_progress_bars[key] = pb
+            else:
+                # Spacer so the column lines up with the percent bars.
+                grid.addWidget(QLabel(""), r, 2)
+
+        stats_lay.addLayout(grid)
+        parent_layout.addWidget(stats_card)
+
+        # ---- OSC addresses card ----
+        addr_card = _Card()
+        addr_lay = _vbox(14, 6)
+        addr_card.setLayout(addr_lay)
+
+        addr_hdr = QLabel("OSC Output")
+        addr_hdr.setObjectName("sectionTitle")
+        addr_lay.addWidget(addr_hdr)
+
+        addr_lay.addWidget(self._muted_label(
+            "Set the avatar parameter name each stat is written to. Percent stats are normalised "
+            "to 0-1; memory stats are sent in GB as floats. Untick a row to skip sending that stat."
+        ))
+
+        addr_grid = QGridLayout()
+        addr_grid.setHorizontalSpacing(10)
+        addr_grid.setVerticalSpacing(6)
+        addr_grid.addWidget(QLabel("Stat"), 0, 0)
+        addr_grid.addWidget(QLabel("Send"), 0, 1)
+        addr_grid.addWidget(QLabel("Parameter Name"), 0, 2)
+        addr_grid.addWidget(QLabel("Type"), 0, 3)
+        addr_grid.addWidget(QLabel("Last Sent Value"), 0, 4)
+
+        self.hwmon_addr_edits: Dict[str, QLineEdit] = {}
+        self.hwmon_send_checks: Dict[str, QCheckBox] = {}
+        self.hwmon_last_sent_labels: Dict[str, QLabel] = {}
+        for r, (key, label, _kind) in enumerate(self._HWMON_STATS, start=1):
+            addr_grid.addWidget(QLabel(label), r, 0)
+
+            chk = QCheckBox()
+            chk.toggled.connect(
+                lambda checked, k=key: self._on_hwmon_send_toggle_changed(k, checked)
+            )
+            addr_grid.addWidget(chk, r, 1)
+            self.hwmon_send_checks[key] = chk
+
+            edit = QLineEdit()
+            edit.editingFinished.connect(
+                lambda k=key: self._on_hwmon_address_changed(k)
+            )
+            addr_grid.addWidget(edit, r, 2)
+            self.hwmon_addr_edits[key] = edit
+
+            # Type column — every stat is transmitted as a float.
+            type_lbl = QLabel("float")
+            type_lbl.setProperty("muted", "true")
+            type_lbl.setAlignment(Qt.AlignCenter)
+            addr_grid.addWidget(type_lbl, r, 3)
+
+            # Last Sent Value column — updated on each refresh tick.
+            sent_lbl = QLabel("--")
+            sent_lbl.setAlignment(Qt.AlignCenter)
+            sent_font = QFont("Consolas")
+            sent_font.setStyleHint(QFont.Monospace)
+            sent_lbl.setFont(sent_font)
+            addr_grid.addWidget(sent_lbl, r, 4)
+            self.hwmon_last_sent_labels[key] = sent_lbl
+
+        addr_grid.setColumnStretch(2, 1)
+        addr_lay.addLayout(addr_grid)
+        parent_layout.addWidget(addr_card)
+
+        parent_layout.addStretch(1)
+
+        # Initial population + periodic refresh.
+        self._refresh_hardware_monitor_view(full=True)
+        self._hwmon_refresh_timer = QTimer(self.window)
+        self._hwmon_refresh_timer.setInterval(500)
+        self._hwmon_refresh_timer.timeout.connect(
+            lambda: self._refresh_hardware_monitor_view(full=False)
+        )
+        self._hwmon_refresh_timer.start()
+
+    # ---- Hardware monitor handlers ----
+
+    def _on_hwmon_enabled_toggled(self, checked: bool):
+        if self._is_updating_hwmon:
+            return
+        self.controller.set_hardware_monitor_enabled(bool(checked))
+
+    def _on_hwmon_send_osc_toggled(self, checked: bool):
+        if self._is_updating_hwmon:
+            return
+        self.controller.set_hardware_monitor_send_osc(bool(checked))
+
+    def _on_hwmon_gpu_toggled(self, checked: bool):
+        if self._is_updating_hwmon:
+            return
+        self.controller.set_hardware_monitor_gpu_enabled(bool(checked))
+
+    def _on_hwmon_poll_rate_changed(self, value: float):
+        if self._is_updating_hwmon:
+            return
+        self.controller.set_hardware_monitor_poll_rate(float(value))
+
+    def _on_hwmon_send_toggle_changed(self, key: str, checked: bool):
+        if self._is_updating_hwmon:
+            return
+        self.controller.set_hardware_monitor_send_toggle(key, bool(checked))
+
+    def _on_hwmon_address_changed(self, key: str):
+        if self._is_updating_hwmon:
+            return
+        edit = self.hwmon_addr_edits.get(key)
+        if edit is None:
+            return
+        self.controller.set_hardware_monitor_address(key, edit.text().strip())
+
+    def _refresh_hardware_monitor_view(self, full: bool = False):
+        if not hasattr(self, "hwmon_value_labels"):
+            return
+        try:
+            status = self.controller.get_hardware_monitor_status()
+        except Exception:
+            return
+        stats = status.get("stats", {}) or {}
+        settings = status.get("settings", {}) or {}
+
+        # Live values + last-sent OSC payload
+        last_sent = stats.get("last_sent_values", {}) or {}
+        for key, _label, kind in self._HWMON_STATS:
+            val = stats.get(key)
+            lbl = self.hwmon_value_labels.get(key)
+            if lbl is not None:
+                if val is None:
+                    lbl.setText("--")
+                elif kind == "percent":
+                    lbl.setText(f"{float(val):.1f} %")
+                else:
+                    lbl.setText(f"{float(val):.2f} GB")
+            pb = self.hwmon_progress_bars.get(key)
+            if pb is not None:
+                try:
+                    pb.setValue(max(0, min(100, int(round(float(val or 0))))))
+                except (TypeError, ValueError):
+                    pb.setValue(0)
+            # Last Sent Value column — shows the actual OSC payload.
+            sent_lbl = self.hwmon_last_sent_labels.get(key)
+            if sent_lbl is not None:
+                sent_val = last_sent.get(key)
+                if sent_val is None:
+                    sent_lbl.setText("--")
+                else:
+                    sent_lbl.setText(f"{float(sent_val):.4f}")
+
+        # GPU name / status footer
+        gpu_name = stats.get("gpu_name")
+        backend = stats.get("gpu_backend", "none")
+        if backend == "nvml" and gpu_name:
+            self.hwmon_gpu_name_label.setText(f"GPU: {gpu_name} (NVML)")
+            self.hwmon_gpu_name_label.setStyleSheet(f"color: {COLOR_SUCCESS};")
+        elif not stats.get("has_nvml", False):
+            self.hwmon_gpu_name_label.setText(
+                "GPU: NVML not available (pip install nvidia-ml-py for NVIDIA GPUs)"
+            )
+            self.hwmon_gpu_name_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+        else:
+            self.hwmon_gpu_name_label.setText("GPU: --")
+            self.hwmon_gpu_name_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+
+        # Status line
+        if not stats.get("has_psutil", True):
+            self.hwmon_status_label.setText("psutil not installed — CPU/RAM unavailable")
+            self.hwmon_status_label.setStyleSheet(f"color: {COLOR_ALERT};")
+        elif stats.get("error"):
+            self.hwmon_status_label.setText(f"Last error: {stats['error']}")
+            self.hwmon_status_label.setStyleSheet(f"color: {COLOR_ALERT};")
+        else:
+            self.hwmon_status_label.setText("OK")
+            self.hwmon_status_label.setStyleSheet(f"color: {COLOR_SUCCESS};")
+
+        # Sync settings widgets (only on full refresh to avoid stomping
+        # in-flight user edits to text fields).
+        if full:
+            self._is_updating_hwmon = True
+            try:
+                self.hwmon_enabled_check.setChecked(bool(settings.get("enabled", False)))
+                self.hwmon_send_osc_check.setChecked(bool(settings.get("send_osc", True)))
+                self.hwmon_gpu_enabled_check.setChecked(bool(settings.get("gpu_enabled", True)))
+                self.hwmon_poll_rate_spin.setValue(float(settings.get("poll_rate_s", 2.0)))
+
+                addresses = settings.get("addresses", {}) or {}
+                toggles = settings.get("send_toggles", {}) or {}
+                for key, _label, _kind in self._HWMON_STATS:
+                    edit = self.hwmon_addr_edits.get(key)
+                    if edit is not None and not edit.hasFocus():
+                        edit.setText(str(addresses.get(key, "")))
+                    chk = self.hwmon_send_checks.get(key)
+                    if chk is not None:
+                        chk.setChecked(bool(toggles.get(key, True)))
+            finally:
+                self._is_updating_hwmon = False
 
     def _build_help_view(self, parent_layout: QVBoxLayout):
         title = QLabel("Help & How It Works")
@@ -2859,6 +3710,18 @@ Both consume the same data, so they stay in lockstep.
         header_lay = _hbox(0, 8)
         header.setLayout(header_lay)
 
+        icon_button = QToolButton()
+        icon_button.setObjectName("lovenseIcon")
+        icon_button.setAutoRaise(True)
+        icon_button.setIconSize(QSize(32, 32))
+        icon_button.setFixedSize(QSize(38, 38))
+        icon_button.setCursor(Qt.PointingHandCursor)
+        icon_button.clicked.connect(
+            lambda _=False, n=device_name, b=icon_button: self._on_lovense_icon_clicked(n, b)
+        )
+        self._apply_lovense_icon(device_name, icon_button)
+        header_lay.addWidget(icon_button)
+
         status_icon = "✓" if is_connected else "⚠"
         name_label = QLabel(f"{status_icon} {device_name}")
         name_label.setObjectName("deviceName")
@@ -2961,7 +3824,7 @@ Both consume the same data, so they stay in lockstep.
                 # All SPS is an additive override — toggling it on/off never
                 # touches the individual zone selections, so the user can
                 # temporarily switch to match-any and return to their saved set.
-                all_sps_cb = QCheckBox("All SPS (match any zone — overrides selections below)")
+                all_sps_cb = ToggleSwitch("All SPS (match any zone — overrides selections below)")
                 all_sps_cb.setChecked("All SPS" in current_selected)
 
                 def on_all_sps(checked):
@@ -2995,7 +3858,7 @@ Both consume the same data, so they stay in lockstep.
                 for zone in fresh_zones:
                     if zone == "None":
                         continue
-                    cb = QCheckBox(zone)
+                    cb = ToggleSwitch(zone)
                     cb.setChecked(zone in current_selected)
                     cb.toggled.connect(make_toggle(zone))
                     panel_lay.addWidget(cb)
@@ -3011,7 +3874,14 @@ Both consume the same data, so they stay in lockstep.
                     panel.setVisible(False)
                     btn.setText(zone_btn_text(state["value"]))
 
-            zone_btn.clicked.connect(lambda _=False: toggle_zone_panel())
+            # Bind `toggle_zone_panel` via a default arg so each button keeps
+            # its own iteration's closure. Without this, every motor's button
+            # resolved the name `toggle_zone_panel` at click time and got the
+            # LAST iteration's version — so clicking motor 0's "Select Zones"
+            # expanded motor 1's panel and motor 0 was unreachable.
+            zone_btn.clicked.connect(
+                lambda _=False, tog=toggle_zone_panel: tog()
+            )
 
             # Interaction filter checkboxes
             filter_row = QWidget()
@@ -3019,7 +3889,7 @@ Both consume the same data, so they stay in lockstep.
             filter_row.setLayout(filter_lay)
 
             def make_filter_cb(label, key, default):
-                cb = QCheckBox(label)
+                cb = ToggleSwitch(label)
                 cb.setChecked(
                     bool(self.controller.get_profile_config(device_name, key, default))
                 )
@@ -3134,8 +4004,41 @@ Both consume the same data, so they stay in lockstep.
             "status_label": name_label,
             "battery_label": battery_label,
             "delete_button": delete_button,
+            "icon_button": icon_button,
             "motors": motor_vars,
         }
+
+    # ----------------------------------------------------------
+    # Lovense product icon (auto-detect + manual override)
+    # ----------------------------------------------------------
+
+    def _apply_lovense_icon(self, device_name: str, button: "QToolButton") -> None:
+        """Refresh the icon button to reflect current override / auto-detect state."""
+        override = self.controller.get_profile_config(device_name, "icon_override", None)
+        key = _lovense_icons.resolve_key(device_name, override)
+        pixmap = _lovense_icons.load_pixmap(key, size=32, circular=True) if key else None
+        if pixmap is not None:
+            button.setIcon(QIcon(pixmap))
+            button.setIconSize(QSize(32, 32))
+            tip = f"{_lovense_icons.display_name(key)} — click to change"
+        else:
+            button.setIcon(QIcon())
+            button.setText("?")
+            tip = "No icon — click to pick one"
+        button.setToolTip(tip)
+
+    def _on_lovense_icon_clicked(self, device_name: str, button: "QToolButton") -> None:
+        current_override = self.controller.get_profile_config(
+            device_name, "icon_override", None
+        )
+        result = _lovense_icons.pick_icon(self.window, device_name, current_override)
+        if result is _lovense_icons.PICK_CANCELLED:
+            return
+        # PICK_AUTO  -> None ; PICK_NONE -> "" ; "<key>" -> "<key>"
+        self.controller.update_device_config(device_name, "icon_override", result)
+        if hasattr(self.controller, "save_profiles"):
+            self.controller.save_profiles()
+        self._apply_lovense_icon(device_name, button)
 
     def _make_segmented(self, options: List[str], current: str,
                         on_change: Callable[[str], None]) -> QWidget:
@@ -3280,7 +4183,7 @@ Both consume the same data, so they stay in lockstep.
         search.setPlaceholderText("Search avatar parameters...")
         lay.addWidget(search)
 
-        show_all = QCheckBox("Include non-avatar parameters (OGB/SPS, system, etc.)")
+        show_all = ToggleSwitch("Include non-avatar parameters (OGB/SPS, system, etc.)")
         lay.addWidget(show_all)
 
         tree = QTreeWidget()
@@ -3423,6 +4326,10 @@ Both consume the same data, so they stay in lockstep.
     def _muted_label(self, text: str) -> QLabel:
         lbl = QLabel(text)
         lbl.setProperty("muted", "true")
+        # Word-wrap is critical — without it, long description blocks force
+        # the page's minimum width to fit the full single-line text, which
+        # prevents the window from shrinking and clips titles on narrow views.
+        lbl.setWordWrap(True)
         self._repolish(lbl)
         return lbl
 
@@ -3845,51 +4752,6 @@ Both consume the same data, so they stay in lockstep.
         return self.window
 
 
-# ============================================================
-# Slider / progress wrappers that accept floats 0.0-1.0 like CTk.
-# ============================================================
-
-class _SliderProxy:
-    def __init__(self, slider: QSlider):
-        self._slider = slider
-
-    def set(self, value: float):
-        v = max(0, min(1000, int(round(float(value) * 1000))))
-        # blockSignals so programmatic updates don't echo back through the controller.
-        self._slider.blockSignals(True)
-        self._slider.setValue(v)
-        self._slider.blockSignals(False)
-
-    def get(self) -> float:
-        return self._slider.value() / 1000.0
-
-
-class _ProgressProxy:
-    def __init__(self, bar: QProgressBar):
-        self._bar = bar
-
-    def set(self, value: float):
-        v = max(0, min(1000, int(round(float(value) * 1000))))
-        self._bar.setValue(v)
-
-    def get(self) -> float:
-        return self._bar.value() / 1000.0
-
-
-def _truncate(text: str, max_chars: int) -> str:
-    """Return text shortened to `max_chars` with an ellipsis."""
-    if text is None:
-        return ""
-    text = str(text)
-    if len(text) <= max_chars:
-        return text
-    return text[: max(0, max_chars - 1)] + "…"
-
-
-def _html_escape(s: str) -> str:
-    return (
-        s.replace("&", "&amp;")
-         .replace("<", "&lt;")
-         .replace(">", "&gt;")
-         .replace(" ", "&nbsp;")
-    )
+# (_SliderProxy / _ProgressProxy / _truncate / _html_escape now live in
+# `ui/widgets.py` and `ui/text_helpers.py`. The import-aliases at the top
+# of this file preserve the underscore names.)

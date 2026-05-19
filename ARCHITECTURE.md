@@ -30,12 +30,15 @@ following anti-tangling rules:
 3. **No Shared Hardware State:** `HapticEngine` is a sealed black box.
    Do not pass dictionaries between threads. `main.py` drops commands
    into the queue and uses the engine's primitive-only facade
-   (`update_target()`, `set_linear_config()`,
+   (`update_target()`, `set_linear_config()`, `mark_connected()`,
    `list_connected_device_names()`, `get_motor_count_map()`,
-   `snapshot_discovered_devices()`, `async_start_scan()`). It never
-   reaches through `haptic_engine.buttplug_client` — the underlying
-   buttplug.io client and `device.*` attributes are private to the
-   engine. The engine manages its own internal `device_targets` memory.
+   `snapshot_discovered_devices()`, `async_start_scan()`,
+   `async_connect()`, `async_disconnect()`, `async_purr_check()`,
+   `async_test_device()`). It never reaches through
+   `haptic_engine.buttplug_client` — the underlying buttplug.io client
+   and `device.*` attributes are private to the engine. The engine
+   manages its own internal `device_targets` memory and owns its
+   `is_connected` flag (writers go through `mark_connected()`).
 4. **Stateless Networking:** `vrchat_osc.py` does not own data. It only
    writes to `parameter_store.py`.
 

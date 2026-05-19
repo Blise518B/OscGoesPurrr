@@ -93,6 +93,9 @@ class BHapticsRouter:
         # Track last submitted dot tuple per device so we can debounce, and so
         # the debug UI can read what's currently being driven.
         self._last_dots: Dict[str, Tuple[int, ...]] = {}
+        # Mirror of the per-tick raw values (pre anti-stuck, pre override) so
+        # the debug UI can render a side-by-side raw-vs-output comparison.
+        self._last_raw: Dict[str, Tuple[int, ...]] = {}
         # Anti-stuck bookkeeping (per device, per node):
         #   _raw_values   — the raw intensity (0-100) computed from OSC last tick
         #   _change_times — wall-clock time the raw value last actually changed
@@ -100,6 +103,12 @@ class BHapticsRouter:
         self._raw_values: Dict[str, List[int]] = {}
         self._change_times: Dict[str, List[float]] = {}
         self._snapshot_lock = threading.Lock()
+        # Manual debug overrides: {position: {dot_index_0based: intensity_0_100}}.
+        # Set by the UI when the user click-holds a debug dot; merged with the
+        # routed output via max-wins so the device fires even if no OSC param
+        # is driving that node.
+        self._overrides: Dict[str, Dict[int, int]] = {}
+        self._overrides_lock = threading.Lock()
 
     def start(self):
         if self._thread is not None and self._thread.is_alive():
@@ -126,6 +135,29 @@ class BHapticsRouter:
         with self._snapshot_lock:
             return {pos: list(dots) for pos, dots in self._last_dots.items()}
 
+    def get_raw_snapshot(self) -> Dict[str, List[int]]:
+        """Per-device raw OSC intensities (pre anti-stuck, pre manual override).
+        Companion to get_snapshot() — paired they show input vs. driven output."""
+        with self._snapshot_lock:
+            return {pos: list(raw) for pos, raw in self._last_raw.items()}
+
+    def set_manual_override(self, position: str, index: int, intensity) -> None:
+        """Force a single dot to a fixed intensity (0..100), or pass None to
+        clear. Used by the debug UI's click-to-test feature. Max-merges with
+        the routed output, so triggering an override always wins."""
+        with self._overrides_lock:
+            slot = self._overrides.setdefault(position, {})
+            if intensity is None:
+                slot.pop(int(index), None)
+                if not slot:
+                    self._overrides.pop(position, None)
+            else:
+                slot[int(index)] = max(0, min(100, int(intensity)))
+
+    def clear_manual_overrides(self) -> None:
+        with self._overrides_lock:
+            self._overrides.clear()
+
     def _tick(self):
         if not self.engine.is_connected:
             # Clear debounce so we re-submit immediately on reconnect, and
@@ -134,11 +166,15 @@ class BHapticsRouter:
             with self._snapshot_lock:
                 if self._last_dots:
                     self._last_dots.clear()
+                if self._last_raw:
+                    self._last_raw.clear()
             self._raw_values.clear()
             self._change_times.clear()
             return
-        params = store.get_all_parameters()
-        if not params:
+        params = store.get_all_parameters() or {}
+        with self._overrides_lock:
+            overrides = {pos: dict(slots) for pos, slots in self._overrides.items()}
+        if not params and not overrides:
             return
         configs = self.get_device_configs()
         antistuck = self.get_antistuck()
@@ -148,7 +184,24 @@ class BHapticsRouter:
         now = time.time()
         for position, slot, count in _DEVICE_TABLE:
             cfg = configs.get(position)
+            pos_overrides = overrides.get(position) or {}
             if cfg is None or not cfg.enabled:
+                # Disabled device contributes no OSC routing, so raw is zeros.
+                zero_raw = tuple([0] * count)
+                with self._snapshot_lock:
+                    self._last_raw[position] = zero_raw
+                # Device disabled: still honor manual debug overrides so the
+                # click-to-test feature works without flipping the toggle.
+                if pos_overrides:
+                    dots = [int(pos_overrides.get(i, 0)) for i in range(count)]
+                    tup = tuple(dots)
+                    with self._snapshot_lock:
+                        prev = self._last_dots.get(position)
+                    if prev != tup:
+                        with self._snapshot_lock:
+                            self._last_dots[position] = tup
+                        self.engine.submit_dot_frame(position, dots)
+                    continue
                 # If we previously submitted activity, push a zero frame once
                 # to silence the device, then keep the zero snapshot.
                 with self._snapshot_lock:
@@ -172,6 +225,7 @@ class BHapticsRouter:
                 self._change_times[position] = time_arr
 
             dots: List[int] = []
+            raw_dots: List[int] = []
             for n in range(1, count + 1):
                 # Two known v1 schemas are supported and combined per-node
                 # (max wins). Both feed the same physical dot.
@@ -193,6 +247,7 @@ class BHapticsRouter:
                         from_float = 0
 
                 raw = max(from_bool, from_float)
+                raw_dots.append(raw)
 
                 # --- Anti-stuck ramp-down -----------------------------------
                 # Track when raw last actually changed; if it sits unchanged
@@ -218,10 +273,20 @@ class BHapticsRouter:
                 else:
                     out = raw
 
+                # Manual debug override: max-wins, bypasses anti-stuck.
+                ov = pos_overrides.get(idx)
+                if ov is not None and ov > out:
+                    out = ov
+
                 dots.append(out)
 
             tup = tuple(dots)
+            raw_tup = tuple(raw_dots)
             with self._snapshot_lock:
+                # Always refresh raw snapshot so the debug view tracks input
+                # changes even when output is debounced (e.g., anti-stuck
+                # holding output flat while raw varies).
+                self._last_raw[position] = raw_tup
                 prev = self._last_dots.get(position)
             if prev == tup:
                 continue

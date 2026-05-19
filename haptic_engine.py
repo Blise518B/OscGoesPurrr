@@ -333,6 +333,14 @@ class HapticEngine:
         """Thread-safe entry point for the Main Thread to command hardware."""
         self.device_targets[(device_name, motor_idx)] = target_val
 
+    def mark_connected(self, connected: bool) -> None:
+        """Thread-safe facade: external observers (the VRChat OSC link, the
+        Controller's auto-connect logic) flip the engine's connection flag
+        through this setter instead of poking `is_connected` directly. Keeps
+        the engine's internal state owned by the engine (ARCHITECTURE.md
+        rule #3)."""
+        self.is_connected = bool(connected)
+
     def set_linear_config(self, device_name: str, motor_idx: int,
                           mode: str = "position", idle: str = "rest") -> None:
         """Thread-safe entry point for the controller to push per-motor linear
@@ -444,7 +452,28 @@ class HapticEngine:
         except Exception as e:
             self.push_ui_update(f"Vibration error: {e}")
 
-    async def _async_purr_check(self):
+    async def async_test_device(self, device_name: str, intensity: float = 0.4,
+                                 duration_s: float = 1.0):
+        """Pulse a single device's vibrate motors at `intensity` for `duration_s`,
+        then drop back to 0. Linear motors are intentionally skipped (same
+        rationale as Purr-Check)."""
+        if not self.buttplug_client or not self.is_connected:
+            return
+        try:
+            target = None
+            for device in self.buttplug_client.devices.values():
+                if device.name == device_name:
+                    target = device
+                    break
+            if target is None or not target.has_output(OutputType.VIBRATE):
+                return
+            await target.run_output(DeviceOutputCommand(OutputType.VIBRATE, intensity))
+            await asyncio.sleep(duration_s)
+            await target.run_output(DeviceOutputCommand(OutputType.VIBRATE, 0.0))
+        except Exception as e:
+            self.push_ui_update(f"Test toy error ({device_name}): {e}")
+
+    async def async_purr_check(self):
         """Test all devices by setting them to 0.1, waiting 1 second, then 0.
 
         Vibrate-only check by design -- we don't want a Purr-Check to fling a
@@ -582,7 +611,7 @@ class HapticEngine:
         back into BLE range after a battery swap).
 
         Pre-initial-scan additions are intentionally ignored here -- they get
-        batched into the bulk `devices_found` push from `_async_connect`. Gating
+        batched into the bulk `devices_found` push from `async_connect`. Gating
         on `is_connected` keeps us from double-pushing during the connect window.
         """
         if not self.is_connected:
@@ -663,10 +692,10 @@ class HapticEngine:
         if not self.is_connected:
             return
         self.push_ui_update("Intiface server disconnected. Will retry...")
-        self.is_connected = False
+        self.mark_connected(False)
         self.push_connection_status(False, "")
 
-    async def _async_connect(self):
+    async def async_connect(self):
         """Internal async method to connect to Intiface"""
         self.buttplug_client = ButtplugClient(APP_NAME)
 
@@ -730,7 +759,7 @@ class HapticEngine:
             }
 
         # Update connection status before triggering UI rebuild (fixes race condition)
-        self.is_connected = True
+        self.mark_connected(True)
         self.push_connection_status(True, "Intiface")
 
         # Register device add/remove hooks AFTER the initial bulk sync. Doing it
@@ -750,14 +779,14 @@ class HapticEngine:
 
         self.push_ui_update(f"Scan complete. Devices found: {len(self.buttplug_client.devices)}")
 
-    async def _async_disconnect(self):
+    async def async_disconnect(self):
         """Internal async method to disconnect from Intiface"""
         if self.buttplug_client:
             try:
                 await self.buttplug_client.disconnect()
             except Exception:
                 pass
-        self.is_connected = False
+        self.mark_connected(False)
         self._motor_features.clear()
         self.linear_actuators.clear()
         self.stroke_speed_actuators.clear()
@@ -902,7 +931,7 @@ class HapticEngine:
         self.push_ui_update(f"Vibration error for {device_name} motor {motor_idx}: {e}")
         if any(token in error_str for token in ("closed", "disconnect", "websocket", "connection")):
             self.push_ui_update("Intiface connection lost. Triggering auto-retry.")
-            self.is_connected = False
+            self.mark_connected(False)
             self.push_connection_status(False, "")
             return True
         return False
