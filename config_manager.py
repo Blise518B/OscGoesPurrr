@@ -120,7 +120,11 @@ class SteamVRSettingsManager:
         "autostart_with_steamvr": False,
         "auto_connect_steamvr": True,
         "no_data_enabled": True,
-        "no_data_timeout_s": 15,
+        # Two-timer anti-stuck (ported from VRC-Haptic-Pancake): mid-range
+        # values are cleared faster than saturated (==1.0) ones, since a
+        # legitimate full-contact hold is more common than a stuck mid value.
+        "no_data_timeout_active_s": 7,
+        "no_data_timeout_peaked_s": 15,
         "battery_poll_interval_s": 5.0,
         "patterns": [
             {"pattern": "Linear",   "str_min": 0,  "str_max": 80, "speed": 4},   # PROXIMITY
@@ -176,14 +180,30 @@ class SteamVRSettingsManager:
         self._save()
 
     def get_no_data(self) -> Dict[str, Any]:
+        # Backward-compat: older configs only stored `no_data_timeout_s`. Use
+        # it as the peaked timeout (the original semantics) and derive a
+        # reasonable active timeout if nothing newer is set.
+        legacy = self.settings.get("no_data_timeout_s")
+        peaked = self.settings.get("no_data_timeout_peaked_s",
+                                   legacy if legacy is not None else 15)
+        active = self.settings.get("no_data_timeout_active_s",
+                                   max(1, int(int(peaked) * 7 / 15)))
         return {
             "enabled": bool(self.settings.get("no_data_enabled", True)),
-            "timeout_s": int(self.settings.get("no_data_timeout_s", 15)),
+            "timeout_active_s": int(active),
+            "timeout_peaked_s": int(peaked),
+            # Keep the legacy key in the response so any old consumer that
+            # reads `timeout_s` keeps working (we use the peaked value).
+            "timeout_s": int(peaked),
         }
 
-    def set_no_data(self, enabled: bool, timeout_s: int) -> None:
+    def set_no_data(self, enabled: bool, timeout_active_s: int,
+                    timeout_peaked_s: int) -> None:
         self.settings["no_data_enabled"] = bool(enabled)
-        self.settings["no_data_timeout_s"] = int(timeout_s)
+        self.settings["no_data_timeout_active_s"] = int(timeout_active_s)
+        self.settings["no_data_timeout_peaked_s"] = int(timeout_peaked_s)
+        # Mirror to the legacy key so a downgrade still finds a sane value.
+        self.settings["no_data_timeout_s"] = int(timeout_peaked_s)
         self._save()
 
     def get_battery_interval(self) -> float:

@@ -217,11 +217,21 @@ class _FeedbackThread(threading.Thread):
             self.engine._raw_pulse(self.tracker.index, int(length * self.tracker.pulse_multiplier))
 
     def _clear_stuck(self):
+        # Two-timer anti-stuck (VRC-Haptic-Pancake parity): saturated values
+        # (==1.0) usually represent a legitimate hold and get a longer fuse;
+        # mid-range stuck values are almost always avatar swaps / dropped
+        # packets and are cleared sooner. VRChat OSC only fires on parameter
+        # change, so without this the last value would vibrate forever.
         cfg = self.engine.no_data_config
         if self.strength == 0 or not cfg["enabled"]:
             return
-        delay = cfg["timeout_s"]
-        if time.time() - self.last_set_time >= delay:
+        # Defensive lookups so older config dicts (single timeout_s key)
+        # still work after a downgrade.
+        peaked_delay = cfg.get("timeout_peaked_s", cfg.get("timeout_s", 15))
+        active_delay = cfg.get("timeout_active_s", max(1, int(peaked_delay * 7 / 15)))
+        elapsed = time.time() - self.last_set_time
+        delay = peaked_delay if self.strength >= 1.0 else active_delay
+        if elapsed >= delay:
             self.set_strength(0)
 
     def _calc_strength(self) -> float:

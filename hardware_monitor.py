@@ -51,6 +51,10 @@ class HardwareStats:
     gpu_backend: str = "none"                 # "nvml" | "none"
     last_update: float = 0.0
     error: Optional[str] = None
+    # last_sent_values tracks the actual OSC payload per stat key so the UI
+    # can display what was last transmitted.  Keyed by stat name
+    # (cpu_percent, ram_used_gb, …).
+    last_sent_values: Dict[str, float] = field(default_factory=dict)
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -66,6 +70,7 @@ class HardwareStats:
             "error": self.error,
             "has_psutil": _HAS_PSUTIL,
             "has_nvml": _HAS_NVML,
+            "last_sent_values": dict(self.last_sent_values),
         }
 
 
@@ -204,6 +209,12 @@ class HardwareMonitorEngine:
                 s.error = (s.error or "") + f" gpu: {e}"
                 s.gpu_backend = "none"
 
+        # Preserve last_sent_values from the previous snapshot so the UI can
+        # still display the last transmitted value even when a stat is
+        # toggled off this cycle.
+        with self._lock:
+            s.last_sent_values = dict(self._stats.last_sent_values)
+
         # Publish snapshot
         with self._lock:
             self._stats = s
@@ -238,6 +249,8 @@ class HardwareMonitorEngine:
             try:
                 self._send_osc(addr, out)
                 self._last_sent[addr] = out
+                # Track the transmitted value (keyed by stat name) for the UI.
+                s.last_sent_values[key] = out
             except Exception as e:
                 with self._lock:
                     self._stats.error = f"osc: {e}"
