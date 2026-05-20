@@ -43,6 +43,10 @@ DEFAULT_APP_SETTINGS = {
     # Default ON so the first launch lands on the stripped Simple Mode panel.
     # The user can disable it from the Simple Mode panel or Settings.
     "simple_mode": True,
+    # Simple Mode Position↔Speed blend (0.0 = pure SPS depth, 1.0 = pure
+    # motion-derived speed). Per-toy profiles have their own per-motor
+    # `motor_{i}_speed_blend` key; this app-level value applies in Simple Mode.
+    "simple_mode_speed_blend": 0.0,
     # Feature toggles — turn off subsystems the user doesn't need so their
     # background threads / OSC traffic don't run. All default ON to match
     # pre-toggle behaviour.
@@ -119,6 +123,10 @@ class SteamVRSettingsManager:
     DEFAULTS: Dict[str, Any] = {
         "autostart_with_steamvr": False,
         "auto_connect_steamvr": True,
+        # Joke / vanity feature: register a virtual OpenVR driver so the
+        # user's connected toys show up alongside the HMD/controllers in
+        # SteamVR's device strip. Off by default — opt-in from Settings.
+        "show_toys_in_steamvr": False,
         "no_data_enabled": True,
         # Two-timer anti-stuck (ported from VRC-Haptic-Pancake): mid-range
         # values are cleared faster than saturated (==1.0) ones, since a
@@ -177,6 +185,13 @@ class SteamVRSettingsManager:
 
     def set_auto_connect(self, value: bool) -> None:
         self.settings["auto_connect_steamvr"] = bool(value)
+        self._save()
+
+    def get_show_toys(self) -> bool:
+        return bool(self.settings.get("show_toys_in_steamvr", False))
+
+    def set_show_toys(self, value: bool) -> None:
+        self.settings["show_toys_in_steamvr"] = bool(value)
         self._save()
 
     def get_no_data(self) -> Dict[str, Any]:

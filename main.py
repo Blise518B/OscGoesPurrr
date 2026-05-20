@@ -36,10 +36,20 @@ from version import __version__
 
 # Per-engine facade mixins extend the controller's call surface without
 # bloating main.py — each mixin's docstring covers its assumed attributes.
-from controllers import SteamVRFacade, BHapticsFacade, HardwareMonitorFacade
+from controllers import (
+    SteamVRFacade,
+    SteamVRToysFacade,
+    BHapticsFacade,
+    HardwareMonitorFacade,
+)
 
 
-class OscGoesPurrrApp(SteamVRFacade, BHapticsFacade, HardwareMonitorFacade):
+class OscGoesPurrrApp(
+    SteamVRFacade,
+    SteamVRToysFacade,
+    BHapticsFacade,
+    HardwareMonitorFacade,
+):
     def __init__(self):
         self.async_loop: asyncio.AbstractEventLoop = None
         
@@ -171,10 +181,25 @@ class OscGoesPurrrApp(SteamVRFacade, BHapticsFacade, HardwareMonitorFacade):
         self.auto_refresh_enabled = self.profile_manager.app_settings.get("auto_refresh", True)
         self.auto_connect_enabled = self.profile_manager.app_settings.get("auto_connect", True)
         
+        # SteamVR virtual-toy-device feature — must be initialised BEFORE
+        # the UI is constructed, because the Settings tab queries
+        # `get_steamvr_toys_status()` while building the SteamVR card.
+        # The facade no-ops the bridge/install steps when the user hasn't
+        # enabled the feature, so it's cheap to call unconditionally.
+        try:
+            self._steamvr_toys_init()
+        except Exception as e:
+            print(f"[steamvr-toys] init failed: {e}")
+
         # Instantiate UI Component (must be after haptic_engine is created).
         # The UI owns its own root window so this controller stays
         # framework-agnostic.
         self.ui = OscGoesPurrrUI(self)
+        # Now that the UI exists, let the SteamVR-toys bridge log through it.
+        try:
+            self._steamvr_toys_attach_ui()
+        except Exception:
+            pass
 
         # Push window-chrome settings through the UI facade.
         self.ui.set_title(f"{APP_NAME} - v{__version__}")
@@ -271,6 +296,12 @@ class OscGoesPurrrApp(SteamVRFacade, BHapticsFacade, HardwareMonitorFacade):
                 # every stored device frame so reconnects flip back to
                 # connected immediately.
                 self.ui.update_stored_devices_ui()
+                # Mirror the new device list into the SteamVR toy driver
+                # (no-op when the feature is disabled).
+                try:
+                    self.steamvr_toys_on_devices_changed()
+                except Exception as e:
+                    self.log_message(f"[steamvr-toys] sync failed: {e}")
             elif msg_type == "battery_update":
                 try:
                     self._battery_cache[data["device_name"]] = float(data["level"])
@@ -281,12 +312,20 @@ class OscGoesPurrrApp(SteamVRFacade, BHapticsFacade, HardwareMonitorFacade):
                 # exposes a hook for live battery refresh.
                 if hasattr(self.ui, "update_simple_mode_battery"):
                     self.ui.update_simple_mode_battery(data["device_name"], data["level"])
+                try:
+                    self.steamvr_toys_on_battery(data["device_name"], data["level"])
+                except Exception:
+                    pass
             elif msg_type == "device_removed":
                 device_name = data
                 self.log_message(f"Toy disconnected: {device_name}")
                 # Frame stays (the device is "stored"); just flip its
                 # connection-status icon from green to yellow.
                 self.ui.update_stored_devices_ui()
+                try:
+                    self.steamvr_toys_on_devices_changed()
+                except Exception:
+                    pass
             elif msg_type == "stored_devices_refresh":
                 self.ui.build_stored_devices_ui()
             elif msg_type == "osc_status":
@@ -743,7 +782,10 @@ class OscGoesPurrrApp(SteamVRFacade, BHapticsFacade, HardwareMonitorFacade):
         params, _version, zones = store.snapshot()
         if self.get_app_setting("simple_mode", False):
             motor_counts = self.get_device_motor_counts()
-            updates = self.motor_router.reevaluate_simple_mode(motor_counts, params, zones=zones)
+            blend = self.get_app_setting("simple_mode_speed_blend", 0.0)
+            updates = self.motor_router.reevaluate_simple_mode(
+                motor_counts, params, zones=zones, speed_blend=blend
+            )
         else:
             active = self.profile_manager.get_active_profile_dict()
             if active is None:
@@ -1619,6 +1661,14 @@ class OscGoesPurrrApp(SteamVRFacade, BHapticsFacade, HardwareMonitorFacade):
 
         try:
             self.hardware_monitor.stop()
+        except Exception:
+            pass
+
+        try:
+            bridge = getattr(self, "_steamvr_toy_bridge", None)
+            if bridge is not None:
+                bridge.clear_devices()
+                bridge.stop()
         except Exception:
             pass
 

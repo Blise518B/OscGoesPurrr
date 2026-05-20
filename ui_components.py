@@ -1466,6 +1466,35 @@ class OscGoesPurrrUI:
         self.simple_mode_status_label.setProperty("muted", "true")
         tlay.addWidget(self.simple_mode_status_label)
 
+        # Global Position ↔ Speed blend for Simple Mode. Same semantics as the
+        # per-motor slider in Device Routing — left=depth, right=motion speed.
+        blend_label = QLabel("Output Style")
+        bf = blend_label.font(); bf.setBold(True)
+        blend_label.setFont(bf)
+        tlay.addWidget(blend_label)
+        tlay.addWidget(self._muted_label(
+            "Drag right to make the toy respond to how fast you're moving "
+            "instead of how deep."
+        ))
+
+        def on_simple_blend_changed(val: float):
+            if hasattr(self.controller, "set_app_setting"):
+                self.controller.set_app_setting("simple_mode_speed_blend", float(val))
+            if hasattr(self.controller, 'force_recalculate'):
+                self.controller.force_recalculate()
+
+        initial_simple_blend = 0.0
+        if hasattr(self.controller, "get_app_setting"):
+            try:
+                initial_simple_blend = float(
+                    self.controller.get_app_setting("simple_mode_speed_blend", 0.0) or 0.0
+                )
+            except (TypeError, ValueError):
+                initial_simple_blend = 0.0
+        tlay.addWidget(self._make_blend_slider_row(
+            initial_simple_blend, on_simple_blend_changed
+        ))
+
         hint = QLabel(
             "Tip: you can always come back to Simple Mode from Settings."
         )
@@ -2397,6 +2426,30 @@ class OscGoesPurrrUI:
         self.steamvr_autostart_check_settings.toggled.connect(self._on_steamvr_autostart_toggled)
         svr_lay.addWidget(self.steamvr_autostart_check_settings)
 
+        # Show toys as virtual SteamVR devices — registers a small bundled
+        # OpenVR driver so connected toys appear in SteamVR's device strip.
+        try:
+            _toys_status = self.controller.get_steamvr_toys_status()
+        except Exception:
+            _toys_status = {"supported": False, "enabled": False}
+        if _toys_status.get("supported"):
+            self.steamvr_show_toys_check = ToggleSwitch("Show toys in SteamVR (Joke)")
+            self.steamvr_show_toys_check.setChecked(bool(_toys_status.get("enabled")))
+            self.steamvr_show_toys_check.toggled.connect(self._on_steamvr_show_toys_toggled)
+            svr_lay.addWidget(self.steamvr_show_toys_check)
+            self.steamvr_show_toys_hint = self._muted_label(
+                "Adds the user's connected toys to SteamVR's device list with "
+                "their name, battery, and icon. Restart SteamVR after enabling."
+            )
+            svr_lay.addWidget(self.steamvr_show_toys_hint)
+
+            # Manual reinstall button — useful if the DLL was rebuilt with a
+            # fix and you want to recopy it without flipping the feature off.
+            self.steamvr_toys_reinstall_btn = QPushButton("Reinstall toy driver")
+            self.steamvr_toys_reinstall_btn.setProperty("role", "secondary")
+            self.steamvr_toys_reinstall_btn.clicked.connect(self._on_steamvr_toys_reinstall_clicked)
+            svr_lay.addWidget(self.steamvr_toys_reinstall_btn)
+
         # Manual Refresh — useful when auto-connect is off.
         refresh_row = _hbox(0, 8)
         svr_refresh_btn = QPushButton("Refresh SteamVR Devices")
@@ -2593,6 +2646,77 @@ class OscGoesPurrrUI:
             return
         self.controller.set_steamvr_autostart(bool(checked))
 
+    def _on_steamvr_toys_reinstall_clicked(self):
+        """Force a re-copy of the bundled driver DLL/manifest into the
+        per-user folder and re-register the path. Used after rebuilding the
+        C++ driver so the new bits land without toggling the whole feature
+        off/on."""
+        try:
+            result = self.controller.reinstall_steamvr_toys_driver()
+        except Exception as e:
+            self.log_message(f"Reinstall failed: {e}")
+            return
+        if result.get("ok"):
+            self.log_message(
+                f"Toy driver reinstalled to: {result.get('dll')}\n"
+                "Restart SteamVR for the updated DLL to take effect."
+            )
+            return
+        kind = result.get("error_kind", "")
+        if kind == "dll_locked":
+            self.log_message(
+                "Reinstall failed: SteamVR is currently using the existing toy "
+                "driver DLL, so we can't overwrite it. Fully exit SteamVR "
+                "(tray icon -> Exit), then click Reinstall again."
+            )
+        elif kind == "bundle_missing":
+            self.log_message(
+                "Reinstall failed: the bundled DLL is missing from this build "
+                "of OscGoesPurrr. Rebuild the C++ driver (build_driver.bat) "
+                "and then rebuild the OscGoesPurrr EXE (build.bat)."
+            )
+        elif kind == "register_failed":
+            self.log_message(
+                "Reinstall failed: could not update SteamVR's openvrpaths.vrpath. "
+                "Check that you have write access to "
+                "%LOCALAPPDATA%\\openvr\\openvrpaths.vrpath."
+            )
+        else:
+            self.log_message(
+                f"Reinstall failed ({kind or 'unknown'}). See log lines above."
+            )
+
+    def _on_steamvr_show_toys_toggled(self, checked: bool):
+        if self._is_updating_steamvr:
+            return
+        try:
+            status = self.controller.set_steamvr_toys_enabled(bool(checked))
+        except Exception as e:
+            self.log_message(f"SteamVR toys toggle failed: {e}")
+            return
+        if checked and status.get("install_failed"):
+            # Most likely cause: this build of the app doesn't include a
+            # compiled driver_oscgoespurrr.dll yet. The C++ driver has to be
+            # built once via steamvr_toy_driver/build.bat and committed.
+            self.log_message(
+                "SteamVR toys: install FAILED — the bundled driver DLL is missing. "
+                "This build of OscGoesPurrr was packaged without "
+                "steamvr_toy_driver/bin/win64/driver_oscgoespurrr.dll. "
+                "See steamvr_toy_driver/README.md for the one-time build steps."
+            )
+        elif checked and status.get("first_install"):
+            self.log_message(
+                "SteamVR toy driver installed. Restart SteamVR to see your toys "
+                "in the device list."
+            )
+        elif checked:
+            self.log_message(
+                "SteamVR toys enabled. Restart SteamVR if this is the first launch "
+                "after the driver was installed."
+            )
+        else:
+            self.log_message("SteamVR toys disabled.")
+
     def _on_steamvr_auto_connect_toggled(self, checked: bool):
         if self._is_updating_steamvr:
             return
@@ -2658,6 +2782,12 @@ class OscGoesPurrrUI:
             self.steamvr_auto_connect_check_settings.setChecked(bool(status.get("auto_connect")))
         if hasattr(self, "steamvr_autostart_check_settings"):
             self.steamvr_autostart_check_settings.setChecked(bool(status.get("autostart")))
+        if hasattr(self, "steamvr_show_toys_check"):
+            try:
+                toys_status = self.controller.get_steamvr_toys_status()
+            except Exception:
+                toys_status = {}
+            self.steamvr_show_toys_check.setChecked(bool(toys_status.get("enabled")))
         try:
             self.steamvr_battery_interval_spin.setValue(int(round(float(status.get("battery_interval_s", 5)))))
         except Exception:
@@ -4003,6 +4133,24 @@ Both consume the same data, so they stay in lockstep.
             filter_lay.addStretch(1)
             mlay.addWidget(filter_row)
 
+            # Position ↔ Speed blend — moves output between depth-driven
+            # (left) and motion-derived (right). Saved per motor.
+            current_blend = self.controller.get_profile_config(
+                device_name, f"motor_{motor_idx}_speed_blend", 0.0
+            )
+
+            def on_blend_changed(val: float, dn=device_name, idx=motor_idx):
+                self.controller.update_device_config(
+                    dn, f"motor_{idx}_speed_blend", float(val)
+                )
+                self.controller.save_profiles()
+                if hasattr(self.controller, 'force_recalculate'):
+                    self.controller.force_recalculate()
+
+            mlay.addWidget(self._make_blend_slider_row(
+                float(current_blend or 0.0), on_blend_changed
+            ))
+
             # Linear-actuator controls
             this_kind = motor_kinds[motor_idx] if (motor_kinds and motor_idx < len(motor_kinds)) else None
             if this_kind in ("linear", "linear-d"):
@@ -4158,6 +4306,58 @@ Both consume the same data, so they stay in lockstep.
             h.addWidget(b)
         apply_styles()
         group.buttonClicked.connect(on_clicked)
+        return host
+
+    # ----------------------------------------------------------
+    # Position ↔ Speed blend slider (per motor + Simple Mode)
+    # ----------------------------------------------------------
+
+    def _make_blend_slider_row(self, initial_blend: float,
+                               on_change: Callable[[float], None]) -> QWidget:
+        """Horizontal slider that picks a Position↔Speed blend in [0.0, 1.0].
+
+        Layout: "Position" — slider — "Speed" — readout. `on_change` fires on
+        every value change with the new blend; persistence and recalculation
+        are the caller's responsibility (matches the per-motor + Simple Mode
+        save paths, which differ in where they persist).
+        """
+        host = QWidget()
+        row = _hbox(0, 8)
+        host.setLayout(row)
+
+        pos_label = QLabel("Position")
+        pos_label.setProperty("muted", "true")
+        self._repolish(pos_label)
+        row.addWidget(pos_label)
+
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(0, 100)
+        clamped = max(0.0, min(1.0, float(initial_blend)))
+        slider.setValue(int(round(clamped * 100)))
+        row.addWidget(slider, 1)
+
+        spd_label = QLabel("Speed")
+        spd_label.setProperty("muted", "true")
+        self._repolish(spd_label)
+        row.addWidget(spd_label)
+
+        readout = QLabel("")
+        readout.setMinimumWidth(96)
+        readout.setProperty("muted", "true")
+        self._repolish(readout)
+        row.addWidget(readout)
+
+        def render(v: int):
+            spd_pct = int(v)
+            pos_pct = 100 - spd_pct
+            readout.setText(f"Pos {pos_pct}% · Spd {spd_pct}%")
+
+        def on_value_changed(v: int):
+            render(v)
+            on_change(v / 100.0)
+
+        render(slider.value())
+        slider.valueChanged.connect(on_value_changed)
         return host
 
     # ----------------------------------------------------------
