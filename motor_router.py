@@ -1,4 +1,6 @@
 import fnmatch
+import math
+import time
 from typing import Dict, List, Tuple, Any, Optional, Set
 from utilities import normalize_osc_value
 from parameter_store import store as _global_store
@@ -131,9 +133,23 @@ class MotorRouter:
     moment the penetrator tip enters the receiver radius.
     """
 
+    # Speed-blend tuning. `SPEED_GAIN` scales raw |Δposition|/Δt (units/sec)
+    # into the 0–1 output range — 0.25 means ~4 units/sec saturates the
+    # signal, which corresponds to a vigorous penetration stroke covering
+    # the full insertion range in ~250ms. `SPEED_DECAY_TAU` is the
+    # exponential decay time-constant of the smoothed speed signal, so
+    # speed sustains briefly between strokes instead of pulsing only on
+    # the rising edge.
+    SPEED_GAIN = 0.25
+    SPEED_DECAY_TAU = 0.18
+
     def __init__(self) -> None:
         # Tracks last calculated outputs to prevent flooding the UI/hardware thread.
         self.last_outputs: Dict[tuple, float] = {}
+        # Per-motor speed-tracker keyed by (device_name, motor_idx).
+        # Value is (last_time_s, last_position, smoothed_speed). A reserved
+        # ("__simple_mode__", 0) key is used by Simple Mode.
+        self._speed_state: Dict[Tuple[str, int], Tuple[float, float, float]] = {}
         # Per-zone length detectors keyed by ("Orf"|"Pen", zone_name, "self"|"others").
         self._length_detectors: Dict[Tuple[str, str, str], GameDeviceLengthDetector] = {}
         # Compiled per-motor config cache.
@@ -419,6 +435,60 @@ class MotorRouter:
         self._compiled_cfg[cache_key] = compiled
         return compiled
 
+    def _apply_speed_blend(
+        self,
+        key: Tuple[str, int],
+        position: float,
+        blend: float,
+    ) -> float:
+        """Blend a raw position signal with its derived speed signal, weighted
+        by `blend` (0.0 = pure position, 1.0 = pure speed). State for the
+        smoothed speed is kept per `key` so motors don't cross-contaminate.
+
+        The tracker is updated even when blend == 0 so that flipping the
+        slider mid-session doesn't start from a stale position delta.
+        """
+        now = time.monotonic()
+        prev = self._speed_state.get(key)
+        if prev is None:
+            # First sample for this motor — no derivative yet.
+            self._speed_state[key] = (now, position, 0.0)
+            speed_smoothed = 0.0
+        else:
+            last_t, last_pos, last_speed = prev
+            dt = now - last_t
+            if dt <= 0:
+                # Clock didn't move — reuse last smoothed value as-is.
+                speed_smoothed = last_speed
+            else:
+                raw_speed = abs(position - last_pos) / dt
+                speed_signal = raw_speed * self.SPEED_GAIN
+                if speed_signal > 1.0:
+                    speed_signal = 1.0
+                # Exponential decay: smoothed value attacks instantly on
+                # rising edge and falls off with time-constant SPEED_DECAY_TAU.
+                decay = math.exp(-dt / self.SPEED_DECAY_TAU)
+                speed_smoothed = max(speed_signal, last_speed * decay)
+            self._speed_state[key] = (now, position, speed_smoothed)
+
+        if blend <= 0.0:
+            return position
+        if blend >= 1.0:
+            return speed_smoothed
+        return (1.0 - blend) * position + blend * speed_smoothed
+
+    @staticmethod
+    def _coerce_blend(raw: Any) -> float:
+        try:
+            blend = float(raw)
+        except (TypeError, ValueError):
+            return 0.0
+        if blend < 0.0:
+            return 0.0
+        if blend > 1.0:
+            return 1.0
+        return blend
+
     # ------------------------------------------------------------------ public
     def _calculate_motor_target(
         self,
@@ -464,28 +534,40 @@ class MotorRouter:
                     target_val = cand
 
         # --- 2. SPS Zones ------------------------------------------------------------
-        if not compiled["has_zone_filter"]:
-            return target_val
+        if compiled["has_zone_filter"]:
+            is_all_sps = compiled["is_all_sps"]
+            allowed_zone_set = compiled["allowed_zones"]
+            best = target_val
+            for zone_type, zone_name in zones:
+                if is_all_sps or zone_name in allowed_zone_set:
+                    contribution = self._zone_contribution(zone_type, zone_name, config, motor_idx, all_params)
+                    if contribution > best:
+                        best = contribution
+            target_val = best
 
-        is_all_sps = compiled["is_all_sps"]
-        allowed_zone_set = compiled["allowed_zones"]
-        best = target_val
-        for zone_type, zone_name in zones:
-            if is_all_sps or zone_name in allowed_zone_set:
-                contribution = self._zone_contribution(zone_type, zone_name, config, motor_idx, all_params)
-                if contribution > best:
-                    best = contribution
-        return best
+        # --- 3. Position ↔ Speed blend ----------------------------------------------
+        # The slider is stored per-motor in the profile; 0.0 keeps the legacy
+        # position-only behavior. The tracker is updated unconditionally so a
+        # later slider change picks up from a current sample.
+        blend = self._coerce_blend(config.get(f"motor_{motor_idx}_speed_blend", 0.0))
+        return self._apply_speed_blend((device_name, motor_idx), target_val, blend)
+
+    _SIMPLE_MODE_SPEED_KEY: Tuple[str, int] = ("__simple_mode__", 0)
 
     def compute_simple_mode_value(
         self,
         all_params: Dict[str, Any],
         zones: Optional[Set[Tuple[str, str]]] = None,
+        speed_blend: float = 0.0,
     ) -> float:
         """Simple-mode max: return the strongest contribution across every
         detected SPS zone, ignoring per-toy profile config. Touch + pen from
         others are allowed; self-contact is excluded so the user doesn't get
-        unexpected output from their own contacts firing the gates."""
+        unexpected output from their own contacts firing the gates.
+
+        `speed_blend` mirrors the per-motor Position↔Speed slider but applies
+        globally because Simple Mode pushes the same value to every motor.
+        """
         zones = self._get_zone_tuples(all_params, zones)
         self._update_length_detectors(all_params, zones)
         # Synthetic config: allow everything except self, mirroring the
@@ -501,19 +583,24 @@ class MotorRouter:
             contribution = self._zone_contribution(zone_type, zone_name, cfg, 0, all_params)
             if contribution > best:
                 best = contribution
-        return best
+        return self._apply_speed_blend(
+            self._SIMPLE_MODE_SPEED_KEY, best, self._coerce_blend(speed_blend)
+        )
 
     def reevaluate_simple_mode(
         self,
         device_motor_counts: Dict[str, int],
         all_params: Dict[str, Any],
         zones: Optional[Set[Tuple[str, str]]] = None,
+        speed_blend: float = 0.0,
     ) -> List[Tuple[str, float, int]]:
         """Simple-mode routing: push the same global SPS max value to every
         connected device's every motor. Returns only entries whose target
         value changed (same debounce semantics as `reevaluate_state`)."""
         zones = self._get_zone_tuples(all_params, zones)
-        value = self.compute_simple_mode_value(all_params, zones=zones)
+        value = self.compute_simple_mode_value(
+            all_params, zones=zones, speed_blend=speed_blend
+        )
         updates: List[Tuple[str, float, int]] = []
         for device_name, motor_count in device_motor_counts.items():
             for motor_idx in range(motor_count):
@@ -528,6 +615,10 @@ class MotorRouter:
         motor as changed. Used when switching routing modes so motors don't
         get stuck at the previous mode's last value."""
         self.last_outputs.clear()
+        # Clearing speed state too prevents a stale Δposition spike the next
+        # tick when the user flips a mode change (a routing switch can leave
+        # the last-seen position arbitrarily far from the new computation).
+        self._speed_state.clear()
 
     def reevaluate_state(
         self,
