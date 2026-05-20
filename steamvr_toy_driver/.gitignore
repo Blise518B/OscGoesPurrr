@@ -1,0 +1,6 @@
+build/
+include/openvr_driver.h
+*.exp
+*.lib
+*.pdb
+*.ilk
