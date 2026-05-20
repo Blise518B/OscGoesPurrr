@@ -8,20 +8,22 @@ def normalize_osc_value(v: float) -> float:
     return max(0.0, min(1.0, v if v <= 1.0 else v / 255.0))
 
 def value_to_hex_color(value: Any) -> str:
-    """Convert a value to a hex color string for the debugger UI."""
+    """Convert a value to a hex color string for the OSC inspector.
+
+    Numeric values interpolate across the 2-stop brand gradient
+    (purple → hot pink), matching the slider groove and intensity meters.
+    Booleans map to neon green (on) and purple (off).
+    """
     if isinstance(value, bool):
-        return "#00ff00" if value else "#ff0000"
+        return "#07FF77" if value else "#7C4DFF"
     if isinstance(value, (int, float)):
         f = max(0.0, min(1.0, float(value)))
-        if f <= 0.5:
-            t = f / 0.5
-            r = 255
-            g = int(t * 255)
-        else:
-            t = (f - 0.5) / 0.5
-            r = int(255 * (1 - t))
-            g = 255
-        return f"#{r:02x}{g:02x}00"
+        c0 = (0x7C, 0x4D, 0xFF)  # COLOR_PRIMARY
+        c1 = (0xFF, 0x3D, 0x7F)  # COLOR_LIVE
+        r = int(c0[0] + (c1[0] - c0[0]) * f)
+        g = int(c0[1] + (c1[1] - c0[1]) * f)
+        b = int(c0[2] + (c1[2] - c0[2]) * f)
+        return f"#{r:02x}{g:02x}{b:02x}"
     return "#ffffff"
 
 def toggle_windows_console(show: bool):

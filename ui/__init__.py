@@ -28,8 +28,11 @@ from .widgets import (
     Invoker,
     MainWindow,
     ProgressProxy,
+    RainbowMeter,
+    RainbowScrollBar,
     SliderProxy,
     ToggleSwitch,
+    install_rainbow_scrollbars,
 )
 
 __all__ = [
@@ -52,6 +55,9 @@ __all__ = [
     "Invoker",
     "MainWindow",
     "ProgressProxy",
+    "RainbowMeter",
+    "RainbowScrollBar",
     "SliderProxy",
     "ToggleSwitch",
+    "install_rainbow_scrollbars",
 ]

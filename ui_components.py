@@ -53,6 +53,9 @@ from ui.widgets import (
     BHapticsDotGrid as _BHapticsDotGrid,
     SliderProxy as _SliderProxy,
     ProgressProxy as _ProgressProxy,
+    RainbowMeter as _RainbowMeter,
+    RainbowScrollBar as _RainbowScrollBar,
+    install_rainbow_scrollbars as _install_rainbow_scrollbars,
 )
 
 
@@ -75,11 +78,11 @@ QFrame#sidebar {{
 }}
 QFrame#card {{
     background-color: {COLOR_SURFACE};
-    border-radius: 8px;
+    border-radius: 12px;
 }}
 QFrame#cardDark {{
     background-color: {COLOR_BG};
-    border-radius: 8px;
+    border-radius: 12px;
 }}
 QFrame#chip {{
     background-color: {COLOR_SURFACE_HOVER};
@@ -87,11 +90,11 @@ QFrame#chip {{
 }}
 QFrame#motorBlock {{
     background-color: {COLOR_SURFACE};
-    border-radius: 6px;
+    border-radius: 10px;
 }}
 QFrame#zonePanel {{
     background-color: {COLOR_SURFACE_HOVER};
-    border-radius: 4px;
+    border-radius: 6px;
 }}
 QFrame#separator {{
     background-color: {COLOR_SURFACE};
@@ -120,19 +123,46 @@ QLabel#sectionTitle {{
 QLabel#cardHeader {{
     font-size: 16px;
     font-weight: bold;
+    color: {COLOR_INPUT_FOCUS};
 }}
 QLabel#deviceName {{
     font-size: 14px;
     font-weight: bold;
+    color: {COLOR_TEXT};
 }}
 QLabel#motorLabel {{
     font-weight: bold;
+    color: {COLOR_LIVE};
 }}
+/* Accent overrides for any header label — opt in per widget:
+   lbl.setProperty("accent", "live"|"warn"|"ok"|"primary") */
+QLabel[accent="live"]    {{ color: {COLOR_LIVE}; }}
+QLabel[accent="warn"]    {{ color: {COLOR_WARNING}; }}
+QLabel[accent="ok"]      {{ color: {COLOR_SUCCESS}; }}
+QLabel[accent="primary"] {{ color: {COLOR_PRIMARY}; }}
 QLabel[muted="true"] {{
     color: {COLOR_TEXT_MUTED};
 }}
 QLabel[role="success"] {{ color: {COLOR_SUCCESS}; }}
 QLabel[role="alert"]   {{ color: {COLOR_ALERT}; }}
+QLabel[role="warning"] {{ color: {COLOR_WARNING}; }}
+QLabel[role="live"]    {{ color: {COLOR_LIVE}; }}
+
+/* Pill badges — small status chips with a tinted fill and accent text.
+   Usage: lbl.setProperty("role", "pill"); lbl.setProperty("tone", "ok"|"warn"|"err"|"live"|"info") */
+QLabel[role="pill"] {{
+    padding: 2px 10px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: bold;
+    background-color: {COLOR_SURFACE_HOVER};
+    color: {COLOR_TEXT};
+}}
+QLabel[role="pill"][tone="ok"]   {{ background-color: {COLOR_SUCCESS_DIM}; color: {COLOR_SUCCESS}; }}
+QLabel[role="pill"][tone="warn"] {{ background-color: {COLOR_WARNING_DIM}; color: {COLOR_WARNING}; }}
+QLabel[role="pill"][tone="err"]  {{ background-color: {COLOR_ALERT_DIM};   color: {COLOR_ALERT}; }}
+QLabel[role="pill"][tone="live"] {{ background-color: {COLOR_LIVE_DIM};    color: {COLOR_LIVE}; }}
+QLabel[role="pill"][tone="info"] {{ background-color: {COLOR_SURFACE_HOVER}; color: {COLOR_INPUT_FOCUS}; }}
 
 QPushButton {{
     background-color: {COLOR_PRIMARY};
@@ -177,6 +207,7 @@ QPushButton[role="nav"] {{
     text-align: left;
     padding: 10px 14px;
     border-radius: 6px;
+    border-left: 3px solid transparent;
     font-size: 14px;
 }}
 QPushButton[role="nav"]:hover {{
@@ -184,6 +215,9 @@ QPushButton[role="nav"]:hover {{
 }}
 QPushButton[role="nav"][active="true"] {{
     background-color: {COLOR_BG};
+    border-left: 3px solid {COLOR_PRIMARY};
+    color: {COLOR_INPUT_FOCUS};
+    font-weight: bold;
 }}
 QPushButton[role="profileActive"] {{
     background-color: {COLOR_PRIMARY};
@@ -210,7 +244,12 @@ QPushButton[role="chipClose"]:hover {{
     color: {COLOR_TEXT};
 }}
 QPushButton[role="segActive"] {{
-    background-color: {COLOR_PRIMARY};
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 {COLOR_PRIMARY}, stop:1 {COLOR_LIVE}
+    );
+    color: {COLOR_TEXT};
+    font-weight: bold;
 }}
 QPushButton[role="segIdle"] {{
     background-color: {COLOR_BUTTON};
@@ -302,37 +341,83 @@ QCheckBox[role="switch"]::indicator:checked {{
     border: 2px solid {COLOR_TEXT};
 }}
 
+/* Static-gradient slider trick:
+   The groove paints the FULL rainbow once across the whole track, then
+   ::add-page (the unfilled side) covers the right portion with the bg
+   color. This keeps the gradient at a fixed scale regardless of value,
+   so each color always lives at the same position on the track. */
 QSlider::groove:horizontal {{
     height: 6px;
-    background: {COLOR_SURFACE};
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 {COLOR_PRIMARY},
+        stop:1 {COLOR_LIVE}
+    );
     border-radius: 3px;
 }}
 QSlider::sub-page:horizontal {{
-    background: {COLOR_PRIMARY};
+    background: transparent;
+}}
+QSlider::add-page:horizontal {{
+    background: {COLOR_BG};
     border-radius: 3px;
 }}
 QSlider::handle:horizontal {{
-    background: {COLOR_PRIMARY};
-    width: 16px;
+    background: {COLOR_TEXT};
+    width: 14px;
     margin: -6px 0;
-    border-radius: 8px;
+    border-radius: 7px;
+    border: 2px solid {COLOR_PRIMARY};
 }}
 QSlider::handle:horizontal:hover {{
-    background: {COLOR_PRIMARY_HOVER};
+    border-color: {COLOR_LIVE};
 }}
 
 QProgressBar {{
-    background: {COLOR_SURFACE};
+    background: {COLOR_BG};
     border: none;
-    border-radius: 3px;
+    border-radius: 4px;
     text-align: center;
     color: transparent;
-    max-height: 6px;
-    min-height: 6px;
+    max-height: 8px;
+    min-height: 8px;
 }}
+/* Default chunk: vertical 2-stop gradient (no horizontal stretch
+   artifact since the gradient runs top→bottom; the bar can grow in
+   width without distorting). */
 QProgressBar::chunk {{
-    background-color: {COLOR_PRIMARY};
-    border-radius: 3px;
+    border-radius: 4px;
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 {COLOR_LIVE},
+        stop:1 {COLOR_PRIMARY}
+    );
+}}
+/* Tonal progress variants — set bar.setProperty("tone", "ok"|"warn"|"live"|"rainbow") */
+QProgressBar[tone="ok"]::chunk {{
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 {COLOR_SUCCESS}, stop:1 #04A04A
+    );
+}}
+QProgressBar[tone="warn"]::chunk {{
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 {COLOR_WARNING}, stop:1 {COLOR_ALERT}
+    );
+}}
+QProgressBar[tone="live"]::chunk {{
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 {COLOR_LIVE}, stop:1 {COLOR_PRIMARY}
+    );
+}}
+/* Rainbow tone: horizontal 2-stop brand gradient (purple → hot pink). */
+QProgressBar[tone="rainbow"]::chunk {{
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 {COLOR_PRIMARY}, stop:1 {COLOR_LIVE}
+    );
 }}
 
 QScrollArea {{
@@ -342,31 +427,18 @@ QScrollArea {{
 QScrollArea > QWidget > QWidget {{
     background-color: transparent;
 }}
-QScrollBar:vertical {{
-    background: {COLOR_BG};
-    width: 10px;
+/* Scrollbar painting is done by the RainbowScrollBar subclass — Qt's
+   stylesheet style will hijack paintEvent if QSS sets background/handle
+   visuals on QScrollBar, so we only specify sizing/track here. */
+QScrollBar {{
+    background: transparent;
     border: none;
 }}
-QScrollBar::handle:vertical {{
-    background: {COLOR_SURFACE_HOVER};
-    border-radius: 5px;
-    min-height: 30px;
-}}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-    height: 0px;
+QScrollBar:vertical {{
+    width: 10px;
 }}
 QScrollBar:horizontal {{
-    background: {COLOR_BG};
     height: 10px;
-    border: none;
-}}
-QScrollBar::handle:horizontal {{
-    background: {COLOR_SURFACE_HOVER};
-    border-radius: 5px;
-    min-width: 30px;
-}}
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
-    width: 0px;
 }}
 
 QTreeWidget {{
@@ -614,6 +686,7 @@ class OscGoesPurrrUI:
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        _install_rainbow_scrollbars(scroll)
         scroll.setWidget(page)
         return scroll
 
@@ -654,10 +727,11 @@ class OscGoesPurrrUI:
         # --- VRChat OSC Section ---
         lay.addWidget(self._sidebar_section_title("VRChat OSC"))
 
-        self.osc_status_label = QLabel("Status: Waiting for VRChat...")
-        self.osc_status_label.setProperty("role", "alert")
-        self.osc_status_label.setAlignment(Qt.AlignHCenter)
-        lay.addWidget(self.osc_status_label)
+        self.osc_status_label = QLabel("WAITING FOR VRCHAT")
+        self.osc_status_label.setProperty("role", "pill")
+        self.osc_status_label.setProperty("tone", "warn")
+        self.osc_status_label.setAlignment(Qt.AlignCenter)
+        lay.addWidget(self.osc_status_label, 0, Qt.AlignHCenter)
 
         self.osc_port_label = QLabel("Listening on Port: --")
         self.osc_port_label.setAlignment(Qt.AlignHCenter)
@@ -683,10 +757,11 @@ class OscGoesPurrrUI:
 
         intiface_lay.addWidget(self._sidebar_section_title("Intiface Central"))
 
-        self.status_label = QLabel("Status: Disconnected")
-        self.status_label.setProperty("role", "alert")
-        self.status_label.setAlignment(Qt.AlignHCenter)
-        intiface_lay.addWidget(self.status_label)
+        self.status_label = QLabel("DISCONNECTED")
+        self.status_label.setProperty("role", "pill")
+        self.status_label.setProperty("tone", "err")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        intiface_lay.addWidget(self.status_label, 0, Qt.AlignHCenter)
 
         self.connection_button = QPushButton("Connect to Intiface")
         self.connection_button.setMinimumHeight(BTN_HEIGHT_LARGE)
@@ -1139,6 +1214,7 @@ class OscGoesPurrrUI:
         # Scrollable rows
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        _install_rainbow_scrollbars(scroll)
         host = QWidget()
         host_lay = _vbox(0, 6)
         host.setLayout(host_lay)
@@ -1690,6 +1766,7 @@ class OscGoesPurrrUI:
         # Scrollable list of device cards.
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        _install_rainbow_scrollbars(scroll)
         inner = QWidget()
         self.unified_devices_layout = _vbox(4, 8)
         self.unified_devices_layout.addStretch(1)
@@ -2450,6 +2527,7 @@ class OscGoesPurrrUI:
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        _install_rainbow_scrollbars(scroll)
         inner = QWidget()
         self.steamvr_tracker_list_layout = _vbox(6, 8)
         inner.setLayout(self.steamvr_tracker_list_layout)
@@ -2643,9 +2721,9 @@ class OscGoesPurrrUI:
 
         # Header: class tag · model · serial · battery · pulse-test
         header = _hbox(0, 8)
-        class_tag = QLabel(f"[{self._DEVICE_CLASS_LABEL.get(dev_class, dev_class.title())}]")
-        cf = class_tag.font(); cf.setBold(True)
-        class_tag.setFont(cf)
+        class_tag = QLabel(self._DEVICE_CLASS_LABEL.get(dev_class, dev_class.title()).upper())
+        class_tag.setProperty("role", "pill")
+        class_tag.setProperty("tone", "info")
         header.addWidget(class_tag)
 
         title = QLabel(f"{t.get('model', '?')}  ·  {serial}")
@@ -2655,13 +2733,24 @@ class OscGoesPurrrUI:
         header.addStretch(1)
 
         bat = t.get("battery")
-        bat_text = "Battery: —"
+        bat_pct: Optional[int] = None
         if bat is not None:
             try:
-                bat_text = f"Battery: {int(float(bat) * 100)}%"
+                bat_pct = int(float(bat) * 100)
             except Exception:
-                pass
-        header.addWidget(QLabel(bat_text))
+                bat_pct = None
+        bat_label = QLabel(f"{bat_pct}%" if bat_pct is not None else "— %")
+        bat_label.setProperty("role", "pill")
+        # Tone reflects battery health so the eye picks it up at a glance.
+        if bat_pct is None:
+            bat_label.setProperty("tone", "info")
+        elif bat_pct <= 20:
+            bat_label.setProperty("tone", "err")
+        elif bat_pct <= 40:
+            bat_label.setProperty("tone", "warn")
+        else:
+            bat_label.setProperty("tone", "ok")
+        header.addWidget(bat_label)
 
         if supports_haptics:
             pulse_btn = QPushButton("Pulse Test")
@@ -2852,6 +2941,7 @@ class OscGoesPurrrUI:
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        _install_rainbow_scrollbars(scroll)
         inner = QWidget()
         self.bhaptics_device_list_layout = _vbox(6, 8)
         inner.setLayout(self.bhaptics_device_list_layout)
@@ -3424,6 +3514,7 @@ class OscGoesPurrrUI:
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        _install_rainbow_scrollbars(scroll)
         inner = QWidget()
         inner_lay = _vbox(0, 10)
         inner.setLayout(inner_lay)
@@ -3612,12 +3703,13 @@ Both consume the same data, so they stay in lockstep.
             self._repolish(self.connection_button)
 
         if self.status_label is not None:
+            self.status_label.setProperty("role", "pill")
             if connected:
-                self.status_label.setText("Status: Connected to Intiface")
-                self.status_label.setProperty("role", "success")
+                self.status_label.setText("CONNECTED")
+                self.status_label.setProperty("tone", "ok")
             else:
-                self.status_label.setText("Status: Disconnected")
-                self.status_label.setProperty("role", "alert")
+                self.status_label.setText("DISCONNECTED")
+                self.status_label.setProperty("tone", "err")
             self._repolish(self.status_label)
 
         self.update_stored_devices_ui()
@@ -3625,9 +3717,10 @@ Both consume the same data, so they stay in lockstep.
     def update_osc_status(self, is_connected: bool, port: int = None):
         if self.osc_status_label is None:
             return
+        self.osc_status_label.setProperty("role", "pill")
         if is_connected:
-            self.osc_status_label.setText("Status: Connected to VRChat")
-            self.osc_status_label.setProperty("role", "success")
+            self.osc_status_label.setText("VRCHAT CONNECTED")
+            self.osc_status_label.setProperty("tone", "ok")
             if port and self.osc_port_label is not None:
                 self.osc_port_label.setText(f"Listening on Port: {port}")
             if self.osc_connection_button is not None:
@@ -3635,8 +3728,8 @@ Both consume the same data, so they stay in lockstep.
                 self.osc_connection_button.setProperty("role", "danger")
                 self._repolish(self.osc_connection_button)
         else:
-            self.osc_status_label.setText("Status: Waiting for VRChat...")
-            self.osc_status_label.setProperty("role", "alert")
+            self.osc_status_label.setText("WAITING FOR VRCHAT")
+            self.osc_status_label.setProperty("tone", "warn")
             if self.osc_port_label is not None:
                 self.osc_port_label.setText("Listening on Port: --")
             if self.osc_connection_button is not None:
@@ -3977,12 +4070,10 @@ Both consume the same data, so they stay in lockstep.
             )
             mlay.addWidget(slider)
 
-            # Vibe meter (read-only progress)
-            vibe_meter = QProgressBar()
-            vibe_meter.setRange(0, 1000)
-            vibe_meter.setValue(0)
-            vibe_meter.setTextVisible(False)
-            vibe_meter.setFixedHeight(6)
+            # Vibe meter — custom-painted RainbowMeter so the rainbow stays
+            # at fixed track positions instead of stretching with value
+            # (QProgressBar's ::chunk scales the gradient).
+            vibe_meter = _RainbowMeter(maximum=1000)
             mlay.addWidget(vibe_meter)
 
             card_lay.addWidget(motor_frame)
