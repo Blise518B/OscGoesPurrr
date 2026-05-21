@@ -35,11 +35,6 @@ _DEVICE_TABLE: List[Tuple[str, str, int]] = [
 ]
 
 
-def osc_path(slot: str, node_1based: int) -> str:
-    """Canonical OSC address for documentation/UI display (HerpDerpinstine v1.0)."""
-    return f"/avatar/parameters/bHaptics_{slot}_{node_1based}_bool"
-
-
 def _store_key(slot: str, node_1based: int) -> str:
     """parameter_store key (short form — UDP handler strips the avatar/parameters/ prefix)."""
     return f"bHaptics_{slot}_{node_1based}_bool"
@@ -54,13 +49,6 @@ def _store_key_bosc_v1(position: str, node_1based: int) -> str:
     instead of the underscore-separated slot form. Values are proximity
     floats from VRChat contact receivers rather than booleans."""
     return f"bOSC_v1_{position}_{node_1based}"
-
-
-def all_paths_for_position(position: str) -> List[str]:
-    for pos, slot, count in _DEVICE_TABLE:
-        if pos == position:
-            return [osc_path(slot, n) for n in range(1, count + 1)]
-    return []
 
 
 def _truthy(value) -> bool:
@@ -153,10 +141,6 @@ class BHapticsRouter:
                     self._overrides.pop(position, None)
             else:
                 slot[int(index)] = max(0, min(100, int(intensity)))
-
-    def clear_manual_overrides(self) -> None:
-        with self._overrides_lock:
-            self._overrides.clear()
 
     def _tick(self):
         if not self.engine.is_connected:
