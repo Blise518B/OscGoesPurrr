@@ -37,6 +37,36 @@ class BHapticsFacade:
         return self._bhaptics_settings().get_antistuck()
 
     # ------------------------------------------------------------------
+    # VRChat-side: bool that tracks the bHaptics Player connection
+    # ------------------------------------------------------------------
+
+    def _bhaptics_send_connected_bool(self) -> None:
+        """Push the current bHaptics connection state to the user-configured
+        VRChat avatar parameter as a bool. Called when:
+          * the bHaptics Player connects / disconnects (state callback)
+          * VRChat OSC reconnects (parameter values reset on the wire)
+          * /avatar/change fires (loading an avatar resets its params)
+        Silent no-op if the user disabled the feature or VRChat OSC isn't
+        connected yet — the next OSC connect will re-send."""
+        cfg = self._bhaptics_settings().get_osc_connected()
+        if not cfg.get("enabled"):
+            return
+        if not self.osc_manager or not getattr(self.osc_manager, "is_connected", False):
+            return
+        param = cfg.get("param") or "bHaptics_Connected"
+        address = f"/avatar/parameters/{param}"
+        try:
+            value = bool(self.bhaptics_engine.is_connected)
+        except Exception:
+            value = False
+        try:
+            # ignore_rate_limit so state-change edges always land; rate
+            # limiting could swallow the transition we care about.
+            self.osc_manager.send_parameter(address, value, ignore_rate_limit=True)
+        except Exception as e:
+            self.log_message(f"bHaptics OSC connected-bool send failed ({address}): {e}")
+
+    # ------------------------------------------------------------------
     # UI-facing API
     # ------------------------------------------------------------------
 
@@ -51,6 +81,7 @@ class BHapticsFacade:
             "host": s.get_host(),
             "port": s.get_port(),
             "antistuck": s.get_antistuck(),
+            "osc_connected": s.get_osc_connected(),
             "devices": [
                 {
                     "position": pos,
@@ -93,3 +124,12 @@ class BHapticsFacade:
 
     def set_bhaptics_antistuck(self, enabled: bool, hold_s: float, ramp_s: float) -> None:
         self._bhaptics_settings().set_antistuck(enabled, hold_s, ramp_s)
+
+    def set_bhaptics_osc_connected(self, enabled: bool, param: str) -> None:
+        """Configure the connected-state OSC bool. `param` is the bare avatar
+        parameter name (e.g. 'bHaptics_Connected'); a leading
+        /avatar/parameters/ is stripped if the user pastes one in. Re-sends
+        the current value immediately so the avatar parameter reflects
+        whatever the engine state is right now."""
+        self._bhaptics_settings().set_osc_connected(enabled, param)
+        self._bhaptics_send_connected_bool()

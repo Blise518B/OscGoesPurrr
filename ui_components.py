@@ -2907,7 +2907,7 @@ class OscGoesPurrrUI:
         lay.addLayout(out_row)
         battery_edit = QLineEdit()
         battery_edit.setText(str(cfg.get("battery_osc_address", "")))
-        battery_edit.setPlaceholderText("/avatar/parameters/HMD_Battery  (leave blank to disable)")
+        battery_edit.setPlaceholderText("HMD_Battery  (leave blank to disable)")
         lay.addWidget(battery_edit)
 
         # ---- Incoming: haptic OSC addresses (skip for HMD) ----
@@ -2920,7 +2920,7 @@ class OscGoesPurrrUI:
             lay.addLayout(in_row)
             addr_edit = QLineEdit()
             addr_edit.setText(";".join(cfg.get("address_list", [])))
-            addr_edit.setPlaceholderText("/avatar/parameters/MyParam;/avatar/parameters/OtherParam")
+            addr_edit.setPlaceholderText("MyParam;OtherParam")
             lay.addWidget(addr_edit)
 
             params_row = _hbox(0, 8)
@@ -2938,16 +2938,31 @@ class OscGoesPurrrUI:
         else:
             lay.addWidget(self._muted_label("HMDs don't support haptic pulses — battery broadcast only."))
 
+        def _strip_param_prefix(s: str) -> str:
+            # UI mirror of SteamVRSettingsManager._strip_param_prefix —
+            # stored form is always the bare parameter name. Re-stripping
+            # here means a stale paste of the full path gets cleaned
+            # before it ever reaches disk.
+            s = (s or "").strip()
+            if s.startswith("/avatar/parameters/"):
+                s = s[len("/avatar/parameters/"):]
+            return s.lstrip("/")
+
         def push(_=None):
             if self._is_updating_steamvr:
                 return
             new_cfg = dict(cfg)
             new_cfg["enabled"] = enabled.isChecked()
-            new_cfg["battery_osc_address"] = battery_edit.text().strip()
+            new_cfg["battery_osc_address"] = _strip_param_prefix(battery_edit.text())
             if addr_edit is not None:
-                addrs = [a.strip() for a in addr_edit.text().split(";") if a.strip()]
+                addrs = [
+                    _strip_param_prefix(a)
+                    for a in addr_edit.text().split(";")
+                    if a.strip()
+                ]
+                addrs = [a for a in addrs if a]
                 if not addrs:
-                    addrs = ["/avatar/parameters/..."]
+                    addrs = ["..."]
                 new_cfg["address_list"] = addrs
             if mult is not None:
                 new_cfg["multiplier_override"] = float(mult.value())
@@ -3069,6 +3084,38 @@ class OscGoesPurrrUI:
         as_lay.addLayout(as_row)
         parent_layout.addWidget(as_card)
 
+        # ---- VRChat connected-bool card ----
+        # When the bHaptics Player connects/disconnects we can flip a bool
+        # avatar parameter so an animation reacts (e.g., show the suit
+        # mesh). User picks the parameter name to match whatever their
+        # avatar exposes; the /avatar/parameters/ prefix is added at send
+        # time so the user just sees the bare name.
+        oc_card = _Card()
+        oc_lay = _vbox(14, 6)
+        oc_card.setLayout(oc_lay)
+        oc_hdr = QLabel("VRChat connected-state parameter")
+        oc_hdr.setObjectName("sectionTitle")
+        oc_lay.addWidget(oc_hdr)
+        oc_lay.addWidget(self._muted_label(
+            "Send a bool to a VRChat avatar parameter whenever the bHaptics Player connects or "
+            "disconnects. Use it to auto-enable a suit-on animation. Re-sent on VRChat OSC "
+            "reconnect and on /avatar/change so the value survives avatar reloads."
+        ))
+        oc_row = _hbox(0, 8)
+        self.bhaptics_osc_connected_check = ToggleSwitch("Send connected-state bool")
+        self.bhaptics_osc_connected_check.toggled.connect(self._on_bhaptics_osc_connected_changed)
+        oc_row.addWidget(self.bhaptics_osc_connected_check)
+        oc_row.addSpacing(16)
+        oc_row.addWidget(QLabel("Parameter"))
+        self.bhaptics_osc_connected_edit = QLineEdit()
+        self.bhaptics_osc_connected_edit.setPlaceholderText("bHaptics_Connected")
+        self.bhaptics_osc_connected_edit.setFixedWidth(220)
+        self.bhaptics_osc_connected_edit.editingFinished.connect(self._on_bhaptics_osc_connected_changed)
+        oc_row.addWidget(self.bhaptics_osc_connected_edit)
+        oc_row.addStretch(1)
+        oc_lay.addLayout(oc_row)
+        parent_layout.addWidget(oc_card)
+
         # ---- Per-device cards ----
         list_card = _Card(dark_bg=True)
         llay = _vbox(10, 6)
@@ -3140,6 +3187,20 @@ class OscGoesPurrrUI:
         self.controller.set_bhaptics_endpoint(host, port)
         self.log_message(f"bHaptics: endpoint set to {host}:{port}")
 
+    def _on_bhaptics_osc_connected_changed(self, *_):
+        if self._is_updating_bhaptics:
+            return
+        enabled = bool(self.bhaptics_osc_connected_check.isChecked())
+        # Strip the prefix client-side so the controller's persisted form
+        # matches what the user re-sees in the box (no leading slash).
+        raw = self.bhaptics_osc_connected_edit.text().strip()
+        if raw.startswith("/avatar/parameters/"):
+            raw = raw[len("/avatar/parameters/"):]
+        param = raw.lstrip("/") or "bHaptics_Connected"
+        self.controller.set_bhaptics_osc_connected(enabled, param)
+        if raw != self.bhaptics_osc_connected_edit.text():
+            self.bhaptics_osc_connected_edit.setText(param)
+
     def _refresh_bhaptics_status_only(self):
         try:
             status = self.controller.get_bhaptics_status()
@@ -3192,6 +3253,13 @@ class OscGoesPurrrUI:
         if self.bhaptics_port_spin.value() != port:
             self.bhaptics_port_spin.setValue(port)
         self.bhaptics_auto_connect_check.setChecked(bool(status.get("auto_connect")))
+
+        oc_cfg = status.get("osc_connected") or {}
+        if hasattr(self, "bhaptics_osc_connected_check"):
+            self.bhaptics_osc_connected_check.setChecked(bool(oc_cfg.get("enabled", True)))
+            current_param = (oc_cfg.get("param") or "bHaptics_Connected")
+            if self.bhaptics_osc_connected_edit.text() != current_param:
+                self.bhaptics_osc_connected_edit.setText(current_param)
 
         as_cfg = status.get("antistuck") or {}
         if hasattr(self, "bhaptics_antistuck_check"):

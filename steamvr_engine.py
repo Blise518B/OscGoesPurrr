@@ -59,7 +59,7 @@ class PatternConfig:
 @dataclass
 class TrackerConfig:
     enabled: bool = True
-    address_list: List[str] = field(default_factory=lambda: ["/avatar/parameters/..."])
+    address_list: List[str] = field(default_factory=lambda: ["..."])
     multiplier_override: float = 1.0
     battery_threshold: int = 20
     battery_osc_address: str = ""  # outgoing — empty disables battery broadcast
@@ -79,7 +79,7 @@ class TrackerConfig:
         if not addrs and d.get("address"):
             addrs = str(d["address"]).split(";")
         if not addrs:
-            addrs = ["/avatar/parameters/..."]
+            addrs = ["..."]
         return cls(
             enabled=bool(d.get("enabled", True)),
             address_list=list(addrs),

@@ -147,6 +147,13 @@ class OscGoesPurrrApp(
         bs = self.profile_manager.bhaptics_settings
         self.bhaptics_engine = BHapticsEngine(host=bs.get_host(), port=bs.get_port())
         self.bhaptics_engine.set_auto_connect_getter(self._bhaptics_get_auto_connect)
+        # Re-publish bhaptics devices into the SteamVR strip whenever the
+        # Player connects/disconnects or its connected-position set changes.
+        # Routed through the queue so the bridge update happens on the main
+        # thread, matching how Lovense device-changed events flow.
+        self.bhaptics_engine.set_state_callback(
+            lambda: self.thread_queue.put(("bhaptics_state_changed", None))
+        )
         self.bhaptics_router = BHapticsRouter(
             engine=self.bhaptics_engine,
             get_device_configs=self._bhaptics_get_device_configs,
@@ -330,6 +337,20 @@ class OscGoesPurrrApp(
                     self.steamvr_toys_on_devices_changed()
                 except Exception:
                     pass
+            elif msg_type == "bhaptics_state_changed":
+                # bHaptics engine reported a connection-state or
+                # connected-positions change. Mirror it into the SteamVR
+                # device strip (no-op when the SteamVR toy feature is off)
+                # AND push the user-configured connection bool to VRChat
+                # so an avatar animation can react.
+                try:
+                    self.steamvr_toys_on_bhaptics_state_changed()
+                except Exception:
+                    pass
+                try:
+                    self._bhaptics_send_connected_bool()
+                except Exception:
+                    pass
             elif msg_type == "stored_devices_refresh":
                 self.ui.build_stored_devices_ui()
             elif msg_type == "osc_status":
@@ -356,6 +377,13 @@ class OscGoesPurrrApp(
                     # so probe the OSCQuery HTTP node for the current
                     # value as soon as the OSCQuery handshake settles.
                     self._schedule_avatar_id_probe()
+                    # Re-push the bHaptics connection bool — VRChat just
+                    # came back, so its avatar parameter cache no longer
+                    # reflects whatever we sent during the prior session.
+                    try:
+                        self._bhaptics_send_connected_bool()
+                    except Exception:
+                        pass
                 else:
                     self.ui.log_message("VRChat OSC Disconnected. Waiting for VRChat to come back...")
                     # Dump diagnostics so we can see whether packets ever
@@ -1298,6 +1326,14 @@ class OscGoesPurrrApp(
 
         if hasattr(self.ui, '_refresh_profile_buttons'):
             self.ui._refresh_profile_buttons()
+
+        # Avatar swaps reset every avatar parameter on the VRChat side, so
+        # the bHaptics-connected bool needs to be re-asserted whether or not
+        # the engine state changed.
+        try:
+            self._bhaptics_send_connected_bool()
+        except Exception:
+            pass
 
     def get_current_avatar_id(self) -> str:
         return self.profile_manager.current_avatar_id or ""

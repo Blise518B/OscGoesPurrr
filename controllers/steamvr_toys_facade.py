@@ -16,6 +16,23 @@ from steamvr_toy_bridge import SteamVRToyBridge, ToyEntry
 from ui import lovense_icons
 
 
+# bHaptics position → (icon_key, serial suffix, display name) for the per-
+# position SteamVR entries. icon_key matches the entries we added to
+# steamvr_toy_driver/resources/driver.vrresources; serial suffix matches the
+# default.vrsettings tracker-role binding keys.
+_BHAPTICS_ENTRIES = [
+    ("Head",      "bhaptics_head", "HEAD",      "bHaptics Head"),
+    ("VestFront", "bhaptics_vest", "VESTFRONT", "bHaptics Vest (Front)"),
+    ("VestBack",  "bhaptics_vest", "VESTBACK",  "bHaptics Vest (Back)"),
+    ("ForearmL",  "bhaptics_arm",  "FOREARML",  "bHaptics Arm Left"),
+    ("ForearmR",  "bhaptics_arm",  "FOREARMR",  "bHaptics Arm Right"),
+    ("HandL",     "bhaptics_hand", "HANDL",     "bHaptics Hand Left"),
+    ("HandR",     "bhaptics_hand", "HANDR",     "bHaptics Hand Right"),
+    ("FootL",     "bhaptics_foot", "FOOTL",     "bHaptics Foot Left"),
+    ("FootR",     "bhaptics_foot", "FOOTR",     "bHaptics Foot Right"),
+]
+
+
 class SteamVRToysFacade:
     """Mixin: SteamVR virtual-toy-device methods. Composed into OscGoesPurrrApp."""
 
@@ -238,10 +255,16 @@ class SteamVRToysFacade:
         bridge = getattr(self, "_steamvr_toy_bridge", None)
         if bridge is None:
             return
+
+        entries: List[ToyEntry] = []
+        entries.extend(self._steamvr_toys_build_lovense_entries())
+        entries.extend(self._steamvr_toys_build_bhaptics_entries())
+        bridge.set_devices(entries)
+
+    def _steamvr_toys_build_lovense_entries(self) -> List[ToyEntry]:
         engine = getattr(self, "haptic_engine", None)
         if engine is None:
-            bridge.clear_devices()
-            return
+            return []
         names: List[str] = engine.list_connected_device_names()
         battery_cache: Dict[str, float] = getattr(self, "_battery_cache", {}) or {}
 
@@ -255,4 +278,73 @@ class SteamVRToysFacade:
                 icon_path=icon_path or "",
                 battery=float(battery_cache.get(name, 1.0)),
             ))
-        bridge.set_devices(entries)
+        return entries
+
+    def _steamvr_toys_build_bhaptics_entries(self) -> List[ToyEntry]:
+        """Per-position bHaptics entries — one per device position the Player
+        reports as connected. Falls back to a single "bHaptics Suit" entry
+        when the Player WebSocket is up but the Player doesn't broadcast a
+        connectedPositions list (public Player builds often don't)."""
+        engine = getattr(self, "bhaptics_engine", None)
+        installer = getattr(self, "_steamvr_toy_installer", None)
+        if engine is None or installer is None:
+            return []
+        if not getattr(engine, "is_connected", False):
+            return []
+
+        try:
+            connected: set = engine.get_connected_positions()
+        except Exception:
+            connected = set()
+
+        entries: List[ToyEntry] = []
+
+        # Resolve the icon path once per icon_key — they all live in the
+        # same install dir, so a single miss means the asset wasn't shipped
+        # (e.g., installer hasn't laid down the bhaptics_*.png yet).
+        def _icon_for(icon_key: str) -> tuple[str, str]:
+            path = installer.resolve_installed_icon_path(f"{icon_key}.png")
+            if not path:
+                return "", ""
+            return icon_key, f"{{oscgoespurrr}}/icons/{icon_key}.png"
+
+        if connected:
+            # Per-position entries — one per position the Player reports.
+            for position, icon_key, suffix, display in _BHAPTICS_ENTRIES:
+                if position not in connected:
+                    continue
+                key, ipath = _icon_for(icon_key)
+                battery = engine.get_position_battery(position)
+                entries.append(ToyEntry(
+                    serial=f"OGP_BHAPTICS_{suffix}",
+                    name=display,
+                    icon_key=key,
+                    icon_path=ipath,
+                    battery=float(battery) if battery is not None else 1.0,
+                ))
+            return entries
+
+        # Fallback: Player up but not broadcasting a position list. Show one
+        # "bHaptics Suit" entry so the strip still surfaces the connection.
+        key, ipath = _icon_for("bhaptics_vest")
+        entries.append(ToyEntry(
+            serial="OGP_BHAPTICS_SUIT",
+            name="bHaptics Suit",
+            icon_key=key,
+            icon_path=ipath,
+            battery=1.0,
+        ))
+        return entries
+
+    # ------------------------------------------------------------------
+    # bHaptics → SteamVR hook
+    # ------------------------------------------------------------------
+
+    def steamvr_toys_on_bhaptics_state_changed(self) -> None:
+        """Re-sync the SteamVR bridge after the bHaptics engine's connection
+        OR per-position status changed. Called from the bhaptics engine's
+        state-change callback (background thread); safe because the bridge's
+        set_devices is internally locked."""
+        if not self._steamvr_toys_is_enabled():
+            return
+        self._steamvr_toys_sync_from_engine()
