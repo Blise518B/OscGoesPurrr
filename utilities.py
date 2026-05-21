@@ -1,6 +1,33 @@
+import json
 import os
 import ctypes
-from typing import Any
+from pathlib import Path
+from typing import Any, Union
+
+
+def atomic_write_json(path: Union[str, Path], data: Any, **dumps_kwargs) -> None:
+    """Write `data` as JSON to `path` so a crash mid-write can't truncate the
+    target. Writes to a sibling `.tmp` file, fsyncs, then `os.replace`s it
+    onto the real path (atomic on every OS we ship to).
+
+    `dumps_kwargs` are forwarded to `json.dumps` — pass `indent=2`, etc.
+
+    The tmp file is placed in the same directory as the target so the replace
+    stays on one filesystem (Windows `os.replace` cross-volume is an error).
+    """
+    target = Path(path)
+    tmp = target.with_name(target.name + ".tmp")
+    body = json.dumps(data, **dumps_kwargs)
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(body)
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except OSError:
+            # fsync isn't available on every Python build / FS; the replace
+            # is still atomic, just a touch less durable.
+            pass
+    os.replace(tmp, target)
 
 
 def normalize_osc_value(v: float) -> float:

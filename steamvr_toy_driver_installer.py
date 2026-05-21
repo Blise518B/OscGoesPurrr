@@ -23,6 +23,8 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+from utilities import atomic_write_json
+
 
 # ---- Locations -----------------------------------------------------------
 
@@ -358,11 +360,12 @@ def _read_paths_file(path: Path, log) -> Optional[dict]:
 
 
 def _write_paths_file(path: Path, data: dict, log) -> bool:
+    # Atomic so a crash mid-write can't corrupt openvrpaths.vrpath — a broken
+    # one will brick SteamVR's boot. SteamVR's own writer formats with
+    # indent=3 and a trailing newline; we keep the indent and let the lack
+    # of a trailing newline ride (SteamVR doesn't require it).
     try:
-        body = json.dumps(data, indent=3)
-        # SteamVR writes the file with a trailing newline and sorted-ish key
-        # order; matching is friendly but not required.
-        path.write_text(body + "\n", encoding="utf-8")
+        atomic_write_json(path, data, indent=3)
         return True
     except OSError as e:
         log(f"[steamvr-toys] could not write {path}: {e}")

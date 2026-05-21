@@ -51,22 +51,27 @@ class OSCQueryHandler(BaseHTTPRequestHandler):
     GETs, in a session with VRCOSC/VRCFT also running).
     """
 
-    # Class-level counter so even malformed requests (where do_GET never
-    # runs) still increment something we can read for diagnostics.
-    _raw_connections = 0
-
-    def __init__(self, *args, host_info=None, osc_tree=None, on_request=None, **kwargs):
+    def __init__(self, *args, host_info=None, osc_tree=None,
+                 on_request=None, on_raw_connection=None, **kwargs):
         self.host_info = host_info
         self.osc_tree = osc_tree
         self._on_request = on_request
+        self._on_raw_connection = on_raw_connection
         super().__init__(*args, **kwargs)
 
     def setup(self):
         # Count every accepted TCP connection regardless of whether the
         # HTTP request that follows is well-formed. Lets us distinguish
         # "VRChat never reached us at all" from "VRChat reached us but
-        # we didn't understand its request".
-        OSCQueryHandler._raw_connections += 1
+        # we didn't understand its request". The count lives on the
+        # owning VRChatOSCManager so it resets cleanly on
+        # disconnect/reconnect cycles.
+        cb = self._on_raw_connection
+        if cb is not None:
+            try:
+                cb()
+            except Exception:
+                pass
         super().setup()
 
     def do_GET(self):
@@ -253,6 +258,12 @@ class VRChatOSCManager:
         # picks up a new client. If this number is stuck at 0 long after we
         # connect, VRChat doesn't see our OSCQuery advertisement.
         self._phonebook_requests: int = 0
+        # Raw inbound TCP accepts to our phonebook server. Bumped from
+        # OSCQueryHandler.setup() so malformed requests (where do_GET never
+        # runs) still increment something we can read. Useful for telling
+        # "VRChat never reached us" from "VRChat reached us but we mis-served
+        # HOST_INFO". Resets with the manager, not the process.
+        self._raw_http_connections: int = 0
 
         # Ring buffer of recent diagnostic events (mDNS, handshake, health
         # check failures, watchdog warnings). Read by the OSC Diagnostics
@@ -456,11 +467,11 @@ class VRChatOSCManager:
             "mdns_service_name": self.service_short_name,
             "mdns_rereg_count": self._mdns_rereg_count,
             "log_file_path": self.get_log_file_path(),
-            # Raw inbound TCP connections to our HTTP phonebook. If this
-            # is non-zero but phonebook_GETs is 0, VRChat reached us but
-            # we mis-served the request. If both are 0, VRChat (or the
+            # Raw inbound TCP connections to our HTTP phonebook this session.
+            # If this is non-zero but phonebook_GETs is 0, VRChat reached us
+            # but we mis-served the request. If both are 0, VRChat (or the
             # firewall) is dropping us before we ever see a packet.
-            "http_raw_connections": OSCQueryHandler._raw_connections,
+            "http_raw_connections": self._raw_http_connections,
         }
 
     def _start_discovery(self):
@@ -1003,6 +1014,7 @@ class VRChatOSCManager:
                 host_info=self.host_info,
                 osc_tree=self.osc_tree,
                 on_request=self._on_phonebook_request,
+                on_raw_connection=self._on_raw_http_connection,
                 **kwargs,
             ),
         )
@@ -1023,6 +1035,11 @@ class VRChatOSCManager:
         # Log only the first 3 to avoid spam, but always count.
         if self._phonebook_requests <= 3:
             self._log(f"phonebook GET #{self._phonebook_requests} path={path} from={client}")
+
+    def _on_raw_http_connection(self) -> None:
+        """Callback fired from OSCQueryHandler.setup() — bumps the per-session
+        raw TCP-accept counter. Cheap (single int increment, GIL-protected)."""
+        self._raw_http_connections += 1
 
     def _advertise_service(self):
         """Registers this app as an OSC service via mDNS (both UDP and TCP phonebook).

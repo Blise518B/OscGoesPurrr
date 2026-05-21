@@ -239,6 +239,10 @@ class _FeedbackThread(threading.Thread):
         if self.engine._battery_level(self.tracker.index) < (cfg.battery_threshold / 100.0):
             if self.battery_low_notif > 0:
                 self.battery_low_notif -= 1
+                # Low-battery alert: buzz the tracker N times at progressively
+                # weaker intensities to get the user's attention without locking
+                # the motor at full strength. `int % 0.9` produces 8→0.8,
+                # 7→0.7, ..., 1→0.1 — a stepped fade-out, not arithmetic.
                 return self.battery_low_notif % 0.9
             return 0.0
         self.battery_low_notif = self.LOW_BATTERY_ALERT_COUNT

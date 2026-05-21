@@ -3,11 +3,12 @@
 # auto-launch OscGoesPurrr alongside the runtime. Ported from
 # VRC-Haptic-Pancake/BridgeApp/vr_manifest.py (GPL3 compatible).
 
-import json
 import os
 import stat
 import sys
 from pathlib import Path
+
+from utilities import atomic_write_json
 
 
 APP_KEY = "com.oscgoespurrr.steamvr"
@@ -93,8 +94,10 @@ class SteamVRManifest:
     def save(self):
         if not self._data:
             raise RuntimeError("Manifest data not prepared")
-        with open(self.manifest_path, "w", encoding="utf-8") as f:
-            json.dump(self._data, f, ensure_ascii=False, sort_keys=True, indent=4)
+        atomic_write_json(
+            self.manifest_path, self._data,
+            ensure_ascii=False, sort_keys=True, indent=4,
+        )
         if not self.is_app_bundled:
             self._save_devlauncher()
         self._recent = True

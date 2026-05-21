@@ -1677,13 +1677,21 @@ class OscGoesPurrrApp(
                 future.result(timeout=2)
                 self.update_connection_status(False, "")
                 
-                # Stop auto-refresh if disconnecting
+                # Stop auto-refresh and auto-connect for the rest of this
+                # session. We deliberately do NOT persist these to disk: the
+                # user's long-term preferences in app_settings stay True,
+                # so the next launch starts fresh. Setting only the in-memory
+                # flag means a manual Disconnect respects the user's intent
+                # ("stop doing that now") without overwriting the checkbox
+                # state they configured earlier. Reconnect via the same
+                # button leaves both flags off until the user re-toggles —
+                # by design, so auto-reconnect doesn't immediately undo the
+                # disconnect they just triggered.
                 self.auto_refresh_enabled = False
                 if self._auto_refresh_task:
                     self._auto_refresh_task.cancel()
                     self._auto_refresh_task = None
-                
-                # Stop auto-connect if disconnecting
+
                 self.auto_connect_enabled = False
                 if self._auto_connect_task:
                     try:
@@ -1740,6 +1748,21 @@ class OscGoesPurrrApp(
 
         self.save_profiles()
 
+        # Cleanly disconnect Intiface so its log doesn't show an abrupt
+        # websocket drop and so it stops scanning when we leave. Best-effort
+        # with a short timeout — daemon-killing the async thread on exit is
+        # the safe fallback if something hangs.
+        try:
+            if (self.async_loop and self.haptic_engine
+                    and self.haptic_engine.is_connected):
+                future = asyncio.run_coroutine_threadsafe(
+                    self.haptic_engine.async_disconnect(),
+                    self.async_loop,
+                )
+                future.result(timeout=2.0)
+        except Exception:
+            pass
+
         try:
             self.steamvr_router.stop()
             self.steamvr_battery.stop()
@@ -1763,6 +1786,16 @@ class OscGoesPurrrApp(
             if bridge is not None:
                 bridge.clear_devices()
                 bridge.stop()
+        except Exception:
+            pass
+
+        # Stop the VRChat OSC manager so its mDNS records are torn down and
+        # its sockets released before the process exits. Cheap; the manager's
+        # stop() is idempotent.
+        try:
+            mgr = getattr(self, "osc_manager", None)
+            if mgr is not None:
+                mgr.stop()
         except Exception:
             pass
 
