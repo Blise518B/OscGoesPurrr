@@ -28,6 +28,7 @@ from pythonosc.osc_bundle_builder import OscBundleBuilder
 from pythonosc.osc_message_builder import OscMessageBuilder
 from zeroconf import ServiceBrowser, Zeroconf, ServiceStateChange, ServiceInfo
 from parameter_store import store
+from utilities import strip_param_prefix
 from constants import VRC_DEFAULT_PORT
 
 class OSCQueryHandler(BaseHTTPRequestHandler):
@@ -1302,12 +1303,7 @@ class VRChatOSCManager:
             value = args[0] if args else 0.0
 
             # Strip the redundant VRChat prefix for internal routing and UI
-            prefix = "/avatar/parameters/"
-            clean_address = address
-            if address.startswith(prefix):
-                clean_address = address[len(prefix):]
-            elif address.startswith("/"):
-                clean_address = address[1:] # Clean up leading slash for standard paths
+            clean_address = strip_param_prefix(address)
 
             # Bookkeeping for diagnostics. Cheap — just int increments and
             # a timestamp write. No lock needed: monotonic int writes are

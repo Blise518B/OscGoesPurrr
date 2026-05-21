@@ -11,6 +11,7 @@ from typing import Callable, Dict, Optional
 
 from parameter_store import store
 from steamvr_engine import SteamVREngine, TrackerConfig
+from utilities import strip_param_prefix
 
 
 class SteamVRRouter:
@@ -62,14 +63,8 @@ class SteamVRRouter:
                 # Stored form is the bare parameter name (UI strips any
                 # /avatar/parameters/ the user pastes), but stay defensive
                 # in case a stale config or upgrade path slips a prefix
-                # through — parameter_store keys are always the short form
-                # (UDP handler and OSCQuery JSON loader both strip
-                # avatar/parameters/).
-                lookup = addr.strip()
-                if lookup.startswith("/avatar/parameters/"):
-                    lookup = lookup[len("/avatar/parameters/"):]
-                elif lookup.startswith("/"):
-                    lookup = lookup[1:]
+                # through — parameter_store keys are always the short form.
+                lookup = strip_param_prefix(addr)
                 if lookup in params:
                     try:
                         v = float(params[lookup])

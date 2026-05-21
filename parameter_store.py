@@ -1,6 +1,8 @@
 import threading
 from typing import Dict, Any, List, Set, Tuple
 
+from utilities import classify_ogb_zone
+
 
 class ParameterStore:
     """
@@ -32,19 +34,6 @@ class ParameterStore:
     # the Inspector shows stale duplicates that never refresh.
     _AVATAR_PARAM_PREFIX = "avatar/parameters/"
 
-    @staticmethod
-    def _classify_zone(path: str) -> "Tuple[str, str] | None":
-        """Return `(zone_type, zone_name)` for an OGB-shaped path or None."""
-        parts = path.split("/", 3)
-        if len(parts) >= 3 and parts[0] == "OGB":
-            category = parts[1]
-            zone_name = parts[2]
-            if category in ("Orifice", "Orf"):
-                return ("Orf", zone_name)
-            if category in ("Penetrator", "Pen"):
-                return ("Pen", zone_name)
-        return None
-
     def _refresh_zone_lists(self) -> None:
         """Rebuild the public Orifices/Penetrators name lists from `_zone_tuples`."""
         orifices = sorted({n for t, n in self._zone_tuples if t == "Orf"})
@@ -75,7 +64,7 @@ class ParameterStore:
             return
         derived: Set[Tuple[str, str]] = set()
         for path in self.all_parameters.keys():
-            zone = self._classify_zone(path)
+            zone = classify_ogb_zone(path)
             if zone is not None:
                 derived.add(zone)
         if derived:
@@ -109,7 +98,7 @@ class ParameterStore:
             self._parse_oscquery_node(data)
 
             for path in self.all_parameters.keys():
-                zone = self._classify_zone(path)
+                zone = classify_ogb_zone(path)
                 if zone is not None:
                     self._zone_tuples.add(zone)
 
@@ -130,7 +119,7 @@ class ParameterStore:
             self._version += 1
             self.packets_received += 1
             if is_new_key:
-                zone = self._classify_zone(address)
+                zone = classify_ogb_zone(address)
                 if zone is not None and zone not in self._zone_tuples:
                     self._zone_tuples.add(zone)
                     self._refresh_zone_lists()

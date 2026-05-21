@@ -2,7 +2,7 @@ import fnmatch
 import math
 import time
 from typing import Callable, Dict, List, Tuple, Any, Optional, Set
-from utilities import normalize_osc_value
+from utilities import normalize_osc_value, strip_param_prefix, classify_ogb_zone
 from parameter_store import store as _global_store
 
 _GLOB_CHARS = frozenset("*?[")
@@ -12,28 +12,11 @@ def _has_glob(addr: str) -> bool:
     return any(c in _GLOB_CHARS for c in addr)
 
 
-def _clean_custom_addr(addr: str) -> str:
-    """Strip VRChat's `/avatar/parameters/` prefix or a bare leading slash so
-    the address matches the parameter_store's normalized keys."""
-    if addr.startswith("/avatar/parameters/"):
-        return addr[len("/avatar/parameters/"):]
-    if addr.startswith("/"):
-        return addr[1:]
-    return addr
-
-
-def _classify_zone_path(path: str) -> Optional[Tuple[str, str]]:
-    """Standalone version of `ParameterStore._classify_zone` for the rare
-    fallback when the global store isn't reachable (tests)."""
-    parts = path.split("/", 3)
-    if len(parts) >= 3 and parts[0] == "OGB":
-        category = parts[1]
-        zone_name = parts[2]
-        if category in ("Orifice", "Orf"):
-            return ("Orf", zone_name)
-        if category in ("Penetrator", "Pen"):
-            return ("Pen", zone_name)
-    return None
+# Module-level aliases so existing call sites and tests keep importing
+# `_clean_custom_addr` / `_classify_zone_path`. The real implementations
+# live in utilities.py.
+_clean_custom_addr = strip_param_prefix
+_classify_zone_path = classify_ogb_zone
 
 
 class GameDeviceLengthDetector:
