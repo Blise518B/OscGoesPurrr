@@ -108,6 +108,16 @@
     "/devices/oscgoespurrr/OGP_TOY_LOVENSE_DOMI_2": "TrackerRole_LeftShoulder",
     "/devices/oscgoespurrr/OGP_TOY_LOVENSE_DOMI2": "TrackerRole_LeftShoulder",
     "/devices/oscgoespurrr/OGP_TOY_LOVENSE_GEMINI": "TrackerRole_RightShoulder",
-    "/devices/oscgoespurrr/OGP_TOY_GEMINI": "TrackerRole_RightShoulder"
+    "/devices/oscgoespurrr/OGP_TOY_GEMINI": "TrackerRole_RightShoulder",
+
+    "/devices/oscgoespurrr/OGP_BHAPTICS_HEAD":      "TrackerRole_Keyboard",
+    "/devices/oscgoespurrr/OGP_BHAPTICS_VESTFRONT": "TrackerRole_Chest",
+    "/devices/oscgoespurrr/OGP_BHAPTICS_VESTBACK":  "TrackerRole_Waist",
+    "/devices/oscgoespurrr/OGP_BHAPTICS_FOREARML":  "TrackerRole_LeftElbow",
+    "/devices/oscgoespurrr/OGP_BHAPTICS_FOREARMR":  "TrackerRole_RightElbow",
+    "/devices/oscgoespurrr/OGP_BHAPTICS_HANDL":     "TrackerRole_LeftShoulder",
+    "/devices/oscgoespurrr/OGP_BHAPTICS_HANDR":     "TrackerRole_RightShoulder",
+    "/devices/oscgoespurrr/OGP_BHAPTICS_FOOTL":     "TrackerRole_LeftAnkle",
+    "/devices/oscgoespurrr/OGP_BHAPTICS_FOOTR":     "TrackerRole_RightAnkle"
   }
 }
