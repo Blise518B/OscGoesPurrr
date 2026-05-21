@@ -45,6 +45,8 @@ from controllers import (
     SteamVRToysFacade,
     BHapticsFacade,
     HardwareMonitorFacade,
+    OscFacade,
+    ProfilesFacade,
 )
 
 
@@ -53,6 +55,8 @@ class OscGoesPurrrApp(
     SteamVRToysFacade,
     BHapticsFacade,
     HardwareMonitorFacade,
+    OscFacade,
+    ProfilesFacade,
 ):
     def __init__(self):
         self.async_loop: asyncio.AbstractEventLoop = None
@@ -422,18 +426,6 @@ class OscGoesPurrrApp(
         """Add a message to the log text box (main thread only)"""
         self.ui.log_message(message)
     
-    def save_all_profiles(self):
-        """Persist all profiles. Per-motor addresses are kept up-to-date in the
-        profile dict on every UI add/remove, so this just flushes to disk and
-        ensures every device has at least one default address."""
-        for device_name in self.ui.get_known_device_names():
-            existing = self.get_profile_config(device_name, "osc_addresses", None)
-            if not existing:
-                default_addr = device_name.replace(" ", "_")
-                self.update_device_config(device_name, "osc_addresses", {"0": [default_addr]})
-        self.save_profiles()
-        self.log_message("All device profiles saved")
-    
     def update_connection_status(self, connected: bool, server: str):
         """Update connection UI elements (main thread only)"""
         # Sync with haptic engine (haptic_engine.is_connected is now the single source of truth)
@@ -531,10 +523,6 @@ class OscGoesPurrrApp(
         show_console = not self.get_app_setting("hide_console", True)
         toggle_windows_console(show_console)
 
-    def update_stored_devices_ui(self):
-        """Update the stored devices UI to show connection status"""
-        self.ui.update_stored_devices_ui()
-    
     def delete_stored_device(self, device_name: str):
         """Forget a toy entirely — removes it from every profile and the
         global known-toys registry. The card will not reappear on profile
@@ -551,14 +539,6 @@ class OscGoesPurrrApp(
         self.ui.remove_device_frame(device_name)
 
         self.log_message(f"Deleted stored toy: {device_name}")
-    
-    def build_stored_devices_ui(self):
-        """Build the UI for all stored devices from profiles"""
-        self.ui.build_stored_devices_ui()
-    
-    def build_device_list_ui(self, devices_dict: dict):
-        """Build dynamic UI controls for each discovered device"""
-        self.ui.build_device_list_ui(devices_dict)
     
     def get_profile_config(self, device_name: str, key: str, default=None):
         """Get a specific config value for a device from current profile using profile_manager"""
@@ -742,118 +722,10 @@ class OscGoesPurrrApp(
     def get_detected_zones(self) -> Dict[str, List[str]]:
         """Facade method for UI to safely read detected zones from the Central Store."""
         return store.get_detected_zones()
-
-    def get_osc_diagnostics(self) -> Dict[str, Any]:
-        """Facade: dump VRChat OSC manager diagnostics. Empty dict when the
-        manager isn't running yet. UI panels (or the user manually triggering
-        a dump) can show this to debug the 'connected but silent' failure."""
-        if not getattr(self, "osc_manager", None):
-            return {}
-        try:
-            return self.osc_manager.get_diagnostics()
-        except Exception as e:
-            return {"error": f"{type(e).__name__}: {e}"}
-
-    def log_osc_diagnostics(self) -> None:
-        """Dump the OSC diagnostics dict to the in-app log on demand.
-        Useful while reproducing the silent-connection bug."""
-        diag = self.get_osc_diagnostics()
-        if not diag:
-            self.log_message("OSC diag: manager not running")
-            return
-        self.log_message(
-            "OSC diag: " + ", ".join(f"{k}={v}" for k, v in diag.items())
-        )
-
-    def get_osc_event_log(self) -> List[str]:
-        """Facade: snapshot of the OSC manager's event ring buffer."""
-        mgr = getattr(self, "osc_manager", None)
-        if mgr is None:
-            return []
-        try:
-            return mgr.get_event_log()
-        except Exception:
-            return []
-
-    def get_osc_other_clients(self) -> Dict[str, Dict[str, Any]]:
-        """Facade: which non-VRChat OSCQuery clients have we seen this session."""
-        mgr = getattr(self, "osc_manager", None)
-        if mgr is None:
-            return {}
-        try:
-            return mgr.get_other_clients()
-        except Exception:
-            return {}
-
-    def force_osc_rehandshake(self) -> None:
-        """Facade: manually fire a re-poll of VRChat's OSCQuery endpoint and
-        a fresh handshake ping. Wired to the 'Force re-handshake' button on
-        the OSC Diagnostics panel — try this when packets stop flowing and
-        you don't want to flip Disconnect/Connect to test if VRChat will
-        resume sending."""
-        mgr = getattr(self, "osc_manager", None)
-        if mgr is None:
-            self.log_message("Force re-handshake: OSC manager not running")
-            return
-        self.log_message("Force re-handshake: re-polling VRChat OSCQuery...")
-        try:
-            mgr._reprobe_silent_connection()
-        except Exception as e:
-            self.log_message(f"Force re-handshake failed: {type(e).__name__}: {e}")
-
-    def force_osc_reregister_mdns(self) -> None:
-        """Facade: rip our mDNS advertisement and re-publish under a fresh
-        unique name. The strongest non-destructive recovery for the
-        'connected but silent' bug — forces VRChat's OSCQuery client cache
-        to enumerate us as a brand-new client and re-query our phonebook.
-        Wired to the 'Re-publish mDNS' button on the Diagnostics panel."""
-        mgr = getattr(self, "osc_manager", None)
-        if mgr is None:
-            self.log_message("Re-publish mDNS: OSC manager not running")
-            return
-        self.log_message("Re-publish mDNS: unregistering and re-advertising under a fresh name...")
-        try:
-            ok = mgr.reregister_mdns()
-            if ok:
-                self.log_message("Re-publish mDNS: done. Wait ~5s for VRChat to re-query us.")
-            else:
-                self.log_message("Re-publish mDNS: completed with errors — see OSC Diagnostics log.")
-        except Exception as e:
-            self.log_message(f"Re-publish mDNS failed: {type(e).__name__}: {e}")
-
-    def open_osc_log_folder(self) -> None:
-        """Facade: open the directory containing the persistent OSC log file
-        in the system file explorer. Wired to the 'Open log folder' button."""
-        mgr = getattr(self, "osc_manager", None)
-        path = mgr.get_log_file_path() if mgr is not None else None
-        if not path:
-            self.log_message("Open log folder: no log path available (appdata denied?)")
-            return
-        try:
-            import os as _os
-            import subprocess as _subp
-            folder = _os.path.dirname(path)
-            self.log_message(f"OSC log file: {path}")
-            if _os.name == "nt":
-                _os.startfile(folder)  # type: ignore[attr-defined]
-            else:
-                # Fallback for non-Windows; this app targets Windows but
-                # keep it from crashing if someone runs it elsewhere.
-                _subp.Popen(["xdg-open", folder])
-        except Exception as e:
-            self.log_message(f"Open log folder failed: {type(e).__name__}: {e}")
     
     def update_device_config(self, device_name: str, key: str, value):
         """Update a config value for a device in current profile using profile_manager"""
         self.profile_manager.update_device_config(device_name, key, value)
-    
-    def on_osc_message(self, address: str, value):
-        """Acts as a trigger ping when new UDP data arrives. Sets a flag to batch rapid updates."""
-        self._needs_recalculation = True
-        # VRChat reports the freshly-loaded avatar's ID via /avatar/change.
-        # The OSC layer strips the leading slash, so we see "avatar/change".
-        if address == "avatar/change":
-            self.thread_queue.put(("avatar_change", str(value) if value is not None else ""))
 
     def force_recalculate(self):
         """Forces the router to recalculate output based on current state and new UI configs.
@@ -879,14 +751,6 @@ class OscGoesPurrrApp(
             updates = self.motor_router.reevaluate_state(active, params, zones=zones)
         for device_name, target_val, motor_idx in updates:
             self.thread_queue.put(("osc_haptic_update", (device_name, target_val, motor_idx)))
-
-    def sync_motor_to_filters(self, device_name: str, motor_idx: int):
-        """Recalculate the max value for a motor based on the live shadow state and filter checkboxes.
-
-        Used when user toggles a checkbox to immediately stop output if all interaction types are blocked.
-        With the stateless router, this just triggers a full recalculation against the shadow state.
-        """
-        self.force_recalculate()
 
     def toggle_osc_debugger(self, *args):
         """Toggle the OSC debugger on/off (accepts *args for safe UI toggle compatibility)"""
@@ -1131,367 +995,6 @@ class OscGoesPurrrApp(
         self.profile_manager.app_settings.update_setting("bind_all_interfaces", value)
         self.ui.log_message("Network bind changed. PLEASE RESTART APP to apply.")
 
-    def _seed_profile_with_known_devices(self, profile_name: str) -> None:
-        """Make sure every known toy has a default entry in the given profile.
-
-        This is what gives new/empty profiles the "remember my toys" behaviour
-        — the user gets blank-but-present device cards to configure, rather
-        than having to reconnect each toy to see it.
-        """
-        profile = self.profile_manager.profiles.setdefault(profile_name, {})
-        known = self.profile_manager.known_devices.all()
-        if not known:
-            return
-        added = []
-        for name, meta in known.items():
-            if name in profile:
-                continue
-            motor_count = int(meta.get("motor_count", 1))
-            entry = {"motor_count": motor_count}
-            if meta.get("motor_kinds"):
-                entry["motor_kinds"] = list(meta["motor_kinds"])
-            # Default per-motor OSC addresses match what build_device_list_ui
-            # would seed for a freshly-discovered device.
-            addrs = {}
-            for i in range(motor_count):
-                suffix = f"_{i}" if motor_count > 1 else ""
-                addrs[str(i)] = [f"{name.replace(' ', '_')}{suffix}"]
-            entry["osc_addresses"] = addrs
-            profile[name] = entry
-            added.append(name)
-        if added:
-            self.profile_manager.save_profiles()
-            print(f"[profiles] seeded profile '{profile_name}' with {len(added)} known toy(s): {added}")
-
-    def switch_profile(self, profile_name: str):
-        """Switch to a different profile and reload the device UI.
-
-        Auto-creates an empty profile if `profile_name` doesn't exist yet, so
-        the four dashboard slots feel like real profile slots even before the
-        user has saved anything to them.
-
-        Args:
-            profile_name: Name of the profile to switch to.
-        """
-        if profile_name not in self.profile_manager.profiles:
-            self.profile_manager.profiles[profile_name] = {}
-            self.profile_manager.save_profiles()
-            self.log_message(f"Created new profile: {profile_name}")
-
-        # Toys are global; profiles are pure settings overlays. Every profile
-        # therefore has an entry for every known toy (default settings until
-        # the user changes them). "Delete" is the explicit way to forget a toy
-        # across all profiles — see delete_stored_device.
-        self._seed_profile_with_known_devices(profile_name)
-
-        self.profile_manager.current_profile = profile_name
-        self.current_profile = profile_name
-        # Remember this choice for the currently-loaded avatar (if any) so
-        # the next time that avatar loads, this global stays selected
-        # instead of auto-switching to a bound avatar profile.
-        self.profile_manager.record_choice("global", profile_name)
-
-        # Clear cached UI frames so build_stored_devices_ui doesn't short-circuit
-        # and leave the previous profile's device cards on screen when the new
-        # profile is empty.
-        self.ui.clear_device_caches()
-
-        self.ui.build_stored_devices_ui()
-        if hasattr(self.ui, "_refresh_profile_buttons"):
-            self.ui._refresh_profile_buttons()
-        if hasattr(self, "force_recalculate"):
-            self.force_recalculate()
-        self.log_message(f"Switched to profile: {profile_name}")
-
-        # Refresh the profile buttons on the Dashboard
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
-    
-    def create_profile(self, base_name: str = "New Profile") -> str:
-        """Create a fresh profile and return its name. If `base_name` is
-        already taken, appends ' 2', ' 3', ... until a free name is found."""
-        existing = set(self.profile_manager.profiles.keys())
-        name = base_name
-        n = 2
-        while name in existing:
-            name = f"{base_name} {n}"
-            n += 1
-        self.profile_manager.profiles[name] = {}
-        self._seed_profile_with_known_devices(name)
-        self.profile_manager.save_profiles()
-        self.log_message(f"Created profile '{name}'")
-        if hasattr(self.ui, "_refresh_profile_buttons"):
-            self.ui._refresh_profile_buttons()
-        return name
-
-    def delete_profile(self, profile_name: str):
-        """Delete a profile. Refuses to delete the last remaining profile.
-        If the deleted profile is currently active, switches to another."""
-        if profile_name not in self.profile_manager.profiles:
-            return
-        if len(self.profile_manager.profiles) <= 1:
-            self.log_message("Cannot delete the only remaining profile.")
-            return
-
-        del self.profile_manager.profiles[profile_name]
-        self.profile_manager.save_profiles()
-        self.log_message(f"Deleted profile '{profile_name}'")
-
-        if self.profile_manager.current_profile == profile_name:
-            fallback = next(iter(self.profile_manager.profiles.keys()))
-            self.switch_profile(fallback)
-        elif hasattr(self.ui, "_refresh_profile_buttons"):
-            self.ui._refresh_profile_buttons()
-
-    def rename_profile(self, old_name: str, new_name: str):
-        """Rename a profile, or create a new one if `old_name` is a placeholder
-        slot (e.g. "Profile 3") that hasn't been used yet.
-
-        Args:
-            old_name: Current name of the profile (or placeholder slot name).
-            new_name: New name for the profile.
-        """
-        new_name = new_name.strip()
-        if not new_name:
-            return
-        if new_name in self.profile_manager.profiles and new_name != old_name:
-            self.log_message(f"Cannot rename: profile '{new_name}' already exists.")
-            return
-
-        if old_name in self.profile_manager.profiles:
-            data = self.profile_manager.profiles.pop(old_name)
-            self.profile_manager.profiles[new_name] = data
-            self.log_message(f"Renamed profile '{old_name}' to '{new_name}'")
-        else:
-            # Renaming an empty placeholder slot creates a fresh profile,
-            # seeded with all previously-seen toys (default settings).
-            self.profile_manager.profiles[new_name] = {}
-            self._seed_profile_with_known_devices(new_name)
-            self.log_message(f"Created profile '{new_name}'")
-
-        self.profile_manager.save_profiles()
-
-        if self.profile_manager.current_profile == old_name:
-            self.profile_manager.current_profile = new_name
-            self.current_profile = new_name
-
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
-
-    # ====================
-    # Avatar profiles + clipboard (copy/paste)
-    # ====================
-
-    def _schedule_avatar_id_probe(self):
-        """Spawn a short background poll that asks VRChat's OSCQuery server
-        for the current avatar id. Posts an avatar_change queue message on
-        success. Safe to call repeatedly — it's just a few HTTP GETs."""
-        def _probe():
-            import time as _t
-            # OSCQuery mDNS discovery + JSON build can lag a couple of seconds
-            # after OSC starts. Retry briefly so the user doesn't see "not
-            # detected" on first launch.
-            for attempt in range(6):
-                if not self.osc_manager or not self.osc_manager.is_connected:
-                    return
-                avatar_id = self.osc_manager.query_avatar_id()
-                if avatar_id:
-                    self.thread_queue.put(("avatar_change", avatar_id))
-                    return
-                _t.sleep(1.0)
-        threading.Thread(target=_probe, daemon=True).start()
-
-    def _on_avatar_change(self, avatar_id: str):
-        """Handle a fresh /avatar/change message from VRChat.
-
-        If an avatar profile is bound to this id, it becomes the active
-        profile silently — device cards rebuild against the new settings.
-        Otherwise we keep the currently-selected global profile.
-        """
-        avatar_id = (avatar_id or "").strip()
-        previously_active = self.profile_manager.get_active_profile_info()
-        bound_name = self.profile_manager.set_current_avatar(avatar_id)
-        now_active = self.profile_manager.get_active_profile_info()
-
-        if previously_active != now_active:
-            if now_active["kind"] == "avatar":
-                self.log_message(
-                    f"Avatar changed → activating avatar profile '{now_active['name']}'"
-                )
-            else:
-                self.log_message(
-                    f"Avatar changed → no bound profile, staying on global '{now_active['name']}'"
-                )
-            self.ui.clear_device_caches()
-            self.ui.build_stored_devices_ui()
-            self.force_recalculate()
-        else:
-            self.log_message(f"Avatar changed (id={avatar_id or 'unknown'})")
-
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
-
-        # Avatar swaps reset every avatar parameter on the VRChat side, so
-        # the bHaptics-connected bool needs to be re-asserted whether or not
-        # the engine state changed.
-        try:
-            self._bhaptics_send_connected_bool()
-        except Exception:
-            pass
-
-    def get_current_avatar_id(self) -> str:
-        return self.profile_manager.current_avatar_id or ""
-
-    def get_active_profile_info(self) -> dict:
-        """{"kind": "avatar"|"global", "name": str} — for UI display."""
-        return self.profile_manager.get_active_profile_info()
-
-    def get_avatar_profile_names(self) -> list:
-        return list(self.profile_manager.avatar_profiles.keys())
-
-    def get_avatar_binding(self, profile_name: str) -> str:
-        return self.profile_manager.avatar_bindings.get(profile_name, "")
-
-    def create_avatar_profile(self, base_name: str = "New Avatar Profile") -> str:
-        """Create an avatar profile bound to the *current* avatar id and seeded
-        from the currently-active profile's settings (per design decision).
-        """
-        active = self.profile_manager.get_active_profile_dict() or {}
-        new_name = self.profile_manager.create_avatar_profile(
-            base_name=base_name,
-            avatar_id=self.profile_manager.current_avatar_id,
-            copy_from=active,
-        )
-        self.log_message(f"Created avatar profile '{new_name}'")
-        # The new profile is automatically bound to the current avatar (if any),
-        # which makes it the active profile. Rebuild device cards so the user
-        # sees the inherited settings under the new profile name.
-        self.ui.clear_device_caches()
-        self.ui.build_stored_devices_ui()
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
-        return new_name
-
-    def delete_avatar_profile(self, name: str):
-        if name not in self.profile_manager.avatar_profiles:
-            return
-        was_active = (self.profile_manager.get_active_profile_info()
-                      == {"kind": "avatar", "name": name})
-        self.profile_manager.delete_avatar_profile(name)
-        self.log_message(f"Deleted avatar profile '{name}'")
-        if was_active:
-            self.ui.clear_device_caches()
-            self.ui.build_stored_devices_ui()
-            self.force_recalculate()
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
-
-    def rename_avatar_profile(self, old: str, new: str):
-        if self.profile_manager.rename_avatar_profile(old, new):
-            self.log_message(f"Renamed avatar profile '{old}' → '{new}'")
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
-
-    def bind_avatar_profile_to_current(self, name: str):
-        """Bind `name` to the current avatar and record it as the user's
-        remembered choice for that avatar."""
-        self.profile_manager.bind_avatar_profile(
-            name, self.profile_manager.current_avatar_id
-        )
-        self.log_message(
-            f"Bound avatar profile '{name}' to "
-            f"{self.profile_manager.current_avatar_id or 'no avatar'}"
-        )
-        self.ui.clear_device_caches()
-        self.ui.build_stored_devices_ui()
-        self.force_recalculate()
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
-
-    def copy_profile(self, kind: str, name: str):
-        """Copy a profile into the in-memory clipboard. `kind` is 'global'|'avatar'."""
-        ok = self.profile_manager.copy_profile_to_clipboard(kind, name)
-        if ok:
-            self.log_message(f"Copied {kind} profile '{name}' to clipboard")
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
-
-    def paste_profile(self, target_kind: str):
-        """Paste the clipboard into a new profile in the target section."""
-        bind_avatar = self.profile_manager.current_avatar_id if target_kind == "avatar" else None
-        name = self.profile_manager.paste_profile(target_kind, avatar_id=bind_avatar)
-        if name:
-            self.log_message(f"Pasted clipboard → new {target_kind} profile '{name}'")
-            if target_kind == "avatar" and bind_avatar:
-                self.ui.clear_device_caches()
-                self.ui.build_stored_devices_ui()
-                self.force_recalculate()
-            if hasattr(self.ui, '_refresh_profile_buttons'):
-                self.ui._refresh_profile_buttons()
-        else:
-            self.log_message("Paste failed — clipboard is empty")
-
-    def paste_profile_into(self, target_kind: str, target_name: str):
-        """Overwrite an existing profile with the current clipboard contents,
-        then clear the clipboard so the row toggles back to Copy mode."""
-        ok = self.profile_manager.paste_into_profile(target_kind, target_name)
-        if not ok:
-            self.log_message("Paste failed — clipboard empty or target missing")
-            return
-        self.profile_manager.clear_clipboard()
-        self.log_message(
-            f"Pasted clipboard onto {target_kind} profile '{target_name}'"
-        )
-        # If we just overwrote the currently-active profile, reapply it so
-        # devices pick up the new settings immediately.
-        active = self.profile_manager.get_active_profile_info() or {}
-        if active.get("kind") == target_kind and active.get("name") == target_name:
-            self.ui.clear_device_caches()
-            self.ui.build_stored_devices_ui()
-            self.force_recalculate()
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
-
-    def clear_clipboard(self):
-        """Cancel a pending copy — used when the user clicks the source row
-        again to dismiss the paste-mode UI."""
-        if not self.profile_manager.has_clipboard():
-            return
-        self.profile_manager.clear_clipboard()
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
-
-    def has_clipboard(self) -> bool:
-        return self.profile_manager.has_clipboard()
-
-    def get_clipboard_source_name(self) -> str:
-        return self.profile_manager.get_clipboard_source_name() or ""
-
-    def get_clipboard_source_kind(self) -> str:
-        """Facade: which section ('global'|'avatar') the clipboard came from."""
-        return self.profile_manager.get_clipboard_source_kind() or ""
-
-    # ---- Profile-list facades (used by the UI to render rows) ----
-
-    def get_global_profile_names(self) -> List[str]:
-        """Facade: ordered list of every global profile's name."""
-        return list(self.profile_manager.profiles.keys())
-
-    def get_current_global_profile_name(self) -> str:
-        """Facade: the global profile most recently selected by the user.
-        Falls back to the resolver's active name if none is set."""
-        return self.profile_manager.current_profile or ""
-
-    def profile_exists(self, kind: str, name: str) -> bool:
-        """Facade: True if a profile with this name exists in the given pool."""
-        pool = (self.profile_manager.profiles if kind == "global"
-                else self.profile_manager.avatar_profiles)
-        return name in pool
-
-    def get_active_profile_dict(self) -> Dict[str, Any]:
-        """Facade: the live dict of per-device settings the router/UI read."""
-        return self.profile_manager.get_active_profile_dict() or {}
-
     # ---- Haptic engine facades ----
 
     def set_haptic_connected(self, connected: bool) -> None:
@@ -1499,63 +1002,6 @@ class OscGoesPurrrApp(
         VRChat OSC link. Setter-only so the UI never holds the object."""
         if hasattr(self, 'haptic_engine') and self.haptic_engine:
             self.haptic_engine.mark_connected(connected)
-
-    def toggle_osc_connection(self):
-        """Toggles the VRChat OSC connection on and off safely (non-blocking)."""
-        if hasattr(self, 'osc_manager') and self.osc_manager and self.osc_manager.is_connected:
-            # --- Disconnect Path ---
-            self.log_message("Disconnecting VRChat OSC...")
-            try:
-                self.osc_manager.stop()
-            except Exception:
-                pass
-            self.osc_manager.is_connected = False
-            self.ui.update_osc_status(False)
-        else:
-            # --- Connect Path ---
-            self.log_message("Starting VRChat OSC server...")
-            self.ui.update_osc_status(False)  # Reset UI to waiting state
-            
-            # Rebuild manager for a clean socket state
-            bind_all = self.profile_manager.app_settings.settings.get("bind_all_interfaces", True)
-            self.osc_manager = VRChatOSCManager(local_listen_port=0, bind_all_interfaces=bind_all)
-            self.osc_manager.global_osc_callback = self.on_osc_message
-            self.osc_manager.on_connected = lambda ports: self.thread_queue.put(
-                ("osc_status", (True, ports.get("local_listen_port")))
-            )
-            self.osc_manager.on_disconnected = lambda: self.thread_queue.put(
-                ("osc_status", (False, self.osc_manager.local_listen_port if self.osc_manager else None))
-            )
-            
-            # Run startup in a background thread to prevent UI lockup
-            threading.Thread(target=self.osc_manager.start, daemon=True).start()
-
-    def restart_osc(self):
-        """Legacy wrapper: disconnect if connected, then reconnect via toggle."""
-        if hasattr(self, 'osc_manager') and self.osc_manager and self.osc_manager.is_connected:
-            try:
-                self.osc_manager.stop()
-            except Exception:
-                pass
-            self.osc_manager.is_connected = False
-        self.toggle_osc_connection()
-
-    def toggle_osc_auto_connect(self):
-        """Handle OSC auto-connect checkbox toggle from UI"""
-        if not self.ui.get_osc_auto_connect_enabled():
-            # Checkbox unchecked - disable OSC auto connect
-            self.profile_manager.app_settings.set("auto_connect_osc", False)
-            self.log_message("VRChat OSC Auto connect disabled")
-        else:
-            # Checkbox checked - enable OSC auto connect
-            self.profile_manager.app_settings.set("auto_connect_osc", True)
-            self.log_message("VRChat OSC Auto connect enabled")
-            # If OSC server is not running, start it
-            if self.osc_manager:
-                try:
-                    self.osc_manager.start()
-                except Exception:
-                    pass  # Server may already be running
     
     def toggle_auto_refresh(self):
         """Handle auto-refresh checkbox toggle from UI"""

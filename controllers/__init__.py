@@ -14,10 +14,14 @@ from .steamvr_facade import SteamVRFacade
 from .steamvr_toys_facade import SteamVRToysFacade
 from .bhaptics_facade import BHapticsFacade
 from .hardware_monitor_facade import HardwareMonitorFacade
+from .osc_facade import OscFacade
+from .profiles_facade import ProfilesFacade
 
 __all__ = [
     "SteamVRFacade",
     "SteamVRToysFacade",
     "BHapticsFacade",
     "HardwareMonitorFacade",
+    "OscFacade",
+    "ProfilesFacade",
 ]
