@@ -130,6 +130,7 @@ dmypy.json
 
 # Claude Code local session/permissions state
 .claude/
+CLAUDE.md
 
 # OS files
 .DS_Store
