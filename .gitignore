@@ -29,6 +29,7 @@ share/python-wheels/
 # PyInstaller
 *.manifest
 *.spec
+_version_baked.py
 
 # Installer logs
 pip-log.txt
