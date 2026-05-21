@@ -45,6 +45,19 @@ echo.
 echo [3/4] Building standalone executable with PyInstaller...
 echo.
 
+REM Bake the resolved version into _version_baked.py so the frozen exe does
+REM not shell out to git at startup. Each subprocess.run from a --windowed
+REM build pops a brief console window per call, which is what we are avoiding.
+REM repr() handles any special characters in the branch suffix safely.
+echo Baking version into _version_baked.py...
+python -c "from version import __version__ as v, _SHORT_HASH as h; open('_version_baked.py','w',encoding='utf-8').write('VERSION = ' + repr(v) + '\nSHORT_HASH = ' + repr(h) + '\n')"
+if %errorlevel% neq 0 (
+    echo [ERROR] Failed to bake version.
+    if exist "_version_baked.py" del /q "_version_baked.py"
+    pause
+    exit /b 1
+)
+
 REM Run PyInstaller (no --clean flag for faster rebuilds)
 REM --onefile: bundle everything into a single executable
 REM --windowed: no console window (GUI app with PySide6)
@@ -79,12 +92,19 @@ if %errorlevel% neq 0 (
     echo.
     echo [ERROR] PyInstaller build failed!
     echo Temporary files have been preserved for debugging.
+    if exist "_version_baked.py" del /q "_version_baked.py"
     pause
     exit /b 1
 )
 
 echo.
 echo [4/4] Cleaning up temporary files...
+
+REM Delete the baked version file so source-tree runs go back to live git lookups
+if exist "_version_baked.py" (
+    echo Deleting _version_baked.py...
+    del /q "_version_baked.py"
+)
 
 REM Delete .spec files (PyInstaller build blueprints)
 for %%f in (*.spec) do (

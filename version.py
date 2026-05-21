@@ -7,6 +7,12 @@
 #   1.0.51            (on main)
 #   1.0.51-dev(3)     (on dev, 3 commits ahead of main)
 #   1.0.51-fix-foo(2) (on fix/foo, slashes replaced with dashes)
+#
+# Frozen (PyInstaller) builds: build.bat writes `_version_baked.py` next to
+# this module before running PyInstaller and removes it during cleanup. When
+# that file is bundled into the exe, the import below short-circuits the git
+# lookups — important because each subprocess.run on a --windowed exe would
+# otherwise flash a console window at startup.
 
 import re
 import subprocess
@@ -16,12 +22,17 @@ RELEASE_BRANCH = "main"
 
 
 def _run_git(args: list[str]) -> str:
+    # CREATE_NO_WINDOW keeps a console from flashing when this runs under a
+    # parent process without a console (e.g. pythonw.exe). Defined as 0 on
+    # non-Windows, where subprocess ignores creationflags anyway.
+    creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     try:
         result = subprocess.run(
             ["git", *args],
             capture_output=True,
             text=True,
             timeout=5,
+            creationflags=creationflags,
         )
         if result.returncode == 0:
             return result.stdout.strip()
@@ -66,16 +77,23 @@ def _get_git_short_hash() -> str:
     return _run_git(["rev-parse", "--short", "HEAD"])
 
 
-_COMMIT_COUNT = _get_main_commit_count()
-_BRANCH = _get_current_branch()
-_SHORT_HASH = _get_git_short_hash()
+def _resolve_from_git() -> tuple[str, str]:
+    commit_count = _get_main_commit_count()
+    branch = _get_current_branch()
+    short_hash = _get_git_short_hash()
 
-if _BRANCH and _BRANCH != RELEASE_BRANCH:
-    _AHEAD = _get_ahead_of_main()
-    _suffix = f"-{_sanitize_branch(_BRANCH)}({_AHEAD})"
-else:
-    _suffix = ""
-__version__ = f"{BASE_VERSION}.{_COMMIT_COUNT}{_suffix}"
+    if branch and branch != RELEASE_BRANCH:
+        ahead = _get_ahead_of_main()
+        suffix = f"-{_sanitize_branch(branch)}({ahead})"
+    else:
+        suffix = ""
+    return f"{BASE_VERSION}.{commit_count}{suffix}", short_hash
+
+
+try:
+    from _version_baked import VERSION as __version__, SHORT_HASH as _SHORT_HASH
+except ImportError:
+    __version__, _SHORT_HASH = _resolve_from_git()
 
 if _SHORT_HASH:
     __version_full__ = f"{__version__} ({_SHORT_HASH})"
