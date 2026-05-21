@@ -1,0 +1,8 @@
+# Development-only dependencies — not shipped with the app, not required
+# at runtime. Install on top of `requirements.txt` when contributing:
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+pytest>=7.4
