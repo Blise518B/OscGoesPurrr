@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 from constants import APP_NAME
+from utilities import atomic_write_json
 
 
 # AppData directory for persistent storage
@@ -97,28 +98,23 @@ class AppSettingsManager:
     def _save_settings(self) -> None:
         """Save current settings to JSON file."""
         try:
-            with open(APP_SETTINGS_FILE, 'w') as f:
-                json.dump(self.settings, f, indent=2)
-        except IOError as e:
+            atomic_write_json(APP_SETTINGS_FILE, self.settings, indent=2)
+        except OSError as e:
             print(f"App settings save error: {e}")
-    
+
     def get(self, key: str, default=None) -> Any:
         """Get a setting value"""
         return self.settings.get(key, default)
-    
+
     def set(self, key: str, value: Any) -> None:
         """Set a setting value and save to file"""
         self.settings[key] = value
         self._save_settings()
-    
+
     def update_setting(self, key: str, value: Any) -> None:
         """Update a setting value and persist to file (alias for set)"""
         self.settings[key] = value
-        try:
-            with open(APP_SETTINGS_FILE, 'w') as f:
-                json.dump(self.settings, f, indent=2)
-        except Exception as e:
-            print(f"Failed to save settings: {e}")
+        self._save_settings()
 
 
 class SteamVRSettingsManager:
@@ -220,9 +216,8 @@ class SteamVRSettingsManager:
 
     def _save(self) -> None:
         try:
-            with open(STEAMVR_SETTINGS_FILE, 'w') as f:
-                json.dump(self.settings, f, indent=2)
-        except IOError as e:
+            atomic_write_json(STEAMVR_SETTINGS_FILE, self.settings, indent=2)
+        except OSError as e:
             print(f"SteamVR settings save error: {e}")
 
     # ---- Top-level fields ----
@@ -413,9 +408,8 @@ class BHapticsSettingsManager:
 
     def _save(self) -> None:
         try:
-            with open(BHAPTICS_SETTINGS_FILE, 'w') as f:
-                json.dump(self.settings, f, indent=2)
-        except IOError as e:
+            atomic_write_json(BHAPTICS_SETTINGS_FILE, self.settings, indent=2)
+        except OSError as e:
             print(f"bHaptics settings save error: {e}")
 
     # ---- Endpoint ----
@@ -568,9 +562,8 @@ class HardwareMonitorSettingsManager:
 
     def _save(self) -> None:
         try:
-            with open(HARDWARE_MONITOR_SETTINGS_FILE, 'w') as f:
-                json.dump(self.settings, f, indent=2)
-        except IOError as e:
+            atomic_write_json(HARDWARE_MONITOR_SETTINGS_FILE, self.settings, indent=2)
+        except OSError as e:
             print(f"Hardware monitor settings save error: {e}")
 
     def get_all(self) -> Dict[str, Any]:
@@ -659,9 +652,8 @@ class KnownDevicesRegistry:
 
     def save(self) -> None:
         try:
-            with open(KNOWN_DEVICES_FILE, 'w') as f:
-                json.dump(self.devices, f, indent=2)
-        except IOError as e:
+            atomic_write_json(KNOWN_DEVICES_FILE, self.devices, indent=2)
+        except OSError as e:
             print(f"Known devices save error: {e}")
 
     def register(self, name: str, motor_count: int, motor_kinds=None) -> bool:
@@ -881,10 +873,9 @@ class ProfileManager:
             "avatar_last_choice": self.avatar_last_choice,
         }
         try:
-            with open(PROFILE_FILE, 'w') as f:
-                json.dump(payload, f, indent=2)
+            atomic_write_json(PROFILE_FILE, payload, indent=2)
             print(f"Profiles saved to {PROFILE_FILE}")
-        except IOError as e:
+        except OSError as e:
             print(f"Profile save error: {e}")
 
     # ------------------------------------------------------------------
