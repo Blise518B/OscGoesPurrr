@@ -51,6 +51,37 @@ class ParameterStore:
         penetrators = sorted({n for t, n in self._zone_tuples if t == "Pen"})
         self.detected_zones = {"Orifices": orifices, "Penetrators": penetrators}
 
+    def _ensure_zone_tuples_locked(self) -> None:
+        """Belt-and-suspenders: if `_zone_tuples` is empty but `all_parameters`
+        has OGB-shaped paths, re-derive zones from the param cache and write
+        the result back so callers see a coherent set.
+
+        Why this exists: `_zone_tuples` is normally maintained incrementally
+        by `update_parameter` and rebuilt by `rebuild_from_json`, both of
+        which keep it in sync with `all_parameters`. But a window of
+        inconsistency is observable in two cases:
+          1. `rebuild_from_json` raises mid-parse — both stores were cleared
+             before the parse, leaving the param cache half-populated and
+             the zone set empty.
+          2. A consumer reads the snapshot during the moment after avatar
+             swap when the OSCQuery refetch fires `rebuild_from_json` to
+             clear-and-repopulate; if anything during the rebuild path
+             classifies into the zone set in an unexpected order.
+        In either case the router would emit zero output for an "All SPS"
+        selection even though the touch/proximity params are sitting in
+        `all_parameters`. This method scans once on demand to recover.
+        Caller MUST already hold `self.lock`."""
+        if self._zone_tuples or not self.all_parameters:
+            return
+        derived: Set[Tuple[str, str]] = set()
+        for path in self.all_parameters.keys():
+            zone = self._classify_zone(path)
+            if zone is not None:
+                derived.add(zone)
+        if derived:
+            self._zone_tuples = derived
+            self._refresh_zone_lists()
+
     def _parse_oscquery_node(self, node: dict, prefix: str = ""):
         """Recursively flattens the OSCQuery JSON tree."""
         if "CONTENTS" in node:
@@ -123,6 +154,7 @@ class ParameterStore:
         single coherent picture per tick.
         """
         with self.lock:
+            self._ensure_zone_tuples_locked()
             return (
                 self.all_parameters.copy(),
                 self._version,
@@ -139,11 +171,13 @@ class ParameterStore:
         """Set of `(zone_type, zone_name)` tuples currently present. Maintained
         incrementally — O(1) per get instead of O(N params)."""
         with self.lock:
+            self._ensure_zone_tuples_locked()
             return set(self._zone_tuples)
 
     def get_detected_zones(self) -> Dict[str, List[str]]:
         """Safely returns a copy of the detected zones."""
         with self.lock:
+            self._ensure_zone_tuples_locked()
             return {
                 "Orifices": list(self.detected_zones["Orifices"]),
                 "Penetrators": list(self.detected_zones["Penetrators"])
