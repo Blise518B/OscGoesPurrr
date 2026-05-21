@@ -92,6 +92,10 @@ QFrame#motorBlock {{
     background-color: {COLOR_SURFACE};
     border-radius: 10px;
 }}
+QFrame#speedCard {{
+    background-color: {COLOR_SURFACE_HOVER};
+    border-radius: 8px;
+}}
 QFrame#zonePanel {{
     background-color: {COLOR_SURFACE_HOVER};
     border-radius: 6px;
@@ -536,6 +540,10 @@ class OscGoesPurrrUI:
         # ---- State that the controller reads via the facade ----
         self.device_ui_frames: Dict[str, dict] = {}
         self.stored_device_frames: Dict[str, dict] = {}
+        # Debug tuning spinboxes — each per-motor card adds its set, and
+        # editing one syncs the displayed value across siblings so the user
+        # doesn't see stale numbers on the other cards.
+        self._speed_tuning_spins: Dict[str, List[QDoubleSpinBox]] = {}
 
         # ---- Lazily-bound view widgets ----
         self.sidebar_frame: Optional[QFrame] = None
@@ -4131,25 +4139,32 @@ Both consume the same data, so they stay in lockstep.
             filter_lay.addWidget(make_filter_cb("Self", f"motor_{motor_idx}_self", False))
             filter_lay.addWidget(make_filter_cb("Others", f"motor_{motor_idx}_others", True))
             filter_lay.addStretch(1)
-            mlay.addWidget(filter_row)
 
-            # Position ↔ Speed blend — moves output between depth-driven
-            # (left) and motion-derived (right). Saved per motor.
-            current_blend = self.controller.get_profile_config(
-                device_name, f"motor_{motor_idx}_speed_blend", 0.0
-            )
+            # Split the rest of the motor block into a left column (main
+            # controls) and a right sub-card (Position↔Speed blend + debug
+            # tuning). The filter row, linear controls, address editor,
+            # intensity slider and vibe meter all live on the left; the
+            # speed-blend stuff is visually pulled out so it's easy to
+            # spot while we're still tuning.
+            content_row = QWidget()
+            crow_lay = _hbox(0, 12)
+            content_row.setLayout(crow_lay)
 
-            def on_blend_changed(val: float, dn=device_name, idx=motor_idx):
-                self.controller.update_device_config(
-                    dn, f"motor_{idx}_speed_blend", float(val)
-                )
-                self.controller.save_profiles()
-                if hasattr(self.controller, 'force_recalculate'):
-                    self.controller.force_recalculate()
+            left_col = QWidget()
+            left_lay = _vbox(0, 6)
+            left_col.setLayout(left_lay)
+            crow_lay.addWidget(left_col, 1)
 
-            mlay.addWidget(self._make_blend_slider_row(
-                float(current_blend or 0.0), on_blend_changed
-            ))
+            speed_card = self._build_speed_blend_subcard(device_name, motor_idx)
+            crow_lay.addWidget(speed_card, 0, Qt.AlignTop)
+
+            mlay.addWidget(content_row)
+
+            # From here on, append to the left column instead of the
+            # motor-block root so the remaining widgets sit beside the
+            # speed sub-card rather than below it.
+            left_lay.addWidget(filter_row)
+            mlay = left_lay
 
             # Linear-actuator controls
             this_kind = motor_kinds[motor_idx] if (motor_kinds and motor_idx < len(motor_kinds)) else None
@@ -4359,6 +4374,153 @@ Both consume the same data, so they stay in lockstep.
         render(slider.value())
         slider.valueChanged.connect(on_value_changed)
         return host
+
+    # Per-motor speed-blend sub-card (Position↔Speed slider + debug tuning).
+    # Returned as a QFrame so the caller can drop it anywhere in a layout.
+    _SPEED_TUNING_SPECS = (
+        # (key, label, range_lo, range_hi, step, decimals, tooltip)
+        ("speed_gain", "Gain",
+         0.0, 50.0, 0.1, 2,
+         "How aggressively raw motion maps to output. Higher = saturates "
+         "on smaller strokes."),
+        ("speed_input_deadband", "Input deadband",
+         0.0, 0.5, 0.005, 3,
+         "Per-tick |Δposition| below this is treated as jitter. Raise if "
+         "static contacts still output nonzero speed; lower for more "
+         "sensitivity to slow strokes."),
+        ("speed_output_cutoff", "Output cutoff",
+         0.0, 0.95, 0.01, 2,
+         "Smoothed signals below this snap to true zero so the toy fully "
+         "stops between strokes."),
+        ("speed_decay_tau", "Decay τ (s)",
+         0.01, 5.0, 0.01, 2,
+         "How long the speed signal sustains after motion stops. Higher = "
+         "smoother, lower = more responsive to each individual stroke."),
+    )
+
+    def _build_speed_blend_subcard(self, device_name: str, motor_idx: int) -> QFrame:
+        card = QFrame()
+        card.setObjectName("speedCard")
+        card.setFixedWidth(290)
+        lay = _vbox(10, 8)
+        card.setLayout(lay)
+
+        header = QLabel("Position ↔ Speed")
+        hf = header.font(); hf.setBold(True)
+        header.setFont(hf)
+        lay.addWidget(header)
+        lay.addWidget(self._muted_label(
+            "Blend SPS depth with motion-derived speed. Left = pure "
+            "position, right = pure speed."
+        ))
+
+        current_blend = self.controller.get_profile_config(
+            device_name, f"motor_{motor_idx}_speed_blend", 0.0
+        )
+
+        def on_blend_changed(val: float, dn=device_name, idx=motor_idx):
+            self.controller.update_device_config(
+                dn, f"motor_{idx}_speed_blend", float(val)
+            )
+            self.controller.save_profiles()
+            if hasattr(self.controller, 'force_recalculate'):
+                self.controller.force_recalculate()
+
+        lay.addWidget(self._make_blend_slider_row(
+            float(current_blend or 0.0), on_blend_changed
+        ))
+
+        # ---- Debug tuning knobs (global, affects every motor + Simple Mode) ----
+        divider = QFrame()
+        divider.setObjectName("separator")
+        lay.addWidget(divider)
+
+        tuning_label = QLabel("Tuning (debug)")
+        tlf = tuning_label.font(); tlf.setBold(True)
+        tuning_label.setFont(tlf)
+        lay.addWidget(tuning_label)
+        lay.addWidget(self._muted_label(
+            "Shared across all motors. Tweak to taste; we'll bake the final "
+            "values in later."
+        ))
+
+        tuning = {}
+        if hasattr(self.controller, "get_speed_tuning"):
+            try:
+                tuning = self.controller.get_speed_tuning() or {}
+            except Exception:
+                tuning = {}
+
+        for key, label, lo, hi, step, decimals, tooltip in self._SPEED_TUNING_SPECS:
+            row = _hbox(0, 8)
+            lbl = QLabel(label)
+            lbl.setMinimumWidth(110)
+            row.addWidget(lbl)
+
+            spin = QDoubleSpinBox()
+            spin.setRange(lo, hi)
+            spin.setSingleStep(step)
+            spin.setDecimals(decimals)
+            spin.setValue(float(tuning.get(key, 0.0)))
+            spin.setToolTip(tooltip)
+            row.addWidget(spin, 1)
+
+            def on_value_changed(val, k=key):
+                self._on_speed_tuning_edited(k, float(val))
+
+            spin.valueChanged.connect(on_value_changed)
+            self._speed_tuning_spins.setdefault(key, []).append(spin)
+            lay.addLayout(row)
+
+        reset_btn = QPushButton("Reset to defaults")
+        reset_btn.setProperty("role", "secondary")
+        reset_btn.setFixedHeight(BTN_HEIGHT_SMALL)
+        reset_btn.setToolTip(
+            "Revert Gain, Input deadband, Output cutoff and Decay τ to "
+            "the built-in defaults."
+        )
+        reset_btn.clicked.connect(self._on_speed_tuning_reset)
+        lay.addWidget(reset_btn)
+
+        return card
+
+    def _on_speed_tuning_edited(self, key: str, value: float) -> None:
+        """Persist the user's tuning edit through the controller and mirror
+        the post-clamp value back into every sibling spinbox so all motor
+        cards show the same number."""
+        snapshot = {}
+        if hasattr(self.controller, "set_speed_tuning_value"):
+            try:
+                snapshot = self.controller.set_speed_tuning_value(key, value) or {}
+            except Exception:
+                snapshot = {}
+        applied = float(snapshot.get(key, value))
+        self._sync_speed_tuning_spinbox(key, applied)
+
+    def _on_speed_tuning_reset(self) -> None:
+        """Call the controller's reset facade and push the returned snapshot
+        into every spinbox on every motor card."""
+        if not hasattr(self.controller, "reset_speed_tuning"):
+            return
+        try:
+            snapshot = self.controller.reset_speed_tuning() or {}
+        except Exception:
+            snapshot = {}
+        for key, value in snapshot.items():
+            self._sync_speed_tuning_spinbox(key, float(value))
+
+    def _sync_speed_tuning_spinbox(self, key: str, value: float) -> None:
+        """Write `value` into every registered spinbox for `key` without
+        re-firing their valueChanged signals — used by both the edit-sync
+        path and the Reset button."""
+        for spin in self._speed_tuning_spins.get(key, []):
+            if abs(spin.value() - value) < 10 ** -spin.decimals():
+                continue
+            spin.blockSignals(True)
+            try:
+                spin.setValue(value)
+            finally:
+                spin.blockSignals(False)
 
     # ----------------------------------------------------------
     # Custom OSC address row (per motor)

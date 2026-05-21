@@ -133,19 +133,47 @@ class MotorRouter:
     moment the penetrator tip enters the receiver radius.
     """
 
-    # Speed-blend tuning. `SPEED_GAIN` scales raw |Δposition|/Δt (units/sec)
-    # into the 0–1 output range — 0.25 means ~4 units/sec saturates the
-    # signal, which corresponds to a vigorous penetration stroke covering
-    # the full insertion range in ~250ms. `SPEED_DECAY_TAU` is the
-    # exponential decay time-constant of the smoothed speed signal, so
-    # speed sustains briefly between strokes instead of pulsing only on
-    # the rising edge.
-    SPEED_GAIN = 0.25
-    SPEED_DECAY_TAU = 0.18
+    # Speed-blend default tuning (still exposed as class-level constants so
+    # callers/tests can reference the factory defaults, but the live values
+    # live on the instance and are overridable via `apply_speed_tuning`).
+    #
+    # `speed_input_deadband` is applied to the per-tick |Δposition| BEFORE
+    # dividing by dt. VRChat avatar parameters jitter even on a static
+    # contact, so without an input gate the smoothed speed signal never
+    # reaches zero in pure-speed mode.
+    #
+    # `speed_gain` scales the noise-gated raw speed into the 0–1 range.
+    # Realistic in-VRChat thrusts oscillate over a fraction of the full
+    # insertion range, so the gain is tuned so a moderate stroke saturates.
+    #
+    # `speed_decay_tau` is the exponential decay time-constant of the
+    # smoothed signal, so motion sustains briefly between strokes.
+    #
+    # `speed_output_cutoff` snaps decayed output to true zero once it
+    # falls below this threshold (otherwise exponential decay only
+    # asymptotes toward 0 and the toy keeps quietly humming).
+    DEFAULT_SPEED_INPUT_DEADBAND = 0.005
+    DEFAULT_SPEED_GAIN = 0.75
+    DEFAULT_SPEED_DECAY_TAU = 0.30
+    DEFAULT_SPEED_OUTPUT_CUTOFF = 0.02
+
+    SPEED_TUNING_KEYS = (
+        "speed_input_deadband",
+        "speed_gain",
+        "speed_decay_tau",
+        "speed_output_cutoff",
+    )
 
     def __init__(self) -> None:
         # Tracks last calculated outputs to prevent flooding the UI/hardware thread.
         self.last_outputs: Dict[tuple, float] = {}
+        # Live tuning — overridable at runtime via apply_speed_tuning. Bounds
+        # are enforced when values come in so a bad input can't break the
+        # math (e.g. decay_tau must stay strictly positive).
+        self.speed_input_deadband = self.DEFAULT_SPEED_INPUT_DEADBAND
+        self.speed_gain = self.DEFAULT_SPEED_GAIN
+        self.speed_decay_tau = self.DEFAULT_SPEED_DECAY_TAU
+        self.speed_output_cutoff = self.DEFAULT_SPEED_OUTPUT_CUTOFF
         # Per-motor speed-tracker keyed by (device_name, motor_idx).
         # Value is (last_time_s, last_position, smoothed_speed). A reserved
         # ("__simple_mode__", 0) key is used by Simple Mode.
@@ -461,21 +489,87 @@ class MotorRouter:
                 # Clock didn't move — reuse last smoothed value as-is.
                 speed_smoothed = last_speed
             else:
-                raw_speed = abs(position - last_pos) / dt
-                speed_signal = raw_speed * self.SPEED_GAIN
+                # Input deadband: |Δposition| below `speed_input_deadband` is
+                # treated as static jitter, so a static contact with sub-1%
+                # OSC noise contributes nothing to speed. Subtracting the
+                # deadband (instead of hard-gating) keeps the response
+                # continuous as movements grow past the threshold.
+                delta = abs(position - last_pos)
+                if delta <= self.speed_input_deadband:
+                    raw_speed = 0.0
+                else:
+                    raw_speed = (delta - self.speed_input_deadband) / dt
+                speed_signal = raw_speed * self.speed_gain
                 if speed_signal > 1.0:
                     speed_signal = 1.0
                 # Exponential decay: smoothed value attacks instantly on
-                # rising edge and falls off with time-constant SPEED_DECAY_TAU.
-                decay = math.exp(-dt / self.SPEED_DECAY_TAU)
+                # rising edge and falls off with time-constant `speed_decay_tau`.
+                tau = self.speed_decay_tau if self.speed_decay_tau > 1e-4 else 1e-4
+                decay = math.exp(-dt / tau)
                 speed_smoothed = max(speed_signal, last_speed * decay)
             self._speed_state[key] = (now, position, speed_smoothed)
+
+        # Output deadzone: snap to true 0 once the smoothed signal decays
+        # below the cutoff, otherwise the exponential tail keeps a tiny
+        # output alive forever. Above the cutoff, rescale [cutoff, 1] back
+        # into [0, 1] so there's no visible step at the threshold.
+        cutoff = self.speed_output_cutoff
+        if speed_smoothed <= cutoff:
+            output_speed = 0.0
+        else:
+            denom = max(1.0 - cutoff, 1e-6)
+            output_speed = (speed_smoothed - cutoff) / denom
+            if output_speed > 1.0:
+                output_speed = 1.0
 
         if blend <= 0.0:
             return position
         if blend >= 1.0:
-            return speed_smoothed
-        return (1.0 - blend) * position + blend * speed_smoothed
+            return output_speed
+        return (1.0 - blend) * position + blend * output_speed
+
+    def apply_speed_tuning(self, **overrides: Any) -> Dict[str, float]:
+        """Update one or more speed-tuning knobs at runtime.
+
+        Each value is coerced to float and clamped into a safe range so the
+        UI can pass user input straight through without sanitising it
+        first. Returns the post-clamp snapshot so callers (and the saver)
+        always persist what's actually in use.
+        """
+        for key, raw in overrides.items():
+            try:
+                v = float(raw)
+            except (TypeError, ValueError):
+                continue
+            if key == "speed_input_deadband":
+                self.speed_input_deadband = max(0.0, min(0.5, v))
+            elif key == "speed_gain":
+                self.speed_gain = max(0.0, min(50.0, v))
+            elif key == "speed_decay_tau":
+                # Strictly positive — exp(-dt/tau) blows up at tau→0.
+                self.speed_decay_tau = max(0.01, min(5.0, v))
+            elif key == "speed_output_cutoff":
+                self.speed_output_cutoff = max(0.0, min(0.95, v))
+        return self.get_speed_tuning()
+
+    def get_speed_tuning(self) -> Dict[str, float]:
+        return {
+            "speed_input_deadband": self.speed_input_deadband,
+            "speed_gain": self.speed_gain,
+            "speed_decay_tau": self.speed_decay_tau,
+            "speed_output_cutoff": self.speed_output_cutoff,
+        }
+
+    @classmethod
+    def get_speed_tuning_defaults(cls) -> Dict[str, float]:
+        """Factory defaults for the speed-blend tuning knobs. Used by the
+        Reset button to revert without depending on app_settings state."""
+        return {
+            "speed_input_deadband": cls.DEFAULT_SPEED_INPUT_DEADBAND,
+            "speed_gain": cls.DEFAULT_SPEED_GAIN,
+            "speed_decay_tau": cls.DEFAULT_SPEED_DECAY_TAU,
+            "speed_output_cutoff": cls.DEFAULT_SPEED_OUTPUT_CUTOFF,
+        }
 
     @staticmethod
     def _coerce_blend(raw: Any) -> float:
