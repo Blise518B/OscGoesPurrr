@@ -113,6 +113,11 @@ Contents, left to right:
 │  │                            │  │ ▸ More   │ ▸ More   │        │  │
 │  │                            │  └──────────┴──────────┘        │  │
 │  │                            │  Combine: ( )Sum  (●)Max        │  │
+│  │                            │  ┌─SMOOTHING ───────────┐       │  │
+│  │                            │  │ Attack  ▬●▬   50 ms  │       │  │
+│  │                            │  │ Release ▬●▬  300 ms  │       │  │
+│  │                            │  │ ▸ More               │       │  │
+│  │                            │  └──────────────────────┘       │  │
 │  │                            │  ▸ Output (Position/Speed, Idle…│  │
 │  └────────────────────────────────────────────────────────────────┘ │
 │                                                                     │
@@ -218,7 +223,9 @@ tuning flow.
 
 ### Conceptual model
 
-Two channels feed into the per-motor mixer. Each channel has:
+Two input channels feed into the per-motor mixer; the mixed value
+then passes through a final smoothing stage before reaching the
+engine. Each input channel has:
 
 | Field         | Type                          | Default     |
 |---------------|-------------------------------|-------------|
@@ -234,6 +241,13 @@ Plus per-motor:
 |-------------------|----------------------------|--------------|
 | `combine`         | enum {sum, max}            | `max`        |
 | `modulator_range` | (min: 0.0–1.0, max: 0.0–2.0) | `(0.5, 1.5)` |
+
+And the smoothing stage (post-combine):
+
+| Field         | Type                 | Default  |
+|---------------|----------------------|----------|
+| `attack_ms`   | float (0 – 2000 ms)  | `50`     |
+| `release_ms`  | float (0 – 2000 ms)  | `300`    |
 
 **Rule:** at most one channel can have `mode = modulate` at a time.
 Setting one to `modulate` flips the other back to `additive` and
@@ -258,7 +272,27 @@ Three resulting combination modes:
 3. **Depth modulates speed.** `out = S_shaped *
    lerp(mod_min, mod_max, D_shaped)`. Symmetric.
 
-Final `out` is clamped to `[0, 1]` before going to the engine.
+Call the result of the steps above `mixed`. `mixed` then passes
+through an asymmetric exponential envelope follower:
+
+* If `mixed > smoothed_prev` (rising): ramp up at the attack rate
+  `smoothed = smoothed_prev + (mixed - smoothed_prev) * (1 - exp(-dt / attack_ms))`
+* If `mixed < smoothed_prev` (falling): ramp down at the release rate
+  `smoothed = smoothed_prev + (mixed - smoothed_prev) * (1 - exp(-dt / release_ms))`
+
+`out = clamp(smoothed, 0, 1)` is the final value sent to the engine.
+
+Setting both `attack_ms` and `release_ms` near 0 effectively
+disables smoothing (`smoothed` tracks `mixed` instantaneously).
+Defaults (~50 ms attack, ~300 ms release) give a barely-noticeable
+rise and a gentle fade — toys feel less twitchy on choppy OSC input
+without lagging the user's intent.
+
+Note: smoothing here is **post-mix**, distinct from the speed
+channel's per-channel `decay_tau` which lives inside the speed-
+derivation algorithm itself (it controls how long the *speed
+signal* sustains after motion stops, before the mixer ever sees
+it). Both are useful, do different things, and ship.
 
 The `lerp` form for modulators is intentional. `D * S` collapses to
 zero whenever either input is zero — usually too harsh. The lerp
@@ -293,7 +327,11 @@ The per-motor profile section gains a `mix` block:
       "decay_tau": 0.4
     },
     "combine": "max",
-    "modulator_range": [0.5, 1.5]
+    "modulator_range": [0.5, 1.5],
+    "smoothing": {
+      "attack_ms": 50,
+      "release_ms": 300
+    }
   }
 }
 ```
@@ -359,11 +397,14 @@ legend on the side of the graph:
 | Raw speed        | `S_raw` from the speed-derivation pipe  | on          |
 | Depth influence  | `D_shaped = curve(D_raw) * gain`        | on          |
 | Speed influence  | `S_shaped = curve(S_raw) * gain`        | on          |
-| **Final output** | post-combine, post-clamp                | on (bold)   |
+| Post-mix         | `mixed` — post-combine, pre-smoothing   | off         |
+| **Final output** | `out` — post-smoothing, post-clamp      | on (bold)   |
 
 Toggling traces off lets the user focus on a single setting — e.g.
 turn off Raw and Final, leave only Depth influence visible while
-adjusting the depth curve.
+adjusting the depth curve. Post-mix defaults to off (it overlaps
+Final when smoothing is light); turn it on to see what smoothing
+itself is doing to the signal.
 
 ### Source: Simulated
 
@@ -414,7 +455,7 @@ Three new pieces:
    motor. Off by default — zero cost when the Tune tab is closed.
    Exact form: `{"type": "tune_trace", "device": "...", "motor":
    N, "t_ms": ..., "d_raw": ..., "s_raw": ..., "d_shaped": ...,
-   "s_shaped": ..., "out": ...}`.
+   "s_shaped": ..., "mixed": ..., "out": ...}`.
 3. **`controllers/tune_facade.py`** — `TuneFacade` mixin composed
    into `OscGoesPurrrApp`. UI-facing methods: `tune_select_motor()`,
    `tune_set_source()`, `tune_start_pattern()`, `tune_stop_pattern()`,
@@ -426,6 +467,39 @@ trace queue. `QtCharts` is fine if the dependency is already
 acceptable; otherwise a custom `QPainter` widget with a ring buffer
 is straightforward and matches the project's "draw widgets ourselves"
 approach already used for `RainbowMeter`.
+
+### Signal-flow visualization (stretch goal — Phase 3.5)
+
+Beyond the main multi-trace graph, an optional horizontal "stages"
+strip at the top of the Tune tab visualizes the signal chain as a
+sequence of connected modules — the same conceptual flow as a
+textbook DSP diagram:
+
+```
+┌──────┐    ┌──────┐    ┌──────┐    ┌──────┐    ┌──────┐
+│ Raw  │ →  │Depth │ →  │ Mix  │ →  │Smooth│ →  │Output│
+│inputs│    │  ch  │    │      │    │  ing │    │      │
+│      │    │ (and │    │      │    │      │    │      │
+│ ▁▂▃  │    │Speed │    │ ▂▄▆  │    │ ▃▅▇  │    │ ▃▅▇  │
+│ ░▒▓  │    │  ch) │    │      │    │      │    │      │
+└──────┘    └──────┘    └──────┘    └──────┘    └──────┘
+```
+
+Each module card shows a live sparkline of its own output over the
+last ~1 s. Clicking a card focuses the main detail graph on just
+that stage's input and output traces — so to tune smoothing you
+click the Smoothing card and the big graph below collapses to just
+Post-mix and Final.
+
+The intent is purely pedagogical: users see *what each module does
+to the signal* as they tune, instead of mentally tracing a single
+multi-line graph. Same data source as the main graph (the
+intermediates feed from `motor_router`), no new plumbing.
+
+Ship the main multi-trace graph first; add the stages strip as a
+Phase 3.5 if users find the main graph cluttered or hard to map
+back to the Mix controls. Both views share the same data so the
+strip is purely a render-layer addition.
 
 ### Phase 3 open decisions
 

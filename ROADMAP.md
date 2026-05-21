@@ -236,6 +236,20 @@ Order within a group is rough priority, not a hard sequence.
 
 ## Reliability & Lifecycle
 
+- **Stateless router test suite.**
+  Pytest coverage for `motor_router.py`, `steamvr_router.py`, and
+  `bhaptics_router.py`. Each router is a near-pure function over
+  (profile, `parameter_store` snapshot) → output, which is exactly
+  what pytest is best at. Pin down current behaviour for the common
+  cases (multi-zone merging, touch/pen/self/other filters, linear-
+  actuator Position vs Speed modes, antistuck timing, per-motor
+  debouncing) so the routing-redesign Phase 2 mixer rework can be
+  verified to preserve behaviour for cases the user hasn't
+  customized. Test cases also become living documentation of router
+  semantics for future maintainers. **Worth doing before the
+  routing redesign Phase 2 lands** — see
+  [`ROUTING_REDESIGN.md`](ROUTING_REDESIGN.md).
+
 - **Stuck-value safety cutoff.**
   If an OSC float input stays exactly static for ~2 s (configurable),
   treat it as a stuck/frozen sender and force the corresponding motors
