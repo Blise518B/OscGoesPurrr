@@ -2,7 +2,8 @@
 #
 # Pure View layer. The controller talks to this class through a fixed facade
 # (set_title, schedule_callback, run, update_*, etc.). Swapping toolkits
-# means rewriting this file only.
+# means rewriting this file plus the `ui/` subpackage (widgets, icons,
+# layout helpers) — and nothing else.
 
 from typing import List, Optional, Dict, Any, Callable
 import os

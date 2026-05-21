@@ -1,10 +1,14 @@
 # OscGoesPurrr - Main Orchestrator (The Traffic Cop)
-# Architecture: 5-Part MVC Ecosystem
-# 1. The Brain (parameter_store.py) - Central State Vault
-# 2. The Eardrum (vrchat_osc.py) - Network Listener
-# 3. The Muscle (haptic_engine.py) - Async Hardware Driver
-# 4. The Face (ui_components.py) - Dumb View Layer
-# 5. The Traffic Cop (main.py) - Controller & Event Router
+#
+# This file is the Controller. It boots the threads, holds the
+# profile_manager, drains the cross-thread queue, and routes data
+# between layers. Per-engine UI-facing methods live as mixins under
+# `controllers/` and are composed into OscGoesPurrrApp via multiple
+# inheritance below.
+#
+# See ARCHITECTURE.md for the full picture (Brain / Eardrum / Muscles
+# family / stateless Routers / Face / Traffic Cop) and the four
+# anti-tangling rules that keep the layers separate.
 
 import threading
 import asyncio

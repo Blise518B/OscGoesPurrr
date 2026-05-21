@@ -115,8 +115,7 @@ def normalise_one(src_path: Path, dst_path: Path) -> str:
     new_alpha = np.clip(new_alpha, 0.0, 255.0).astype(np.uint8)
 
     # Output: white RGB, modulated alpha. Pre-multiplied alpha isn't
-    # required — SteamVR (and PySide6/Tk for the in-app UI) handle straight
-    # alpha PNGs fine.
+    # required — SteamVR and PySide6 both handle straight-alpha PNGs fine.
     out = np.zeros_like(arr, dtype=np.uint8)
     out[:, :, 0] = 255
     out[:, :, 1] = 255
