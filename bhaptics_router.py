@@ -14,11 +14,11 @@
 #   Foot_Left/Right  → FootL/R     (3)
 
 import threading
-import time
 from typing import Callable, Dict, List, Tuple
 
 from parameter_store import store
 from bhaptics_engine import BHapticsEngine, DeviceConfig, NODE_COUNTS
+from polling import PollingThread
 
 
 # (position, v1_slot, node_count)
@@ -62,7 +62,7 @@ def _truthy(value) -> bool:
         return False
 
 
-class BHapticsRouter:
+class BHapticsRouter(PollingThread):
     """Polls parameter_store and pushes per-device frames to the engine."""
 
     def __init__(self,
@@ -70,14 +70,13 @@ class BHapticsRouter:
                  get_device_configs: Callable[[], Dict[str, DeviceConfig]],
                  poll_rate_s: float = 0.05,
                  get_antistuck: Callable[[], Dict[str, float]] | None = None):
+        super().__init__("bHapticsRouter")
         self.engine = engine
         self.get_device_configs = get_device_configs
         self.poll_rate_s = poll_rate_s
         # Returns {"enabled": bool, "hold_s": float, "ramp_s": float}.
         # Read on every tick so config changes apply live.
         self.get_antistuck = get_antistuck or (lambda: {"enabled": False, "hold_s": 2.0, "ramp_s": 2.0})
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
         # Track last submitted dot tuple per device so we can debounce, and so
         # the debug UI can read what's currently being driven.
         self._last_dots: Dict[str, Tuple[int, ...]] = {}
@@ -98,16 +97,6 @@ class BHapticsRouter:
         self._overrides: Dict[str, Dict[int, int]] = {}
         self._overrides_lock = threading.Lock()
 
-    def start(self):
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="bHapticsRouter")
-        self._thread.start()
-
-    def stop(self):
-        self._stop.set()
-
     def _run(self):
         print("[bHaptics] Router thread started")
         while not self._stop.is_set():
@@ -115,7 +104,7 @@ class BHapticsRouter:
                 self._tick()
             except Exception as e:
                 print(f"[bHaptics][Router] tick error: {e}")
-            time.sleep(self.poll_rate_s)
+            self._interruptible_sleep(self.poll_rate_s)
 
     def get_snapshot(self) -> Dict[str, List[int]]:
         """Return a copy of the current per-device dot intensity arrays.

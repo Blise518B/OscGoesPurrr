@@ -14,6 +14,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, Optional, Any
 
+from polling import PollingThread
+
 try:
     import psutil  # type: ignore
     _HAS_PSUTIL = True
@@ -102,7 +104,7 @@ def _full_osc_address(name: str) -> str:
     return OSC_PARAM_PREFIX + n.lstrip("/")
 
 
-class HardwareMonitorEngine:
+class HardwareMonitorEngine(PollingThread):
     """Background poller. Reads CPU/RAM via psutil and (optionally) NVIDIA GPU
     metrics via NVML. Pushes values to VRChat through an injected `send_osc`
     callback. The UI reads `snapshot()` for live display."""
@@ -112,11 +114,10 @@ class HardwareMonitorEngine:
         get_config: Callable[[], Dict[str, Any]],
         send_osc: Callable[[str, float], None],
     ):
+        super().__init__("HardwareMonitor")
         self._get_config = get_config
         self._send_osc = send_osc
 
-        self._stop_evt = threading.Event()
-        self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
         self._stats = HardwareStats()
         self._last_sent: Dict[str, float] = {}
@@ -128,17 +129,8 @@ class HardwareMonitorEngine:
 
     # -------- Lifecycle --------
 
-    def start(self):
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop_evt.clear()
-        self._thread = threading.Thread(
-            target=self._run, daemon=True, name="HardwareMonitor"
-        )
-        self._thread.start()
-
     def stop(self):
-        self._stop_evt.set()
+        super().stop()
         self._shutdown_nvml()
 
     # -------- Public read-side --------
@@ -158,7 +150,7 @@ class HardwareMonitorEngine:
             except Exception:
                 pass
 
-        while not self._stop_evt.is_set():
+        while not self._stop.is_set():
             cfg = {}
             try:
                 cfg = self._get_config() or {}
@@ -175,12 +167,7 @@ class HardwareMonitorEngine:
                     with self._lock:
                         self._stats.error = f"poll: {e}"
 
-            # Sleep in small slices so stop() is responsive.
-            slept = 0.0
-            while slept < poll_rate and not self._stop_evt.is_set():
-                step = min(0.1, poll_rate - slept)
-                time.sleep(step)
-                slept += step
+            self._interruptible_sleep(poll_rate)
 
     def _poll_once(self, cfg: Dict[str, Any]):
         s = HardwareStats()
