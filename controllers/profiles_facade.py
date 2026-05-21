@@ -10,6 +10,11 @@ from typing import Any, Dict, List
 
 class ProfilesFacade:
 
+    def _refresh_profile_buttons_ui(self) -> None:
+        """Tell the UI to redraw its profile buttons. No-op when self.ui is
+        None or doesn't expose the method (early startup, headless tests)."""
+        self._refresh_profile_buttons_ui()
+
     def _seed_profile_with_known_devices(self, profile_name: str) -> None:
         """Make sure every known toy has a default entry in the given profile.
 
@@ -76,15 +81,13 @@ class ProfilesFacade:
         self.ui.clear_device_caches()
 
         self.ui.build_stored_devices_ui()
-        if hasattr(self.ui, "_refresh_profile_buttons"):
-            self.ui._refresh_profile_buttons()
+        self._refresh_profile_buttons_ui()
         if hasattr(self, "force_recalculate"):
             self.force_recalculate()
         self.log_message(f"Switched to profile: {profile_name}")
 
         # Refresh the profile buttons on the Dashboard
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
+        self._refresh_profile_buttons_ui()
     
     def create_profile(self, base_name: str = "New Profile") -> str:
         """Create a fresh profile and return its name. If `base_name` is
@@ -99,8 +102,7 @@ class ProfilesFacade:
         self._seed_profile_with_known_devices(name)
         self.profile_manager.save_profiles()
         self.log_message(f"Created profile '{name}'")
-        if hasattr(self.ui, "_refresh_profile_buttons"):
-            self.ui._refresh_profile_buttons()
+        self._refresh_profile_buttons_ui()
         return name
 
     def delete_profile(self, profile_name: str):
@@ -119,8 +121,8 @@ class ProfilesFacade:
         if self.profile_manager.current_profile == profile_name:
             fallback = next(iter(self.profile_manager.profiles.keys()))
             self.switch_profile(fallback)
-        elif hasattr(self.ui, "_refresh_profile_buttons"):
-            self.ui._refresh_profile_buttons()
+        else:
+            self._refresh_profile_buttons_ui()
 
     def rename_profile(self, old_name: str, new_name: str):
         """Rename a profile, or create a new one if `old_name` is a placeholder
@@ -154,8 +156,7 @@ class ProfilesFacade:
             self.profile_manager.current_profile = new_name
             self.current_profile = new_name
 
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
+        self._refresh_profile_buttons_ui()
 
     # ====================
     # Avatar profiles + clipboard (copy/paste)
@@ -207,8 +208,7 @@ class ProfilesFacade:
         else:
             self.log_message(f"Avatar changed (id={avatar_id or 'unknown'})")
 
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
+        self._refresh_profile_buttons_ui()
 
         # Avatar swaps reset every avatar parameter on the VRChat side, so
         # the bHaptics-connected bool needs to be re-asserted whether or not
@@ -247,8 +247,7 @@ class ProfilesFacade:
         # sees the inherited settings under the new profile name.
         self.ui.clear_device_caches()
         self.ui.build_stored_devices_ui()
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
+        self._refresh_profile_buttons_ui()
         return new_name
 
     def delete_avatar_profile(self, name: str):
@@ -262,14 +261,12 @@ class ProfilesFacade:
             self.ui.clear_device_caches()
             self.ui.build_stored_devices_ui()
             self.force_recalculate()
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
+        self._refresh_profile_buttons_ui()
 
     def rename_avatar_profile(self, old: str, new: str):
         if self.profile_manager.rename_avatar_profile(old, new):
             self.log_message(f"Renamed avatar profile '{old}' → '{new}'")
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
+        self._refresh_profile_buttons_ui()
 
     def bind_avatar_profile_to_current(self, name: str):
         """Bind `name` to the current avatar and record it as the user's
@@ -284,16 +281,14 @@ class ProfilesFacade:
         self.ui.clear_device_caches()
         self.ui.build_stored_devices_ui()
         self.force_recalculate()
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
+        self._refresh_profile_buttons_ui()
 
     def copy_profile(self, kind: str, name: str):
         """Copy a profile into the in-memory clipboard. `kind` is 'global'|'avatar'."""
         ok = self.profile_manager.copy_profile_to_clipboard(kind, name)
         if ok:
             self.log_message(f"Copied {kind} profile '{name}' to clipboard")
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
+        self._refresh_profile_buttons_ui()
 
     def paste_profile(self, target_kind: str):
         """Paste the clipboard into a new profile in the target section."""
@@ -305,8 +300,7 @@ class ProfilesFacade:
                 self.ui.clear_device_caches()
                 self.ui.build_stored_devices_ui()
                 self.force_recalculate()
-            if hasattr(self.ui, '_refresh_profile_buttons'):
-                self.ui._refresh_profile_buttons()
+            self._refresh_profile_buttons_ui()
         else:
             self.log_message("Paste failed — clipboard is empty")
 
@@ -328,8 +322,7 @@ class ProfilesFacade:
             self.ui.clear_device_caches()
             self.ui.build_stored_devices_ui()
             self.force_recalculate()
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
+        self._refresh_profile_buttons_ui()
 
     def clear_clipboard(self):
         """Cancel a pending copy — used when the user clicks the source row
@@ -337,8 +330,7 @@ class ProfilesFacade:
         if not self.profile_manager.has_clipboard():
             return
         self.profile_manager.clear_clipboard()
-        if hasattr(self.ui, '_refresh_profile_buttons'):
-            self.ui._refresh_profile_buttons()
+        self._refresh_profile_buttons_ui()
 
     def has_clipboard(self) -> bool:
         return self.profile_manager.has_clipboard()
