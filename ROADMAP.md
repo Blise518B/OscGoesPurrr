@@ -5,6 +5,14 @@ Order within a group is rough priority, not a hard sequence.
 
 ## Haptics Features
 
+- **Routing redesign: per-motor mixer, UI refresh, live tuning.**
+  Full overhaul of Device Routing — collapsed-by-default toy cards,
+  a new two-channel depth/speed mixer with per-channel gain / curve /
+  modulate-other modes, Help Mode for in-context parameter
+  explanations, and a new Tune tab with a live multi-curve graph and
+  simulated input patterns for offline tuning. Phased: UI shell →
+  mixer math → Tune tab. See [`ROUTING_REDESIGN.md`](ROUTING_REDESIGN.md).
+
 - **SPS → bHaptics zone mirror.**
   When an OGB SPS contact fires (Boob, Tummy, etc.), also pulse a
   configured subset of bHaptics dots so the suit reinforces what the
