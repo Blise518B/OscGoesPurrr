@@ -57,12 +57,15 @@ class SteamVRRouter:
                 continue
             best = 0.0
             for addr in cfg.address_list:
-                if not addr or addr.startswith("/avatar/parameters/..."):
+                if not addr or addr.strip() in ("", "..."):
                     continue
-                # Users typically paste the full /avatar/parameters/... path;
-                # parameter_store keys are the short form (UDP handler and
-                # OSCQuery JSON loader both strip avatar/parameters/).
-                lookup = addr
+                # Stored form is the bare parameter name (UI strips any
+                # /avatar/parameters/ the user pastes), but stay defensive
+                # in case a stale config or upgrade path slips a prefix
+                # through — parameter_store keys are always the short form
+                # (UDP handler and OSCQuery JSON loader both strip
+                # avatar/parameters/).
+                lookup = addr.strip()
                 if lookup.startswith("/avatar/parameters/"):
                     lookup = lookup[len("/avatar/parameters/"):]
                 elif lookup.startswith("/"):

@@ -53,11 +53,25 @@ REM PyInstaller automatically analyzes imports, so all .py modules are bundled
 REM Temp files are cleaned up after successful build in step 4
 set EXE_NAME=OscGoesPurrr_!BUILD_VERSION!
 
+REM steamvr_toy_driver: bundle the prebuilt DLL + manifest + resources so the
+REM installer can lay them into %LOCALAPPDATA% at runtime. Only the runtime
+REM payload (manifest, bin/win64/*.dll, resources/) needs to ship; src/, include/,
+REM build/, and *.bat are stripped via PyInstaller's --add-data globs below.
+REM
+REM --collect-all openvr: the openvr Python package ships libopenvr_api_64.dll
+REM as a plain data file inside its own folder, NOT declared via setup.py. Without
+REM --collect-all PyInstaller bundles the .py code but skips the native DLL, so
+REM `import openvr` blows up at runtime with no obvious error.
 pyinstaller --noconfirm ^
     --onefile ^
     --windowed ^
     --icon "Images\OGP_Icon.ico" ^
     --add-data "Images;Images" ^
+    --add-data "steamvr_toy_driver\driver.vrdrivermanifest;steamvr_toy_driver" ^
+    --add-data "steamvr_toy_driver\bin;steamvr_toy_driver\bin" ^
+    --add-data "steamvr_toy_driver\resources;steamvr_toy_driver\resources" ^
+    --add-data "steamvr_toy_driver\icon_assets_64;steamvr_toy_driver\icon_assets_64" ^
+    --collect-all openvr ^
     --name "!EXE_NAME!" ^
     main.py
 

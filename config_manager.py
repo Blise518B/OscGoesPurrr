@@ -43,6 +43,18 @@ DEFAULT_APP_SETTINGS = {
     # Default ON so the first launch lands on the stripped Simple Mode panel.
     # The user can disable it from the Simple Mode panel or Settings.
     "simple_mode": True,
+    # Simple Mode Position↔Speed blend (0.0 = pure SPS depth, 1.0 = pure
+    # motion-derived speed). Per-toy profiles have their own per-motor
+    # `motor_{i}_speed_blend` key; this app-level value applies in Simple Mode.
+    "simple_mode_speed_blend": 0.0,
+    # Speed-blend tuning knobs (exposed in the UI as debug spinboxes for now —
+    # we can fold them back into hard-coded defaults once the values settle).
+    # See MotorRouter for the math; these mirror its instance attributes
+    # and must stay in sync with the `DEFAULT_SPEED_*` class constants there.
+    "speed_input_deadband": 0.005,
+    "speed_gain": 0.75,
+    "speed_decay_tau": 0.30,
+    "speed_output_cutoff": 0.02,
     # Feature toggles — turn off subsystems the user doesn't need so their
     # background threads / OSC traffic don't run. All default ON to match
     # pre-toggle behaviour.
@@ -119,6 +131,10 @@ class SteamVRSettingsManager:
     DEFAULTS: Dict[str, Any] = {
         "autostart_with_steamvr": False,
         "auto_connect_steamvr": True,
+        # Joke / vanity feature: register a virtual OpenVR driver so the
+        # user's connected toys show up alongside the HMD/controllers in
+        # SteamVR's device strip. Off by default — opt-in from Settings.
+        "show_toys_in_steamvr": False,
         "no_data_enabled": True,
         # Two-timer anti-stuck (ported from VRC-Haptic-Pancake): mid-range
         # values are cleared faster than saturated (==1.0) ones, since a
@@ -132,6 +148,45 @@ class SteamVRSettingsManager:
         ],
         "trackers": {},  # serial -> {enabled, address_list, multiplier_override, battery_threshold}
     }
+
+    @staticmethod
+    def _strip_param_prefix(name: str) -> str:
+        """Normalise a parameter name: accept full /avatar/parameters/<x>
+        paths or bare names. Stored form is always the bare name so the
+        UI shows clean parameter names and the send path can re-add the
+        prefix consistently."""
+        s = str(name or "").strip()
+        if s.startswith("/avatar/parameters/"):
+            s = s[len("/avatar/parameters/"):]
+        return s.lstrip("/")
+
+    def _migrate_tracker_addresses(self) -> bool:
+        """Strip any legacy `/avatar/parameters/` prefixes from saved tracker
+        address lists and battery-out addresses. Returns True if anything
+        changed so the caller can re-save."""
+        changed = False
+        trackers = self.settings.get("trackers") or {}
+        for cfg in trackers.values():
+            if not isinstance(cfg, dict):
+                continue
+            addrs = cfg.get("address_list")
+            if isinstance(addrs, list):
+                new_addrs = []
+                for a in addrs:
+                    if not isinstance(a, str):
+                        continue
+                    bare = self._strip_param_prefix(a)
+                    new_addrs.append(bare if bare else "...")
+                if new_addrs != addrs:
+                    cfg["address_list"] = new_addrs
+                    changed = True
+            bat = cfg.get("battery_osc_address")
+            if isinstance(bat, str):
+                bare = self._strip_param_prefix(bat)
+                if bare != bat:
+                    cfg["battery_osc_address"] = bare
+                    changed = True
+        return changed
 
     def __init__(self):
         self.settings: Dict[str, Any] = {}
@@ -150,6 +205,12 @@ class SteamVRSettingsManager:
                         if "trackers" not in loaded or not isinstance(loaded.get("trackers"), dict):
                             merged["trackers"] = {}
                         self.settings = merged
+                        # One-shot migration: older configs stored full
+                        # `/avatar/parameters/MyParam` paths. The router and
+                        # UI both speak in bare names now, so strip the
+                        # prefix at load time and persist the cleaned form.
+                        if self._migrate_tracker_addresses():
+                            self._save()
                         return
             except (json.JSONDecodeError, IOError) as e:
                 print(f"SteamVR settings load error: {e}, using defaults")
@@ -177,6 +238,13 @@ class SteamVRSettingsManager:
 
     def set_auto_connect(self, value: bool) -> None:
         self.settings["auto_connect_steamvr"] = bool(value)
+        self._save()
+
+    def get_show_toys(self) -> bool:
+        return bool(self.settings.get("show_toys_in_steamvr", False))
+
+    def set_show_toys(self, value: bool) -> None:
+        self.settings["show_toys_in_steamvr"] = bool(value)
         self._save()
 
     def get_no_data(self) -> Dict[str, Any]:
@@ -241,7 +309,7 @@ class SteamVRSettingsManager:
         if serial not in trackers:
             trackers[serial] = {
                 "enabled": True,
-                "address_list": ["/avatar/parameters/..."],
+                "address_list": ["..."],
                 "multiplier_override": 1.0,
                 "battery_threshold": 20,
                 "battery_osc_address": "",
@@ -255,8 +323,22 @@ class SteamVRSettingsManager:
         return dict(trackers[serial])
 
     def set_tracker(self, serial: str, cfg: Dict[str, Any]) -> None:
+        # Defensive normalisation: addresses are always stored as bare
+        # parameter names (no /avatar/parameters/ prefix). The UI strips
+        # too, but a stale caller pasting a full path here shouldn't
+        # poison the on-disk state.
+        clean = dict(cfg)
+        addrs = clean.get("address_list")
+        if isinstance(addrs, list):
+            clean["address_list"] = [
+                self._strip_param_prefix(a) or "..."
+                for a in addrs if isinstance(a, str)
+            ] or ["..."]
+        bat = clean.get("battery_osc_address")
+        if isinstance(bat, str):
+            clean["battery_osc_address"] = self._strip_param_prefix(bat)
         trackers = self.settings.setdefault("trackers", {})
-        trackers[serial] = dict(cfg)
+        trackers[serial] = clean
         self._save()
 
 
@@ -288,8 +370,24 @@ class BHapticsSettingsManager:
         "antistuck_enabled": True,
         "antistuck_hold_s": 2.0,
         "antistuck_ramp_s": 2.0,
+        # When the bHaptics Player connection state changes, push the bool
+        # to this VRChat avatar parameter so an animation can react. Bare
+        # parameter name — the /avatar/parameters/ prefix is added at send
+        # time, matching the Hardware Monitor convention.
+        "osc_connected_enabled": True,
+        "osc_connected_param": "bHaptics_Connected",
         "devices": _DEFAULT_DEVICES,
     }
+
+    @staticmethod
+    def _strip_param_prefix(name: str) -> str:
+        """Normalise a parameter name: accept full /avatar/parameters/<x>
+        paths or bare names. Stored form is always the bare name so the
+        send path can re-add the prefix consistently."""
+        s = str(name or "").strip()
+        if s.startswith("/avatar/parameters/"):
+            s = s[len("/avatar/parameters/"):]
+        return s.lstrip("/")
 
     def __init__(self):
         self.settings: Dict[str, Any] = {}
@@ -364,6 +462,21 @@ class BHapticsSettingsManager:
             self.settings["antistuck_ramp_s"] = max(0.1, float(ramp_s))
         except (TypeError, ValueError):
             self.settings["antistuck_ramp_s"] = 2.0
+        self._save()
+
+    # ---- Connected-state OSC bool ----
+    def get_osc_connected(self) -> Dict[str, Any]:
+        return {
+            "enabled": bool(self.settings.get("osc_connected_enabled", True)),
+            "param":   self._strip_param_prefix(
+                self.settings.get("osc_connected_param", "bHaptics_Connected")
+            ) or "bHaptics_Connected",
+        }
+
+    def set_osc_connected(self, enabled: bool, param: str) -> None:
+        self.settings["osc_connected_enabled"] = bool(enabled)
+        cleaned = self._strip_param_prefix(param) or "bHaptics_Connected"
+        self.settings["osc_connected_param"] = cleaned
         self._save()
 
     # ---- Devices ----

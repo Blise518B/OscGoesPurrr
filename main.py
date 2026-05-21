@@ -36,10 +36,20 @@ from version import __version__
 
 # Per-engine facade mixins extend the controller's call surface without
 # bloating main.py — each mixin's docstring covers its assumed attributes.
-from controllers import SteamVRFacade, BHapticsFacade, HardwareMonitorFacade
+from controllers import (
+    SteamVRFacade,
+    SteamVRToysFacade,
+    BHapticsFacade,
+    HardwareMonitorFacade,
+)
 
 
-class OscGoesPurrrApp(SteamVRFacade, BHapticsFacade, HardwareMonitorFacade):
+class OscGoesPurrrApp(
+    SteamVRFacade,
+    SteamVRToysFacade,
+    BHapticsFacade,
+    HardwareMonitorFacade,
+):
     def __init__(self):
         self.async_loop: asyncio.AbstractEventLoop = None
         
@@ -107,6 +117,10 @@ class OscGoesPurrrApp(SteamVRFacade, BHapticsFacade, HardwareMonitorFacade):
 
         # Initialize standalone OSC routing engine
         self.motor_router = MotorRouter()
+        # Restore any persisted speed-blend tuning (kept in app settings so
+        # we can tweak the math at runtime via the debug spinboxes without
+        # editing source). Missing keys fall back to MotorRouter defaults.
+        self._apply_saved_speed_tuning()
 
         # SteamVR Haptics — independent pipeline that shares the parameter_store
         # but targets SteamVR trackers via OpenVR.
@@ -133,6 +147,13 @@ class OscGoesPurrrApp(SteamVRFacade, BHapticsFacade, HardwareMonitorFacade):
         bs = self.profile_manager.bhaptics_settings
         self.bhaptics_engine = BHapticsEngine(host=bs.get_host(), port=bs.get_port())
         self.bhaptics_engine.set_auto_connect_getter(self._bhaptics_get_auto_connect)
+        # Re-publish bhaptics devices into the SteamVR strip whenever the
+        # Player connects/disconnects or its connected-position set changes.
+        # Routed through the queue so the bridge update happens on the main
+        # thread, matching how Lovense device-changed events flow.
+        self.bhaptics_engine.set_state_callback(
+            lambda: self.thread_queue.put(("bhaptics_state_changed", None))
+        )
         self.bhaptics_router = BHapticsRouter(
             engine=self.bhaptics_engine,
             get_device_configs=self._bhaptics_get_device_configs,
@@ -171,10 +192,25 @@ class OscGoesPurrrApp(SteamVRFacade, BHapticsFacade, HardwareMonitorFacade):
         self.auto_refresh_enabled = self.profile_manager.app_settings.get("auto_refresh", True)
         self.auto_connect_enabled = self.profile_manager.app_settings.get("auto_connect", True)
         
+        # SteamVR virtual-toy-device feature — must be initialised BEFORE
+        # the UI is constructed, because the Settings tab queries
+        # `get_steamvr_toys_status()` while building the SteamVR card.
+        # The facade no-ops the bridge/install steps when the user hasn't
+        # enabled the feature, so it's cheap to call unconditionally.
+        try:
+            self._steamvr_toys_init()
+        except Exception as e:
+            print(f"[steamvr-toys] init failed: {e}")
+
         # Instantiate UI Component (must be after haptic_engine is created).
         # The UI owns its own root window so this controller stays
         # framework-agnostic.
         self.ui = OscGoesPurrrUI(self)
+        # Now that the UI exists, let the SteamVR-toys bridge log through it.
+        try:
+            self._steamvr_toys_attach_ui()
+        except Exception:
+            pass
 
         # Push window-chrome settings through the UI facade.
         self.ui.set_title(f"{APP_NAME} - v{__version__}")
@@ -271,6 +307,12 @@ class OscGoesPurrrApp(SteamVRFacade, BHapticsFacade, HardwareMonitorFacade):
                 # every stored device frame so reconnects flip back to
                 # connected immediately.
                 self.ui.update_stored_devices_ui()
+                # Mirror the new device list into the SteamVR toy driver
+                # (no-op when the feature is disabled).
+                try:
+                    self.steamvr_toys_on_devices_changed()
+                except Exception as e:
+                    self.log_message(f"[steamvr-toys] sync failed: {e}")
             elif msg_type == "battery_update":
                 try:
                     self._battery_cache[data["device_name"]] = float(data["level"])
@@ -281,12 +323,34 @@ class OscGoesPurrrApp(SteamVRFacade, BHapticsFacade, HardwareMonitorFacade):
                 # exposes a hook for live battery refresh.
                 if hasattr(self.ui, "update_simple_mode_battery"):
                     self.ui.update_simple_mode_battery(data["device_name"], data["level"])
+                try:
+                    self.steamvr_toys_on_battery(data["device_name"], data["level"])
+                except Exception:
+                    pass
             elif msg_type == "device_removed":
                 device_name = data
                 self.log_message(f"Toy disconnected: {device_name}")
                 # Frame stays (the device is "stored"); just flip its
                 # connection-status icon from green to yellow.
                 self.ui.update_stored_devices_ui()
+                try:
+                    self.steamvr_toys_on_devices_changed()
+                except Exception:
+                    pass
+            elif msg_type == "bhaptics_state_changed":
+                # bHaptics engine reported a connection-state or
+                # connected-positions change. Mirror it into the SteamVR
+                # device strip (no-op when the SteamVR toy feature is off)
+                # AND push the user-configured connection bool to VRChat
+                # so an avatar animation can react.
+                try:
+                    self.steamvr_toys_on_bhaptics_state_changed()
+                except Exception:
+                    pass
+                try:
+                    self._bhaptics_send_connected_bool()
+                except Exception:
+                    pass
             elif msg_type == "stored_devices_refresh":
                 self.ui.build_stored_devices_ui()
             elif msg_type == "osc_status":
@@ -313,6 +377,13 @@ class OscGoesPurrrApp(SteamVRFacade, BHapticsFacade, HardwareMonitorFacade):
                     # so probe the OSCQuery HTTP node for the current
                     # value as soon as the OSCQuery handshake settles.
                     self._schedule_avatar_id_probe()
+                    # Re-push the bHaptics connection bool — VRChat just
+                    # came back, so its avatar parameter cache no longer
+                    # reflects whatever we sent during the prior session.
+                    try:
+                        self._bhaptics_send_connected_bool()
+                    except Exception:
+                        pass
                 else:
                     self.ui.log_message("VRChat OSC Disconnected. Waiting for VRChat to come back...")
                     # Dump diagnostics so we can see whether packets ever
@@ -498,6 +569,56 @@ class OscGoesPurrrApp(SteamVRFacade, BHapticsFacade, HardwareMonitorFacade):
     def set_app_setting(self, key: str, value: Any):
         """Facade method for UI to safely update app settings."""
         self.profile_manager.app_settings.set(key, value)
+
+    # ------------------------------------------------------------------
+    # Speed-blend tuning facade (UI debug knobs)
+    # ------------------------------------------------------------------
+
+    def _apply_saved_speed_tuning(self) -> None:
+        if not hasattr(self, "motor_router"):
+            return
+        overrides = {}
+        for key in self.motor_router.SPEED_TUNING_KEYS:
+            saved = self.get_app_setting(key, None)
+            if saved is not None:
+                overrides[key] = saved
+        if overrides:
+            self.motor_router.apply_speed_tuning(**overrides)
+
+    def get_speed_tuning(self) -> Dict[str, float]:
+        """Snapshot of the live speed-blend tuning values, for UI display."""
+        if not hasattr(self, "motor_router"):
+            return {}
+        return self.motor_router.get_speed_tuning()
+
+    def set_speed_tuning_value(self, key: str, value: float) -> Dict[str, float]:
+        """Update one tuning knob, persist it, and re-evaluate so the change
+        is audible immediately. Returns the clamped snapshot so the UI can
+        show the actually-applied value if it differs from the user's input.
+        """
+        if not hasattr(self, "motor_router"):
+            return {}
+        snapshot = self.motor_router.apply_speed_tuning(**{key: value})
+        # Persist the post-clamp value so a stale UI input never resurrects
+        # on the next launch.
+        self.set_app_setting(key, snapshot.get(key, value))
+        if hasattr(self, "force_recalculate"):
+            self.force_recalculate()
+        return snapshot
+
+    def reset_speed_tuning(self) -> Dict[str, float]:
+        """Revert every speed-blend tuning knob to the MotorRouter factory
+        defaults, persist them, and force a recalc so the next tick uses the
+        fresh values. Returns the applied snapshot for the UI."""
+        if not hasattr(self, "motor_router"):
+            return {}
+        defaults = self.motor_router.get_speed_tuning_defaults()
+        snapshot = self.motor_router.apply_speed_tuning(**defaults)
+        for key, value in snapshot.items():
+            self.set_app_setting(key, value)
+        if hasattr(self, "force_recalculate"):
+            self.force_recalculate()
+        return snapshot
 
     # ==================================================================
     # Feature toggles — Settings → Features panel uses these to gate the
@@ -743,7 +864,10 @@ class OscGoesPurrrApp(SteamVRFacade, BHapticsFacade, HardwareMonitorFacade):
         params, _version, zones = store.snapshot()
         if self.get_app_setting("simple_mode", False):
             motor_counts = self.get_device_motor_counts()
-            updates = self.motor_router.reevaluate_simple_mode(motor_counts, params, zones=zones)
+            blend = self.get_app_setting("simple_mode_speed_blend", 0.0)
+            updates = self.motor_router.reevaluate_simple_mode(
+                motor_counts, params, zones=zones, speed_blend=blend
+            )
         else:
             active = self.profile_manager.get_active_profile_dict()
             if active is None:
@@ -1203,6 +1327,14 @@ class OscGoesPurrrApp(SteamVRFacade, BHapticsFacade, HardwareMonitorFacade):
         if hasattr(self.ui, '_refresh_profile_buttons'):
             self.ui._refresh_profile_buttons()
 
+        # Avatar swaps reset every avatar parameter on the VRChat side, so
+        # the bHaptics-connected bool needs to be re-asserted whether or not
+        # the engine state changed.
+        try:
+            self._bhaptics_send_connected_bool()
+        except Exception:
+            pass
+
     def get_current_avatar_id(self) -> str:
         return self.profile_manager.current_avatar_id or ""
 
@@ -1619,6 +1751,14 @@ class OscGoesPurrrApp(SteamVRFacade, BHapticsFacade, HardwareMonitorFacade):
 
         try:
             self.hardware_monitor.stop()
+        except Exception:
+            pass
+
+        try:
+            bridge = getattr(self, "_steamvr_toy_bridge", None)
+            if bridge is not None:
+                bridge.clear_devices()
+                bridge.stop()
         except Exception:
             pass
 

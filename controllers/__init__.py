@@ -11,7 +11,13 @@ Each mixin assumes the host controller has these attributes/methods:
 """
 
 from .steamvr_facade import SteamVRFacade
+from .steamvr_toys_facade import SteamVRToysFacade
 from .bhaptics_facade import BHapticsFacade
 from .hardware_monitor_facade import HardwareMonitorFacade
 
-__all__ = ["SteamVRFacade", "BHapticsFacade", "HardwareMonitorFacade"]
+__all__ = [
+    "SteamVRFacade",
+    "SteamVRToysFacade",
+    "BHapticsFacade",
+    "HardwareMonitorFacade",
+]

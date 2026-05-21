@@ -53,6 +53,9 @@ from ui.widgets import (
     BHapticsDotGrid as _BHapticsDotGrid,
     SliderProxy as _SliderProxy,
     ProgressProxy as _ProgressProxy,
+    RainbowMeter as _RainbowMeter,
+    RainbowScrollBar as _RainbowScrollBar,
+    install_rainbow_scrollbars as _install_rainbow_scrollbars,
 )
 
 
@@ -75,11 +78,11 @@ QFrame#sidebar {{
 }}
 QFrame#card {{
     background-color: {COLOR_SURFACE};
-    border-radius: 8px;
+    border-radius: 12px;
 }}
 QFrame#cardDark {{
     background-color: {COLOR_BG};
-    border-radius: 8px;
+    border-radius: 12px;
 }}
 QFrame#chip {{
     background-color: {COLOR_SURFACE_HOVER};
@@ -87,11 +90,15 @@ QFrame#chip {{
 }}
 QFrame#motorBlock {{
     background-color: {COLOR_SURFACE};
-    border-radius: 6px;
+    border-radius: 10px;
+}}
+QFrame#speedCard {{
+    background-color: {COLOR_SURFACE_HOVER};
+    border-radius: 8px;
 }}
 QFrame#zonePanel {{
     background-color: {COLOR_SURFACE_HOVER};
-    border-radius: 4px;
+    border-radius: 6px;
 }}
 QFrame#separator {{
     background-color: {COLOR_SURFACE};
@@ -120,19 +127,46 @@ QLabel#sectionTitle {{
 QLabel#cardHeader {{
     font-size: 16px;
     font-weight: bold;
+    color: {COLOR_INPUT_FOCUS};
 }}
 QLabel#deviceName {{
     font-size: 14px;
     font-weight: bold;
+    color: {COLOR_TEXT};
 }}
 QLabel#motorLabel {{
     font-weight: bold;
+    color: {COLOR_LIVE};
 }}
+/* Accent overrides for any header label — opt in per widget:
+   lbl.setProperty("accent", "live"|"warn"|"ok"|"primary") */
+QLabel[accent="live"]    {{ color: {COLOR_LIVE}; }}
+QLabel[accent="warn"]    {{ color: {COLOR_WARNING}; }}
+QLabel[accent="ok"]      {{ color: {COLOR_SUCCESS}; }}
+QLabel[accent="primary"] {{ color: {COLOR_PRIMARY}; }}
 QLabel[muted="true"] {{
     color: {COLOR_TEXT_MUTED};
 }}
 QLabel[role="success"] {{ color: {COLOR_SUCCESS}; }}
 QLabel[role="alert"]   {{ color: {COLOR_ALERT}; }}
+QLabel[role="warning"] {{ color: {COLOR_WARNING}; }}
+QLabel[role="live"]    {{ color: {COLOR_LIVE}; }}
+
+/* Pill badges — small status chips with a tinted fill and accent text.
+   Usage: lbl.setProperty("role", "pill"); lbl.setProperty("tone", "ok"|"warn"|"err"|"live"|"info") */
+QLabel[role="pill"] {{
+    padding: 2px 10px;
+    border-radius: 10px;
+    font-size: 11px;
+    font-weight: bold;
+    background-color: {COLOR_SURFACE_HOVER};
+    color: {COLOR_TEXT};
+}}
+QLabel[role="pill"][tone="ok"]   {{ background-color: {COLOR_SUCCESS_DIM}; color: {COLOR_SUCCESS}; }}
+QLabel[role="pill"][tone="warn"] {{ background-color: {COLOR_WARNING_DIM}; color: {COLOR_WARNING}; }}
+QLabel[role="pill"][tone="err"]  {{ background-color: {COLOR_ALERT_DIM};   color: {COLOR_ALERT}; }}
+QLabel[role="pill"][tone="live"] {{ background-color: {COLOR_LIVE_DIM};    color: {COLOR_LIVE}; }}
+QLabel[role="pill"][tone="info"] {{ background-color: {COLOR_SURFACE_HOVER}; color: {COLOR_INPUT_FOCUS}; }}
 
 QPushButton {{
     background-color: {COLOR_PRIMARY};
@@ -177,6 +211,7 @@ QPushButton[role="nav"] {{
     text-align: left;
     padding: 10px 14px;
     border-radius: 6px;
+    border-left: 3px solid transparent;
     font-size: 14px;
 }}
 QPushButton[role="nav"]:hover {{
@@ -184,6 +219,9 @@ QPushButton[role="nav"]:hover {{
 }}
 QPushButton[role="nav"][active="true"] {{
     background-color: {COLOR_BG};
+    border-left: 3px solid {COLOR_PRIMARY};
+    color: {COLOR_INPUT_FOCUS};
+    font-weight: bold;
 }}
 QPushButton[role="profileActive"] {{
     background-color: {COLOR_PRIMARY};
@@ -210,7 +248,12 @@ QPushButton[role="chipClose"]:hover {{
     color: {COLOR_TEXT};
 }}
 QPushButton[role="segActive"] {{
-    background-color: {COLOR_PRIMARY};
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 {COLOR_PRIMARY}, stop:1 {COLOR_LIVE}
+    );
+    color: {COLOR_TEXT};
+    font-weight: bold;
 }}
 QPushButton[role="segIdle"] {{
     background-color: {COLOR_BUTTON};
@@ -302,37 +345,83 @@ QCheckBox[role="switch"]::indicator:checked {{
     border: 2px solid {COLOR_TEXT};
 }}
 
+/* Static-gradient slider trick:
+   The groove paints the FULL rainbow once across the whole track, then
+   ::add-page (the unfilled side) covers the right portion with the bg
+   color. This keeps the gradient at a fixed scale regardless of value,
+   so each color always lives at the same position on the track. */
 QSlider::groove:horizontal {{
     height: 6px;
-    background: {COLOR_SURFACE};
+    background: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 {COLOR_PRIMARY},
+        stop:1 {COLOR_LIVE}
+    );
     border-radius: 3px;
 }}
 QSlider::sub-page:horizontal {{
-    background: {COLOR_PRIMARY};
+    background: transparent;
+}}
+QSlider::add-page:horizontal {{
+    background: {COLOR_BG};
     border-radius: 3px;
 }}
 QSlider::handle:horizontal {{
-    background: {COLOR_PRIMARY};
-    width: 16px;
+    background: {COLOR_TEXT};
+    width: 14px;
     margin: -6px 0;
-    border-radius: 8px;
+    border-radius: 7px;
+    border: 2px solid {COLOR_PRIMARY};
 }}
 QSlider::handle:horizontal:hover {{
-    background: {COLOR_PRIMARY_HOVER};
+    border-color: {COLOR_LIVE};
 }}
 
 QProgressBar {{
-    background: {COLOR_SURFACE};
+    background: {COLOR_BG};
     border: none;
-    border-radius: 3px;
+    border-radius: 4px;
     text-align: center;
     color: transparent;
-    max-height: 6px;
-    min-height: 6px;
+    max-height: 8px;
+    min-height: 8px;
 }}
+/* Default chunk: vertical 2-stop gradient (no horizontal stretch
+   artifact since the gradient runs top→bottom; the bar can grow in
+   width without distorting). */
 QProgressBar::chunk {{
-    background-color: {COLOR_PRIMARY};
-    border-radius: 3px;
+    border-radius: 4px;
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 {COLOR_LIVE},
+        stop:1 {COLOR_PRIMARY}
+    );
+}}
+/* Tonal progress variants — set bar.setProperty("tone", "ok"|"warn"|"live"|"rainbow") */
+QProgressBar[tone="ok"]::chunk {{
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 {COLOR_SUCCESS}, stop:1 #04A04A
+    );
+}}
+QProgressBar[tone="warn"]::chunk {{
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 {COLOR_WARNING}, stop:1 {COLOR_ALERT}
+    );
+}}
+QProgressBar[tone="live"]::chunk {{
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:0, y2:1,
+        stop:0 {COLOR_LIVE}, stop:1 {COLOR_PRIMARY}
+    );
+}}
+/* Rainbow tone: horizontal 2-stop brand gradient (purple → hot pink). */
+QProgressBar[tone="rainbow"]::chunk {{
+    background-color: qlineargradient(
+        x1:0, y1:0, x2:1, y2:0,
+        stop:0 {COLOR_PRIMARY}, stop:1 {COLOR_LIVE}
+    );
 }}
 
 QScrollArea {{
@@ -342,31 +431,18 @@ QScrollArea {{
 QScrollArea > QWidget > QWidget {{
     background-color: transparent;
 }}
-QScrollBar:vertical {{
-    background: {COLOR_BG};
-    width: 10px;
+/* Scrollbar painting is done by the RainbowScrollBar subclass — Qt's
+   stylesheet style will hijack paintEvent if QSS sets background/handle
+   visuals on QScrollBar, so we only specify sizing/track here. */
+QScrollBar {{
+    background: transparent;
     border: none;
 }}
-QScrollBar::handle:vertical {{
-    background: {COLOR_SURFACE_HOVER};
-    border-radius: 5px;
-    min-height: 30px;
-}}
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
-    height: 0px;
+QScrollBar:vertical {{
+    width: 10px;
 }}
 QScrollBar:horizontal {{
-    background: {COLOR_BG};
     height: 10px;
-    border: none;
-}}
-QScrollBar::handle:horizontal {{
-    background: {COLOR_SURFACE_HOVER};
-    border-radius: 5px;
-    min-width: 30px;
-}}
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
-    width: 0px;
 }}
 
 QTreeWidget {{
@@ -464,6 +540,10 @@ class OscGoesPurrrUI:
         # ---- State that the controller reads via the facade ----
         self.device_ui_frames: Dict[str, dict] = {}
         self.stored_device_frames: Dict[str, dict] = {}
+        # Debug tuning spinboxes — each per-motor card adds its set, and
+        # editing one syncs the displayed value across siblings so the user
+        # doesn't see stale numbers on the other cards.
+        self._speed_tuning_spins: Dict[str, List[QDoubleSpinBox]] = {}
 
         # ---- Lazily-bound view widgets ----
         self.sidebar_frame: Optional[QFrame] = None
@@ -614,6 +694,7 @@ class OscGoesPurrrUI:
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        _install_rainbow_scrollbars(scroll)
         scroll.setWidget(page)
         return scroll
 
@@ -654,10 +735,11 @@ class OscGoesPurrrUI:
         # --- VRChat OSC Section ---
         lay.addWidget(self._sidebar_section_title("VRChat OSC"))
 
-        self.osc_status_label = QLabel("Status: Waiting for VRChat...")
-        self.osc_status_label.setProperty("role", "alert")
-        self.osc_status_label.setAlignment(Qt.AlignHCenter)
-        lay.addWidget(self.osc_status_label)
+        self.osc_status_label = QLabel("WAITING FOR VRCHAT")
+        self.osc_status_label.setProperty("role", "pill")
+        self.osc_status_label.setProperty("tone", "warn")
+        self.osc_status_label.setAlignment(Qt.AlignCenter)
+        lay.addWidget(self.osc_status_label, 0, Qt.AlignHCenter)
 
         self.osc_port_label = QLabel("Listening on Port: --")
         self.osc_port_label.setAlignment(Qt.AlignHCenter)
@@ -683,10 +765,11 @@ class OscGoesPurrrUI:
 
         intiface_lay.addWidget(self._sidebar_section_title("Intiface Central"))
 
-        self.status_label = QLabel("Status: Disconnected")
-        self.status_label.setProperty("role", "alert")
-        self.status_label.setAlignment(Qt.AlignHCenter)
-        intiface_lay.addWidget(self.status_label)
+        self.status_label = QLabel("DISCONNECTED")
+        self.status_label.setProperty("role", "pill")
+        self.status_label.setProperty("tone", "err")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        intiface_lay.addWidget(self.status_label, 0, Qt.AlignHCenter)
 
         self.connection_button = QPushButton("Connect to Intiface")
         self.connection_button.setMinimumHeight(BTN_HEIGHT_LARGE)
@@ -1139,6 +1222,7 @@ class OscGoesPurrrUI:
         # Scrollable rows
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        _install_rainbow_scrollbars(scroll)
         host = QWidget()
         host_lay = _vbox(0, 6)
         host.setLayout(host_lay)
@@ -1389,6 +1473,35 @@ class OscGoesPurrrUI:
         self.simple_mode_status_label = QLabel("")
         self.simple_mode_status_label.setProperty("muted", "true")
         tlay.addWidget(self.simple_mode_status_label)
+
+        # Global Position ↔ Speed blend for Simple Mode. Same semantics as the
+        # per-motor slider in Device Routing — left=depth, right=motion speed.
+        blend_label = QLabel("Output Style")
+        bf = blend_label.font(); bf.setBold(True)
+        blend_label.setFont(bf)
+        tlay.addWidget(blend_label)
+        tlay.addWidget(self._muted_label(
+            "Drag right to make the toy respond to how fast you're moving "
+            "instead of how deep."
+        ))
+
+        def on_simple_blend_changed(val: float):
+            if hasattr(self.controller, "set_app_setting"):
+                self.controller.set_app_setting("simple_mode_speed_blend", float(val))
+            if hasattr(self.controller, 'force_recalculate'):
+                self.controller.force_recalculate()
+
+        initial_simple_blend = 0.0
+        if hasattr(self.controller, "get_app_setting"):
+            try:
+                initial_simple_blend = float(
+                    self.controller.get_app_setting("simple_mode_speed_blend", 0.0) or 0.0
+                )
+            except (TypeError, ValueError):
+                initial_simple_blend = 0.0
+        tlay.addWidget(self._make_blend_slider_row(
+            initial_simple_blend, on_simple_blend_changed
+        ))
 
         hint = QLabel(
             "Tip: you can always come back to Simple Mode from Settings."
@@ -1690,6 +1803,7 @@ class OscGoesPurrrUI:
         # Scrollable list of device cards.
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        _install_rainbow_scrollbars(scroll)
         inner = QWidget()
         self.unified_devices_layout = _vbox(4, 8)
         self.unified_devices_layout.addStretch(1)
@@ -2320,6 +2434,30 @@ class OscGoesPurrrUI:
         self.steamvr_autostart_check_settings.toggled.connect(self._on_steamvr_autostart_toggled)
         svr_lay.addWidget(self.steamvr_autostart_check_settings)
 
+        # Show toys as virtual SteamVR devices — registers a small bundled
+        # OpenVR driver so connected toys appear in SteamVR's device strip.
+        try:
+            _toys_status = self.controller.get_steamvr_toys_status()
+        except Exception:
+            _toys_status = {"supported": False, "enabled": False}
+        if _toys_status.get("supported"):
+            self.steamvr_show_toys_check = ToggleSwitch("Show toys in SteamVR (Joke)")
+            self.steamvr_show_toys_check.setChecked(bool(_toys_status.get("enabled")))
+            self.steamvr_show_toys_check.toggled.connect(self._on_steamvr_show_toys_toggled)
+            svr_lay.addWidget(self.steamvr_show_toys_check)
+            self.steamvr_show_toys_hint = self._muted_label(
+                "Adds the user's connected toys to SteamVR's device list with "
+                "their name, battery, and icon. Restart SteamVR after enabling."
+            )
+            svr_lay.addWidget(self.steamvr_show_toys_hint)
+
+            # Manual reinstall button — useful if the DLL was rebuilt with a
+            # fix and you want to recopy it without flipping the feature off.
+            self.steamvr_toys_reinstall_btn = QPushButton("Reinstall toy driver")
+            self.steamvr_toys_reinstall_btn.setProperty("role", "secondary")
+            self.steamvr_toys_reinstall_btn.clicked.connect(self._on_steamvr_toys_reinstall_clicked)
+            svr_lay.addWidget(self.steamvr_toys_reinstall_btn)
+
         # Manual Refresh — useful when auto-connect is off.
         refresh_row = _hbox(0, 8)
         svr_refresh_btn = QPushButton("Refresh SteamVR Devices")
@@ -2450,6 +2588,7 @@ class OscGoesPurrrUI:
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        _install_rainbow_scrollbars(scroll)
         inner = QWidget()
         self.steamvr_tracker_list_layout = _vbox(6, 8)
         inner.setLayout(self.steamvr_tracker_list_layout)
@@ -2514,6 +2653,77 @@ class OscGoesPurrrUI:
         if self._is_updating_steamvr:
             return
         self.controller.set_steamvr_autostart(bool(checked))
+
+    def _on_steamvr_toys_reinstall_clicked(self):
+        """Force a re-copy of the bundled driver DLL/manifest into the
+        per-user folder and re-register the path. Used after rebuilding the
+        C++ driver so the new bits land without toggling the whole feature
+        off/on."""
+        try:
+            result = self.controller.reinstall_steamvr_toys_driver()
+        except Exception as e:
+            self.log_message(f"Reinstall failed: {e}")
+            return
+        if result.get("ok"):
+            self.log_message(
+                f"Toy driver reinstalled to: {result.get('dll')}\n"
+                "Restart SteamVR for the updated DLL to take effect."
+            )
+            return
+        kind = result.get("error_kind", "")
+        if kind == "dll_locked":
+            self.log_message(
+                "Reinstall failed: SteamVR is currently using the existing toy "
+                "driver DLL, so we can't overwrite it. Fully exit SteamVR "
+                "(tray icon -> Exit), then click Reinstall again."
+            )
+        elif kind == "bundle_missing":
+            self.log_message(
+                "Reinstall failed: the bundled DLL is missing from this build "
+                "of OscGoesPurrr. Rebuild the C++ driver (build_driver.bat) "
+                "and then rebuild the OscGoesPurrr EXE (build.bat)."
+            )
+        elif kind == "register_failed":
+            self.log_message(
+                "Reinstall failed: could not update SteamVR's openvrpaths.vrpath. "
+                "Check that you have write access to "
+                "%LOCALAPPDATA%\\openvr\\openvrpaths.vrpath."
+            )
+        else:
+            self.log_message(
+                f"Reinstall failed ({kind or 'unknown'}). See log lines above."
+            )
+
+    def _on_steamvr_show_toys_toggled(self, checked: bool):
+        if self._is_updating_steamvr:
+            return
+        try:
+            status = self.controller.set_steamvr_toys_enabled(bool(checked))
+        except Exception as e:
+            self.log_message(f"SteamVR toys toggle failed: {e}")
+            return
+        if checked and status.get("install_failed"):
+            # Most likely cause: this build of the app doesn't include a
+            # compiled driver_oscgoespurrr.dll yet. The C++ driver has to be
+            # built once via steamvr_toy_driver/build.bat and committed.
+            self.log_message(
+                "SteamVR toys: install FAILED — the bundled driver DLL is missing. "
+                "This build of OscGoesPurrr was packaged without "
+                "steamvr_toy_driver/bin/win64/driver_oscgoespurrr.dll. "
+                "See steamvr_toy_driver/README.md for the one-time build steps."
+            )
+        elif checked and status.get("first_install"):
+            self.log_message(
+                "SteamVR toy driver installed. Restart SteamVR to see your toys "
+                "in the device list."
+            )
+        elif checked:
+            self.log_message(
+                "SteamVR toys enabled. Restart SteamVR if this is the first launch "
+                "after the driver was installed."
+            )
+        else:
+            self.log_message("SteamVR toys disabled.")
 
     def _on_steamvr_auto_connect_toggled(self, checked: bool):
         if self._is_updating_steamvr:
@@ -2580,6 +2790,12 @@ class OscGoesPurrrUI:
             self.steamvr_auto_connect_check_settings.setChecked(bool(status.get("auto_connect")))
         if hasattr(self, "steamvr_autostart_check_settings"):
             self.steamvr_autostart_check_settings.setChecked(bool(status.get("autostart")))
+        if hasattr(self, "steamvr_show_toys_check"):
+            try:
+                toys_status = self.controller.get_steamvr_toys_status()
+            except Exception:
+                toys_status = {}
+            self.steamvr_show_toys_check.setChecked(bool(toys_status.get("enabled")))
         try:
             self.steamvr_battery_interval_spin.setValue(int(round(float(status.get("battery_interval_s", 5)))))
         except Exception:
@@ -2643,9 +2859,9 @@ class OscGoesPurrrUI:
 
         # Header: class tag · model · serial · battery · pulse-test
         header = _hbox(0, 8)
-        class_tag = QLabel(f"[{self._DEVICE_CLASS_LABEL.get(dev_class, dev_class.title())}]")
-        cf = class_tag.font(); cf.setBold(True)
-        class_tag.setFont(cf)
+        class_tag = QLabel(self._DEVICE_CLASS_LABEL.get(dev_class, dev_class.title()).upper())
+        class_tag.setProperty("role", "pill")
+        class_tag.setProperty("tone", "info")
         header.addWidget(class_tag)
 
         title = QLabel(f"{t.get('model', '?')}  ·  {serial}")
@@ -2655,13 +2871,24 @@ class OscGoesPurrrUI:
         header.addStretch(1)
 
         bat = t.get("battery")
-        bat_text = "Battery: —"
+        bat_pct: Optional[int] = None
         if bat is not None:
             try:
-                bat_text = f"Battery: {int(float(bat) * 100)}%"
+                bat_pct = int(float(bat) * 100)
             except Exception:
-                pass
-        header.addWidget(QLabel(bat_text))
+                bat_pct = None
+        bat_label = QLabel(f"{bat_pct}%" if bat_pct is not None else "— %")
+        bat_label.setProperty("role", "pill")
+        # Tone reflects battery health so the eye picks it up at a glance.
+        if bat_pct is None:
+            bat_label.setProperty("tone", "info")
+        elif bat_pct <= 20:
+            bat_label.setProperty("tone", "err")
+        elif bat_pct <= 40:
+            bat_label.setProperty("tone", "warn")
+        else:
+            bat_label.setProperty("tone", "ok")
+        header.addWidget(bat_label)
 
         if supports_haptics:
             pulse_btn = QPushButton("Pulse Test")
@@ -2680,7 +2907,7 @@ class OscGoesPurrrUI:
         lay.addLayout(out_row)
         battery_edit = QLineEdit()
         battery_edit.setText(str(cfg.get("battery_osc_address", "")))
-        battery_edit.setPlaceholderText("/avatar/parameters/HMD_Battery  (leave blank to disable)")
+        battery_edit.setPlaceholderText("HMD_Battery  (leave blank to disable)")
         lay.addWidget(battery_edit)
 
         # ---- Incoming: haptic OSC addresses (skip for HMD) ----
@@ -2693,7 +2920,7 @@ class OscGoesPurrrUI:
             lay.addLayout(in_row)
             addr_edit = QLineEdit()
             addr_edit.setText(";".join(cfg.get("address_list", [])))
-            addr_edit.setPlaceholderText("/avatar/parameters/MyParam;/avatar/parameters/OtherParam")
+            addr_edit.setPlaceholderText("MyParam;OtherParam")
             lay.addWidget(addr_edit)
 
             params_row = _hbox(0, 8)
@@ -2711,16 +2938,31 @@ class OscGoesPurrrUI:
         else:
             lay.addWidget(self._muted_label("HMDs don't support haptic pulses — battery broadcast only."))
 
+        def _strip_param_prefix(s: str) -> str:
+            # UI mirror of SteamVRSettingsManager._strip_param_prefix —
+            # stored form is always the bare parameter name. Re-stripping
+            # here means a stale paste of the full path gets cleaned
+            # before it ever reaches disk.
+            s = (s or "").strip()
+            if s.startswith("/avatar/parameters/"):
+                s = s[len("/avatar/parameters/"):]
+            return s.lstrip("/")
+
         def push(_=None):
             if self._is_updating_steamvr:
                 return
             new_cfg = dict(cfg)
             new_cfg["enabled"] = enabled.isChecked()
-            new_cfg["battery_osc_address"] = battery_edit.text().strip()
+            new_cfg["battery_osc_address"] = _strip_param_prefix(battery_edit.text())
             if addr_edit is not None:
-                addrs = [a.strip() for a in addr_edit.text().split(";") if a.strip()]
+                addrs = [
+                    _strip_param_prefix(a)
+                    for a in addr_edit.text().split(";")
+                    if a.strip()
+                ]
+                addrs = [a for a in addrs if a]
                 if not addrs:
-                    addrs = ["/avatar/parameters/..."]
+                    addrs = ["..."]
                 new_cfg["address_list"] = addrs
             if mult is not None:
                 new_cfg["multiplier_override"] = float(mult.value())
@@ -2842,6 +3084,38 @@ class OscGoesPurrrUI:
         as_lay.addLayout(as_row)
         parent_layout.addWidget(as_card)
 
+        # ---- VRChat connected-bool card ----
+        # When the bHaptics Player connects/disconnects we can flip a bool
+        # avatar parameter so an animation reacts (e.g., show the suit
+        # mesh). User picks the parameter name to match whatever their
+        # avatar exposes; the /avatar/parameters/ prefix is added at send
+        # time so the user just sees the bare name.
+        oc_card = _Card()
+        oc_lay = _vbox(14, 6)
+        oc_card.setLayout(oc_lay)
+        oc_hdr = QLabel("VRChat connected-state parameter")
+        oc_hdr.setObjectName("sectionTitle")
+        oc_lay.addWidget(oc_hdr)
+        oc_lay.addWidget(self._muted_label(
+            "Send a bool to a VRChat avatar parameter whenever the bHaptics Player connects or "
+            "disconnects. Use it to auto-enable a suit-on animation. Re-sent on VRChat OSC "
+            "reconnect and on /avatar/change so the value survives avatar reloads."
+        ))
+        oc_row = _hbox(0, 8)
+        self.bhaptics_osc_connected_check = ToggleSwitch("Send connected-state bool")
+        self.bhaptics_osc_connected_check.toggled.connect(self._on_bhaptics_osc_connected_changed)
+        oc_row.addWidget(self.bhaptics_osc_connected_check)
+        oc_row.addSpacing(16)
+        oc_row.addWidget(QLabel("Parameter"))
+        self.bhaptics_osc_connected_edit = QLineEdit()
+        self.bhaptics_osc_connected_edit.setPlaceholderText("bHaptics_Connected")
+        self.bhaptics_osc_connected_edit.setFixedWidth(220)
+        self.bhaptics_osc_connected_edit.editingFinished.connect(self._on_bhaptics_osc_connected_changed)
+        oc_row.addWidget(self.bhaptics_osc_connected_edit)
+        oc_row.addStretch(1)
+        oc_lay.addLayout(oc_row)
+        parent_layout.addWidget(oc_card)
+
         # ---- Per-device cards ----
         list_card = _Card(dark_bg=True)
         llay = _vbox(10, 6)
@@ -2852,6 +3126,7 @@ class OscGoesPurrrUI:
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        _install_rainbow_scrollbars(scroll)
         inner = QWidget()
         self.bhaptics_device_list_layout = _vbox(6, 8)
         inner.setLayout(self.bhaptics_device_list_layout)
@@ -2912,6 +3187,20 @@ class OscGoesPurrrUI:
         self.controller.set_bhaptics_endpoint(host, port)
         self.log_message(f"bHaptics: endpoint set to {host}:{port}")
 
+    def _on_bhaptics_osc_connected_changed(self, *_):
+        if self._is_updating_bhaptics:
+            return
+        enabled = bool(self.bhaptics_osc_connected_check.isChecked())
+        # Strip the prefix client-side so the controller's persisted form
+        # matches what the user re-sees in the box (no leading slash).
+        raw = self.bhaptics_osc_connected_edit.text().strip()
+        if raw.startswith("/avatar/parameters/"):
+            raw = raw[len("/avatar/parameters/"):]
+        param = raw.lstrip("/") or "bHaptics_Connected"
+        self.controller.set_bhaptics_osc_connected(enabled, param)
+        if raw != self.bhaptics_osc_connected_edit.text():
+            self.bhaptics_osc_connected_edit.setText(param)
+
     def _refresh_bhaptics_status_only(self):
         try:
             status = self.controller.get_bhaptics_status()
@@ -2964,6 +3253,13 @@ class OscGoesPurrrUI:
         if self.bhaptics_port_spin.value() != port:
             self.bhaptics_port_spin.setValue(port)
         self.bhaptics_auto_connect_check.setChecked(bool(status.get("auto_connect")))
+
+        oc_cfg = status.get("osc_connected") or {}
+        if hasattr(self, "bhaptics_osc_connected_check"):
+            self.bhaptics_osc_connected_check.setChecked(bool(oc_cfg.get("enabled", True)))
+            current_param = (oc_cfg.get("param") or "bHaptics_Connected")
+            if self.bhaptics_osc_connected_edit.text() != current_param:
+                self.bhaptics_osc_connected_edit.setText(current_param)
 
         as_cfg = status.get("antistuck") or {}
         if hasattr(self, "bhaptics_antistuck_check"):
@@ -3424,6 +3720,7 @@ class OscGoesPurrrUI:
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        _install_rainbow_scrollbars(scroll)
         inner = QWidget()
         inner_lay = _vbox(0, 10)
         inner.setLayout(inner_lay)
@@ -3612,12 +3909,13 @@ Both consume the same data, so they stay in lockstep.
             self._repolish(self.connection_button)
 
         if self.status_label is not None:
+            self.status_label.setProperty("role", "pill")
             if connected:
-                self.status_label.setText("Status: Connected to Intiface")
-                self.status_label.setProperty("role", "success")
+                self.status_label.setText("CONNECTED")
+                self.status_label.setProperty("tone", "ok")
             else:
-                self.status_label.setText("Status: Disconnected")
-                self.status_label.setProperty("role", "alert")
+                self.status_label.setText("DISCONNECTED")
+                self.status_label.setProperty("tone", "err")
             self._repolish(self.status_label)
 
         self.update_stored_devices_ui()
@@ -3625,9 +3923,10 @@ Both consume the same data, so they stay in lockstep.
     def update_osc_status(self, is_connected: bool, port: int = None):
         if self.osc_status_label is None:
             return
+        self.osc_status_label.setProperty("role", "pill")
         if is_connected:
-            self.osc_status_label.setText("Status: Connected to VRChat")
-            self.osc_status_label.setProperty("role", "success")
+            self.osc_status_label.setText("VRCHAT CONNECTED")
+            self.osc_status_label.setProperty("tone", "ok")
             if port and self.osc_port_label is not None:
                 self.osc_port_label.setText(f"Listening on Port: {port}")
             if self.osc_connection_button is not None:
@@ -3635,8 +3934,8 @@ Both consume the same data, so they stay in lockstep.
                 self.osc_connection_button.setProperty("role", "danger")
                 self._repolish(self.osc_connection_button)
         else:
-            self.osc_status_label.setText("Status: Waiting for VRChat...")
-            self.osc_status_label.setProperty("role", "alert")
+            self.osc_status_label.setText("WAITING FOR VRCHAT")
+            self.osc_status_label.setProperty("tone", "warn")
             if self.osc_port_label is not None:
                 self.osc_port_label.setText("Listening on Port: --")
             if self.osc_connection_button is not None:
@@ -3908,7 +4207,32 @@ Both consume the same data, so they stay in lockstep.
             filter_lay.addWidget(make_filter_cb("Self", f"motor_{motor_idx}_self", False))
             filter_lay.addWidget(make_filter_cb("Others", f"motor_{motor_idx}_others", True))
             filter_lay.addStretch(1)
-            mlay.addWidget(filter_row)
+
+            # Split the rest of the motor block into a left column (main
+            # controls) and a right sub-card (Position↔Speed blend + debug
+            # tuning). The filter row, linear controls, address editor,
+            # intensity slider and vibe meter all live on the left; the
+            # speed-blend stuff is visually pulled out so it's easy to
+            # spot while we're still tuning.
+            content_row = QWidget()
+            crow_lay = _hbox(0, 12)
+            content_row.setLayout(crow_lay)
+
+            left_col = QWidget()
+            left_lay = _vbox(0, 6)
+            left_col.setLayout(left_lay)
+            crow_lay.addWidget(left_col, 1)
+
+            speed_card = self._build_speed_blend_subcard(device_name, motor_idx)
+            crow_lay.addWidget(speed_card, 0, Qt.AlignTop)
+
+            mlay.addWidget(content_row)
+
+            # From here on, append to the left column instead of the
+            # motor-block root so the remaining widgets sit beside the
+            # speed sub-card rather than below it.
+            left_lay.addWidget(filter_row)
+            mlay = left_lay
 
             # Linear-actuator controls
             this_kind = motor_kinds[motor_idx] if (motor_kinds and motor_idx < len(motor_kinds)) else None
@@ -3977,12 +4301,10 @@ Both consume the same data, so they stay in lockstep.
             )
             mlay.addWidget(slider)
 
-            # Vibe meter (read-only progress)
-            vibe_meter = QProgressBar()
-            vibe_meter.setRange(0, 1000)
-            vibe_meter.setValue(0)
-            vibe_meter.setTextVisible(False)
-            vibe_meter.setFixedHeight(6)
+            # Vibe meter — custom-painted RainbowMeter so the rainbow stays
+            # at fixed track positions instead of stretching with value
+            # (QProgressBar's ::chunk scales the gradient).
+            vibe_meter = _RainbowMeter(maximum=1000)
             mlay.addWidget(vibe_meter)
 
             card_lay.addWidget(motor_frame)
@@ -4068,6 +4390,205 @@ Both consume the same data, so they stay in lockstep.
         apply_styles()
         group.buttonClicked.connect(on_clicked)
         return host
+
+    # ----------------------------------------------------------
+    # Position ↔ Speed blend slider (per motor + Simple Mode)
+    # ----------------------------------------------------------
+
+    def _make_blend_slider_row(self, initial_blend: float,
+                               on_change: Callable[[float], None]) -> QWidget:
+        """Horizontal slider that picks a Position↔Speed blend in [0.0, 1.0].
+
+        Layout: "Position" — slider — "Speed" — readout. `on_change` fires on
+        every value change with the new blend; persistence and recalculation
+        are the caller's responsibility (matches the per-motor + Simple Mode
+        save paths, which differ in where they persist).
+        """
+        host = QWidget()
+        row = _hbox(0, 8)
+        host.setLayout(row)
+
+        pos_label = QLabel("Position")
+        pos_label.setProperty("muted", "true")
+        self._repolish(pos_label)
+        row.addWidget(pos_label)
+
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(0, 100)
+        clamped = max(0.0, min(1.0, float(initial_blend)))
+        slider.setValue(int(round(clamped * 100)))
+        row.addWidget(slider, 1)
+
+        spd_label = QLabel("Speed")
+        spd_label.setProperty("muted", "true")
+        self._repolish(spd_label)
+        row.addWidget(spd_label)
+
+        readout = QLabel("")
+        readout.setMinimumWidth(96)
+        readout.setProperty("muted", "true")
+        self._repolish(readout)
+        row.addWidget(readout)
+
+        def render(v: int):
+            spd_pct = int(v)
+            pos_pct = 100 - spd_pct
+            readout.setText(f"Pos {pos_pct}% · Spd {spd_pct}%")
+
+        def on_value_changed(v: int):
+            render(v)
+            on_change(v / 100.0)
+
+        render(slider.value())
+        slider.valueChanged.connect(on_value_changed)
+        return host
+
+    # Per-motor speed-blend sub-card (Position↔Speed slider + debug tuning).
+    # Returned as a QFrame so the caller can drop it anywhere in a layout.
+    _SPEED_TUNING_SPECS = (
+        # (key, label, range_lo, range_hi, step, decimals, tooltip)
+        ("speed_gain", "Gain",
+         0.0, 50.0, 0.1, 2,
+         "How aggressively raw motion maps to output. Higher = saturates "
+         "on smaller strokes."),
+        ("speed_input_deadband", "Input deadband",
+         0.0, 0.5, 0.005, 3,
+         "Per-tick |Δposition| below this is treated as jitter. Raise if "
+         "static contacts still output nonzero speed; lower for more "
+         "sensitivity to slow strokes."),
+        ("speed_output_cutoff", "Output cutoff",
+         0.0, 0.95, 0.01, 2,
+         "Smoothed signals below this snap to true zero so the toy fully "
+         "stops between strokes."),
+        ("speed_decay_tau", "Decay τ (s)",
+         0.01, 5.0, 0.01, 2,
+         "How long the speed signal sustains after motion stops. Higher = "
+         "smoother, lower = more responsive to each individual stroke."),
+    )
+
+    def _build_speed_blend_subcard(self, device_name: str, motor_idx: int) -> QFrame:
+        card = QFrame()
+        card.setObjectName("speedCard")
+        card.setFixedWidth(290)
+        lay = _vbox(10, 8)
+        card.setLayout(lay)
+
+        header = QLabel("Position ↔ Speed")
+        hf = header.font(); hf.setBold(True)
+        header.setFont(hf)
+        lay.addWidget(header)
+        lay.addWidget(self._muted_label(
+            "Blend SPS depth with motion-derived speed. Left = pure "
+            "position, right = pure speed."
+        ))
+
+        current_blend = self.controller.get_profile_config(
+            device_name, f"motor_{motor_idx}_speed_blend", 0.0
+        )
+
+        def on_blend_changed(val: float, dn=device_name, idx=motor_idx):
+            self.controller.update_device_config(
+                dn, f"motor_{idx}_speed_blend", float(val)
+            )
+            self.controller.save_profiles()
+            if hasattr(self.controller, 'force_recalculate'):
+                self.controller.force_recalculate()
+
+        lay.addWidget(self._make_blend_slider_row(
+            float(current_blend or 0.0), on_blend_changed
+        ))
+
+        # ---- Debug tuning knobs (global, affects every motor + Simple Mode) ----
+        divider = QFrame()
+        divider.setObjectName("separator")
+        lay.addWidget(divider)
+
+        tuning_label = QLabel("Tuning (debug)")
+        tlf = tuning_label.font(); tlf.setBold(True)
+        tuning_label.setFont(tlf)
+        lay.addWidget(tuning_label)
+        lay.addWidget(self._muted_label(
+            "Shared across all motors. Tweak to taste; we'll bake the final "
+            "values in later."
+        ))
+
+        tuning = {}
+        if hasattr(self.controller, "get_speed_tuning"):
+            try:
+                tuning = self.controller.get_speed_tuning() or {}
+            except Exception:
+                tuning = {}
+
+        for key, label, lo, hi, step, decimals, tooltip in self._SPEED_TUNING_SPECS:
+            row = _hbox(0, 8)
+            lbl = QLabel(label)
+            lbl.setMinimumWidth(110)
+            row.addWidget(lbl)
+
+            spin = QDoubleSpinBox()
+            spin.setRange(lo, hi)
+            spin.setSingleStep(step)
+            spin.setDecimals(decimals)
+            spin.setValue(float(tuning.get(key, 0.0)))
+            spin.setToolTip(tooltip)
+            row.addWidget(spin, 1)
+
+            def on_value_changed(val, k=key):
+                self._on_speed_tuning_edited(k, float(val))
+
+            spin.valueChanged.connect(on_value_changed)
+            self._speed_tuning_spins.setdefault(key, []).append(spin)
+            lay.addLayout(row)
+
+        reset_btn = QPushButton("Reset to defaults")
+        reset_btn.setProperty("role", "secondary")
+        reset_btn.setFixedHeight(BTN_HEIGHT_SMALL)
+        reset_btn.setToolTip(
+            "Revert Gain, Input deadband, Output cutoff and Decay τ to "
+            "the built-in defaults."
+        )
+        reset_btn.clicked.connect(self._on_speed_tuning_reset)
+        lay.addWidget(reset_btn)
+
+        return card
+
+    def _on_speed_tuning_edited(self, key: str, value: float) -> None:
+        """Persist the user's tuning edit through the controller and mirror
+        the post-clamp value back into every sibling spinbox so all motor
+        cards show the same number."""
+        snapshot = {}
+        if hasattr(self.controller, "set_speed_tuning_value"):
+            try:
+                snapshot = self.controller.set_speed_tuning_value(key, value) or {}
+            except Exception:
+                snapshot = {}
+        applied = float(snapshot.get(key, value))
+        self._sync_speed_tuning_spinbox(key, applied)
+
+    def _on_speed_tuning_reset(self) -> None:
+        """Call the controller's reset facade and push the returned snapshot
+        into every spinbox on every motor card."""
+        if not hasattr(self.controller, "reset_speed_tuning"):
+            return
+        try:
+            snapshot = self.controller.reset_speed_tuning() or {}
+        except Exception:
+            snapshot = {}
+        for key, value in snapshot.items():
+            self._sync_speed_tuning_spinbox(key, float(value))
+
+    def _sync_speed_tuning_spinbox(self, key: str, value: float) -> None:
+        """Write `value` into every registered spinbox for `key` without
+        re-firing their valueChanged signals — used by both the edit-sync
+        path and the Reset button."""
+        for spin in self._speed_tuning_spins.get(key, []):
+            if abs(spin.value() - value) < 10 ** -spin.decimals():
+                continue
+            spin.blockSignals(True)
+            try:
+                spin.setValue(value)
+            finally:
+                spin.blockSignals(False)
 
     # ----------------------------------------------------------
     # Custom OSC address row (per motor)

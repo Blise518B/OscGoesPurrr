@@ -1,0 +1,395 @@
+{
+  "jsonid": "vrresources",
+  "statusicons": {
+    "ambi": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/ambi.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/ambi.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/ambi.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/ambi.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/ambi.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/ambi.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/ambi.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/ambi.png"
+    },
+    "calor": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/calor.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/calor.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/calor.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/calor.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/calor.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/calor.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/calor.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/calor.png"
+    },
+    "diamo": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/diamo.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/diamo.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/diamo.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/diamo.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/diamo.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/diamo.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/diamo.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/diamo.png"
+    },
+    "dolce": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/dolce.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/dolce.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/dolce.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/dolce.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/dolce.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/dolce.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/dolce.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/dolce.png"
+    },
+    "domi_2": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/domi_2.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/domi_2.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/domi_2.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/domi_2.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/domi_2.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/domi_2.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/domi_2.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/domi_2.png"
+    },
+    "edge_2": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/edge_2.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/edge_2.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/edge_2.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/edge_2.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/edge_2.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/edge_2.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/edge_2.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/edge_2.png"
+    },
+    "exomoon": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/exomoon.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/exomoon.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/exomoon.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/exomoon.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/exomoon.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/exomoon.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/exomoon.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/exomoon.png"
+    },
+    "ferri": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/ferri.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/ferri.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/ferri.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/ferri.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/ferri.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/ferri.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/ferri.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/ferri.png"
+    },
+    "flexer": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/flexer.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/flexer.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/flexer.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/flexer.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/flexer.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/flexer.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/flexer.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/flexer.png"
+    },
+    "gemini": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/gemini.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/gemini.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/gemini.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/gemini.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/gemini.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/gemini.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/gemini.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/gemini.png"
+    },
+    "gravity": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/gravity.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/gravity.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/gravity.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/gravity.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/gravity.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/gravity.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/gravity.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/gravity.png"
+    },
+    "gush_2": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/gush_2.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/gush_2.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/gush_2.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/gush_2.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/gush_2.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/gush_2.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/gush_2.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/gush_2.png"
+    },
+    "hush_2": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/hush_2.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/hush_2.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/hush_2.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/hush_2.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/hush_2.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/hush_2.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/hush_2.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/hush_2.png"
+    },
+    "hyphy": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/hyphy.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/hyphy.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/hyphy.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/hyphy.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/hyphy.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/hyphy.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/hyphy.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/hyphy.png"
+    },
+    "kraken": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/kraken.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/kraken.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/kraken.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/kraken.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/kraken.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/kraken.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/kraken.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/kraken.png"
+    },
+    "lapis": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/lapis.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/lapis.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/lapis.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/lapis.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/lapis.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/lapis.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/lapis.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/lapis.png"
+    },
+    "lush_3": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/lush_3.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/lush_3.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/lush_3.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/lush_3.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/lush_3.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/lush_3.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/lush_3.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/lush_3.png"
+    },
+    "lush_4": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/lush_4.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/lush_4.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/lush_4.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/lush_4.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/lush_4.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/lush_4.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/lush_4.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/lush_4.png"
+    },
+    "lush_anal": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/lush_anal.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/lush_anal.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/lush_anal.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/lush_anal.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/lush_anal.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/lush_anal.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/lush_anal.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/lush_anal.png"
+    },
+    "lush_mini": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/lush_mini.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/lush_mini.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/lush_mini.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/lush_mini.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/lush_mini.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/lush_mini.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/lush_mini.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/lush_mini.png"
+    },
+    "max_2": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/max_2.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/max_2.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/max_2.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/max_2.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/max_2.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/max_2.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/max_2.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/max_2.png"
+    },
+    "mini_sex_machine": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/mini_sex_machine.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/mini_sex_machine.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/mini_sex_machine.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/mini_sex_machine.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/mini_sex_machine.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/mini_sex_machine.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/mini_sex_machine.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/mini_sex_machine.png"
+    },
+    "mission_2": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/mission_2.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/mission_2.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/mission_2.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/mission_2.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/mission_2.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/mission_2.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/mission_2.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/mission_2.png"
+    },
+    "nora": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/nora.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/nora.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/nora.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/nora.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/nora.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/nora.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/nora.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/nora.png"
+    },
+    "osci_3": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/osci_3.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/osci_3.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/osci_3.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/osci_3.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/osci_3.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/osci_3.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/osci_3.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/osci_3.png"
+    },
+    "ridge": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/ridge.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/ridge.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/ridge.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/ridge.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/ridge.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/ridge.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/ridge.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/ridge.png"
+    },
+    "sex_machine": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/sex_machine.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/sex_machine.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/sex_machine.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/sex_machine.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/sex_machine.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/sex_machine.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/sex_machine.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/sex_machine.png"
+    },
+    "solace": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/solace.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/solace.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/solace.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/solace.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/solace.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/solace.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/solace.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/solace.png"
+    },
+    "solace_pro": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/solace_pro.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/solace_pro.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/solace_pro.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/solace_pro.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/solace_pro.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/solace_pro.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/solace_pro.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/solace_pro.png"
+    },
+    "spinel": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/spinel.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/spinel.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/spinel.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/spinel.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/spinel.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/spinel.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/spinel.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/spinel.png"
+    },
+    "tenera": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/tenera.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/tenera.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/tenera.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/tenera.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/tenera.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/tenera.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/tenera.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/tenera.png"
+    },
+    "tenera_2": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/tenera_2.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/tenera_2.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/tenera_2.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/tenera_2.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/tenera_2.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/tenera_2.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/tenera_2.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/tenera_2.png"
+    },
+    "velvo": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/velvo.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/velvo.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/velvo.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/velvo.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/velvo.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/velvo.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/velvo.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/velvo.png"
+    },
+    "vulse": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/vulse.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/vulse.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/vulse.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/vulse.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/vulse.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/vulse.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/vulse.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/vulse.png"
+    },
+    "bhaptics_head": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/bhaptics_head.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/bhaptics_head.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/bhaptics_head.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/bhaptics_head.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/bhaptics_head.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/bhaptics_head.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/bhaptics_head.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/bhaptics_head.png"
+    },
+    "bhaptics_vest": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/bhaptics_vest.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/bhaptics_vest.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/bhaptics_vest.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/bhaptics_vest.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/bhaptics_vest.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/bhaptics_vest.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/bhaptics_vest.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/bhaptics_vest.png"
+    },
+    "bhaptics_arm": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/bhaptics_arm.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/bhaptics_arm.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/bhaptics_arm.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/bhaptics_arm.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/bhaptics_arm.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/bhaptics_arm.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/bhaptics_arm.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/bhaptics_arm.png"
+    },
+    "bhaptics_hand": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/bhaptics_hand.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/bhaptics_hand.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/bhaptics_hand.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/bhaptics_hand.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/bhaptics_hand.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/bhaptics_hand.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/bhaptics_hand.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/bhaptics_hand.png"
+    },
+    "bhaptics_foot": {
+      "Prop_NamedIconPathDeviceOff_String": "{oscgoespurrr}/icons/bhaptics_foot.png",
+      "Prop_NamedIconPathDeviceSearching_String": "{oscgoespurrr}/icons/bhaptics_foot.png",
+      "Prop_NamedIconPathDeviceSearchingAlert_String": "{oscgoespurrr}/icons/bhaptics_foot.png",
+      "Prop_NamedIconPathDeviceReady_String": "{oscgoespurrr}/icons/bhaptics_foot.png",
+      "Prop_NamedIconPathDeviceReadyAlert_String": "{oscgoespurrr}/icons/bhaptics_foot.png",
+      "Prop_NamedIconPathDeviceNotReady_String": "{oscgoespurrr}/icons/bhaptics_foot.png",
+      "Prop_NamedIconPathDeviceStandby_String": "{oscgoespurrr}/icons/bhaptics_foot.png",
+      "Prop_NamedIconPathDeviceAlertLow_String": "{oscgoespurrr}/icons/bhaptics_foot.png"
+    }
+  }
+}

@@ -8,23 +8,45 @@ can schedule callbacks onto the UI thread without importing Qt.
 from typing import Callable, List, Optional
 
 from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QBrush, QColor, QPainter, QPen
+from PySide6.QtGui import (
+    QBrush,
+    QColor,
+    QLinearGradient,
+    QPainter,
+    QPainterPath,
+    QPen,
+)
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
     QMainWindow,
     QProgressBar,
+    QScrollBar,
     QSlider,
+    QStyle,
+    QStyleOptionSlider,
     QWidget,
 )
 
-from constants import COLOR_SUCCESS, COLOR_TEXT
+from constants import (
+    COLOR_BG,
+    COLOR_BUTTON,
+    COLOR_LIVE,
+    COLOR_PRIMARY,
+    COLOR_SUCCESS,
+    COLOR_TEXT,
+)
 
 
 class ToggleSwitch(QCheckBox):
     """Drop-in QCheckBox replacement painted as a sliding toggle.
 
-    Off: knob on the left, red track. On: knob on the right, green track.
+    Off: knob on the left, muted button-grey track. On: knob on the
+    right, hot-pink track. The off colour intentionally matches the
+    rest of the idle interactive surfaces (segmented buttons, secondary
+    buttons) so the toggle reads as "inactive control" rather than
+    "danger / error". On is the brand "live" pink so toggling something
+    on aligns visually with the live-intensity meters / sliders.
     All QCheckBox APIs (isChecked, setChecked, toggled, stateChanged, …)
     work unchanged — only the visual is replaced.
     """
@@ -34,8 +56,8 @@ class ToggleSwitch(QCheckBox):
     _KNOB_MARGIN = 2
     _LABEL_SPACING = 8
 
-    _COLOR_OFF = QColor("#C0392B")
-    _COLOR_ON = QColor(COLOR_SUCCESS)
+    _COLOR_OFF = QColor(COLOR_BUTTON)
+    _COLOR_ON = QColor(COLOR_LIVE)
     _COLOR_KNOB = QColor("#FFFFFF")
     _COLOR_DISABLED_KNOB = QColor("#CCCCCC")
 
@@ -330,7 +352,7 @@ class SliderProxy:
 
 
 class ProgressProxy:
-    def __init__(self, bar: QProgressBar):
+    def __init__(self, bar):
         self._bar = bar
 
     def set(self, value: float):
@@ -339,3 +361,139 @@ class ProgressProxy:
 
     def get(self) -> float:
         return self._bar.value() / 1000.0
+
+
+class RainbowMeter(QWidget):
+    """Read-only intensity meter painted with a static brand-rainbow track.
+
+    Unlike QProgressBar, the rainbow lives on the full-width track and the
+    unfilled portion is masked by an opaque overlay in the bg color — so
+    each color holds a fixed horizontal position regardless of the
+    current value. Same visual contract as the slider gradient.
+
+    API mirrors QProgressBar.setValue/value so ProgressProxy works
+    unchanged.
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None, maximum: int = 1000):
+        super().__init__(parent)
+        self._max = max(1, int(maximum))
+        self._value = 0
+        self.setFixedHeight(8)
+
+    # -- QProgressBar-compatible API -----------------------------------
+    def setRange(self, minimum: int, maximum: int) -> None:
+        # minimum is assumed 0 — matches QProgressBar usage in this app.
+        self._max = max(1, int(maximum))
+        self.update()
+
+    def setValue(self, v: int) -> None:
+        v = max(0, min(self._max, int(v)))
+        if v != self._value:
+            self._value = v
+            self.update()
+
+    def value(self) -> int:
+        return self._value
+
+    def maximum(self) -> int:
+        return self._max
+
+    def setTextVisible(self, _visible: bool) -> None:  # no-op, here for parity
+        return
+
+    # -- Painting ------------------------------------------------------
+    def paintEvent(self, _ev) -> None:
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        w = self.width()
+        h = self.height()
+        radius = h / 2.0
+
+        # Static rainbow on the full track. Stops match the slider groove
+        # and QProgressBar[tone="rainbow"] QSS so the visual language is
+        # consistent across the app.
+        grad = QLinearGradient(0, 0, w, 0)
+        grad.setColorAt(0.0, QColor(COLOR_PRIMARY))
+        grad.setColorAt(1.0, QColor(COLOR_LIVE))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(grad))
+        p.drawRoundedRect(QRectF(0, 0, w, h), radius, radius)
+
+        # Mask the unfilled (right-side) portion with the bg color, so the
+        # filled portion reveals the rainbow at its fixed position. The
+        # mask extends 1px past the right edge so the rainbow's rounded
+        # corner can't peek through.
+        filled = (self._value / self._max) * w if self._max else 0
+        if filled < w:
+            p.setBrush(QBrush(QColor(COLOR_BG)))
+            p.drawRoundedRect(QRectF(filled, 0, w - filled + 1, h), radius, radius)
+
+        p.end()
+
+
+def install_rainbow_scrollbars(scroll_area) -> None:
+    """Replace a QScrollArea's default scrollbars with RainbowScrollBars.
+
+    Call right after constructing a QScrollArea so both orientations get
+    the static-gradient track + rounded-pill handle treatment.
+    """
+    scroll_area.setVerticalScrollBar(RainbowScrollBar(Qt.Vertical, scroll_area))
+    scroll_area.setHorizontalScrollBar(RainbowScrollBar(Qt.Horizontal, scroll_area))
+
+
+class RainbowScrollBar(QScrollBar):
+    """QScrollBar that paints a static gradient on the full track and shows
+    the handle as a rounded pill "window" revealing the gradient slice
+    behind it. Same visual idea as the RainbowMeter, but the visible
+    portion (the handle) is positioned by scroll value, not by fill.
+
+    Pure-QSS can't do this — masking the handle area with rounded inner
+    corners on ::sub-page / ::add-page produces inverted-notch artifacts.
+    Custom paint sidesteps that by drawing the track and the dark mask as
+    a single QPainterPath (mask = full-rounded-track − handle-pill).
+    """
+
+    _CORNER_RADIUS = 5
+
+    def _handle_rect(self) -> QRectF:
+        opt = QStyleOptionSlider()
+        self.initStyleOption(opt)
+        rect = self.style().subControlRect(
+            QStyle.CC_ScrollBar, opt, QStyle.SC_ScrollBarSlider, self
+        )
+        return QRectF(rect)
+
+    def paintEvent(self, _ev) -> None:  # noqa: N802 (Qt API)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        w, h = self.width(), self.height()
+        vertical = self.orientation() == Qt.Vertical
+        bar_rect = QRectF(0, 0, w, h)
+        r = float(self._CORNER_RADIUS)
+
+        # 1. Paint the full track with the brand gradient (rounded).
+        if vertical:
+            grad = QLinearGradient(0, 0, 0, h)
+        else:
+            grad = QLinearGradient(0, 0, w, 0)
+        grad.setColorAt(0.0, QColor(COLOR_PRIMARY))
+        grad.setColorAt(1.0, QColor(COLOR_LIVE))
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(grad))
+        p.drawRoundedRect(bar_rect, r, r)
+
+        # 2. Mask everything outside the handle pill with bg color, so only
+        #    the slice under the handle reveals the gradient.
+        handle = self._handle_rect()
+        if handle.isValid() and handle.width() > 0 and handle.height() > 0:
+            full_path = QPainterPath()
+            full_path.addRoundedRect(bar_rect, r, r)
+            handle_path = QPainterPath()
+            handle_radius = min(handle.width(), handle.height()) / 2.0
+            handle_path.addRoundedRect(handle, handle_radius, handle_radius)
+            mask = full_path.subtracted(handle_path)
+            p.setBrush(QBrush(QColor(COLOR_BG)))
+            p.drawPath(mask)
+
+        p.end()
