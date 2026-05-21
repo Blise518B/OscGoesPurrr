@@ -1,7 +1,7 @@
 import fnmatch
 import math
 import time
-from typing import Dict, List, Tuple, Any, Optional, Set
+from typing import Callable, Dict, List, Tuple, Any, Optional, Set
 from utilities import normalize_osc_value
 from parameter_store import store as _global_store
 
@@ -164,7 +164,10 @@ class MotorRouter:
         "speed_output_cutoff",
     )
 
-    def __init__(self) -> None:
+    def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
+        # `clock` is dependency-injected so tests can drive time deterministically.
+        # Defaults to time.monotonic so production callers don't change.
+        self._clock = clock
         # Tracks last calculated outputs to prevent flooding the UI/hardware thread.
         self.last_outputs: Dict[tuple, float] = {}
         # Live tuning — overridable at runtime via apply_speed_tuning. Bounds
@@ -476,7 +479,7 @@ class MotorRouter:
         The tracker is updated even when blend == 0 so that flipping the
         slider mid-session doesn't start from a stale position delta.
         """
-        now = time.monotonic()
+        now = self._clock()
         prev = self._speed_state.get(key)
         if prev is None:
             # First sample for this motor — no derivative yet.
