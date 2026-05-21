@@ -272,6 +272,92 @@ Order within a group is rough priority, not a hard sequence.
   while in VR. Toggle from the main window; remembers its own size and
   position.
 
+- **Dashboard view redesign: unified everything-grid.**
+  Restyle the existing Dashboard sidebar view as a modern card-grid in
+  the aesthetic of the lazarus-muya/New-PySide6-ui-design financial
+  dashboard — which was the original color inspiration for the app.
+  **Every connected thing gets its own tile**, across every backend,
+  arranged in one cohesive grid so you can take in the entire state
+  of the rig at a glance. Read-only — this is the **at-a-glance**
+  view, not an editor. Clicking a tile jumps to the appropriate
+  editor view for that thing.
+
+  **Why a separate view, not a replacement.** Heavy users have 8–10
+  stored toys (disconnected ones stay visible so they can still be
+  edited) plus potentially 5–10 SteamVR trackers, multiple bHaptics
+  positions, and hardware monitor stats. That's too much to navigate
+  as a master-detail workflow but ideal for a glanceable grid. The
+  vertical-list editing workflow in
+  [`ROUTING_REDESIGN.md`](ROUTING_REDESIGN.md) stays as the home for
+  configuration; this gives the live-state view its own visual
+  treatment. Both ship.
+
+  ### Tile types
+
+  Grouped into sections so 25+ tiles stay navigable; each section is
+  its own flowing grid, collapsible to a one-line header. Order:
+
+  * **Toys** (per Buttplug device) — Lovense icon, name, connect
+    dot, battery (with the no-battery glyph), live vibe meter,
+    active zones summary. One tile per stored device, connected or
+    not.
+  * **SteamVR trackers** (per tracker) — tracker name / role icon,
+    battery, last-pulse intensity sparkline, OSC address it listens
+    to.
+  * **bHaptics suit** — by default one suit-silhouette tile showing
+    every enabled position's current dot intensities as a heatmap on
+    a mannequin outline. Click to expand into per-position tiles
+    (VestFront, VestBack, ForearmL, etc.) if the user wants finer
+    granularity. Aggregated by default to avoid swamping the grid
+    with 9 vest-piece tiles.
+  * **Hardware Monitor** (when enabled) — CPU / RAM / GPU / VRAM as
+    individual stat tiles with a small history sparkline each.
+    Visually distinct from the input/output device tiles (these are
+    outbound-only broadcasters, not haptic devices).
+  * **System** — OSC connection (mDNS-discovered VRChat, port,
+    packets/sec), active profile + avatar binding, per-backend
+    health pills for Intiface / bHaptics Player / SteamVR runtime.
+    Small tiles, top of the grid.
+
+  Toys made visible in SteamVR's device strip by the Toy Driver
+  appear **only** in the Toys section, never duplicated as fake
+  SteamVR trackers — the dashboard reflects haptic intent, not the
+  driver implementation detail.
+
+  ### Tile sizes
+
+  Snap grid: 1×1 / 2×1 / 2×2. 1×1 is the default for all tiles
+  (essentials only). User can click a tile to grow it for more
+  detail — e.g. a toy tile at 2×1 shows the vibe meter as a live
+  sparkline over the last few seconds; at 2×2 it adds the active
+  zones and the recent OSC source list. Sizes persist per-tile to
+  `app_settings.json` (`dashboard_tile_sizes`).
+
+  ### Filtering
+
+  Header row of chip filters: **All / Toys / Trackers / Suit /
+  Stats / System**. Toggle off categories you don't care about so a
+  user with no bHaptics suit doesn't see those sections at all.
+  Per-user persisted.
+
+  ### Implementation notes
+
+  * Custom `FlowLayout`-style container per section with snap-grid
+    sizes (no arbitrary widths; tiles always occupy whole cells).
+  * Smooth resize animations via `QPropertyAnimation` on tile
+    geometry so size changes feel like rearrangement, not jumps.
+  * Each tile is a small `QFrame` with a section-specific
+    background-gradient class via the `GLOBAL_QSS` stylesheet —
+    reuses the existing rainbow / gradient vocabulary already in
+    use for `RainbowMeter` and the device gradient rings.
+  * Read-only contract is load-bearing: no sliders, no toggles. If a
+    user needs to change something, they navigate to the appropriate
+    editor view. This keeps the dashboard glanceable and free of
+    Demeter-violation pressure (no UI reaches into engines for
+    writes — only for reads, via the existing controller facade
+    methods like `get_steamvr_status()`, `get_bhaptics_status()`,
+    `get_hardware_monitor_status()`).
+
 ---
 
 _Not in scope here:_ bug fixes, refactors, or anything already tracked
