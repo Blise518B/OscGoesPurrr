@@ -228,6 +228,11 @@ engine. Each input channel has:
 | `curve_param` | float (depends on curve type) | `1.0`       |
 | `mode`        | enum {additive, modulate}     | `additive`  |
 
+`curve_param` semantics by curve kind: `linear` ignores it; `power`
+uses it as exponent in `[0.3, 3.0]` (`1.0` = identity); `s_curve`
+uses it as iterated-smoothstep count in `[1, 8]` (`1` = textbook
+`3x² − 2x³`; higher iterations give sharper transitions).
+
 Plus per-motor:
 
 | Field             | Type                       | Default      |
@@ -351,19 +356,6 @@ Promotes per-motor: `min_pos`, `max_pos`, `resting_pos`,
 `resting_time_s`, `max_strokes_per_sec`. Stays global in
 `LINEAR_DEFAULTS`: `max_v`, `max_a`, `duration_mult` (hardware-shape
 parameters; users should not normally touch).
-
-### Phase 2 open decisions
-
-* **Curve types and parameters.** Locked candidates: `linear`,
-  `power` (with exponent `0.3 – 3.0`), `s_curve` (with steepness
-  parameter). Anything else (log, custom multi-point) is out of
-  scope for v1.
-* **Combine policy default.** `max` recommended over `sum` for
-  consistency with the motor router's existing multi-zone merging
-  ("max-wins per dot" — see ROADMAP's SPS-mirror entry) and to
-  preserve dynamic range at high gains.
-* **Whether `combine` is per-motor or per-toy.** Recommend per-motor
-  for consistency with the rest of the Mix card.
 
 ---
 
