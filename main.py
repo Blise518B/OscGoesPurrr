@@ -191,6 +191,7 @@ class OscGoesPurrrApp(
             engine=self.bhaptics_engine,
             get_device_configs=self._bhaptics_get_device_configs,
             get_antistuck=self._bhaptics_get_antistuck,
+            get_sps_mirror_config=self.get_bhaptics_sps_mirror,
         )
 
         # Hardware Monitor — broadcasts system stats (CPU/RAM/GPU/VRAM) to
@@ -1403,6 +1404,20 @@ class OscGoesPurrrApp(
             self.process_async_queue()
             self.ui.schedule_callback(QUEUE_POLL_RATE_MS, check_queue)
 
+        # Slow heartbeat that re-syncs the per-toy connect dots from
+        # the engine's current device list. Defensive against rare
+        # event-loss paths where an Intiface device gets dropped or
+        # re-added without firing our usual `device_added` /
+        # `device_removed` callbacks (e.g. silent BLE re-pair). Cheap
+        # at 1 Hz — just a dict comparison + a stylesheet write.
+        def refresh_device_states():
+            try:
+                if self.ui is not None:
+                    self.ui.update_stored_devices_ui()
+            except Exception:
+                pass
+            self.ui.schedule_callback(1000, refresh_device_states)
+
         # Register clean shutdown handler to auto-save profiles
         self.ui.set_close_handler(self._on_closing)
 
@@ -1410,6 +1425,9 @@ class OscGoesPurrrApp(
 
         # Start the routing tick loop
         self.ui.schedule_callback(ROUTER_POLL_RATE_MS, routing_tick)
+
+        # Start the device-state heartbeat (1 Hz).
+        self.ui.schedule_callback(1000, refresh_device_states)
 
         # Start SteamVR Haptics router. Engine init is deferred to first refresh
         # — the router itself is cheap and just polls the parameter store.
