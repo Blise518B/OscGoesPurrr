@@ -40,6 +40,7 @@ from ui.icons import (
     icon_trash as _icon_trash,
     icon_check as _icon_check,
     icon_cross as _icon_cross,
+    icon_no_battery as _icon_no_battery,
 )
 from ui.widgets import (
     ToggleSwitch,
@@ -67,15 +68,21 @@ class DeviceFrameMixin:
             delete_button: Optional[QPushButton] = frame_data.get("delete_button")
             if status_label is None or delete_button is None:
                 continue
-            if device_name in connected_names:
-                status_label.setText(f"✓ {device_name}")
-                status_label.setProperty("role", "success")
-            else:
-                status_label.setText(f"⚠ {device_name}")
-                status_label.setProperty("role", "alert")
-                battery_label = self.device_ui_frames.get(device_name, {}).get("battery_label")
+            full_frame = self.device_ui_frames.get(device_name, {})
+            is_connected = device_name in connected_names
+            # The connect dot in the bar carries the ✓/⚠ signal now;
+            # the name label just shows the name with a role-based tint.
+            status_label.setText(device_name)
+            status_label.setProperty("role", "success" if is_connected else "alert")
+            dot = full_frame.get("connect_dot")
+            if dot is not None:
+                self._apply_connect_dot(dot, is_connected)
+            if not is_connected:
+                # Drop back to the no-battery glyph; the last-known level
+                # can't be trusted once the device is gone.
+                battery_label = full_frame.get("battery_label")
                 if battery_label is not None:
-                    battery_label.setText("")
+                    self._show_no_battery_glyph(battery_label)
             delete_button.setEnabled(True)
             delete_button.setProperty("role", "danger")
             self._repolish(status_label)
@@ -105,17 +112,21 @@ class DeviceFrameMixin:
     def _create_device_frame(self, device_name: str, is_connected: bool,
                              osc_addresses: dict, motor_count: int,
                              motor_kinds: Optional[List[str]] = None) -> dict:
-        """Create a card for a single device. Returns a dict with widget refs."""
+        """Phase 1 toy frame: collapsed-by-default bar with click-to-expand
+        body. The bar holds quick-status + Mute/Test; the expanded body
+        holds per-motor cards in a Listening To / Mix two-column layout."""
 
         card = QFrame()
         card.setObjectName("card")
-        card_lay = _vbox(8, 6)
+        card_lay = _vbox(0, 0)
         card.setLayout(card_lay)
 
-        # Header row
-        header = QWidget()
-        header_lay = _hbox(0, 8)
-        header.setLayout(header_lay)
+        # ---- Collapsed bar (always visible) ----
+        bar = QWidget()
+        bar.setObjectName("toyBar")
+        bar.setCursor(Qt.PointingHandCursor)
+        bar_lay = _hbox(8, 8)
+        bar.setLayout(bar_lay)
 
         icon_button = QToolButton()
         icon_button.setObjectName("lovenseIcon")
@@ -127,302 +138,131 @@ class DeviceFrameMixin:
             lambda _=False, n=device_name, b=icon_button: self._on_lovense_icon_clicked(n, b)
         )
         self._apply_lovense_icon(device_name, icon_button)
-        header_lay.addWidget(icon_button)
+        bar_lay.addWidget(icon_button)
 
-        status_icon = "✓" if is_connected else "⚠"
-        name_label = QLabel(f"{status_icon} {device_name}")
+        # Green/red dot replaces the old ✓/⚠ text prefix on the name.
+        connect_dot = QFrame()
+        connect_dot.setObjectName("connectDot")
+        connect_dot.setFixedSize(12, 12)
+        self._apply_connect_dot(connect_dot, is_connected)
+        bar_lay.addWidget(connect_dot, 0, Qt.AlignVCenter)
+
+        name_label = QLabel(device_name)
         name_label.setObjectName("deviceName")
         name_label.setProperty("role", "success" if is_connected else "alert")
         self._repolish(name_label)
-        header_lay.addWidget(name_label)
+        bar_lay.addWidget(name_label)
 
+        bar_lay.addStretch(1)
+
+        # Battery defaults to the no-battery glyph; a real battery_update
+        # event replaces it with "🔋 NN%" via update_battery_label.
         battery_label = QLabel("")
-        battery_label.setMinimumWidth(65)
-        header_lay.addWidget(battery_label)
-        header_lay.addStretch(1)
+        battery_label.setMinimumWidth(70)
+        battery_label.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self._show_no_battery_glyph(battery_label)
+        bar_lay.addWidget(battery_label)
 
-        delete_button = QPushButton("Delete")
+        # One mini-bar per motor — glance-while-collapsed visibility.
+        mini_bar_strip = QWidget()
+        mini_strip_lay = _hbox(0, 3)
+        mini_bar_strip.setLayout(mini_strip_lay)
+        mini_bars: List = []
+        for _ in range(motor_count):
+            mb = _RainbowMeter(maximum=1000)
+            mb.setFixedHeight(10)
+            mb.setMinimumWidth(56)
+            mini_strip_lay.addWidget(mb)
+            mini_bars.append(_ProgressProxy(mb))
+        bar_lay.addWidget(mini_bar_strip)
+
+        # Mute = per-toy soft-mute, session-only. Engine target is forced
+        # to 0 while held; the meter keeps showing real mixer output.
+        mute_btn = QPushButton("Mute")
+        mute_btn.setCheckable(True)
+        mute_btn.setFixedHeight(BTN_HEIGHT_SMALL)
+        mute_btn.setChecked(self.controller.is_device_muted(device_name))
+        self._apply_mute_btn_style(mute_btn)
+
+        def on_mute_toggled(checked, n=device_name, btn=mute_btn):
+            self.controller.set_device_muted(n, bool(checked))
+            self._apply_mute_btn_style(btn)
+
+        mute_btn.toggled.connect(on_mute_toggled)
+        bar_lay.addWidget(mute_btn)
+
+        # Test = fixed 0.3s @ 0.5 pulse — distinct from Simple Mode's
+        # test_toy, which keeps its 1.0s/0.4 timing.
+        test_btn = QPushButton("Test")
+        test_btn.setFixedHeight(BTN_HEIGHT_SMALL)
+        test_btn.setProperty("role", "secondary")
+        test_btn.clicked.connect(
+            lambda _=False, n=device_name: self.controller.test_device(n)
+        )
+        bar_lay.addWidget(test_btn)
+
+        expand_caret = QLabel("▾")
+        expand_caret.setObjectName("expandCaret")
+        expand_caret.setFixedWidth(18)
+        expand_caret.setAlignment(Qt.AlignCenter)
+        bar_lay.addWidget(expand_caret)
+
+        card_lay.addWidget(bar)
+
+        # ---- Expanded body (hidden by default) ----
+        body = QWidget()
+        body.setObjectName("toyBody")
+        body_lay = _vbox(12, 12)
+        body.setLayout(body_lay)
+        body.setVisible(False)
+
+        motor_vars: List[Dict[str, Any]] = []
+        for motor_idx in range(motor_count):
+            motor_kind = (motor_kinds[motor_idx]
+                          if motor_kinds and motor_idx < len(motor_kinds) else None)
+            motor_card, motor_var = self._build_motor_card(
+                device_name, motor_idx, osc_addresses, motor_kind
+            )
+            body_lay.addWidget(motor_card)
+            motor_vars.append(motor_var)
+
+        # Delete moved inside the body so it can't be hit by mistake on
+        # the narrow bar.
+        delete_button = QPushButton("Delete device")
         delete_button.setFixedHeight(BTN_HEIGHT_SMALL)
         delete_button.setProperty("role", "danger")
         delete_button.clicked.connect(
             lambda _=False, n=device_name: self.controller.delete_stored_device(n)
         )
-        header_lay.addWidget(delete_button)
-        card_lay.addWidget(header)
+        delete_row = QWidget()
+        delete_row_lay = _hbox(0, 0)
+        delete_row.setLayout(delete_row_lay)
+        delete_row_lay.addStretch(1)
+        delete_row_lay.addWidget(delete_button)
+        delete_row_lay.addStretch(1)
+        body_lay.addWidget(delete_row)
 
-        # ---- Per-motor blocks ----
-        motor_vars = []
-        for motor_idx in range(motor_count):
-            motor_frame = QFrame()
-            motor_frame.setObjectName("motorBlock")
-            mlay = _vbox(10, 6)
-            motor_frame.setLayout(mlay)
+        card_lay.addWidget(body)
 
-            # Row: motor label + zone selector
-            top_row = QWidget()
-            top_lay = _hbox(0, 8)
-            top_row.setLayout(top_lay)
+        # Click anywhere on the bar (except on its own buttons, which
+        # consume their clicks) toggles the body. Buttons in the bar get
+        # their events first via normal child-first dispatch; QLabels and
+        # the bar background propagate up to this handler.
+        def toggle_expand():
+            expanded = not body.isVisible()
+            body.setVisible(expanded)
+            expand_caret.setText("▴" if expanded else "▾")
 
-            motor_label = QLabel(f"Motor {motor_idx}:")
-            motor_label.setObjectName("motorLabel")
-            top_lay.addWidget(motor_label)
-
-            current_zones = self.controller.get_profile_config(
-                device_name, f"motor_{motor_idx}_zones", "All SPS"
-            )
-
-            zones_state = {"value": current_zones, "expanded": False}
-
-            def zone_btn_text(value: str) -> str:
-                parts = [z.strip() for z in value.split(",") if z.strip() and z.strip() != "None"]
-                all_sps = "All SPS" in parts
-                count = len([z for z in parts if z != "All SPS"])
-                if all_sps and count:
-                    return f"Select Zones (All SPS · {count} saved)"
-                if all_sps:
-                    return "Select Zones (All SPS)"
-                if count:
-                    return f"Select Zones ({count} enabled)"
-                return "Select Zones..."
-
-            zone_btn = QPushButton(zone_btn_text(zones_state["value"]))
-            zone_btn.setProperty("role", "secondary")
-            top_lay.addWidget(zone_btn, 1)
-            mlay.addWidget(top_row)
-
-            zone_panel = QFrame()
-            zone_panel.setObjectName("zonePanel")
-            zone_panel_lay = _vbox(8, 4)
-            zone_panel.setLayout(zone_panel_lay)
-            zone_panel.setVisible(False)
-            mlay.addWidget(zone_panel)
-
-            def build_zone_panel(dn=device_name, midx=motor_idx, state=zones_state,
-                                 btn=zone_btn, panel=zone_panel, panel_lay=zone_panel_lay):
-                _clear_layout(panel_lay)
-
-                fresh_zones = []
-                detected = self.controller.get_detected_zones()
-                fresh_zones.extend(detected.get("Orifices", []))
-                fresh_zones.extend(detected.get("Penetrators", []))
-
-                if not fresh_zones:
-                    lbl = QLabel(
-                        "No zones detected yet.\n"
-                        "Make sure VRChat is running and avatar loaded."
-                    )
-                    lbl.setProperty("role", "alert")
-                    panel_lay.addWidget(lbl)
-                    return
-
-                current_selected = [z.strip() for z in state["value"].split(",") if z.strip()]
-
-                def persist(new_val: str):
-                    state["value"] = new_val
-                    self.controller.update_device_config(dn, f"motor_{midx}_zones", new_val)
-                    self.controller.save_profiles()
-                    if hasattr(self.controller, 'force_recalculate'):
-                        self.controller.force_recalculate()
-                    btn.setText(zone_btn_text(new_val) + (" ▲" if state["expanded"] else ""))
-
-                # All SPS is an additive override — toggling it on/off never
-                # touches the individual zone selections, so the user can
-                # temporarily switch to match-any and return to their saved set.
-                all_sps_cb = ToggleSwitch("All SPS (match any zone — overrides selections below)")
-                all_sps_cb.setChecked("All SPS" in current_selected)
-
-                def on_all_sps(checked):
-                    sel = [z.strip() for z in state["value"].split(",") if z.strip()]
-                    sel = [z for z in sel if z != "All SPS"]
-                    if checked:
-                        sel.insert(0, "All SPS")
-                    persist(", ".join(sel))
-
-                all_sps_cb.toggled.connect(on_all_sps)
-                panel_lay.addWidget(all_sps_cb)
-
-                sep_lbl = QLabel("─── Detected Zones ───")
-                sep_lbl.setProperty("muted", "true")
-                sep_lbl.setAlignment(Qt.AlignHCenter)
-                self._repolish(sep_lbl)
-                panel_lay.addWidget(sep_lbl)
-
-                def make_toggle(zone):
-                    def _toggle(checked):
-                        sel = [z.strip() for z in state["value"].split(",") if z.strip()]
-                        if checked:
-                            if zone not in sel and zone != "None":
-                                sel.append(zone)
-                        else:
-                            if zone in sel:
-                                sel.remove(zone)
-                        persist(", ".join(sel))
-                    return _toggle
-
-                for zone in fresh_zones:
-                    if zone == "None":
-                        continue
-                    cb = ToggleSwitch(zone)
-                    cb.setChecked(zone in current_selected)
-                    cb.toggled.connect(make_toggle(zone))
-                    panel_lay.addWidget(cb)
-
-            def toggle_zone_panel(state=zones_state, btn=zone_btn, panel=zone_panel,
-                                  build=build_zone_panel):
-                state["expanded"] = not state["expanded"]
-                if state["expanded"]:
-                    build()
-                    panel.setVisible(True)
-                    btn.setText(zone_btn_text(state["value"]) + " ▲")
-                else:
-                    panel.setVisible(False)
-                    btn.setText(zone_btn_text(state["value"]))
-
-            # Bind `toggle_zone_panel` via a default arg so each button keeps
-            # its own iteration's closure. Without this, every motor's button
-            # resolved the name `toggle_zone_panel` at click time and got the
-            # LAST iteration's version — so clicking motor 0's "Select Zones"
-            # expanded motor 1's panel and motor 0 was unreachable.
-            zone_btn.clicked.connect(
-                lambda _=False, tog=toggle_zone_panel: tog()
-            )
-
-            # Interaction filter checkboxes
-            filter_row = QWidget()
-            filter_lay = _hbox(0, 12)
-            filter_row.setLayout(filter_lay)
-
-            def make_filter_cb(label, key, default):
-                cb = ToggleSwitch(label)
-                cb.setChecked(
-                    bool(self.controller.get_profile_config(device_name, key, default))
-                )
-
-                def on_toggle(checked, k=key):
-                    self.controller.update_device_config(device_name, k, bool(checked))
-                    self.controller.save_profiles()
-                    if hasattr(self.controller, 'force_recalculate'):
-                        self.controller.force_recalculate()
-
-                cb.toggled.connect(on_toggle)
-                return cb
-
-            filter_lay.addWidget(make_filter_cb("Touch", f"motor_{motor_idx}_touch", True))
-            filter_lay.addWidget(make_filter_cb("Penetration", f"motor_{motor_idx}_pen", True))
-            filter_lay.addWidget(make_filter_cb("Self", f"motor_{motor_idx}_self", False))
-            filter_lay.addWidget(make_filter_cb("Others", f"motor_{motor_idx}_others", True))
-            filter_lay.addStretch(1)
-
-            # Split the rest of the motor block into a left column (main
-            # controls) and a right sub-card (Position↔Speed blend + debug
-            # tuning). The filter row, linear controls, address editor,
-            # intensity slider and vibe meter all live on the left; the
-            # speed-blend stuff is visually pulled out so it's easy to
-            # spot while we're still tuning.
-            content_row = QWidget()
-            crow_lay = _hbox(0, 12)
-            content_row.setLayout(crow_lay)
-
-            left_col = QWidget()
-            left_lay = _vbox(0, 6)
-            left_col.setLayout(left_lay)
-            crow_lay.addWidget(left_col, 1)
-
-            speed_card = self._build_speed_blend_subcard(device_name, motor_idx)
-            crow_lay.addWidget(speed_card, 0, Qt.AlignTop)
-
-            mlay.addWidget(content_row)
-
-            # From here on, append to the left column instead of the
-            # motor-block root so the remaining widgets sit beside the
-            # speed sub-card rather than below it.
-            left_lay.addWidget(filter_row)
-            mlay = left_lay
-
-            # Linear-actuator controls
-            this_kind = motor_kinds[motor_idx] if (motor_kinds and motor_idx < len(motor_kinds)) else None
-            if this_kind in ("linear", "linear-d"):
-                lin_row = QWidget()
-                lin_lay = _hbox(0, 8)
-                lin_row.setLayout(lin_lay)
-
-                lin_lay.addWidget(QLabel("Mode:"))
-                current_mode = self.controller.get_profile_config(
-                    device_name, f"motor_{motor_idx}_linear_mode", "position"
-                )
-                mode_group = self._make_segmented(
-                    options=["Position", "Speed"],
-                    current=("Speed" if current_mode == "speed" else "Position"),
-                    on_change=lambda val, idx=motor_idx: (
-                        self.controller.update_device_config(
-                            device_name, f"motor_{idx}_linear_mode", val.lower()
-                        ),
-                        self.controller.save_profiles(),
-                        self.controller.update_linear_motor_config(device_name, idx)
-                        if hasattr(self.controller, "update_linear_motor_config") else None,
-                    ),
-                )
-                lin_lay.addWidget(mode_group)
-
-                lin_lay.addSpacing(12)
-                lin_lay.addWidget(QLabel("Idle:"))
-                current_idle = self.controller.get_profile_config(
-                    device_name, f"motor_{motor_idx}_linear_idle", "rest"
-                )
-                idle_group = self._make_segmented(
-                    options=["Hold", "Rest"],
-                    current=("Hold" if current_idle == "hold" else "Rest"),
-                    on_change=lambda val, idx=motor_idx: (
-                        self.controller.update_device_config(
-                            device_name, f"motor_{idx}_linear_idle", val.lower()
-                        ),
-                        self.controller.save_profiles(),
-                        self.controller.update_linear_motor_config(device_name, idx)
-                        if hasattr(self.controller, "update_linear_motor_config") else None,
-                    ),
-                )
-                lin_lay.addWidget(idle_group)
-                lin_lay.addStretch(1)
-                mlay.addWidget(lin_row)
-
-            # Custom OSC addresses
-            raw_entry = osc_addresses.get(str(motor_idx), [])
-            if isinstance(raw_entry, str):
-                addresses_list = [raw_entry] if raw_entry.strip() else []
-            elif isinstance(raw_entry, list):
-                addresses_list = [a for a in raw_entry if isinstance(a, str)]
+        def on_bar_press(ev):
+            if ev.button() == Qt.LeftButton:
+                toggle_expand()
+                ev.accept()
             else:
-                addresses_list = []
+                QWidget.mousePressEvent(bar, ev)
+        bar.mousePressEvent = on_bar_press
 
-            self._setup_motor_address_row(mlay, device_name, motor_idx, addresses_list)
-
-            # Slider (intensity)
-            slider = QSlider(Qt.Horizontal)
-            slider.setRange(0, 1000)
-            slider.setValue(0)
-            slider.valueChanged.connect(
-                lambda v, dn=device_name, idx=motor_idx:
-                    self.controller.update_device_target(dn, v / 1000.0, idx)
-            )
-            mlay.addWidget(slider)
-
-            # Vibe meter — custom-painted RainbowMeter so the rainbow stays
-            # at fixed track positions instead of stretching with value
-            # (QProgressBar's ::chunk scales the gradient).
-            vibe_meter = _RainbowMeter(maximum=1000)
-            mlay.addWidget(vibe_meter)
-
-            card_lay.addWidget(motor_frame)
-            motor_vars.append({
-                "slider": _SliderProxy(slider),
-                "vibe_meter": _ProgressProxy(vibe_meter),
-                "addresses": addresses_list,
-            })
-
-        # Insert at the end of the unified devices list (before the stretch).
         layout = self.unified_devices_layout
         if layout is not None:
-            # stretch was added last by setup; insert before it
             insert_pos = max(layout.count() - 1, 0)
             layout.insertWidget(insert_pos, card)
 
@@ -432,8 +272,324 @@ class DeviceFrameMixin:
             "battery_label": battery_label,
             "delete_button": delete_button,
             "icon_button": icon_button,
+            "connect_dot": connect_dot,
+            "mini_bars": mini_bars,
             "motors": motor_vars,
         }
+
+    # ----------------------------------------------------------
+    # Phase 1 toy-frame helpers
+    # ----------------------------------------------------------
+
+    def _apply_connect_dot(self, dot_widget: QFrame, is_connected: bool) -> None:
+        """Style the small connection-state dot in the toy bar."""
+        color = COLOR_SUCCESS if is_connected else COLOR_ALERT
+        dot_widget.setStyleSheet(
+            f"background-color: {color}; border-radius: 6px;"
+        )
+
+    def _apply_mute_btn_style(self, btn: QPushButton) -> None:
+        """Reflect the button's checked state in its text + role."""
+        muted = btn.isChecked()
+        btn.setText("Muted" if muted else "Mute")
+        btn.setProperty("role", "danger" if muted else "secondary")
+        self._repolish(btn)
+
+    def _show_no_battery_glyph(self, label: QLabel) -> None:
+        """Reset a battery slot to the painted no-battery glyph."""
+        label.setPixmap(_icon_no_battery().pixmap(20, 20))
+
+    def _build_motor_card(self, device_name: str, motor_idx: int,
+                          osc_addresses: dict,
+                          motor_kind: Optional[str]) -> "tuple[QFrame, dict]":
+        """Build one motor card with the Listening To / Mix two-column
+        layout. Returns (widget, motor_var_dict)."""
+        card = QFrame()
+        card.setObjectName("motorBlock")
+        card_lay = _vbox(10, 8)
+        card.setLayout(card_lay)
+
+        # Free clarity: classify the motor in the header so users can
+        # tell "Motor 0" apart from "Motor 1" without guessing.
+        if motor_kind in ("linear", "linear-d"):
+            kind_suffix = " · Thrust (linear)"
+        elif motor_kind == "vibrate":
+            kind_suffix = " · Vibrate"
+        else:
+            kind_suffix = ""
+        header = QLabel(f"Motor {motor_idx}{kind_suffix}")
+        header.setObjectName("motorCardHeader")
+        hf = header.font(); hf.setBold(True)
+        header.setFont(hf)
+        card_lay.addWidget(header)
+
+        cols = QWidget()
+        cols_lay = _hbox(0, 16)
+        cols.setLayout(cols_lay)
+
+        listen_col = self._build_listening_to_column(
+            device_name, motor_idx, osc_addresses
+        )
+        cols_lay.addWidget(listen_col, 1)
+
+        mix_col = self._build_mix_column(device_name, motor_idx)
+        cols_lay.addWidget(mix_col, 0, Qt.AlignTop)
+
+        card_lay.addWidget(cols)
+
+        # Output stays visible in Phase 1 (becomes a collapsible
+        # disclosure in Phase 2 when it has more knobs to host).
+        if motor_kind in ("linear", "linear-d"):
+            card_lay.addWidget(self._build_linear_output_row(device_name, motor_idx))
+
+        # The bar's mini-bar gives the glance view; this full-width
+        # vibe meter inside the expanded card gives the detail view.
+        vibe_meter = _RainbowMeter(maximum=1000)
+        card_lay.addWidget(vibe_meter)
+
+        return card, {"vibe_meter": _ProgressProxy(vibe_meter)}
+
+    def _build_listening_to_column(self, device_name: str, motor_idx: int,
+                                   osc_addresses: dict) -> QWidget:
+        """Zone selector + collapsible zone panel, OSC address chips,
+        interaction filter toggles. Reads/writes the same profile keys
+        as before."""
+        col = QWidget()
+        col_lay = _vbox(0, 8)
+        col.setLayout(col_lay)
+
+        header = QLabel("LISTENING TO")
+        header.setObjectName("columnHeader")
+        hf = header.font(); hf.setBold(True)
+        header.setFont(hf)
+        col_lay.addWidget(header)
+
+        current_zones = self.controller.get_profile_config(
+            device_name, f"motor_{motor_idx}_zones", "All SPS"
+        )
+        zones_state = {"value": current_zones, "expanded": False}
+
+        def zone_btn_text(value: str) -> str:
+            parts = [z.strip() for z in value.split(",") if z.strip() and z.strip() != "None"]
+            all_sps = "All SPS" in parts
+            count = len([z for z in parts if z != "All SPS"])
+            if all_sps and count:
+                return f"Select Zones (All SPS · {count} saved)"
+            if all_sps:
+                return "Select Zones (All SPS)"
+            if count:
+                return f"Select Zones ({count} enabled)"
+            return "Select Zones..."
+
+        zone_btn = QPushButton(zone_btn_text(zones_state["value"]))
+        zone_btn.setProperty("role", "secondary")
+        col_lay.addWidget(zone_btn)
+
+        zone_panel = QFrame()
+        zone_panel.setObjectName("zonePanel")
+        zone_panel_lay = _vbox(8, 4)
+        zone_panel.setLayout(zone_panel_lay)
+        zone_panel.setVisible(False)
+        col_lay.addWidget(zone_panel)
+
+        def build_zone_panel(dn=device_name, midx=motor_idx, state=zones_state,
+                             btn=zone_btn, panel=zone_panel, panel_lay=zone_panel_lay):
+            _clear_layout(panel_lay)
+
+            fresh_zones = []
+            detected = self.controller.get_detected_zones()
+            fresh_zones.extend(detected.get("Orifices", []))
+            fresh_zones.extend(detected.get("Penetrators", []))
+
+            if not fresh_zones:
+                lbl = QLabel(
+                    "No zones detected yet.\n"
+                    "Make sure VRChat is running and avatar loaded."
+                )
+                lbl.setProperty("role", "alert")
+                panel_lay.addWidget(lbl)
+                return
+
+            current_selected = [z.strip() for z in state["value"].split(",") if z.strip()]
+
+            def persist(new_val: str):
+                state["value"] = new_val
+                self.controller.update_device_config(dn, f"motor_{midx}_zones", new_val)
+                self.controller.save_profiles()
+                if hasattr(self.controller, 'force_recalculate'):
+                    self.controller.force_recalculate()
+                btn.setText(zone_btn_text(new_val) + (" ▲" if state["expanded"] else ""))
+
+            # All SPS is an additive override — toggling it on/off never
+            # touches the individual zone selections.
+            all_sps_cb = ToggleSwitch("All SPS (match any zone — overrides selections below)")
+            all_sps_cb.setChecked("All SPS" in current_selected)
+
+            def on_all_sps(checked):
+                sel = [z.strip() for z in state["value"].split(",") if z.strip()]
+                sel = [z for z in sel if z != "All SPS"]
+                if checked:
+                    sel.insert(0, "All SPS")
+                persist(", ".join(sel))
+
+            all_sps_cb.toggled.connect(on_all_sps)
+            panel_lay.addWidget(all_sps_cb)
+
+            sep_lbl = QLabel("─── Detected Zones ───")
+            sep_lbl.setProperty("muted", "true")
+            sep_lbl.setAlignment(Qt.AlignHCenter)
+            self._repolish(sep_lbl)
+            panel_lay.addWidget(sep_lbl)
+
+            def make_toggle(zone):
+                def _toggle(checked):
+                    sel = [z.strip() for z in state["value"].split(",") if z.strip()]
+                    if checked:
+                        if zone not in sel and zone != "None":
+                            sel.append(zone)
+                    else:
+                        if zone in sel:
+                            sel.remove(zone)
+                    persist(", ".join(sel))
+                return _toggle
+
+            for zone in fresh_zones:
+                if zone == "None":
+                    continue
+                cb = ToggleSwitch(zone)
+                cb.setChecked(zone in current_selected)
+                cb.toggled.connect(make_toggle(zone))
+                panel_lay.addWidget(cb)
+
+        def toggle_zone_panel(state=zones_state, btn=zone_btn, panel=zone_panel,
+                              build=build_zone_panel):
+            state["expanded"] = not state["expanded"]
+            if state["expanded"]:
+                build()
+                panel.setVisible(True)
+                btn.setText(zone_btn_text(state["value"]) + " ▲")
+            else:
+                panel.setVisible(False)
+                btn.setText(zone_btn_text(state["value"]))
+
+        zone_btn.clicked.connect(
+            lambda _=False, tog=toggle_zone_panel: tog()
+        )
+
+        # Custom OSC addresses (chips + Add Variable).
+        raw_entry = osc_addresses.get(str(motor_idx), [])
+        if isinstance(raw_entry, str):
+            addresses_list = [raw_entry] if raw_entry.strip() else []
+        elif isinstance(raw_entry, list):
+            addresses_list = [a for a in raw_entry if isinstance(a, str)]
+        else:
+            addresses_list = []
+        self._setup_motor_address_row(col_lay, device_name, motor_idx, addresses_list)
+
+        # Interaction filter toggles.
+        filter_row = QWidget()
+        filter_lay = _hbox(0, 12)
+        filter_row.setLayout(filter_lay)
+
+        def make_filter_cb(label, key, default):
+            cb = ToggleSwitch(label)
+            cb.setChecked(
+                bool(self.controller.get_profile_config(device_name, key, default))
+            )
+
+            def on_toggle(checked, k=key):
+                self.controller.update_device_config(device_name, k, bool(checked))
+                self.controller.save_profiles()
+                if hasattr(self.controller, 'force_recalculate'):
+                    self.controller.force_recalculate()
+
+            cb.toggled.connect(on_toggle)
+            return cb
+
+        filter_lay.addWidget(make_filter_cb("Touch", f"motor_{motor_idx}_touch", True))
+        filter_lay.addWidget(make_filter_cb("Penetration", f"motor_{motor_idx}_pen", True))
+        filter_lay.addWidget(make_filter_cb("Self", f"motor_{motor_idx}_self", False))
+        filter_lay.addWidget(make_filter_cb("Others", f"motor_{motor_idx}_others", True))
+        filter_lay.addStretch(1)
+        col_lay.addWidget(filter_row)
+
+        return col
+
+    def _build_mix_column(self, device_name: str, motor_idx: int) -> QWidget:
+        """Today's Position↔Speed subcard, rebranded as MIX. Phase 2 will
+        replace the subcard's contents with the real
+        Depth/Speed/Combine/Smoothing mixer UI."""
+        col = QWidget()
+        col_lay = _vbox(0, 8)
+        col.setLayout(col_lay)
+
+        header = QLabel("MIX")
+        header.setObjectName("columnHeader")
+        hf = header.font(); hf.setBold(True)
+        header.setFont(hf)
+        col_lay.addWidget(header)
+
+        col_lay.addWidget(self._build_speed_blend_subcard(device_name, motor_idx))
+        return col
+
+    def _build_linear_output_row(self, device_name: str,
+                                 motor_idx: int) -> QFrame:
+        """Mode/Idle controls for linear actuators."""
+        frame = QFrame()
+        frame.setObjectName("outputBlock")
+        lay = _vbox(8, 6)
+        frame.setLayout(lay)
+
+        header = QLabel("OUTPUT")
+        header.setObjectName("columnHeader")
+        hf = header.font(); hf.setBold(True)
+        header.setFont(hf)
+        lay.addWidget(header)
+
+        row = QWidget()
+        row_lay = _hbox(0, 12)
+        row.setLayout(row_lay)
+
+        row_lay.addWidget(QLabel("Mode:"))
+        current_mode = self.controller.get_profile_config(
+            device_name, f"motor_{motor_idx}_linear_mode", "position"
+        )
+        mode_group = self._make_segmented(
+            options=["Position", "Speed"],
+            current=("Speed" if current_mode == "speed" else "Position"),
+            on_change=lambda val, idx=motor_idx: (
+                self.controller.update_device_config(
+                    device_name, f"motor_{idx}_linear_mode", val.lower()
+                ),
+                self.controller.save_profiles(),
+                self.controller.update_linear_motor_config(device_name, idx)
+                if hasattr(self.controller, "update_linear_motor_config") else None,
+            ),
+        )
+        row_lay.addWidget(mode_group)
+
+        row_lay.addSpacing(12)
+        row_lay.addWidget(QLabel("Idle:"))
+        current_idle = self.controller.get_profile_config(
+            device_name, f"motor_{motor_idx}_linear_idle", "rest"
+        )
+        idle_group = self._make_segmented(
+            options=["Hold", "Rest"],
+            current=("Hold" if current_idle == "hold" else "Rest"),
+            on_change=lambda val, idx=motor_idx: (
+                self.controller.update_device_config(
+                    device_name, f"motor_{idx}_linear_idle", val.lower()
+                ),
+                self.controller.save_profiles(),
+                self.controller.update_linear_motor_config(device_name, idx)
+                if hasattr(self.controller, "update_linear_motor_config") else None,
+            ),
+        )
+        row_lay.addWidget(idle_group)
+        row_lay.addStretch(1)
+        lay.addWidget(row)
+
+        return frame
 
     # ----------------------------------------------------------
     # Lovense product icon (auto-detect + manual override)
@@ -1135,27 +1291,35 @@ class DeviceFrameMixin:
     # Programmatic value updates
     # ----------------------------------------------------------
 
-    def update_device_visuals(self, device_name: str, motor_idx: int, value: float):
-        """Update both the slider and vibe meter (used by the ui_slider_update
-        path, which is guarded by the controller's _is_updating_ui lock)."""
+    def _set_motor_levels(self, device_name: str, motor_idx: int, value: float):
+        """Drive both the per-motor vibe meter inside the expanded card
+        and the matching mini-bar in the collapsed toy bar."""
         if device_name not in self.device_ui_frames:
             return
-        motors = self.device_ui_frames[device_name].get("motors", [])
+        frame_data = self.device_ui_frames[device_name]
+        motors = frame_data.get("motors", [])
+        mini_bars = frame_data.get("mini_bars", [])
         if 0 <= motor_idx < len(motors):
-            motors[motor_idx]["slider"].set(value)
             motors[motor_idx]["vibe_meter"].set(value)
+            if 0 <= motor_idx < len(mini_bars):
+                mini_bars[motor_idx].set(value)
         elif motor_idx == -1:
             for mv in motors:
-                mv["slider"].set(value)
                 mv["vibe_meter"].set(value)
+            for mb in mini_bars:
+                mb.set(value)
+
+    def update_device_visuals(self, device_name: str, motor_idx: int, value: float):
+        """Programmatic motor-value update. With the legacy intensity
+        slider gone this is identical to update_motor_vibe; kept distinct
+        because only this path runs inside the controller's
+        _is_updating_ui guard."""
+        self._set_motor_levels(device_name, motor_idx, value)
 
     def update_motor_vibe(self, device_name: str, motor_idx: int, value: float):
-        """Meter-only update — leaves the user-facing slider alone."""
-        if device_name not in self.device_ui_frames:
-            return
-        motors = self.device_ui_frames[device_name].get("motors", [])
-        if 0 <= motor_idx < len(motors):
-            motors[motor_idx]["vibe_meter"].set(value)
+        """Live mixer-output meter update — called by the router on every
+        tick."""
+        self._set_motor_levels(device_name, motor_idx, value)
 
     # --- Device frame management ---
     def remove_device_frame(self, device_name: str) -> None:

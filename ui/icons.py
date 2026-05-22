@@ -140,3 +140,33 @@ def icon_cross(color: str = COLOR_ALERT, size: int = 20) -> QIcon:
     p.drawLine(QPointF(15.0, 5.0), QPointF(5.0, 15.0))
     p.end()
     return QIcon(pm)
+
+
+def icon_no_battery(color: str = COLOR_TEXT, size: int = 20) -> QIcon:
+    """Battery outline with a diagonal slash — for toys that don't report
+    a battery level. Avoids the font-dependent Unicode glyph (U+1FAAB)."""
+    pm = new_icon_pixmap(size)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing)
+    c = QColor(color)
+
+    # Battery body (outline) + positive-terminal nub.
+    p.setPen(QPen(c, 1.4))
+    p.setBrush(Qt.NoBrush)
+    p.drawRoundedRect(QRectF(2.5, 6.0, 12.0, 8.0), 1.5, 1.5)
+    p.setBrush(QBrush(c))
+    p.drawRoundedRect(QRectF(14.5, 8.5, 2.0, 3.0), 0.6, 0.6)
+
+    # Diagonal slash across the whole icon. Backstroke in the canvas
+    # color first so the slash reads cleanly where it crosses the body
+    # outline, then the slash on top in the icon color.
+    backstroke = QPen(QColor(COLOR_BG), 3.0)
+    backstroke.setCapStyle(Qt.RoundCap)
+    p.setPen(backstroke)
+    p.drawLine(QPointF(3.0, 17.0), QPointF(17.0, 3.0))
+    slash = QPen(c, 1.8)
+    slash.setCapStyle(Qt.RoundCap)
+    p.setPen(slash)
+    p.drawLine(QPointF(3.0, 17.0), QPointF(17.0, 3.0))
+    p.end()
+    return QIcon(pm)

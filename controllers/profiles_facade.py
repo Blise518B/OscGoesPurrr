@@ -80,6 +80,12 @@ class ProfilesFacade:
         # instead of auto-switching to a bound avatar profile.
         self.profile_manager.record_choice("global", profile_name)
 
+        # Per-toy mute is a session-level safety toggle, not a configured
+        # preference — drop it whenever the profile changes so a mute from
+        # the previous config doesn't silently follow the user.
+        if hasattr(self, "clear_all_device_mutes"):
+            self.clear_all_device_mutes()
+
         # Clear cached UI frames so build_stored_devices_ui doesn't short-circuit
         # and leave the previous profile's device cards on screen when the new
         # profile is empty.

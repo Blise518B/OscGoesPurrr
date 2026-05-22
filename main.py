@@ -111,7 +111,14 @@ class OscGoesPurrrApp(
         # so the Simple Mode panel can show a live battery icon next to each
         # connected toy.
         self._battery_cache: Dict[str, float] = {}
-        
+
+        # Per-toy soft-mute set. Session-only, never persisted: cleared on
+        # app start (trivially, by being an empty set here) and on every
+        # profile switch (see ProfilesFacade.switch_profile). Mute forces
+        # the engine target to 0 while the mixer keeps computing real
+        # values so the meter still shows what would be playing.
+        self._muted_devices: set = set()
+
         # Initialize components in correct order
         self._setup_components()
         
@@ -874,7 +881,7 @@ class OscGoesPurrrApp(
 
     def update_device_target(self, device_name: str, value: float, motor_index: int):
         """Update target intensity for a specific device and motor
-        
+
         Args:
             device_name: Name of the device
             value: New intensity value (0.0 to 1.0)
@@ -883,17 +890,78 @@ class OscGoesPurrrApp(
         # Prevent programmatic UI changes from echoing back to the controller
         if getattr(self, '_is_updating_ui', False):
             return
-        
+
         # Only send updates if connected
         if not self.haptic_engine or not self.haptic_engine.is_connected:
             return
-            
+
+        real_value = float(value)
+        engine_value = 0.0 if device_name in self._muted_devices else real_value
+
         # Send the command safely to the Haptic Engine
-        if self.haptic_engine:
-            self.haptic_engine.update_target(device_name, motor_index, float(value))
-        
-        # Update the corresponding vibe meter via the UI facade
-        self.ui.update_motor_vibe(device_name, motor_index, float(value))
+        self.haptic_engine.update_target(device_name, motor_index, engine_value)
+
+        # Vibe meter shows the pre-mute value so the user can still see what
+        # the mixer is producing while the toy is silent. The UI greys the
+        # meter while the device is muted.
+        self.ui.update_motor_vibe(device_name, motor_index, real_value)
+
+    def set_device_muted(self, device_name: str, muted: bool) -> None:
+        """Soft-mute a single toy (or unmute). When muted, the engine target
+        for every motor on this device is forced to 0; the router and mixer
+        keep computing so meters still reflect what *would* be playing.
+
+        Session-only — see `_muted_devices` for the rationale. The UI calls
+        this from the per-toy mute toggle in the collapsed bar."""
+        if muted:
+            if device_name in self._muted_devices:
+                return
+            self._muted_devices.add(device_name)
+            # Push 0 to every motor of this device right now rather than
+            # waiting for the next router tick — keeps the "mute is a safety
+            # toggle" promise honest.
+            if self.haptic_engine and self.haptic_engine.is_connected:
+                try:
+                    counts = self.haptic_engine.get_motor_count_map() or {}
+                except Exception:
+                    counts = {}
+                motor_count = int(counts.get(device_name, 1))
+                for motor_idx in range(motor_count):
+                    self.haptic_engine.update_target(device_name, motor_idx, 0.0)
+        else:
+            self._muted_devices.discard(device_name)
+            # Next router tick will push the real value back to the engine;
+            # no need to forcibly restore anything here.
+
+    def is_device_muted(self, device_name: str) -> bool:
+        return device_name in self._muted_devices
+
+    def clear_all_device_mutes(self) -> None:
+        """Drop all per-toy mutes. Called on profile switch so a previous
+        profile's safety toggle doesn't silently follow the user into a new
+        config."""
+        if not self._muted_devices:
+            return
+        self._muted_devices.clear()
+
+    def test_device(self, device_name: str) -> None:
+        """Fire a short test pulse on every vibrate motor of `device_name`.
+
+        Phase 1 spec: 0.3s at 0.5 intensity. Fire-and-forget so the UI never
+        blocks. Linear motors are intentionally skipped (same rationale as
+        Purr-Check and Simple Mode's `test_toy`). Distinct from `test_toy`,
+        which keeps its 1.0s/0.4 timing for the Simple Mode panel."""
+        if not (self.async_loop and self.haptic_engine and self.haptic_engine.is_connected):
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self.haptic_engine.async_test_device(
+                    device_name, intensity=0.5, duration_s=0.3
+                ),
+                self.async_loop,
+            )
+        except Exception as e:
+            self.log_message(f"test_device({device_name}) failed: {e}")
 
     
     def trigger_purr_check(self):
