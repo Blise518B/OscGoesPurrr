@@ -130,7 +130,13 @@ def smooth(prev: float, mixed: float, dt_ms: float,
     Rising (`mixed > prev`) uses `attack_ms`; falling uses
     `release_ms`. Either tau at zero (or below) disables that
     direction — the output snaps to `mixed` for that polarity. A
-    non-positive `dt_ms` also disables smoothing for safety."""
+    non-positive `dt_ms` also disables smoothing for safety.
+
+    Rate independence: `attack_ms` and `release_ms` are wall-clock
+    time constants. The `1 - exp(-dt/tau)` factor compensates for the
+    elapsed interval, so the perceived envelope shape is identical at
+    any sampling rate. Never recalibrate these values when the
+    router's tick rate changes."""
     prev_f = float(prev)
     mixed_f = float(mixed)
     dt = float(dt_ms)

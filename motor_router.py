@@ -170,6 +170,22 @@ class MotorRouter:
         # `smoothed_output` (post-mix envelope follower state). Lazily
         # created on first tick for any motor.
         self._motor_state: Dict[Tuple[str, int], Dict[str, float]] = {}
+        # Tune intermediates feed. Off by default — when nothing has set
+        # both a subscription and a callback, the per-tick check is a
+        # single None comparison. The Tune view (Phase 3) registers a
+        # subscription via TuneFacade so it can render the six-trace
+        # graph of d_raw / s_raw / d_shaped / s_shaped / mixed / out.
+        self._tune_subscription: Optional[Tuple[str, int]] = None
+        self._tune_emit_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+        # Tune input-override hook. When set and the subscribed motor is
+        # being computed, the provider's return value replaces d_raw —
+        # bypassing zones / custom addresses entirely. Lets the
+        # simulator test the mixer's behaviour with a known clean
+        # signal regardless of how the user's zone filter is configured.
+        # Provider returns None to fall through to the normal d_raw
+        # compute (e.g. when source = live VRChat, or simulated with no
+        # pattern running).
+        self._tune_value_provider: Optional[Callable[[], Optional[float]]] = None
         # Per-zone length detectors keyed by ("Orf"|"Pen", zone_name, "self"|"others").
         self._length_detectors: Dict[Tuple[str, str, str], GameDeviceLengthDetector] = {}
         # Compiled per-motor config cache.
@@ -494,7 +510,15 @@ class MotorRouter:
         """Compute the per-motor S_raw from |Δposition|/dt with the
         speed-channel's input_deadband, output_cutoff and decay_tau knobs.
         Updates `state["smoothed_speed"]` in place. Returns the post-
-        cutoff value in [0, 1] suitable for feeding into apply_curve."""
+        cutoff value in [0, 1] suitable for feeding into apply_curve.
+
+        Rate independence: `decay_tau` is a wall-clock time constant.
+        `decay = exp(-dt / decay_tau)` compensates for the elapsed
+        interval, so the perceived decay envelope is identical at any
+        router rate. Never recalibrate decay_tau when the router's
+        tick rate changes. raw_speed = (|delta| - deadband) / dt is
+        also a per-second rate so it's directly comparable across
+        sample rates."""
         last_pos = state["last_position"]
         prev_smoothed = state["smoothed_speed"]
 
@@ -537,6 +561,39 @@ class MotorRouter:
         denom = max(1.0 - cutoff, 1e-6)
         return min(1.0, (smoothed - cutoff) / denom)
 
+    def set_tune_emit_callback(self,
+                               callback: Optional[Callable[[Dict[str, Any]], None]]
+                               ) -> None:
+        """Register (or clear) the callback that receives per-tick
+        intermediates for the currently-subscribed motor. The Tune
+        facade wires this to a thread_queue push so the UI thread can
+        drain trace records in its existing queue-processing loop."""
+        self._tune_emit_callback = callback
+
+    def set_tune_subscription(self, device_name: str, motor_idx: int) -> None:
+        """Subscribe the Tune view to one motor's intermediates feed.
+        Cheap — only one motor is ever traced at a time, so the
+        per-tick check is just `if subscription == (dev, idx)`."""
+        self._tune_subscription = (str(device_name), int(motor_idx))
+
+    def clear_tune_subscription(self) -> None:
+        self._tune_subscription = None
+
+    def has_tune_subscription(self) -> bool:
+        """True when the Tune view is actively watching a motor — the
+        controller's routing tick uses this to keep the tick firing
+        even when VRChat is silent, so the trace graph stays current."""
+        return self._tune_subscription is not None
+
+    def set_tune_value_provider(self,
+                                provider: Optional[Callable[[], Optional[float]]]
+                                ) -> None:
+        """Register a callable that supplies the simulated d_raw value
+        for the subscribed motor each tick. Pass None to clear. When
+        the provider returns None the router falls back to normal
+        zone/address routing for that motor."""
+        self._tune_value_provider = provider
+
     @staticmethod
     def _coerce_float(value: Any, default: float,
                       lo: float = -1e9, hi: float = 1e9) -> float:
@@ -553,26 +610,22 @@ class MotorRouter:
             return hi
         return v
 
-    # ------------------------------------------------------------------ public
-    def _calculate_motor_target(
+    def _compute_d_raw_from_inputs(
         self,
-        device_name: str,
-        motor_idx: int,
-        config: Dict[str, Any],
+        compiled: Dict[str, Any],
         all_params: Dict[str, Any],
+        config: Dict[str, Any],
+        motor_idx: int,
         zones: Set[Tuple[str, str]],
-        profile_dict: Optional[Dict[str, Any]] = None,
     ) -> float:
-        compiled = self._compile_motor_config(
-            profile_dict if profile_dict is not None else config,
-            device_name, motor_idx, config,
-        )
-
-        # --- 1. D_raw: custom override addresses + SPS zones (max-wins) ---
+        """Max-wins combine of every input the motor listens to:
+        - Literal custom OSC addresses (O(1) dict lookups)
+        - Custom OSC address globs (fnmatch sweep)
+        - SPS zone contributions (when the motor's zone filter is set)
+        Returns a value in [0, 1]. Pure function of its inputs — used
+        by both live routing and as the fallback for the Tune view's
+        input override."""
         d_raw = 0.0
-
-        # Literal addresses get O(1) dict lookups; globs fall back to a
-        # full fnmatch sweep over params. Each contribution feeds max().
         for literal in compiled["literals"]:
             param_val = all_params.get(literal)
             if param_val is None:
@@ -609,6 +662,43 @@ class MotorRouter:
                     if contribution > best:
                         best = contribution
             d_raw = best
+        return d_raw
+
+    # ------------------------------------------------------------------ public
+    def _calculate_motor_target(
+        self,
+        device_name: str,
+        motor_idx: int,
+        config: Dict[str, Any],
+        all_params: Dict[str, Any],
+        zones: Set[Tuple[str, str]],
+        profile_dict: Optional[Dict[str, Any]] = None,
+    ) -> float:
+        compiled = self._compile_motor_config(
+            profile_dict if profile_dict is not None else config,
+            device_name, motor_idx, config,
+        )
+
+        # --- 1. D_raw: custom override addresses + SPS zones (max-wins) ---
+        # Phase 3 Tune view input override: when this is the subscribed
+        # motor and the provider returns a value, use it as d_raw and
+        # skip the normal compute. Lets the simulator test the mixer's
+        # behaviour with a known clean signal regardless of how the
+        # user's zone filter is configured. Other motors are unaffected.
+        sim_d_raw: Optional[float] = None
+        if (self._tune_value_provider is not None
+                and self._tune_subscription == (device_name, motor_idx)):
+            try:
+                sim_d_raw = self._tune_value_provider()
+            except Exception:
+                sim_d_raw = None
+
+        if sim_d_raw is not None:
+            d_raw = max(0.0, min(1.0, float(sim_d_raw)))
+        else:
+            d_raw = self._compute_d_raw_from_inputs(
+                compiled, all_params, config, motor_idx, zones
+            )
 
         # --- 2. Mixer: per-channel shaping → combine → smoothing ---
         mix = self._get_mix_config(config, motor_idx)
@@ -665,6 +755,29 @@ class MotorRouter:
         state["smoothed_output"] = smoothed
         state["last_position"] = d_raw
         state["last_time"] = now
+
+        # Emit Tune intermediates if subscribed. Zero cost when both
+        # `_tune_subscription` and `_tune_emit_callback` are None.
+        if (self._tune_subscription is not None
+                and self._tune_emit_callback is not None
+                and self._tune_subscription == (device_name, motor_idx)):
+            try:
+                self._tune_emit_callback({
+                    "type": "tune_trace",
+                    "device": device_name,
+                    "motor": motor_idx,
+                    "t_ms": now * 1000.0,
+                    "d_raw": d_raw,
+                    "s_raw": s_raw,
+                    "d_shaped": d_shaped,
+                    "s_shaped": s_shaped,
+                    "mixed": mixed,
+                    "out": smoothed,
+                })
+            except Exception:
+                # A misbehaving Tune callback must never break the
+                # router's hot path. Silently drop.
+                pass
 
         return smoothed
 
