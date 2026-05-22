@@ -13,7 +13,12 @@ class ProfilesFacade:
     def _refresh_profile_buttons_ui(self) -> None:
         """Tell the UI to redraw its profile buttons. No-op when self.ui is
         None or doesn't expose the method (early startup, headless tests)."""
-        self._refresh_profile_buttons_ui()
+        ui = getattr(self, "ui", None)
+        if ui is None:
+            return
+        refresh = getattr(ui, "_refresh_profile_buttons", None)
+        if refresh is not None:
+            refresh()
 
     def _seed_profile_with_known_devices(self, profile_name: str) -> None:
         """Make sure every known toy has a default entry in the given profile.
