@@ -34,6 +34,36 @@ def normalize_osc_value(v: float) -> float:
     """Normalizes an incoming OSC float (0.0 to 1.0) or int (0 to 255) to a safe 0.0-1.0 range."""
     return max(0.0, min(1.0, v if v <= 1.0 else v / 255.0))
 
+
+def strip_param_prefix(addr: Any) -> str:
+    """Normalise an OSC parameter address to the bare name used as a
+    parameter_store key. Accepts full `/avatar/parameters/<x>` paths,
+    bare names with a stray leading slash, or None.
+
+    Stored form is always the bare name so the UI shows clean parameter
+    names and the send path can re-add the prefix consistently.
+    """
+    s = str(addr or "").strip()
+    if s.startswith("/avatar/parameters/"):
+        s = s[len("/avatar/parameters/"):]
+    return s.lstrip("/")
+
+
+def classify_ogb_zone(path: str):
+    """Return `(zone_type, zone_name)` for an OGB-shaped path or None.
+    Zone types are 'Orf' (orifice) or 'Pen' (penetrator). Long and short
+    category forms are both accepted (`Orifice`/`Orf`, `Penetrator`/`Pen`).
+    """
+    parts = path.split("/", 3)
+    if len(parts) >= 3 and parts[0] == "OGB":
+        category = parts[1]
+        zone_name = parts[2]
+        if category in ("Orifice", "Orf"):
+            return ("Orf", zone_name)
+        if category in ("Penetrator", "Pen"):
+            return ("Pen", zone_name)
+    return None
+
 def value_to_hex_color(value: Any) -> str:
     """Convert a value to a hex color string for the OSC inspector.
 

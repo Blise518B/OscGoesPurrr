@@ -23,13 +23,6 @@ from steamvr_manifest import SteamVRManifest
 
 
 VIB_PATTERN_LIST = ["None", "Constant", "Linear", "Sine", "Throb"]
-VIB_PATTERN_TOOLTIP = (
-    "- None disables the system.\n"
-    "- Constant always pulses at the maximum allowed value.\n"
-    "- Linear scales proportionally to the incoming value.\n"
-    "- Sine eases the incoming value.\n"
-    "- Throb pulsates between on/off to prevent drift."
-)
 
 PATTERN_PROXIMITY = 0
 PATTERN_VELOCITY = 1
@@ -469,14 +462,6 @@ class SteamVREngine:
             return False
         try:
             return self._vr_apps.isApplicationInstalled(self._manifest.app_key)
-        except Exception:
-            return False
-
-    def is_autolaunch(self) -> bool:
-        if not self.is_registered():
-            return False
-        try:
-            return self._vr_apps.getApplicationAutoLaunch(self._manifest.app_key)
         except Exception:
             return False
 

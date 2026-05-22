@@ -14,11 +14,11 @@
 #   Foot_Left/Right  → FootL/R     (3)
 
 import threading
-import time
 from typing import Callable, Dict, List, Tuple
 
 from parameter_store import store
 from bhaptics_engine import BHapticsEngine, DeviceConfig, NODE_COUNTS
+from polling import PollingThread
 
 
 # (position, v1_slot, node_count)
@@ -33,11 +33,6 @@ _DEVICE_TABLE: List[Tuple[str, str, int]] = [
     ("FootL",      "Foot_Left",   3),
     ("FootR",      "Foot_Right",  3),
 ]
-
-
-def osc_path(slot: str, node_1based: int) -> str:
-    """Canonical OSC address for documentation/UI display (HerpDerpinstine v1.0)."""
-    return f"/avatar/parameters/bHaptics_{slot}_{node_1based}_bool"
 
 
 def _store_key(slot: str, node_1based: int) -> str:
@@ -56,13 +51,6 @@ def _store_key_bosc_v1(position: str, node_1based: int) -> str:
     return f"bOSC_v1_{position}_{node_1based}"
 
 
-def all_paths_for_position(position: str) -> List[str]:
-    for pos, slot, count in _DEVICE_TABLE:
-        if pos == position:
-            return [osc_path(slot, n) for n in range(1, count + 1)]
-    return []
-
-
 def _truthy(value) -> bool:
     if value is None:
         return False
@@ -74,7 +62,7 @@ def _truthy(value) -> bool:
         return False
 
 
-class BHapticsRouter:
+class BHapticsRouter(PollingThread):
     """Polls parameter_store and pushes per-device frames to the engine."""
 
     def __init__(self,
@@ -82,14 +70,13 @@ class BHapticsRouter:
                  get_device_configs: Callable[[], Dict[str, DeviceConfig]],
                  poll_rate_s: float = 0.05,
                  get_antistuck: Callable[[], Dict[str, float]] | None = None):
+        super().__init__("bHapticsRouter")
         self.engine = engine
         self.get_device_configs = get_device_configs
         self.poll_rate_s = poll_rate_s
         # Returns {"enabled": bool, "hold_s": float, "ramp_s": float}.
         # Read on every tick so config changes apply live.
         self.get_antistuck = get_antistuck or (lambda: {"enabled": False, "hold_s": 2.0, "ramp_s": 2.0})
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
         # Track last submitted dot tuple per device so we can debounce, and so
         # the debug UI can read what's currently being driven.
         self._last_dots: Dict[str, Tuple[int, ...]] = {}
@@ -110,16 +97,6 @@ class BHapticsRouter:
         self._overrides: Dict[str, Dict[int, int]] = {}
         self._overrides_lock = threading.Lock()
 
-    def start(self):
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="bHapticsRouter")
-        self._thread.start()
-
-    def stop(self):
-        self._stop.set()
-
     def _run(self):
         print("[bHaptics] Router thread started")
         while not self._stop.is_set():
@@ -127,7 +104,7 @@ class BHapticsRouter:
                 self._tick()
             except Exception as e:
                 print(f"[bHaptics][Router] tick error: {e}")
-            time.sleep(self.poll_rate_s)
+            self._interruptible_sleep(self.poll_rate_s)
 
     def get_snapshot(self) -> Dict[str, List[int]]:
         """Return a copy of the current per-device dot intensity arrays.
@@ -153,10 +130,6 @@ class BHapticsRouter:
                     self._overrides.pop(position, None)
             else:
                 slot[int(index)] = max(0, min(100, int(intensity)))
-
-    def clear_manual_overrides(self) -> None:
-        with self._overrides_lock:
-            self._overrides.clear()
 
     def _tick(self):
         if not self.engine.is_connected:

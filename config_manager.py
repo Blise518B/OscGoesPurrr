@@ -1,686 +1,31 @@
-# Config Manager - Profile and Configuration Handling
-# Extracted from OscGoesPurrr to separate concerns
+# Config Manager - ProfileManager + re-exports of the settings/ package.
+#
+# The individual settings managers (AppSettingsManager, SteamVRSettingsManager,
+# etc.) and their file-path constants live in the `settings/` package. They are
+# re-exported here so existing callers `from config_manager import X` keep
+# working.
 
 import json
 import os
-from pathlib import Path
-from typing import Dict, Any, Optional
-
-from constants import APP_NAME
-from utilities import atomic_write_json
-
-
-# AppData directory for persistent storage
-APPDATA_DIR = Path.home() / "AppData" / "Roaming" / APP_NAME
-
-# Profile file path
-PROFILE_FILE = APPDATA_DIR / "profiles.json"
-
-# App settings file path
-APP_SETTINGS_FILE = APPDATA_DIR / "app_settings.json"
-
-# SteamVR settings file path (autostart, vibration patterns, per-tracker config)
-STEAMVR_SETTINGS_FILE = APPDATA_DIR / "steamvr_settings.json"
-
-# bHaptics settings file path (Player connection, per-device enable + intensity)
-BHAPTICS_SETTINGS_FILE = APPDATA_DIR / "bhaptics_settings.json"
-
-# Hardware monitor settings file path (CPU/RAM/GPU OSC broadcaster)
-HARDWARE_MONITOR_SETTINGS_FILE = APPDATA_DIR / "hardware_monitor_settings.json"
-
-# Known devices file path — global registry of every toy that's ever been
-# connected, independent of any profile. Lets new/empty profiles still show
-# previously-seen toys with default settings.
-KNOWN_DEVICES_FILE = APPDATA_DIR / "known_devices.json"
-
-# Default app settings
-DEFAULT_APP_SETTINGS = {
-    "auto_connect": True,
-    "auto_refresh": True,
-    "auto_connect_osc": True,
-    "bind_all_interfaces": True,
-    "hide_console": True,
-    "minimize_to_tray": False,
-    # Default ON so the first launch lands on the stripped Simple Mode panel.
-    # The user can disable it from the Simple Mode panel or Settings.
-    "simple_mode": True,
-    # Simple Mode Position↔Speed blend (0.0 = pure SPS depth, 1.0 = pure
-    # motion-derived speed). Per-toy profiles have their own per-motor
-    # `motor_{i}_speed_blend` key; this app-level value applies in Simple Mode.
-    "simple_mode_speed_blend": 0.0,
-    # Speed-blend tuning knobs (exposed in the UI as debug spinboxes for now —
-    # we can fold them back into hard-coded defaults once the values settle).
-    # See MotorRouter for the math; these mirror its instance attributes
-    # and must stay in sync with the `DEFAULT_SPEED_*` class constants there.
-    "speed_input_deadband": 0.005,
-    "speed_gain": 0.75,
-    "speed_decay_tau": 0.30,
-    "speed_output_cutoff": 0.02,
-    # Feature toggles — turn off subsystems the user doesn't need so their
-    # background threads / OSC traffic don't run. All default ON to match
-    # pre-toggle behaviour.
-    "feature_osc_inspector": True,
-    "feature_bhaptics": True,
-    "feature_hardware_monitor": True,
-    "feature_steamvr_haptics": True,
-    "feature_steamvr_battery": True,
-    "feature_intiface": True,
-}
-
-# Ensure AppData directory exists
-os.makedirs(APPDATA_DIR, exist_ok=True)
-
-
-class AppSettingsManager:
-    """Manages app-level settings (auto_connect, auto_refresh, etc.)"""
-    
-    def __init__(self):
-        self.settings: Dict[str, Any] = {}
-        self._load_or_create_defaults()
-    
-    def _load_or_create_defaults(self) -> None:
-        """Load settings from JSON file or create defaults if not exists."""
-        if os.path.exists(APP_SETTINGS_FILE):
-            try:
-                with open(APP_SETTINGS_FILE, 'r') as f:
-                    loaded = json.load(f)
-                    # Merge with defaults to ensure all keys exist
-                    self.settings = {**DEFAULT_APP_SETTINGS, **loaded}
-                    print(f"Loaded app settings from {APP_SETTINGS_FILE}")
-                    return
-            except (json.JSONDecodeError, IOError) as e:
-                print(f"App settings load error: {e}, using defaults")
-        
-        # Use defaults if file doesn't exist or has errors
-        self.settings = DEFAULT_APP_SETTINGS.copy()
-        self._save_settings()
-    
-    def _save_settings(self) -> None:
-        """Save current settings to JSON file."""
-        try:
-            atomic_write_json(APP_SETTINGS_FILE, self.settings, indent=2)
-        except OSError as e:
-            print(f"App settings save error: {e}")
-
-    def get(self, key: str, default=None) -> Any:
-        """Get a setting value"""
-        return self.settings.get(key, default)
-
-    def set(self, key: str, value: Any) -> None:
-        """Set a setting value and save to file"""
-        self.settings[key] = value
-        self._save_settings()
-
-    def update_setting(self, key: str, value: Any) -> None:
-        """Update a setting value and persist to file (alias for set)"""
-        self.settings[key] = value
-        self._save_settings()
-
-
-class SteamVRSettingsManager:
-    """Persists SteamVR Haptics section state: autostart flag, vibration
-    pattern configs, no-data timeout, and per-tracker config (keyed by
-    tracker serial). Lives outside profiles because SteamVR trackers are
-    physical hardware, not avatar-bound state.
-    """
-
-    DEFAULTS: Dict[str, Any] = {
-        "autostart_with_steamvr": False,
-        "auto_connect_steamvr": True,
-        # Joke / vanity feature: register a virtual OpenVR driver so the
-        # user's connected toys show up alongside the HMD/controllers in
-        # SteamVR's device strip. Off by default — opt-in from Settings.
-        "show_toys_in_steamvr": False,
-        "no_data_enabled": True,
-        # Two-timer anti-stuck (ported from VRC-Haptic-Pancake): mid-range
-        # values are cleared faster than saturated (==1.0) ones, since a
-        # legitimate full-contact hold is more common than a stuck mid value.
-        "no_data_timeout_active_s": 7,
-        "no_data_timeout_peaked_s": 15,
-        "battery_poll_interval_s": 5.0,
-        "patterns": [
-            {"pattern": "Linear",   "str_min": 0,  "str_max": 80, "speed": 4},   # PROXIMITY
-            {"pattern": "None",     "str_min": 40, "str_max": 80, "speed": 16},  # VELOCITY
-        ],
-        "trackers": {},  # serial -> {enabled, address_list, multiplier_override, battery_threshold}
-    }
-
-    @staticmethod
-    def _strip_param_prefix(name: str) -> str:
-        """Normalise a parameter name: accept full /avatar/parameters/<x>
-        paths or bare names. Stored form is always the bare name so the
-        UI shows clean parameter names and the send path can re-add the
-        prefix consistently."""
-        s = str(name or "").strip()
-        if s.startswith("/avatar/parameters/"):
-            s = s[len("/avatar/parameters/"):]
-        return s.lstrip("/")
-
-    def _migrate_tracker_addresses(self) -> bool:
-        """Strip any legacy `/avatar/parameters/` prefixes from saved tracker
-        address lists and battery-out addresses. Returns True if anything
-        changed so the caller can re-save."""
-        changed = False
-        trackers = self.settings.get("trackers") or {}
-        for cfg in trackers.values():
-            if not isinstance(cfg, dict):
-                continue
-            addrs = cfg.get("address_list")
-            if isinstance(addrs, list):
-                new_addrs = []
-                for a in addrs:
-                    if not isinstance(a, str):
-                        continue
-                    bare = self._strip_param_prefix(a)
-                    new_addrs.append(bare if bare else "...")
-                if new_addrs != addrs:
-                    cfg["address_list"] = new_addrs
-                    changed = True
-            bat = cfg.get("battery_osc_address")
-            if isinstance(bat, str):
-                bare = self._strip_param_prefix(bat)
-                if bare != bat:
-                    cfg["battery_osc_address"] = bare
-                    changed = True
-        return changed
-
-    def __init__(self):
-        self.settings: Dict[str, Any] = {}
-        self._load_or_create_defaults()
-
-    def _load_or_create_defaults(self) -> None:
-        if os.path.exists(STEAMVR_SETTINGS_FILE):
-            try:
-                with open(STEAMVR_SETTINGS_FILE, 'r') as f:
-                    loaded = json.load(f)
-                    if isinstance(loaded, dict):
-                        merged = {**self.DEFAULTS, **loaded}
-                        if "patterns" not in loaded or not isinstance(loaded.get("patterns"), list) \
-                                or len(loaded["patterns"]) != 2:
-                            merged["patterns"] = self.DEFAULTS["patterns"]
-                        if "trackers" not in loaded or not isinstance(loaded.get("trackers"), dict):
-                            merged["trackers"] = {}
-                        self.settings = merged
-                        # One-shot migration: older configs stored full
-                        # `/avatar/parameters/MyParam` paths. The router and
-                        # UI both speak in bare names now, so strip the
-                        # prefix at load time and persist the cleaned form.
-                        if self._migrate_tracker_addresses():
-                            self._save()
-                        return
-            except (json.JSONDecodeError, IOError) as e:
-                print(f"SteamVR settings load error: {e}, using defaults")
-        # Deep-copy defaults so callers don't mutate the class attribute
-        self.settings = json.loads(json.dumps(self.DEFAULTS))
-        self._save()
-
-    def _save(self) -> None:
-        try:
-            atomic_write_json(STEAMVR_SETTINGS_FILE, self.settings, indent=2)
-        except OSError as e:
-            print(f"SteamVR settings save error: {e}")
-
-    # ---- Top-level fields ----
-    def get_autostart(self) -> bool:
-        return bool(self.settings.get("autostart_with_steamvr", False))
-
-    def set_autostart(self, value: bool) -> None:
-        self.settings["autostart_with_steamvr"] = bool(value)
-        self._save()
-
-    def get_auto_connect(self) -> bool:
-        return bool(self.settings.get("auto_connect_steamvr", True))
-
-    def set_auto_connect(self, value: bool) -> None:
-        self.settings["auto_connect_steamvr"] = bool(value)
-        self._save()
-
-    def get_show_toys(self) -> bool:
-        return bool(self.settings.get("show_toys_in_steamvr", False))
-
-    def set_show_toys(self, value: bool) -> None:
-        self.settings["show_toys_in_steamvr"] = bool(value)
-        self._save()
-
-    def get_no_data(self) -> Dict[str, Any]:
-        # Backward-compat: older configs only stored `no_data_timeout_s`. Use
-        # it as the peaked timeout (the original semantics) and derive a
-        # reasonable active timeout if nothing newer is set.
-        legacy = self.settings.get("no_data_timeout_s")
-        peaked = self.settings.get("no_data_timeout_peaked_s",
-                                   legacy if legacy is not None else 15)
-        active = self.settings.get("no_data_timeout_active_s",
-                                   max(1, int(int(peaked) * 7 / 15)))
-        return {
-            "enabled": bool(self.settings.get("no_data_enabled", True)),
-            "timeout_active_s": int(active),
-            "timeout_peaked_s": int(peaked),
-            # Keep the legacy key in the response so any old consumer that
-            # reads `timeout_s` keeps working (we use the peaked value).
-            "timeout_s": int(peaked),
-        }
-
-    def set_no_data(self, enabled: bool, timeout_active_s: int,
-                    timeout_peaked_s: int) -> None:
-        self.settings["no_data_enabled"] = bool(enabled)
-        self.settings["no_data_timeout_active_s"] = int(timeout_active_s)
-        self.settings["no_data_timeout_peaked_s"] = int(timeout_peaked_s)
-        # Mirror to the legacy key so a downgrade still finds a sane value.
-        self.settings["no_data_timeout_s"] = int(timeout_peaked_s)
-        self._save()
-
-    def get_battery_interval(self) -> float:
-        try:
-            return float(self.settings.get("battery_poll_interval_s", 5.0))
-        except (TypeError, ValueError):
-            return 5.0
-
-    def set_battery_interval(self, seconds: float) -> None:
-        try:
-            seconds = max(1.0, float(seconds))
-        except (TypeError, ValueError):
-            seconds = 5.0
-        self.settings["battery_poll_interval_s"] = seconds
-        self._save()
-
-    # ---- Pattern configs (2 entries: PROXIMITY, VELOCITY) ----
-    def get_patterns(self) -> list:
-        return list(self.settings.get("patterns", self.DEFAULTS["patterns"]))
-
-    def set_pattern(self, index: int, pattern_dict: Dict[str, Any]) -> None:
-        patterns = list(self.settings.get("patterns", []))
-        while len(patterns) <= index:
-            patterns.append(dict(self.DEFAULTS["patterns"][len(patterns)]))
-        patterns[index] = dict(pattern_dict)
-        self.settings["patterns"] = patterns
-        self._save()
-
-    # ---- Per-tracker configs ----
-    def get_tracker_dict(self) -> Dict[str, Dict[str, Any]]:
-        return dict(self.settings.get("trackers", {}))
-
-    def get_tracker(self, serial: str) -> Dict[str, Any]:
-        trackers = self.settings.setdefault("trackers", {})
-        if serial not in trackers:
-            trackers[serial] = {
-                "enabled": True,
-                "address_list": ["..."],
-                "multiplier_override": 1.0,
-                "battery_threshold": 20,
-                "battery_osc_address": "",
-            }
-            self._save()
-        else:
-            # Backfill new fields onto pre-existing entries.
-            if "battery_osc_address" not in trackers[serial]:
-                trackers[serial]["battery_osc_address"] = ""
-                self._save()
-        return dict(trackers[serial])
-
-    def set_tracker(self, serial: str, cfg: Dict[str, Any]) -> None:
-        # Defensive normalisation: addresses are always stored as bare
-        # parameter names (no /avatar/parameters/ prefix). The UI strips
-        # too, but a stale caller pasting a full path here shouldn't
-        # poison the on-disk state.
-        clean = dict(cfg)
-        addrs = clean.get("address_list")
-        if isinstance(addrs, list):
-            clean["address_list"] = [
-                self._strip_param_prefix(a) or "..."
-                for a in addrs if isinstance(a, str)
-            ] or ["..."]
-        bat = clean.get("battery_osc_address")
-        if isinstance(bat, str):
-            clean["battery_osc_address"] = self._strip_param_prefix(bat)
-        trackers = self.settings.setdefault("trackers", {})
-        trackers[serial] = clean
-        self._save()
-
-
-class BHapticsSettingsManager:
-    """Persists bHaptics integration state: Player connection endpoint,
-    auto-connect flag, and per-device enable + intensity. Per-device
-    defaults match the v1.0.0 bHapticsOSC layout (9 device categories)."""
-
-    _DEFAULT_DEVICES: Dict[str, Dict[str, Any]] = {
-        "Head":      {"enabled": True, "intensity": 100},
-        "VestFront": {"enabled": True, "intensity": 100},
-        "VestBack":  {"enabled": True, "intensity": 100},
-        "ForearmL":  {"enabled": True, "intensity": 100},
-        "ForearmR":  {"enabled": True, "intensity": 100},
-        "HandL":     {"enabled": True, "intensity": 100},
-        "HandR":     {"enabled": True, "intensity": 100},
-        "FootL":     {"enabled": True, "intensity": 100},
-        "FootR":     {"enabled": True, "intensity": 100},
-    }
-
-    DEFAULTS: Dict[str, Any] = {
-        "auto_connect": True,
-        "host": "127.0.0.1",
-        "port": 15881,
-        # Anti-stuck: when a dot's input value hasn't changed for `hold_s`
-        # seconds, linearly ramp it down to 0 over `ramp_s` seconds. Guards
-        # against avatars that latch a contact at full strength and never
-        # release it (e.g. when the sending controller drops out mid-touch).
-        "antistuck_enabled": True,
-        "antistuck_hold_s": 2.0,
-        "antistuck_ramp_s": 2.0,
-        # When the bHaptics Player connection state changes, push the bool
-        # to this VRChat avatar parameter so an animation can react. Bare
-        # parameter name — the /avatar/parameters/ prefix is added at send
-        # time, matching the Hardware Monitor convention.
-        "osc_connected_enabled": True,
-        "osc_connected_param": "bHaptics_Connected",
-        "devices": _DEFAULT_DEVICES,
-    }
-
-    @staticmethod
-    def _strip_param_prefix(name: str) -> str:
-        """Normalise a parameter name: accept full /avatar/parameters/<x>
-        paths or bare names. Stored form is always the bare name so the
-        send path can re-add the prefix consistently."""
-        s = str(name or "").strip()
-        if s.startswith("/avatar/parameters/"):
-            s = s[len("/avatar/parameters/"):]
-        return s.lstrip("/")
-
-    def __init__(self):
-        self.settings: Dict[str, Any] = {}
-        self._load_or_create_defaults()
-
-    def _load_or_create_defaults(self) -> None:
-        if os.path.exists(BHAPTICS_SETTINGS_FILE):
-            try:
-                with open(BHAPTICS_SETTINGS_FILE, 'r') as f:
-                    loaded = json.load(f)
-                    if isinstance(loaded, dict):
-                        merged = {**self.DEFAULTS, **loaded}
-                        # Backfill any newly-added devices into older configs.
-                        devs = dict(self._DEFAULT_DEVICES)
-                        devs.update(loaded.get("devices", {}) or {})
-                        merged["devices"] = devs
-                        self.settings = merged
-                        return
-            except (json.JSONDecodeError, IOError) as e:
-                print(f"bHaptics settings load error: {e}, using defaults")
-        self.settings = json.loads(json.dumps(self.DEFAULTS))
-        self._save()
-
-    def _save(self) -> None:
-        try:
-            atomic_write_json(BHAPTICS_SETTINGS_FILE, self.settings, indent=2)
-        except OSError as e:
-            print(f"bHaptics settings save error: {e}")
-
-    # ---- Endpoint ----
-    def get_host(self) -> str:
-        return str(self.settings.get("host", "127.0.0.1"))
-
-    def get_port(self) -> int:
-        try:
-            return int(self.settings.get("port", 15881))
-        except (TypeError, ValueError):
-            return 15881
-
-    def set_endpoint(self, host: str, port: int) -> None:
-        self.settings["host"] = str(host or "127.0.0.1").strip()
-        try:
-            self.settings["port"] = int(port)
-        except (TypeError, ValueError):
-            self.settings["port"] = 15881
-        self._save()
-
-    # ---- Auto-connect ----
-    def get_auto_connect(self) -> bool:
-        return bool(self.settings.get("auto_connect", True))
-
-    def set_auto_connect(self, value: bool) -> None:
-        self.settings["auto_connect"] = bool(value)
-        self._save()
-
-    # ---- Anti-stuck ----
-    def get_antistuck(self) -> Dict[str, Any]:
-        return {
-            "enabled": bool(self.settings.get("antistuck_enabled", True)),
-            "hold_s": float(self.settings.get("antistuck_hold_s", 2.0)),
-            "ramp_s": float(self.settings.get("antistuck_ramp_s", 2.0)),
-        }
-
-    def set_antistuck(self, enabled: bool, hold_s: float, ramp_s: float) -> None:
-        self.settings["antistuck_enabled"] = bool(enabled)
-        try:
-            self.settings["antistuck_hold_s"] = max(0.1, float(hold_s))
-        except (TypeError, ValueError):
-            self.settings["antistuck_hold_s"] = 2.0
-        try:
-            self.settings["antistuck_ramp_s"] = max(0.1, float(ramp_s))
-        except (TypeError, ValueError):
-            self.settings["antistuck_ramp_s"] = 2.0
-        self._save()
-
-    # ---- Connected-state OSC bool ----
-    def get_osc_connected(self) -> Dict[str, Any]:
-        return {
-            "enabled": bool(self.settings.get("osc_connected_enabled", True)),
-            "param":   self._strip_param_prefix(
-                self.settings.get("osc_connected_param", "bHaptics_Connected")
-            ) or "bHaptics_Connected",
-        }
-
-    def set_osc_connected(self, enabled: bool, param: str) -> None:
-        self.settings["osc_connected_enabled"] = bool(enabled)
-        cleaned = self._strip_param_prefix(param) or "bHaptics_Connected"
-        self.settings["osc_connected_param"] = cleaned
-        self._save()
-
-    # ---- Devices ----
-    def get_devices(self) -> Dict[str, Dict[str, Any]]:
-        return dict(self.settings.get("devices", {}))
-
-    def get_device(self, position: str) -> Dict[str, Any]:
-        devs = self.settings.setdefault("devices", {})
-        if position not in devs:
-            devs[position] = dict(self._DEFAULT_DEVICES.get(position, {"enabled": True, "intensity": 100}))
-            self._save()
-        return dict(devs[position])
-
-    def set_device(self, position: str, cfg: Dict[str, Any]) -> None:
-        devs = self.settings.setdefault("devices", {})
-        devs[position] = dict(cfg)
-        self._save()
-
-
-class HardwareMonitorSettingsManager:
-    """Persists Hardware Monitor settings: master toggle, poll rate, GPU enable,
-    per-stat send toggles, and per-stat OSC address overrides. Output is sent
-    over the existing VRChat OSC client so any VRChat avatar parameter can
-    receive the values."""
-
-    # User-facing parameter names. The VRChat /avatar/parameters/ prefix is
-    # hidden from the user and re-added at send time by the engine.
-    _DEFAULT_ADDRESSES: Dict[str, str] = {
-        "cpu_percent":   "HW_CPU",
-        "ram_used_gb":   "HW_RAM_Used",
-        "ram_total_gb":  "HW_RAM_Total",
-        "gpu_percent":   "HW_GPU",
-        "vram_used_gb":  "HW_VRAM_Used",
-        "vram_total_gb": "HW_VRAM_Total",
-    }
-
-    @staticmethod
-    def _strip_param_prefix(name: str) -> str:
-        """Migration helper: older configs and any user paste that includes
-        '/avatar/parameters/' gets normalised to the bare parameter name."""
-        s = str(name or "").strip()
-        if s.startswith("/avatar/parameters/"):
-            s = s[len("/avatar/parameters/"):]
-        return s.lstrip("/")
-
-    _DEFAULT_TOGGLES: Dict[str, bool] = {
-        "cpu_percent":   True,
-        "ram_used_gb":   True,
-        "ram_total_gb":  True,
-        "gpu_percent":   True,
-        "vram_used_gb":  True,
-        "vram_total_gb": True,
-    }
-
-    DEFAULTS: Dict[str, Any] = {
-        "enabled": False,
-        "send_osc": True,
-        "gpu_enabled": True,
-        "poll_rate_s": 2.0,
-        "addresses": _DEFAULT_ADDRESSES,
-        "send_toggles": _DEFAULT_TOGGLES,
-    }
-
-    def __init__(self):
-        self.settings: Dict[str, Any] = {}
-        self._load_or_create_defaults()
-
-    def _load_or_create_defaults(self) -> None:
-        if os.path.exists(HARDWARE_MONITOR_SETTINGS_FILE):
-            try:
-                with open(HARDWARE_MONITOR_SETTINGS_FILE, 'r') as f:
-                    loaded = json.load(f)
-                    if isinstance(loaded, dict):
-                        merged = {**self.DEFAULTS, **loaded}
-                        # Backfill any newly-added keys for forward-compat.
-                        addrs = dict(self._DEFAULT_ADDRESSES)
-                        for k, v in (loaded.get("addresses", {}) or {}).items():
-                            addrs[k] = self._strip_param_prefix(v) or self._DEFAULT_ADDRESSES.get(k, "")
-                        merged["addresses"] = addrs
-                        tgs = dict(self._DEFAULT_TOGGLES)
-                        tgs.update(loaded.get("send_toggles", {}) or {})
-                        merged["send_toggles"] = tgs
-                        self.settings = merged
-                        return
-            except (json.JSONDecodeError, IOError) as e:
-                print(f"Hardware monitor settings load error: {e}, using defaults")
-        self.settings = json.loads(json.dumps(self.DEFAULTS))
-        self._save()
-
-    def _save(self) -> None:
-        try:
-            atomic_write_json(HARDWARE_MONITOR_SETTINGS_FILE, self.settings, indent=2)
-        except OSError as e:
-            print(f"Hardware monitor settings save error: {e}")
-
-    def get_all(self) -> Dict[str, Any]:
-        # Return a shallow copy so callers can't mutate persisted state.
-        out = dict(self.settings)
-        out["addresses"] = dict(self.settings.get("addresses", {}))
-        out["send_toggles"] = dict(self.settings.get("send_toggles", {}))
-        return out
-
-    def get_enabled(self) -> bool:
-        return bool(self.settings.get("enabled", False))
-
-    def set_enabled(self, value: bool) -> None:
-        self.settings["enabled"] = bool(value)
-        self._save()
-
-    def get_send_osc(self) -> bool:
-        return bool(self.settings.get("send_osc", True))
-
-    def set_send_osc(self, value: bool) -> None:
-        self.settings["send_osc"] = bool(value)
-        self._save()
-
-    def get_gpu_enabled(self) -> bool:
-        return bool(self.settings.get("gpu_enabled", True))
-
-    def set_gpu_enabled(self, value: bool) -> None:
-        self.settings["gpu_enabled"] = bool(value)
-        self._save()
-
-    def get_poll_rate(self) -> float:
-        try:
-            return max(0.25, float(self.settings.get("poll_rate_s", 2.0)))
-        except (TypeError, ValueError):
-            return 2.0
-
-    def set_poll_rate(self, seconds: float) -> None:
-        try:
-            self.settings["poll_rate_s"] = max(0.25, float(seconds))
-        except (TypeError, ValueError):
-            self.settings["poll_rate_s"] = 2.0
-        self._save()
-
-    def get_address(self, key: str) -> str:
-        return str(self.settings.get("addresses", {}).get(key, self._DEFAULT_ADDRESSES.get(key, "")))
-
-    def set_address(self, key: str, address: str) -> None:
-        addrs = self.settings.setdefault("addresses", {})
-        clean = self._strip_param_prefix(address)
-        addrs[key] = clean or self._DEFAULT_ADDRESSES.get(key, "")
-        self._save()
-
-    def get_send_toggle(self, key: str) -> bool:
-        return bool(self.settings.get("send_toggles", {}).get(key, True))
-
-    def set_send_toggle(self, key: str, value: bool) -> None:
-        toggles = self.settings.setdefault("send_toggles", {})
-        toggles[key] = bool(value)
-        self._save()
-
-
-class KnownDevicesRegistry:
-    """Global registry of every toy that's ever been connected.
-
-    Stored separately from profiles so switching to (or creating) a new empty
-    profile still knows about toys the user has used before. Each entry holds
-    the structural facts about the toy (motor_count, motor_kinds) — anything
-    profile-specific (zones, custom OSC, filters) stays inside the profile.
-    """
-
-    def __init__(self):
-        self.devices: Dict[str, Any] = {}
-        self._load()
-
-    def _load(self) -> None:
-        if os.path.exists(KNOWN_DEVICES_FILE):
-            try:
-                with open(KNOWN_DEVICES_FILE, 'r') as f:
-                    loaded = json.load(f)
-                    if isinstance(loaded, dict):
-                        self.devices = loaded
-                        return
-            except (json.JSONDecodeError, IOError) as e:
-                print(f"Known devices load error: {e}")
-        self.devices = {}
-
-    def save(self) -> None:
-        try:
-            atomic_write_json(KNOWN_DEVICES_FILE, self.devices, indent=2)
-        except OSError as e:
-            print(f"Known devices save error: {e}")
-
-    def register(self, name: str, motor_count: int, motor_kinds=None) -> bool:
-        """Record/refresh a toy. Returns True if anything was added or changed."""
-        if not name:
-            return False
-        entry = self.devices.get(name, {})
-        changed = False
-        if entry.get("motor_count") != motor_count:
-            entry["motor_count"] = motor_count
-            changed = True
-        if motor_kinds is not None and entry.get("motor_kinds") != motor_kinds:
-            entry["motor_kinds"] = list(motor_kinds)
-            changed = True
-        if name not in self.devices or changed:
-            self.devices[name] = entry
-            self.save()
-            return True
-        return False
-
-    def forget(self, name: str) -> None:
-        if name in self.devices:
-            del self.devices[name]
-            self.save()
-
-    def all(self) -> Dict[str, Any]:
-        return dict(self.devices)
+from typing import Any, Dict, Optional
+
+from utilities import atomic_write_json, strip_param_prefix
+
+from settings import (
+    APPDATA_DIR,
+    APP_SETTINGS_FILE,
+    BHAPTICS_SETTINGS_FILE,
+    HARDWARE_MONITOR_SETTINGS_FILE,
+    KNOWN_DEVICES_FILE,
+    PROFILE_FILE,
+    STEAMVR_SETTINGS_FILE,
+    AppSettingsManager,
+    BHapticsSettingsManager,
+    DEFAULT_APP_SETTINGS,
+    HardwareMonitorSettingsManager,
+    KnownDevicesRegistry,
+    SteamVRSettingsManager,
+)
 
 
 class ProfileManager:
@@ -817,17 +162,7 @@ class ProfileManager:
 
         Safe to run multiple times (idempotent).
         """
-        prefix = "/avatar/parameters/"
         migrated = False
-
-        def clean(addr: str) -> str:
-            if not isinstance(addr, str):
-                return ""
-            if addr.startswith(prefix):
-                return addr[len(prefix):]
-            if addr.startswith("/"):
-                return addr[1:]
-            return addr
 
         for source in (self.profiles, self.avatar_profiles):
             for profile in source.values():
@@ -836,33 +171,35 @@ class ProfileManager:
                     if isinstance(osc_addresses, dict):
                         for key, val in list(osc_addresses.items()):
                             if isinstance(val, str):
-                                cleaned = clean(val)
+                                cleaned = strip_param_prefix(val)
                                 new_list = [cleaned] if cleaned else []
                                 osc_addresses[key] = new_list
                                 migrated = True
                             elif isinstance(val, list):
-                                new_list = [clean(a) for a in val if isinstance(a, str) and a.strip()]
+                                new_list = [strip_param_prefix(a) for a in val if isinstance(a, str) and a.strip()]
                                 if new_list != val:
                                     osc_addresses[key] = new_list
                                     migrated = True
 
                     # Legacy single osc_address key
                     legacy_addr = device.get("osc_address", "")
-                    if isinstance(legacy_addr, str) and (legacy_addr.startswith(prefix) or legacy_addr.startswith("/")):
-                        device["osc_address"] = clean(legacy_addr)
+                    if isinstance(legacy_addr, str) and (
+                        legacy_addr.startswith("/avatar/parameters/") or legacy_addr.startswith("/")
+                    ):
+                        device["osc_address"] = strip_param_prefix(legacy_addr)
                         migrated = True
 
         if migrated:
             self.save_profiles()
-    
+
     def load_profiles(self) -> Dict[str, Any]:
         """Load profiles from JSON file or create default if not exists
-        
+
         Returns:
             Dictionary containing all loaded profiles
         """
         return self._load_or_create_default()
-    
+
     def save_profiles(self) -> None:
         """Save current profiles to JSON file in the v2 schema."""
         payload = {
@@ -949,15 +286,6 @@ class ProfileManager:
         finally:
             self.current_avatar_id = prev
         return info["name"] if info["kind"] == "avatar" else None
-
-    def get_profiles_for_avatar(self, avatar_id: Optional[str]) -> list:
-        """All avatar-profile names bound to `avatar_id` (insertion order)."""
-        if not avatar_id:
-            return []
-        return [
-            n for n, bound in self.avatar_bindings.items()
-            if bound == avatar_id and n in self.avatar_profiles
-        ]
 
     def set_current_avatar(self, avatar_id: Optional[str]) -> Optional[str]:
         """Update `current_avatar_id`. Returns the bound avatar-profile name

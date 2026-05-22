@@ -5,35 +5,24 @@
 # Mirrors the Buttplug-side MotorRouter pattern: stateless evaluator
 # polled on a timer, debounced so we only push when the value changes.
 
-import threading
-import time
 from typing import Callable, Dict, Optional
 
 from parameter_store import store
+from polling import PollingThread
 from steamvr_engine import SteamVREngine, TrackerConfig
+from utilities import strip_param_prefix
 
 
-class SteamVRRouter:
+class SteamVRRouter(PollingThread):
     def __init__(self,
                  engine: SteamVREngine,
                  get_all_configs: Callable[[], Dict[str, TrackerConfig]],
                  poll_rate_s: float = 0.033):
+        super().__init__("SteamVRRouter")
         self.engine = engine
         self.get_all_configs = get_all_configs
         self.poll_rate_s = poll_rate_s
-        self._stop = threading.Event()
-        self._thread: threading.Thread | None = None
         self._last_sent: Dict[str, float] = {}
-
-    def start(self):
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="SteamVRRouter")
-        self._thread.start()
-
-    def stop(self):
-        self._stop.set()
 
     def _run(self):
         print("[SteamVR] Router thread started")
@@ -42,7 +31,7 @@ class SteamVRRouter:
                 self._tick()
             except Exception as e:
                 print(f"[SteamVR][Router] tick error: {e}")
-            time.sleep(self.poll_rate_s)
+            self._interruptible_sleep(self.poll_rate_s)
 
     def _tick(self):
         params = store.get_all_parameters()
@@ -62,14 +51,8 @@ class SteamVRRouter:
                 # Stored form is the bare parameter name (UI strips any
                 # /avatar/parameters/ the user pastes), but stay defensive
                 # in case a stale config or upgrade path slips a prefix
-                # through — parameter_store keys are always the short form
-                # (UDP handler and OSCQuery JSON loader both strip
-                # avatar/parameters/).
-                lookup = addr.strip()
-                if lookup.startswith("/avatar/parameters/"):
-                    lookup = lookup[len("/avatar/parameters/"):]
-                elif lookup.startswith("/"):
-                    lookup = lookup[1:]
+                # through — parameter_store keys are always the short form.
+                lookup = strip_param_prefix(addr)
                 if lookup in params:
                     try:
                         v = float(params[lookup])
@@ -83,7 +66,7 @@ class SteamVRRouter:
                 self.engine.set_strength(serial, best)
 
 
-class SteamVRBatteryBroadcaster:
+class SteamVRBatteryBroadcaster(PollingThread):
     """Periodically polls the SteamVR engine for each device's battery level
     and pushes the value to its configured outgoing OSC address. Sends are
     debounced so the same value doesn't go out twice in a row."""
@@ -94,28 +77,17 @@ class SteamVRBatteryBroadcaster:
                  send_osc: Callable[[str, float], None],
                  poll_interval_s: float = 5.0,
                  get_auto_connect: Optional[Callable[[], bool]] = None):
+        super().__init__("SteamVRBatteryBroadcaster")
         self.engine = engine
         self.get_all_configs = get_all_configs
         self.send_osc = send_osc
         self.poll_interval_s = poll_interval_s
         # When True, try to (re)connect to SteamVR each tick if not alive.
         self.get_auto_connect = get_auto_connect or (lambda: False)
-        self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
         self._last_sent: Dict[str, float] = {}
 
     def set_interval(self, seconds: float):
         self.poll_interval_s = max(1.0, float(seconds))
-
-    def start(self):
-        if self._thread is not None and self._thread.is_alive():
-            return
-        self._stop.clear()
-        self._thread = threading.Thread(target=self._run, daemon=True, name="SteamVRBatteryBroadcaster")
-        self._thread.start()
-
-    def stop(self):
-        self._stop.set()
 
     def _run(self):
         print("[SteamVR] Battery broadcaster started")
@@ -124,11 +96,7 @@ class SteamVRBatteryBroadcaster:
                 self._tick()
             except Exception as e:
                 print(f"[SteamVR][Battery] tick error: {e}")
-            # Sleep in small slices so stop() responds quickly.
-            slept = 0.0
-            while slept < self.poll_interval_s and not self._stop.is_set():
-                time.sleep(0.25)
-                slept += 0.25
+            self._interruptible_sleep(self.poll_interval_s, slice_s=0.25)
 
     def _tick(self):
         # Auto-(re)connect: cheap when already alive (try_init early-outs),

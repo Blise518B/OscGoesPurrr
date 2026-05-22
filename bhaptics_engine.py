@@ -26,16 +26,6 @@ except Exception:
     _WEBSOCKET_AVAILABLE = False
 
 
-# bHaptics device positions (v2 Player SDK names). These match the v1 schema's
-# device categories one-for-one.
-POSITIONS: List[str] = [
-    "Head",
-    "VestFront", "VestBack",
-    "ForearmL", "ForearmR",
-    "HandL", "HandR",
-    "FootL", "FootR",
-]
-
 NODE_COUNTS: Dict[str, int] = {
     "Head": 6,
     "VestFront": 20, "VestBack": 20,
@@ -63,7 +53,7 @@ _POSITION_ALIASES: Dict[str, str] = {
 
 def _canon_position(raw) -> Optional[str]:
     """Normalise a position string from a Player status broadcast into one of
-    the canonical POSITIONS values, or None if it doesn't map cleanly."""
+    the canonical NODE_COUNTS keys, or None if it doesn't map cleanly."""
     if not isinstance(raw, str):
         return None
     lo = raw.replace("_", "").replace("-", "").lower()

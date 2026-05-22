@@ -104,9 +104,6 @@ class SteamVRFacade:
     def get_steamvr_pattern_configs(self) -> List[Dict[str, Any]]:
         return list(self._steamvr_settings().get_patterns())
 
-    def get_steamvr_no_data(self) -> Dict[str, Any]:
-        return self._steamvr_settings().get_no_data()
-
     def set_steamvr_no_data(self, enabled: bool, timeout_active_s: int,
                             timeout_peaked_s: int) -> None:
         self._steamvr_settings().set_no_data(enabled, timeout_active_s, timeout_peaked_s)

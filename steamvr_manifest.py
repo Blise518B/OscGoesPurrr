@@ -36,17 +36,12 @@ class SteamVRManifest:
         else:
             self.devlauncher_path = self.manifest_path + ".devlaunch.sh"
 
-        self._recent = False
         self._data = None
         self._prepare()
 
     @property
     def is_app_bundled(self) -> bool:
         return getattr(sys, "frozen", False)
-
-    @property
-    def is_recent(self) -> bool:
-        return self._recent
 
     def _prepare(self):
         binary_path_type = "binary_path_windows" if sys.platform == "win32" else "binary_path_linux"
@@ -100,12 +95,4 @@ class SteamVRManifest:
         )
         if not self.is_app_bundled:
             self._save_devlauncher()
-        self._recent = True
 
-    def remove(self):
-        for path in (self.devlauncher_path, self.manifest_path):
-            try:
-                os.remove(path)
-            except FileNotFoundError:
-                pass
-        self._recent = True
