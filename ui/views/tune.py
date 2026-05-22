@@ -175,9 +175,15 @@ class TuneMixin:
         stop_btn.setFixedHeight(BTN_HEIGHT_SMALL)
         stop_btn.setProperty("role", "secondary")
         pr_lay.addWidget(stop_btn)
+        playing_label = QLabel("")
+        playing_label.setStyleSheet(f"color: {COLOR_SUCCESS}; font-weight: bold;")
+        pr_lay.addWidget(playing_label)
         pr_lay.addStretch(1)
         self._tune_widgets["pattern_combo"] = pattern_combo
         self._tune_widgets["pattern_row"] = pattern_row
+        self._tune_widgets["play_btn"] = play_btn
+        self._tune_widgets["stop_btn"] = stop_btn
+        self._tune_widgets["playing_label"] = playing_label
         parent_layout.addWidget(pattern_row)
 
         send_row = QWidget()
@@ -338,10 +344,14 @@ class TuneMixin:
         def on_pattern_changed(_idx):
             status = self.controller.tune_get_status()
             if not status.get("pattern_running"):
+                # Even when not running, refresh the playing-label so a
+                # future Play picks up the new name.
+                self._tune_refresh_play_state()
                 return
             pattern_id = pattern_combo.currentData()
             if pattern_id:
                 self.controller.tune_start_pattern(str(pattern_id))
+                self._tune_refresh_play_state()
         pattern_combo.currentIndexChanged.connect(on_pattern_changed)
 
         def on_send_to_toy(checked):
@@ -406,6 +416,8 @@ class TuneMixin:
         graph = self._tune_widgets.get("graph")
         if graph is not None:
             graph.clear()
+        # Play needs a selected motor — refresh button state.
+        self._tune_refresh_play_state()
 
         # Rebuild the embedded Mix subcard for the new motor.
         mc_lay: QVBoxLayout = self._tune_widgets["mix_container_lay"]
@@ -436,6 +448,8 @@ class TuneMixin:
             w = self._tune_widgets.get(key)
             if w is not None:
                 w.setVisible(is_sim)
+        # Play/Stop enabled state depends on source too.
+        self._tune_refresh_play_state()
 
     def _tune_on_play(self) -> None:
         combo: QComboBox = self._tune_widgets["pattern_combo"]
@@ -444,10 +458,43 @@ class TuneMixin:
         pattern_id = combo.currentData()
         if not pattern_id:
             return
-        self.controller.tune_start_pattern(str(pattern_id))
+        if self.controller.tune_start_pattern(str(pattern_id)):
+            self._tune_refresh_play_state()
 
     def _tune_on_stop(self) -> None:
         self.controller.tune_stop_pattern()
+        self._tune_refresh_play_state()
+
+    def _tune_refresh_play_state(self) -> None:
+        """Re-evaluate Play/Stop enabled state and the playing-label
+        text from the controller's current status. Called after Play /
+        Stop / pattern-change clicks and after motor-selection or
+        source changes."""
+        if not hasattr(self, "_tune_widgets"):
+            return
+        play_btn = self._tune_widgets.get("play_btn")
+        stop_btn = self._tune_widgets.get("stop_btn")
+        playing_label = self._tune_widgets.get("playing_label")
+        pattern_combo = self._tune_widgets.get("pattern_combo")
+        if play_btn is None or stop_btn is None:
+            return
+        status = self.controller.tune_get_status()
+        is_running = bool(status.get("pattern_running"))
+        is_sim = (status.get("source") == _SOURCE_SIMULATED)
+        has_motor = self._tune_widgets.get("current_selection") is not None
+        # Play: enabled only when in simulated mode with a motor
+        # selected and nothing currently playing.
+        play_btn.setEnabled(is_sim and has_motor and not is_running)
+        stop_btn.setEnabled(is_running)
+        if playing_label is not None:
+            if is_running and pattern_combo is not None:
+                pid = pattern_combo.currentData()
+                playing_label.setText(
+                    f"● Playing {self._tune_pattern_label(pid)}"
+                    if pid else "● Playing"
+                )
+            else:
+                playing_label.setText("")
 
     # ----------------------------------------------------------
     # Phase 3.5 signal-flow stages strip
