@@ -83,8 +83,10 @@ Contents, left to right:
   draw a custom "battery with slash" QPainter glyph (see
   `ui/icons.py` for the existing pattern). No Unicode 🪫 — too
   font-dependent.
-* **Vibe meter.** Aggregate across motors: `max(motor_levels)`.
-  Greyed out when muted.
+* **Vibe meter.** One mini-bar per motor, stacked horizontally
+  inside the bar. Greyed out when muted. Per-motor (vs aggregate
+  `max`) gives at-a-glance visibility of motor imbalance without
+  having to expand the toy.
 * **⏻ Mute.** Per-toy soft-mute. When ON, the engine target for every
   motor on this toy is forced to 0; the mixer continues computing
   internally so the graph still shows real values. **Not persisted** —
@@ -171,7 +173,8 @@ Reset reverts that one channel on that one motor.
 
 ### Help Mode
 
-A single toggle in the toolbar (or sidebar). When ON:
+A toggle in the header of each view that uses it — Device Routing
+today, the Tune tab when Phase 3 lands. When ON:
 
 * A small `?` badge appears next to every knob, toggle, and section
   header in the Device Routing and Tune views.
@@ -206,16 +209,6 @@ tuning flow.
   by grepping the codebase + the on-disk file before the PR — the
   slider may never have been persisted, in which case nothing to
   delete.
-
-### Phase 1 open decisions
-
-* **Test button behaviour.** 0.3 s pulse at 0.5? Ramp 0 → 1 → 0 over
-  1 s? Hold-to-test (press and hold)? Recommend the simple fixed
-  pulse for v1.
-* **Per-curve visibility in the bar's vibe meter.** Currently
-  proposed as `max(motors)`. Could also show one mini-bar per motor.
-  Recommend max for simplicity until multi-motor toys are more
-  common.
 
 ---
 
