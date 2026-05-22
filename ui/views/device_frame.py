@@ -6,6 +6,7 @@ by OscGoesPurrrUI.__init__ (self.controller, self.invoker, etc.)."""
 from typing import List, Optional, Dict, Any, Callable
 import os
 import sys
+import time as _time
 
 from PySide6.QtCore import (
     Qt, QTimer, Signal, QObject, QEvent, QSize, QPointF, QRectF
@@ -54,6 +55,7 @@ from ui.widgets import (
     install_rainbow_scrollbars as _install_rainbow_scrollbars,
 )
 from ui.help_mode import HelpBadge as _HelpBadge
+from ui.trace_graph import TraceGraph as _TraceGraph
 
 
 class DeviceFrameMixin:
@@ -358,7 +360,7 @@ class DeviceFrameMixin:
         )
         cols_lay.addWidget(listen_col, 1)
 
-        mix_col = self._build_mix_column(device_name, motor_idx)
+        mix_col, mini_graph = self._build_mix_column(device_name, motor_idx)
         cols_lay.addWidget(mix_col, 0, Qt.AlignTop)
 
         card_lay.addWidget(cols)
@@ -373,7 +375,10 @@ class DeviceFrameMixin:
         vibe_meter = _RainbowMeter(maximum=1000)
         card_lay.addWidget(vibe_meter)
 
-        return card, {"vibe_meter": _ProgressProxy(vibe_meter)}
+        return card, {
+            "vibe_meter": _ProgressProxy(vibe_meter),
+            "mini_graph": mini_graph,
+        }
 
     def _build_listening_to_column(self, device_name: str, motor_idx: int,
                                    osc_addresses: dict) -> QWidget:
@@ -562,10 +567,11 @@ class DeviceFrameMixin:
 
         return col
 
-    def _build_mix_column(self, device_name: str, motor_idx: int) -> QWidget:
-        """Today's Position↔Speed subcard, rebranded as MIX. Phase 2 will
-        replace the subcard's contents with the real
-        Depth/Speed/Combine/Smoothing mixer UI."""
+    def _build_mix_column(self, device_name: str,
+                          motor_idx: int) -> "tuple[QWidget, _TraceGraph]":
+        """MIX column: header + per-channel mixer UI + total-output
+        mini-graph. Returns (column_widget, mini_graph) so the motor-
+        card builder can register the mini-graph for live updates."""
         col = QWidget()
         col_lay = _vbox(0, 8)
         col.setLayout(col_lay)
@@ -580,15 +586,17 @@ class DeviceFrameMixin:
         header_lay.addWidget(header)
         header_lay.addWidget(self._make_help_badge(
             "Mix",
-            "How the listening input becomes motor output. Phase 1 "
-            "keeps today's Position↔Speed blend; Phase 2 will swap in "
-            "per-channel Depth/Speed mixing with shaping curves."
+            "How the listening input becomes motor output. Per-channel "
+            "Depth and Speed each go through a curve and gain, then "
+            "combine (sum or max), then run through a post-mix "
+            "envelope follower."
         ))
         header_lay.addStretch(1)
         col_lay.addWidget(header_row)
 
-        col_lay.addWidget(self._build_mix_subcard(device_name, motor_idx))
-        return col
+        subcard, mini_graph = self._build_mix_subcard(device_name, motor_idx)
+        col_lay.addWidget(subcard)
+        return col, mini_graph
 
     def _build_linear_output_row(self, device_name: str,
                                  motor_idx: int) -> QFrame:
@@ -976,7 +984,17 @@ class DeviceFrameMixin:
         )
         lay.addWidget(smooth_panel)
 
-        return card
+        # Small sparkline of the final post-smoothing output for this
+        # motor. The same TraceGraph widget that the Tune view's big
+        # multi-trace graph uses, sized down to a single trace at low
+        # height. Data source is update_motor_vibe (existing path), not
+        # the Tune intermediates feed — keeps the router silent when
+        # Tune is closed.
+        mini_graph = _TraceGraph(window_s=3.0)
+        mini_graph.setFixedHeight(40)
+        lay.addWidget(mini_graph)
+
+        return card, mini_graph
 
     def _build_mix_channel_card(self, device_name: str, motor_idx: int,
                                 channel_key: str, label: str,
@@ -1674,20 +1692,29 @@ class DeviceFrameMixin:
     # ----------------------------------------------------------
 
     def _set_motor_levels(self, device_name: str, motor_idx: int, value: float):
-        """Drive both the per-motor vibe meter inside the expanded card
-        and the matching mini-bar in the collapsed toy bar."""
+        """Drive the per-motor vibe meter inside the expanded card, the
+        matching mini-bar in the collapsed toy bar, and the Mix card's
+        scrolling mini-graph."""
         if device_name not in self.device_ui_frames:
             return
         frame_data = self.device_ui_frames[device_name]
         motors = frame_data.get("motors", [])
         mini_bars = frame_data.get("mini_bars", [])
+        now = _time.monotonic()
         if 0 <= motor_idx < len(motors):
-            motors[motor_idx]["vibe_meter"].set(value)
+            mv = motors[motor_idx]
+            mv["vibe_meter"].set(value)
             if 0 <= motor_idx < len(mini_bars):
                 mini_bars[motor_idx].set(value)
+            mg = mv.get("mini_graph")
+            if mg is not None:
+                mg.push_sample(_TraceGraph.DEFAULT_TRACE_ID, now, float(value))
         elif motor_idx == -1:
             for mv in motors:
                 mv["vibe_meter"].set(value)
+                mg = mv.get("mini_graph")
+                if mg is not None:
+                    mg.push_sample(_TraceGraph.DEFAULT_TRACE_ID, now, float(value))
             for mb in mini_bars:
                 mb.set(value)
 
