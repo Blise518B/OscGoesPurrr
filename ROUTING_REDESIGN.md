@@ -447,11 +447,23 @@ Three new pieces:
    `tune_set_send_to_toy()`. The mixin owns the running pattern
    generator and the trace subscription.
 
-The UI side is a `QtCharts`-or-`QPainter` widget that consumes the
-trace queue. `QtCharts` is fine if the dependency is already
-acceptable; otherwise a custom `QPainter` widget with a ring buffer
-is straightforward and matches the project's "draw widgets ourselves"
-approach already used for `RainbowMeter`.
+The UI side is a custom `QPainter` widget (`TraceGraph`) that consumes
+the trace queue. It uses a per-trace ring buffer and matches the
+project's "draw widgets ourselves" convention already used by
+`RainbowMeter`, `BHapticsDotGrid`, and the icons in `ui/icons.py`.
+The same widget renders the big Tune graph and the small per-motor
+mini-graph in the Device Routing Mix subcard (see below); only the
+size and the configured trace set differ.
+
+### Mini-graph in the Device Routing Mix card
+
+Each motor's Mix subcard in Device Routing gets a small total-output
+sparkline at the bottom — the same `TraceGraph` widget, sized down
+and configured with a single trace (the final post-smoothing
+output). Data source is the existing per-motor value path
+(`update_motor_vibe`), not the Tune intermediates feed, so the cost
+stays zero when the Tune tab is closed and the router doesn't have
+to emit per-tick traces for every motor of every connected toy.
 
 ### Signal-flow visualization (stretch goal — Phase 3.5)
 
@@ -485,17 +497,6 @@ Ship the main multi-trace graph first; add the stages strip as a
 Phase 3.5 if users find the main graph cluttered or hard to map
 back to the Mix controls. Both views share the same data so the
 strip is purely a render-layer addition.
-
-### Phase 3 open decisions
-
-* **Graph window length.** Default 3 s; could expose a zoom in the
-  toolbar (1 s / 3 s / 10 s). Recommend ship with 3 s only.
-* **Mini-graph in the Device Routing motor card.** Cheap to add a
-  small total-output-only trace at the bottom of the Mix card.
-  Tempting but adds visual noise to the routing UI. Skip for v1;
-  add later if users ask.
-* **Render tech.** `QtCharts` vs custom `QPainter` — defer to
-  implementation time, no design implication.
 
 ---
 
