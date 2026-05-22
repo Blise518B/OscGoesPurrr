@@ -39,7 +39,6 @@ Tick a box as each test lands. Tests live in
 - [x] Parses comma-separated zone string into a set
 - [x] Drops empty and `"None"` zone entries
 - [x] Detects `"All SPS"` and exposes `is_all_sps`
-- [x] Falls back to legacy `motor_{i}_zone` key when `motor_{i}_zones` missing
 
 ### `_zone_contribution` filter matrix (router method)
 - [x] `allow_touch=False` blocks both TouchSelf and TouchOthers

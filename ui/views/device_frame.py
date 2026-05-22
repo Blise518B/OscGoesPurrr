@@ -167,11 +167,8 @@ class DeviceFrameMixin:
             motor_label.setObjectName("motorLabel")
             top_lay.addWidget(motor_label)
 
-            legacy_zone = self.controller.get_profile_config(
-                device_name, f"motor_{motor_idx}_zone", "All SPS"
-            )
             current_zones = self.controller.get_profile_config(
-                device_name, f"motor_{motor_idx}_zones", legacy_zone or "All SPS"
+                device_name, f"motor_{motor_idx}_zones", "All SPS"
             )
 
             zones_state = {"value": current_zones, "expanded": False}

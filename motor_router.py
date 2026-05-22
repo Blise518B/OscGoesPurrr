@@ -389,10 +389,9 @@ class MotorRouter:
         (e.g. the user toggling a checkbox) safely invalidates the entry.
         """
         addr_zone_key = f"motor_{motor_idx}_zones"
-        addr_legacy_key = f"motor_{motor_idx}_zone"
         osc_addresses = config.get("osc_addresses", {})
         raw_entry = osc_addresses.get(str(motor_idx))
-        zones_str = config.get(addr_zone_key, config.get(addr_legacy_key, ""))
+        zones_str = config.get(addr_zone_key, "")
 
         # Cheap fingerprint of the inputs that drive the compiled value.
         token = (

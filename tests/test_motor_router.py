@@ -49,12 +49,6 @@ class TestCompileMotorConfig:
         assert compiled["is_all_sps"] is True
         assert compiled["has_zone_filter"] is True
 
-    def test_falls_back_to_legacy_zone_key(self, router):
-        # Legacy single-zone string when the new list-form key is missing.
-        cfg = self._config_with(motor_0_zone="Boob")
-        compiled = router._compile_motor_config({}, "dev", 0, cfg)
-        assert compiled["allowed_zones"] == {"Boob"}
-
     def test_no_zones_has_no_filter(self, router):
         cfg = self._config_with()
         compiled = router._compile_motor_config({}, "dev", 0, cfg)
