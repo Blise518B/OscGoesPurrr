@@ -917,8 +917,13 @@ class OscGoesPurrrUI(
             self.window.move(int(x), int(y))
 
     def get_geometry(self) -> str:
+        # Width/height come from geometry() (client-area size, matches
+        # resize()). x/y come from pos() (frame position, matches move()) —
+        # mixing geometry().x()/y() with move() makes the window walk
+        # down-and-right by the title-bar height on every restart.
         g = self.window.geometry()
-        return _format_tk_geometry(g.width(), g.height(), g.x(), g.y())
+        p = self.window.pos()
+        return _format_tk_geometry(g.width(), g.height(), p.x(), p.y())
 
     def set_close_handler(self, callback) -> None:
         self.window.set_close_handler(callback)
