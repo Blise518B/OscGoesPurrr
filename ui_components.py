@@ -68,6 +68,7 @@ from ui.views.steamvr import SteamVRMixin
 from ui.views.bhaptics import BHapticsMixin
 from ui.views.hardware_monitor import HardwareMonitorMixin
 from ui.views.device_frame import DeviceFrameMixin
+from ui.views.tune import TuneMixin
 
 
 # ============================================================
@@ -515,6 +516,7 @@ class OscGoesPurrrUI(
     BHapticsMixin,
     HardwareMonitorMixin,
     DeviceFrameMixin,
+    TuneMixin,
 ):
     """UI Component class — handles all GUI rendering and updates."""
 
@@ -656,7 +658,7 @@ class OscGoesPurrrUI(
         self.main_stack = QStackedWidget()
         root_layout.addWidget(self.main_stack, 1)
 
-        view_names = ["Dashboard", "Simple Mode", "Device Routing",
+        view_names = ["Dashboard", "Simple Mode", "Device Routing", "Tune",
                       "SteamVR Device Comms", "bHaptics", "Hardware Monitor",
                       "OSC Inspector", "OSC Diagnostics", "System Log",
                       "Settings", "Help"]
@@ -664,6 +666,7 @@ class OscGoesPurrrUI(
             "Dashboard": self._build_dashboard_view,
             "Simple Mode": self._build_simple_mode_view,
             "Device Routing": self._build_device_routing_view,
+            "Tune": self._build_tune_view,
             "SteamVR Device Comms": self._build_steamvr_view,
             "bHaptics": self._build_bhaptics_view,
             "Hardware Monitor": self._build_hardware_monitor_view,
@@ -735,7 +738,7 @@ class OscGoesPurrrUI(
         lay.addWidget(title)
         lay.addSpacing(20)
 
-        nav_buttons = ["Dashboard", "Simple Mode", "Device Routing",
+        nav_buttons = ["Dashboard", "Simple Mode", "Device Routing", "Tune",
                        "SteamVR Device Comms", "bHaptics", "Hardware Monitor",
                        "OSC Inspector", "OSC Diagnostics", "System Log",
                        "Settings", "Help"]

@@ -43,15 +43,29 @@ class TraceGraph(QWidget):
                  traces: Optional[Iterable[Tuple[str, str]]] = None,
                  window_s: float = 3.0,
                  parent: Optional[QWidget] = None) -> None:
+        """`traces` is an iterable of (trace_id, color) or
+        (trace_id, color, style_dict). style_dict may contain
+        `width` (float, default 1.6) and `dash` (one of 'solid',
+        'dash', 'dot', 'dashdot'; default 'solid'). Dashed/dotted
+        styles let overlapping traces stay individually readable —
+        useful for the Tune view's Raw vs Influence pairs that lie
+        on top of each other at default gain/curve."""
         super().__init__(parent)
         if traces is None:
             traces = [(self.DEFAULT_TRACE_ID, COLOR_SUCCESS)]
         self._traces: dict = {}
-        for trace_id, color in traces:
+        for spec in traces:
+            if len(spec) == 2:
+                trace_id, color = spec
+                style: dict = {}
+            else:
+                trace_id, color, style = spec
             self._traces[trace_id] = {
                 "color": str(color),
                 "visible": True,
                 "samples": deque(maxlen=_MAX_SAMPLES_PER_TRACE),
+                "width": float(style.get("width", 1.6)),
+                "dash": str(style.get("dash", "solid")),
             }
         self._window_s = float(window_s)
         self.setMinimumHeight(36)
@@ -122,8 +136,15 @@ class TraceGraph(QWidget):
             samples = trace["samples"]
             if len(samples) < 2:
                 continue
-            pen = QPen(QColor(trace["color"]), 1.6)
+            pen = QPen(QColor(trace["color"]), float(trace.get("width", 1.6)))
             pen.setCosmetic(True)
+            dash = trace.get("dash", "solid")
+            if dash == "dash":
+                pen.setStyle(Qt.DashLine)
+            elif dash == "dot":
+                pen.setStyle(Qt.DotLine)
+            elif dash == "dashdot":
+                pen.setStyle(Qt.DashDotLine)
             p.setPen(pen)
             poly = QPolygonF()
             for t, v in samples:

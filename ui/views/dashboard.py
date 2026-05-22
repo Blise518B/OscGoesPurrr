@@ -834,6 +834,9 @@ class DashboardMixin:
         # Device Routing is entirely about Intiface toy motor mapping, so hide
         # it when the user has turned Intiface off.
         "Device Routing":        ("feature_intiface",),
+        # Tune view shares the same mix subcard and routes through the
+        # Buttplug pipeline, so hide it when Intiface is off.
+        "Tune":                  ("feature_intiface",),
     }
 
     def _feature_allows_view(self, view_name: str) -> bool:
