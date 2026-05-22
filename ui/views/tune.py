@@ -70,14 +70,32 @@ class TuneMixin:
     # ----------------------------------------------------------
 
     def _build_tune_view(self, parent_layout: QVBoxLayout):
-        # Title row — Tune view doesn't get a Help Mode toggle yet; the
-        # Phase 1 toggle in Device Routing's header controls the global
-        # state for both views, but Tune's controls don't have badges
-        # wired yet (incremental — badges land in a follow-up).
+        # Title row with the Help Mode toggle — same pattern as
+        # Device Routing's header. The toggle is global state shared
+        # between the two views (persisted in app_settings); flipping
+        # it here also flips badge visibility in Device Routing.
+        title_row = QWidget()
+        title_lay = _hbox(0, 8)
+        title_row.setLayout(title_lay)
+        title_lay.addStretch(1)
         title = QLabel("Tune")
         title.setObjectName("viewTitle")
         title.setAlignment(Qt.AlignHCenter)
-        parent_layout.addWidget(title)
+        title_lay.addWidget(title)
+        title_lay.addStretch(1)
+
+        help_toggle = ToggleSwitch("Help Mode")
+        help_toggle.setChecked(
+            bool(self.controller.get_app_setting("help_mode_enabled", False))
+        )
+
+        def on_help_toggled(checked):
+            self.controller.set_app_setting("help_mode_enabled", bool(checked))
+            self._set_help_badges_visible(bool(checked))
+
+        help_toggle.toggled.connect(on_help_toggled)
+        title_lay.addWidget(help_toggle)
+        parent_layout.addWidget(title_row)
 
         # Cache widget refs so update_tune_trace and the source/motor
         # callbacks can find them later. Init on first view build.
@@ -111,6 +129,13 @@ class TuneMixin:
         source_combo = QComboBox()
         source_combo.addItems(["Simulated", "Live VRChat"])
         tb_lay.addWidget(source_combo)
+        tb_lay.addWidget(self._make_help_badge(
+            "Source",
+            "<b>Simulated</b> injects a synthetic value directly into "
+            "the selected motor's d_raw, bypassing zones and OSC. "
+            "<b>Live VRChat</b> uses real avatar parameters through "
+            "the normal routing pipeline."
+        ))
         self._tune_widgets["source_combo"] = source_combo
 
         tb_lay.addStretch(1)
@@ -131,6 +156,17 @@ class TuneMixin:
         for pat in self.controller.tune_list_patterns():
             pattern_combo.addItem(self._tune_pattern_label(pat), pat)
         pr_lay.addWidget(pattern_combo)
+        pr_lay.addWidget(self._make_help_badge(
+            "Patterns",
+            "Pre-made waveforms for testing the mixer. <b>Slow / "
+            "Medium / Fast strokes</b> are pure sines. "
+            "<b>Fast-in / slow-out</b> exercises asymmetric attack. "
+            "<b>Burst</b> tests the post-mix envelope follower's "
+            "response to step inputs; <b>Trapezoidal burst</b> is a "
+            "more realistic stroke shape with gradual edges. "
+            "<b>Tease</b> modulates the carrier amplitude with a "
+            "random walk. Switching while playing hot-swaps."
+        ))
         play_btn = QPushButton("▶ Play")
         play_btn.setFixedHeight(BTN_HEIGHT_SMALL)
         play_btn.setProperty("role", "secondary")
@@ -154,6 +190,14 @@ class TuneMixin:
             bool(self.controller.tune_get_status().get("send_to_toy", False))
         )
         sr_lay.addWidget(send_toggle)
+        sr_lay.addWidget(self._make_help_badge(
+            "Send to toy",
+            "Safety switch. With this <b>OFF</b> (default), the "
+            "engine receives 0 for the selected motor even though "
+            "the mixer keeps computing — the trace graph still "
+            "shows real values but no physical movement happens. "
+            "Turn <b>ON</b> to feel what the mixer is producing."
+        ))
         sr_lay.addStretch(1)
         self._tune_widgets["send_to_toy_toggle"] = send_toggle
         self._tune_widgets["send_row"] = send_row
@@ -207,10 +251,25 @@ class TuneMixin:
         legend_lay = _vbox(8, 4)
         legend.setLayout(legend_lay)
         legend.setMinimumWidth(160)
+        legend_header_row = QWidget()
+        lhr = _hbox(0, 6)
+        legend_header_row.setLayout(lhr)
         legend_header = QLabel("Traces")
         lhf = legend_header.font(); lhf.setBold(True)
         legend_header.setFont(lhf)
-        legend_lay.addWidget(legend_header)
+        lhr.addWidget(legend_header)
+        lhr.addWidget(self._make_help_badge(
+            "Traces",
+            "Toggle individual lines in the main graph. "
+            "<b>Raw</b> = the router's input before shaping. "
+            "<b>Influence</b> = post-curve, post-gain (dashed). "
+            "<b>Post-mix</b> = combined value before smoothing "
+            "(dotted, off by default). "
+            "<b>Final output</b> = what the engine receives, after "
+            "the envelope follower (bold green)."
+        ))
+        lhr.addStretch(1)
+        legend_lay.addWidget(legend_header_row)
         for t_id, label, color, default_vis, style in _TUNE_TRACES:
             # Annotate the label with the line style so the legend
             # matches what's drawn on the graph.
@@ -411,6 +470,14 @@ class TuneMixin:
         hf = header.font(); hf.setBold(True)
         header.setFont(hf)
         hr_lay.addWidget(header)
+        hr_lay.addWidget(self._make_help_badge(
+            "Signal flow",
+            "Small sparklines of each mixer stage's output over the "
+            "last ~1 second. Click a stage card to focus the main "
+            "graph on just that stage's input/output traces — useful "
+            "for tuning one part of the chain in isolation. "
+            "<b>Show all traces</b> restores the default visibility."
+        ))
         hr_lay.addStretch(1)
         show_all_btn = QPushButton("Show all traces")
         show_all_btn.setFixedHeight(BTN_HEIGHT_SMALL)
