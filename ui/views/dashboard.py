@@ -1050,10 +1050,29 @@ class DashboardMixin:
     # ----------------------------------------------------------
 
     def _build_device_routing_view(self, parent_layout: QVBoxLayout):
+        # Title row: centered title + Help Mode toggle on the right.
+        title_row = QWidget()
+        title_lay = _hbox(0, 8)
+        title_row.setLayout(title_lay)
+        title_lay.addStretch(1)
         title = QLabel("Device Routing")
         title.setObjectName("viewTitle")
         title.setAlignment(Qt.AlignHCenter)
-        parent_layout.addWidget(title)
+        title_lay.addWidget(title)
+        title_lay.addStretch(1)
+
+        help_toggle = ToggleSwitch("Help Mode")
+        help_toggle.setChecked(
+            bool(self.controller.get_app_setting("help_mode_enabled", False))
+        )
+
+        def on_help_toggled(checked):
+            self.controller.set_app_setting("help_mode_enabled", bool(checked))
+            self._set_help_badges_visible(bool(checked))
+
+        help_toggle.toggled.connect(on_help_toggled)
+        title_lay.addWidget(help_toggle)
+        parent_layout.addWidget(title_row)
 
         self.devices_container_frame = _Card(dark_bg=True)
         container_lay = _vbox(10, 6)

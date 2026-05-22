@@ -588,6 +588,11 @@ class OscGoesPurrrUI(
         self.unified_devices_frame: Optional[QWidget] = None
         self.unified_devices_layout: Optional[QVBoxLayout] = None
 
+        # Help Mode badge registry. Populated by _make_help_badge as
+        # views are built; toggled in unison by _set_help_badges_visible.
+        # Persisted state lives in app_settings["help_mode_enabled"].
+        self._help_badges: list = []
+
         # Network & debug view
         self.sps_status_label: Optional[QLabel] = None
         self.osc_debugger_button: Optional[QPushButton] = None

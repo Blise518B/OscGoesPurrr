@@ -53,6 +53,7 @@ from ui.widgets import (
     RainbowMeter as _RainbowMeter,
     install_rainbow_scrollbars as _install_rainbow_scrollbars,
 )
+from ui.help_mode import HelpBadge as _HelpBadge
 
 
 class DeviceFrameMixin:
@@ -299,6 +300,31 @@ class DeviceFrameMixin:
         """Reset a battery slot to the painted no-battery glyph."""
         label.setPixmap(_icon_no_battery().pixmap(20, 20))
 
+    def _make_help_badge(self, title: str, text: str) -> "_HelpBadge":
+        """Create a `?` badge and register it with the UI's Help Mode
+        list. Badge starts in whatever visibility matches the current
+        persisted help_mode_enabled app setting."""
+        badge = _HelpBadge(title, text)
+        if not hasattr(self, "_help_badges"):
+            self._help_badges = []
+        self._help_badges.append(badge)
+        badge.setVisible(
+            bool(self.controller.get_app_setting("help_mode_enabled", False))
+        )
+        return badge
+
+    def _set_help_badges_visible(self, visible: bool) -> None:
+        """Show or hide every registered Help Mode badge. Dead refs
+        (C++ widget destroyed on view rebuild) are pruned lazily."""
+        if not hasattr(self, "_help_badges"):
+            return
+        visible = bool(visible)
+        for badge in list(self._help_badges):
+            try:
+                badge.setVisible(visible)
+            except RuntimeError:
+                self._help_badges.remove(badge)
+
     def _build_motor_card(self, device_name: str, motor_idx: int,
                           osc_addresses: dict,
                           motor_kind: Optional[str]) -> "tuple[QFrame, dict]":
@@ -358,11 +384,22 @@ class DeviceFrameMixin:
         col_lay = _vbox(0, 8)
         col.setLayout(col_lay)
 
+        header_row = QWidget()
+        header_lay = _hbox(0, 6)
+        header_row.setLayout(header_lay)
         header = QLabel("LISTENING TO")
         header.setObjectName("columnHeader")
         hf = header.font(); hf.setBold(True)
         header.setFont(hf)
-        col_lay.addWidget(header)
+        header_lay.addWidget(header)
+        header_lay.addWidget(self._make_help_badge(
+            "Listening To",
+            "What this motor reacts to: detected zones, specific OSC "
+            "parameter addresses, and per-interaction-type filters "
+            "(Touch / Penetration / Self / Others)."
+        ))
+        header_lay.addStretch(1)
+        col_lay.addWidget(header_row)
 
         current_zones = self.controller.get_profile_config(
             device_name, f"motor_{motor_idx}_zones", "All SPS"
@@ -381,9 +418,19 @@ class DeviceFrameMixin:
                 return f"Select Zones ({count} enabled)"
             return "Select Zones..."
 
+        zone_row = QWidget()
+        zone_row_lay = _hbox(0, 6)
+        zone_row.setLayout(zone_row_lay)
         zone_btn = QPushButton(zone_btn_text(zones_state["value"]))
         zone_btn.setProperty("role", "secondary")
-        col_lay.addWidget(zone_btn)
+        zone_row_lay.addWidget(zone_btn, 1)
+        zone_row_lay.addWidget(self._make_help_badge(
+            "Zone selector",
+            "Which OGB zones drive this motor. <b>All SPS</b> matches "
+            "any detected zone; individual toggles bind to specific "
+            "orifices or penetrators."
+        ))
+        col_lay.addWidget(zone_row)
 
         zone_panel = QFrame()
         zone_panel.setObjectName("zonePanel")
@@ -523,11 +570,22 @@ class DeviceFrameMixin:
         col_lay = _vbox(0, 8)
         col.setLayout(col_lay)
 
+        header_row = QWidget()
+        header_lay = _hbox(0, 6)
+        header_row.setLayout(header_lay)
         header = QLabel("MIX")
         header.setObjectName("columnHeader")
         hf = header.font(); hf.setBold(True)
         header.setFont(hf)
-        col_lay.addWidget(header)
+        header_lay.addWidget(header)
+        header_lay.addWidget(self._make_help_badge(
+            "Mix",
+            "How the listening input becomes motor output. Phase 1 "
+            "keeps today's Position↔Speed blend; Phase 2 will swap in "
+            "per-channel Depth/Speed mixing with shaping curves."
+        ))
+        header_lay.addStretch(1)
+        col_lay.addWidget(header_row)
 
         col_lay.addWidget(self._build_speed_blend_subcard(device_name, motor_idx))
         return col
@@ -540,11 +598,25 @@ class DeviceFrameMixin:
         lay = _vbox(8, 6)
         frame.setLayout(lay)
 
+        header_row = QWidget()
+        header_lay = _hbox(0, 6)
+        header_row.setLayout(header_lay)
         header = QLabel("OUTPUT")
         header.setObjectName("columnHeader")
         hf = header.font(); hf.setBold(True)
         header.setFont(hf)
-        lay.addWidget(header)
+        header_lay.addWidget(header)
+        header_lay.addWidget(self._make_help_badge(
+            "Output (linear actuator)",
+            "<b>Mode</b> = how depth maps to physical stroke. "
+            "<i>Position</i> mirrors raw depth; <i>Speed</i> converts "
+            "motion into a stroke-speed sine wave. "
+            "<b>Idle</b> = what the toy does between inputs. "
+            "<i>Rest</i> returns to the resting position; <i>Hold</i> "
+            "stays where it is."
+        ))
+        header_lay.addStretch(1)
+        lay.addWidget(header_row)
 
         row = QWidget()
         row_lay = _hbox(0, 12)
@@ -734,10 +806,22 @@ class DeviceFrameMixin:
         lay = _vbox(10, 8)
         card.setLayout(lay)
 
+        header_row = QWidget()
+        header_lay = _hbox(0, 6)
+        header_row.setLayout(header_lay)
         header = QLabel("Position ↔ Speed")
         hf = header.font(); hf.setBold(True)
         header.setFont(hf)
-        lay.addWidget(header)
+        header_lay.addWidget(header)
+        header_lay.addWidget(self._make_help_badge(
+            "Position ↔ Speed blend",
+            "Mixes depth (left, pure position) with motion-derived "
+            "speed (right). A 50% blend feeds both equally. Phase 2 "
+            "will replace this with independent per-channel Depth and "
+            "Speed controls plus shaping curves."
+        ))
+        header_lay.addStretch(1)
+        lay.addWidget(header_row)
         lay.addWidget(self._muted_label(
             "Blend SPS depth with motion-derived speed. Left = pure "
             "position, right = pure speed."
@@ -793,6 +877,16 @@ class DeviceFrameMixin:
             spin.setValue(float(tuning.get(key, 0.0)))
             spin.setToolTip(tooltip)
             row.addWidget(spin, 1)
+
+            if key == "speed_gain":
+                row.addWidget(self._make_help_badge(
+                    "Speed Gain",
+                    "How aggressively raw motion maps to speed output. "
+                    "Higher = saturates on smaller strokes (more "
+                    "reactive); lower = needs bigger movement to ramp up. "
+                    "Currently global across all motors; Phase 2 makes "
+                    "this per-motor."
+                ))
 
             def on_value_changed(val, k=key):
                 self._on_speed_tuning_edited(k, float(val))
