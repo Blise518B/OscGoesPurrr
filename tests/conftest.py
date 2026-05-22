@@ -1,10 +1,11 @@
 """Pytest fixtures shared across the router test suite.
 
-The big one is `FakeClock`. `MotorRouter._apply_speed_blend` calls
-`time.monotonic()` to derive position deltas, which makes the speed math
-non-deterministic in tests. We inject a clock through `MotorRouter`'s
-optional `clock` kwarg so tests can advance time by exact amounts and
-assert on the resulting speed signal.
+The big one is `FakeClock`. `MotorRouter._calculate_motor_target` calls
+`time.monotonic()` to compute the per-tick dt used by the speed
+derivation and the post-mix envelope follower; that makes the timing
+math non-deterministic in tests. We inject a clock through
+`MotorRouter`'s optional `clock` kwarg so tests can advance time by
+exact amounts and assert on the resulting smoothed signal.
 """
 
 from typing import Callable

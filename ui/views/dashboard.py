@@ -740,34 +740,9 @@ class DashboardMixin:
         self.simple_mode_status_label.setProperty("muted", "true")
         tlay.addWidget(self.simple_mode_status_label)
 
-        # Global Position ↔ Speed blend for Simple Mode. Same semantics as the
-        # per-motor slider in Device Routing — left=depth, right=motion speed.
-        blend_label = QLabel("Output Style")
-        bf = blend_label.font(); bf.setBold(True)
-        blend_label.setFont(bf)
-        tlay.addWidget(blend_label)
-        tlay.addWidget(self._muted_label(
-            "Drag right to make the toy respond to how fast you're moving "
-            "instead of how deep."
-        ))
-
-        def on_simple_blend_changed(val: float):
-            if hasattr(self.controller, "set_app_setting"):
-                self.controller.set_app_setting("simple_mode_speed_blend", float(val))
-            if hasattr(self.controller, 'force_recalculate'):
-                self.controller.force_recalculate()
-
-        initial_simple_blend = 0.0
-        if hasattr(self.controller, "get_app_setting"):
-            try:
-                initial_simple_blend = float(
-                    self.controller.get_app_setting("simple_mode_speed_blend", 0.0) or 0.0
-                )
-            except (TypeError, ValueError):
-                initial_simple_blend = 0.0
-        tlay.addWidget(self._make_blend_slider_row(
-            initial_simple_blend, on_simple_blend_changed
-        ))
+        # Phase 2 simplification: Simple Mode is pure depth (no speed
+        # contribution). Users who want speed blending, curves, or per-toy
+        # tuning use full Device Routing instead.
 
         hint = QLabel(
             "Tip: you can always come back to Simple Mode from Settings."

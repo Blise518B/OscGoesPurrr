@@ -559,10 +559,6 @@ class OscGoesPurrrUI(
         # ---- State that the controller reads via the facade ----
         self.device_ui_frames: Dict[str, dict] = {}
         self.stored_device_frames: Dict[str, dict] = {}
-        # Debug tuning spinboxes — each per-motor card adds its set, and
-        # editing one syncs the displayed value across siblings so the user
-        # doesn't see stale numbers on the other cards.
-        self._speed_tuning_spins: Dict[str, List[QDoubleSpinBox]] = {}
 
         # ---- Lazily-bound view widgets ----
         self.sidebar_frame: Optional[QFrame] = None

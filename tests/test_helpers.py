@@ -1,6 +1,6 @@
-"""Tier 1 tests for the pure module-level helpers and static methods on
-`motor_router.py`. These never touch a MotorRouter instance or any clock —
-just parse strings and clamp numbers.
+"""Tier 1 tests for the pure module-level helpers on `motor_router.py`.
+These never touch a MotorRouter instance or any clock — just parse
+strings and classify zone paths.
 
 See ``PLAN.md`` for the full punch-list.
 """
@@ -8,7 +8,6 @@ See ``PLAN.md`` for the full punch-list.
 import pytest
 
 from motor_router import (
-    MotorRouter,
     _classify_zone_path,
     _clean_custom_addr,
 )
@@ -56,30 +55,3 @@ class TestCleanCustomAddr:
         assert _clean_custom_addr("") == ""
 
 
-# --------------------------------------------------------------- _coerce_blend
-
-class TestCoerceBlend:
-    def test_in_range_unchanged(self):
-        assert MotorRouter._coerce_blend(0.5) == 0.5
-
-    def test_zero(self):
-        assert MotorRouter._coerce_blend(0.0) == 0.0
-
-    def test_one(self):
-        assert MotorRouter._coerce_blend(1.0) == 1.0
-
-    def test_negative_clamps_to_zero(self):
-        assert MotorRouter._coerce_blend(-0.3) == 0.0
-
-    def test_above_one_clamps_to_one(self):
-        assert MotorRouter._coerce_blend(1.7) == 1.0
-
-    def test_none_returns_zero(self):
-        assert MotorRouter._coerce_blend(None) == 0.0
-
-    def test_bad_string_returns_zero(self):
-        assert MotorRouter._coerce_blend("not a number") == 0.0
-
-    def test_numeric_string_parses(self):
-        # float() accepts numeric strings; that's the documented contract.
-        assert MotorRouter._coerce_blend("0.7") == pytest.approx(0.7)

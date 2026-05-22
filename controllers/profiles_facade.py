@@ -27,6 +27,8 @@ class ProfilesFacade:
         — the user gets blank-but-present device cards to configure, rather
         than having to reconnect each toy to see it.
         """
+        from motor_router import MotorRouter  # local import to avoid cycle
+        import copy as _copy
         profile = self.profile_manager.profiles.setdefault(profile_name, {})
         known = self.profile_manager.known_devices.all()
         if not known:
@@ -46,6 +48,14 @@ class ProfilesFacade:
                 suffix = f"_{i}" if motor_count > 1 else ""
                 addrs[str(i)] = [f"{name.replace(' ', '_')}{suffix}"]
             entry["osc_addresses"] = addrs
+            # Phase 2: seed a default mix block per motor so the router and UI
+            # always read a complete config. The router's _get_mix_config falls
+            # back to DEFAULT_MIX_CONFIG when keys are missing, but seeding
+            # here means the UI's spinboxes start at the right values too.
+            entry["mix"] = {
+                str(i): _copy.deepcopy(MotorRouter.DEFAULT_MIX_CONFIG)
+                for i in range(motor_count)
+            }
             profile[name] = entry
             added.append(name)
         if added:

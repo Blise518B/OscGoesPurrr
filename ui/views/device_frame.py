@@ -587,7 +587,7 @@ class DeviceFrameMixin:
         header_lay.addStretch(1)
         col_lay.addWidget(header_row)
 
-        col_lay.addWidget(self._build_speed_blend_subcard(device_name, motor_idx))
+        col_lay.addWidget(self._build_mix_subcard(device_name, motor_idx))
         return col
 
     def _build_linear_output_row(self, device_name: str,
@@ -661,6 +661,45 @@ class DeviceFrameMixin:
         row_lay.addStretch(1)
         lay.addWidget(row)
 
+        # Phase 2: per-motor linear physics knobs. Each writes a
+        # `motor_{i}_<key>` flat key into the device config and forwards
+        # the value through update_linear_motor_config so the engine
+        # picks it up on the next actuator tick.
+        knob_specs = (
+            ("min_pos",        "Min position:",   0.0, 1.0,  0.05, 2, 0.0),
+            ("max_pos",        "Max position:",   0.0, 1.0,  0.05, 2, 1.0),
+            ("resting_pos",    "Resting position:", 0.0, 1.0, 0.05, 2, 0.0),
+            ("resting_time_s", "Resting time (s):", 0.0, 60.0, 0.5,  2, 3.0),
+        )
+        for key, label, lo, hi, step, decimals, default in knob_specs:
+            krow = QWidget()
+            kl = _hbox(0, 8)
+            krow.setLayout(kl)
+            kl.addWidget(QLabel(label))
+            spin = QDoubleSpinBox()
+            spin.setRange(lo, hi)
+            spin.setSingleStep(step)
+            spin.setDecimals(decimals)
+            current = self.controller.get_profile_config(
+                device_name, f"motor_{motor_idx}_{key}", default
+            )
+            try:
+                spin.setValue(float(current))
+            except (TypeError, ValueError):
+                spin.setValue(default)
+
+            def _on_changed(val, k=key):
+                self.controller.update_device_config(
+                    device_name, f"motor_{motor_idx}_{k}", float(val)
+                )
+                self.controller.save_profiles()
+                if hasattr(self.controller, "update_linear_motor_config"):
+                    self.controller.update_linear_motor_config(device_name, motor_idx)
+            spin.valueChanged.connect(_on_changed)
+            kl.addWidget(spin)
+            kl.addStretch(1)
+            lay.addWidget(krow)
+
         return frame
 
     # ----------------------------------------------------------
@@ -725,225 +764,474 @@ class DeviceFrameMixin:
         return host
 
     # ----------------------------------------------------------
-    # Position ↔ Speed blend slider (per motor + Simple Mode)
+    # Phase 2 mix subcard — per-channel Depth + Speed, combine, smoothing
     # ----------------------------------------------------------
 
-    def _make_blend_slider_row(self, initial_blend: float,
-                               on_change: Callable[[float], None]) -> QWidget:
-        """Horizontal slider that picks a Position↔Speed blend in [0.0, 1.0].
+    _CURVE_KINDS = ("linear", "power", "s_curve")
+    _CHANNEL_MODES = ("additive", "modulate")
 
-        Layout: "Position" — slider — "Speed" — readout. `on_change` fires on
-        every value change with the new blend; persistence and recalculation
-        are the caller's responsibility (matches the per-motor + Simple Mode
-        save paths, which differ in where they persist).
-        """
-        host = QWidget()
-        row = _hbox(0, 8)
-        host.setLayout(row)
-
-        pos_label = QLabel("Position")
-        pos_label.setProperty("muted", "true")
-        self._repolish(pos_label)
-        row.addWidget(pos_label)
-
-        slider = QSlider(Qt.Horizontal)
-        slider.setRange(0, 100)
-        clamped = max(0.0, min(1.0, float(initial_blend)))
-        slider.setValue(int(round(clamped * 100)))
-        row.addWidget(slider, 1)
-
-        spd_label = QLabel("Speed")
-        spd_label.setProperty("muted", "true")
-        self._repolish(spd_label)
-        row.addWidget(spd_label)
-
-        readout = QLabel("")
-        readout.setMinimumWidth(96)
-        readout.setProperty("muted", "true")
-        self._repolish(readout)
-        row.addWidget(readout)
-
-        def render(v: int):
-            spd_pct = int(v)
-            pos_pct = 100 - spd_pct
-            readout.setText(f"Pos {pos_pct}% · Spd {spd_pct}%")
-
-        def on_value_changed(v: int):
-            render(v)
-            on_change(v / 100.0)
-
-        render(slider.value())
-        slider.valueChanged.connect(on_value_changed)
-        return host
-
-    # Per-motor speed-blend sub-card (Position↔Speed slider + debug tuning).
-    # Returned as a QFrame so the caller can drop it anywhere in a layout.
-    _SPEED_TUNING_SPECS = (
-        # (key, label, range_lo, range_hi, step, decimals, tooltip)
-        ("speed_gain", "Gain",
-         0.0, 50.0, 0.1, 2,
-         "How aggressively raw motion maps to output. Higher = saturates "
-         "on smaller strokes."),
-        ("speed_input_deadband", "Input deadband",
-         0.0, 0.5, 0.005, 3,
-         "Per-tick |Δposition| below this is treated as jitter. Raise if "
-         "static contacts still output nonzero speed; lower for more "
-         "sensitivity to slow strokes."),
-        ("speed_output_cutoff", "Output cutoff",
-         0.0, 0.95, 0.01, 2,
-         "Smoothed signals below this snap to true zero so the toy fully "
-         "stops between strokes."),
-        ("speed_decay_tau", "Decay τ (s)",
-         0.01, 5.0, 0.01, 2,
-         "How long the speed signal sustains after motion stops. Higher = "
-         "smoother, lower = more responsive to each individual stroke."),
-    )
-
-    def _build_speed_blend_subcard(self, device_name: str, motor_idx: int) -> QFrame:
+    def _build_mix_subcard(self, device_name: str, motor_idx: int) -> QFrame:
+        """Per-motor Phase 2 mixer UI: stacked Depth + Speed channel cards,
+        Combine policy radio, Modulator range (shown only when one channel
+        is in modulate mode), and a Smoothing panel. All controls read/
+        write the per-motor `mix` block in the profile."""
         card = QFrame()
-        card.setObjectName("speedCard")
-        card.setFixedWidth(290)
+        card.setObjectName("mixCard")
+        card.setMinimumWidth(300)
         lay = _vbox(10, 8)
         card.setLayout(lay)
 
-        header_row = QWidget()
-        header_lay = _hbox(0, 6)
-        header_row.setLayout(header_lay)
-        header = QLabel("Position ↔ Speed")
-        hf = header.font(); hf.setBold(True)
-        header.setFont(hf)
-        header_lay.addWidget(header)
-        header_lay.addWidget(self._make_help_badge(
-            "Position ↔ Speed blend",
-            "Mixes depth (left, pure position) with motion-derived "
-            "speed (right). A 50% blend feeds both equally. Phase 2 "
-            "will replace this with independent per-channel Depth and "
-            "Speed controls plus shaping curves."
-        ))
-        header_lay.addStretch(1)
-        lay.addWidget(header_row)
-        lay.addWidget(self._muted_label(
-            "Blend SPS depth with motion-derived speed. Left = pure "
-            "position, right = pure speed."
-        ))
+        mode_widgets: Dict[str, QComboBox] = {}
+        mod_range_holder: list = [None]  # mutable cell for closure access
 
-        current_blend = self.controller.get_profile_config(
-            device_name, f"motor_{motor_idx}_speed_blend", 0.0
-        )
-
-        def on_blend_changed(val: float, dn=device_name, idx=motor_idx):
-            self.controller.update_device_config(
-                dn, f"motor_{idx}_speed_blend", float(val)
+        def refresh_modulator_visibility():
+            panel = mod_range_holder[0]
+            if panel is None:
+                return
+            depth_combo = mode_widgets.get("depth")
+            speed_combo = mode_widgets.get("speed")
+            any_modulate = (
+                (depth_combo is not None and depth_combo.currentText() == "modulate")
+                or (speed_combo is not None and speed_combo.currentText() == "modulate")
             )
-            self.controller.save_profiles()
-            if hasattr(self.controller, 'force_recalculate'):
-                self.controller.force_recalculate()
+            panel.setVisible(any_modulate)
 
-        lay.addWidget(self._make_blend_slider_row(
-            float(current_blend or 0.0), on_blend_changed
+        def on_mode_pick(channel: str, text: str):
+            self._update_mix_field(device_name, motor_idx, (channel, "mode"), text)
+            # Enforce at-most-one-modulate: switching one channel to
+            # modulate flips the other back to additive.
+            if text == "modulate":
+                other = "speed" if channel == "depth" else "depth"
+                other_combo = mode_widgets.get(other)
+                if other_combo is not None and other_combo.currentText() == "modulate":
+                    other_combo.blockSignals(True)
+                    try:
+                        other_combo.setCurrentText("additive")
+                    finally:
+                        other_combo.blockSignals(False)
+                    self._update_mix_field(
+                        device_name, motor_idx, (other, "mode"), "additive"
+                    )
+            refresh_modulator_visibility()
+
+        depth_card, depth_mode_combo = self._build_mix_channel_card(
+            device_name, motor_idx, "depth", "Depth",
+            on_mode_pick=lambda t: on_mode_pick("depth", t),
+        )
+        speed_card, speed_mode_combo = self._build_mix_channel_card(
+            device_name, motor_idx, "speed", "Speed",
+            on_mode_pick=lambda t: on_mode_pick("speed", t),
+        )
+        mode_widgets["depth"] = depth_mode_combo
+        mode_widgets["speed"] = speed_mode_combo
+        lay.addWidget(depth_card)
+        lay.addWidget(speed_card)
+
+        # Combine policy (per-motor). Segmented Sum / Max.
+        combine_row = QWidget()
+        combine_row_lay = _hbox(0, 12)
+        combine_row.setLayout(combine_row_lay)
+        combine_row_lay.addWidget(QLabel("Combine:"))
+        current_combine = str(self._get_mix_field(
+            device_name, motor_idx, ("combine",), "max"
+        ))
+        combine_grp = QButtonGroup(combine_row)
+        combine_grp.setExclusive(True)
+        sum_btn = QPushButton("Sum")
+        sum_btn.setCheckable(True)
+        sum_btn.setFixedHeight(BTN_HEIGHT_SMALL)
+        max_btn = QPushButton("Max")
+        max_btn.setCheckable(True)
+        max_btn.setFixedHeight(BTN_HEIGHT_SMALL)
+        combine_grp.addButton(sum_btn)
+        combine_grp.addButton(max_btn)
+        if current_combine == "sum":
+            sum_btn.setChecked(True)
+        else:
+            max_btn.setChecked(True)
+
+        def _apply_combine_styles():
+            for btn in (sum_btn, max_btn):
+                btn.setProperty("role", "segActive" if btn.isChecked() else "segIdle")
+                self._repolish(btn)
+        _apply_combine_styles()
+
+        def on_combine_pick(_=False):
+            new_op = "sum" if sum_btn.isChecked() else "max"
+            self._update_mix_field(device_name, motor_idx, ("combine",), new_op)
+            _apply_combine_styles()
+        sum_btn.clicked.connect(on_combine_pick)
+        max_btn.clicked.connect(on_combine_pick)
+        combine_row_lay.addWidget(sum_btn)
+        combine_row_lay.addWidget(max_btn)
+        combine_row_lay.addStretch(1)
+        lay.addWidget(combine_row)
+
+        # Modulator range — visible only when a channel is in modulate.
+        mod_panel = QFrame()
+        mod_panel.setObjectName("modulatorPanel")
+        mod_lay = _vbox(6, 4)
+        mod_panel.setLayout(mod_lay)
+        mod_header = QLabel("Modulator range")
+        mhf = mod_header.font(); mhf.setBold(True)
+        mod_header.setFont(mhf)
+        mod_lay.addWidget(mod_header)
+        mod_lay.addWidget(self._muted_label(
+            "Scales the carrier channel by lerp(min, max, modulator). "
+            "Use 1.0–1.0 for pure pass-through; widen to attenuate or "
+            "amplify."
         ))
 
-        # ---- Debug tuning knobs (global, affects every motor + Simple Mode) ----
-        divider = QFrame()
-        divider.setObjectName("separator")
-        lay.addWidget(divider)
+        mod_range = self._get_mix_field(
+            device_name, motor_idx, ("modulator_range",), [0.5, 1.5]
+        )
+        try:
+            mod_min_v = float(mod_range[0])
+            mod_max_v = float(mod_range[1])
+        except (TypeError, ValueError, IndexError):
+            mod_min_v, mod_max_v = 0.5, 1.5
 
-        tuning_label = QLabel("Tuning (debug)")
-        tlf = tuning_label.font(); tlf.setBold(True)
-        tuning_label.setFont(tlf)
-        lay.addWidget(tuning_label)
-        lay.addWidget(self._muted_label(
-            "Shared across all motors. Tweak to taste; we'll bake the final "
-            "values in later."
+        mr_row = QWidget()
+        mr_lay = _hbox(0, 8)
+        mr_row.setLayout(mr_lay)
+        mr_lay.addWidget(QLabel("Min:"))
+        mod_min_spin = QDoubleSpinBox()
+        mod_min_spin.setRange(0.0, 1.0)
+        mod_min_spin.setSingleStep(0.05)
+        mod_min_spin.setDecimals(2)
+        mod_min_spin.setValue(mod_min_v)
+        mr_lay.addWidget(mod_min_spin)
+        mr_lay.addSpacing(12)
+        mr_lay.addWidget(QLabel("Max:"))
+        mod_max_spin = QDoubleSpinBox()
+        mod_max_spin.setRange(0.0, 2.0)
+        mod_max_spin.setSingleStep(0.05)
+        mod_max_spin.setDecimals(2)
+        mod_max_spin.setValue(mod_max_v)
+        mr_lay.addWidget(mod_max_spin)
+        mr_lay.addStretch(1)
+        mod_lay.addWidget(mr_row)
+
+        def on_mod_changed(_=None):
+            self._update_mix_field(
+                device_name, motor_idx, ("modulator_range",),
+                [float(mod_min_spin.value()), float(mod_max_spin.value())],
+            )
+        mod_min_spin.valueChanged.connect(on_mod_changed)
+        mod_max_spin.valueChanged.connect(on_mod_changed)
+        lay.addWidget(mod_panel)
+        mod_range_holder[0] = mod_panel
+        refresh_modulator_visibility()
+
+        # Smoothing panel.
+        smooth_panel = QFrame()
+        smooth_panel.setObjectName("smoothingPanel")
+        sl = _vbox(6, 4)
+        smooth_panel.setLayout(sl)
+        sh = QLabel("Smoothing")
+        shf = sh.font(); shf.setBold(True)
+        sh.setFont(shf)
+        sl.addWidget(sh)
+        sl.addWidget(self._muted_label(
+            "Post-mix envelope follower. Lower = faster response; "
+            "higher = smoother but laggier."
         ))
 
-        tuning = {}
-        if hasattr(self.controller, "get_speed_tuning"):
-            try:
-                tuning = self.controller.get_speed_tuning() or {}
-            except Exception:
-                tuning = {}
+        sm_row = QWidget()
+        sm_lay = _hbox(0, 8)
+        sm_row.setLayout(sm_lay)
+        sm_lay.addWidget(QLabel("Attack:"))
+        attack_spin = QDoubleSpinBox()
+        attack_spin.setRange(0.0, 2000.0)
+        attack_spin.setSingleStep(10.0)
+        attack_spin.setDecimals(0)
+        attack_spin.setSuffix(" ms")
+        attack_spin.setValue(float(self._get_mix_field(
+            device_name, motor_idx, ("smoothing", "attack_ms"), 50.0
+        )))
+        sm_lay.addWidget(attack_spin)
+        sm_lay.addSpacing(12)
+        sm_lay.addWidget(QLabel("Release:"))
+        release_spin = QDoubleSpinBox()
+        release_spin.setRange(0.0, 2000.0)
+        release_spin.setSingleStep(10.0)
+        release_spin.setDecimals(0)
+        release_spin.setSuffix(" ms")
+        release_spin.setValue(float(self._get_mix_field(
+            device_name, motor_idx, ("smoothing", "release_ms"), 300.0
+        )))
+        sm_lay.addWidget(release_spin)
+        sm_lay.addStretch(1)
+        sl.addWidget(sm_row)
 
-        for key, label, lo, hi, step, decimals, tooltip in self._SPEED_TUNING_SPECS:
-            row = _hbox(0, 8)
-            lbl = QLabel(label)
-            lbl.setMinimumWidth(110)
-            row.addWidget(lbl)
+        attack_spin.valueChanged.connect(
+            lambda v: self._update_mix_field(
+                device_name, motor_idx, ("smoothing", "attack_ms"), float(v)
+            )
+        )
+        release_spin.valueChanged.connect(
+            lambda v: self._update_mix_field(
+                device_name, motor_idx, ("smoothing", "release_ms"), float(v)
+            )
+        )
+        lay.addWidget(smooth_panel)
 
+        return card
+
+    def _build_mix_channel_card(self, device_name: str, motor_idx: int,
+                                channel_key: str, label: str,
+                                on_mode_pick: Callable[[str], None]
+                                ) -> "tuple[QFrame, QComboBox]":
+        """Single-channel card (Depth or Speed). Returns (widget,
+        mode_combo) so the parent can wire the at-most-one-modulate rule
+        across both channels."""
+        frame = QFrame()
+        frame.setObjectName("mixChannel")
+        lay = _vbox(8, 6)
+        frame.setLayout(lay)
+
+        # Header — enabled toggle is also the channel's display label.
+        enabled = bool(self._get_mix_field(
+            device_name, motor_idx, (channel_key, "enabled"), True
+        ))
+        enabled_cb = ToggleSwitch(label)
+        enabled_cb.setChecked(enabled)
+        enabled_cb.toggled.connect(
+            lambda v, ck=channel_key: self._update_mix_field(
+                device_name, motor_idx, (ck, "enabled"), bool(v)
+            )
+        )
+        lay.addWidget(enabled_cb)
+
+        # Gain.
+        gain_row = QWidget()
+        gr = _hbox(0, 8)
+        gain_row.setLayout(gr)
+        gr.addWidget(QLabel("Gain:"))
+        gain_spin = QDoubleSpinBox()
+        gain_spin.setRange(0.0, 2.0)
+        gain_spin.setSingleStep(0.05)
+        gain_spin.setDecimals(2)
+        gain_spin.setValue(float(self._get_mix_field(
+            device_name, motor_idx, (channel_key, "gain"), 1.0
+        )))
+        gain_spin.valueChanged.connect(
+            lambda v, ck=channel_key: self._update_mix_field(
+                device_name, motor_idx, (ck, "gain"), float(v)
+            )
+        )
+        gr.addWidget(gain_spin)
+        gr.addStretch(1)
+        lay.addWidget(gain_row)
+
+        # Curve + param row.
+        curve_row = QWidget()
+        cr = _hbox(0, 8)
+        curve_row.setLayout(cr)
+        cr.addWidget(QLabel("Curve:"))
+        curve_combo = QComboBox()
+        curve_combo.addItems(list(self._CURVE_KINDS))
+        curr_curve = str(self._get_mix_field(
+            device_name, motor_idx, (channel_key, "curve"), "linear"
+        ))
+        if curr_curve in self._CURVE_KINDS:
+            curve_combo.setCurrentText(curr_curve)
+        cr.addWidget(curve_combo)
+        param_label = QLabel("Param:")
+        cr.addWidget(param_label)
+        param_spin = QDoubleSpinBox()
+        param_spin.setSingleStep(0.1)
+        param_spin.setDecimals(2)
+        param_spin.setRange(0.3, 8.0)
+        param_spin.setValue(float(self._get_mix_field(
+            device_name, motor_idx, (channel_key, "curve_param"), 1.0
+        )))
+        cr.addWidget(param_spin)
+        cr.addStretch(1)
+
+        def _sync_param_range(curve_text: str):
+            if curve_text == "linear":
+                param_label.setEnabled(False)
+                param_spin.setEnabled(False)
+            elif curve_text == "power":
+                param_label.setEnabled(True)
+                param_spin.setEnabled(True)
+                param_spin.setRange(0.3, 3.0)
+                param_spin.setDecimals(2)
+                param_spin.setSingleStep(0.1)
+            else:  # s_curve
+                param_label.setEnabled(True)
+                param_spin.setEnabled(True)
+                param_spin.setRange(1.0, 8.0)
+                param_spin.setDecimals(0)
+                param_spin.setSingleStep(1.0)
+        _sync_param_range(curve_combo.currentText())
+
+        def on_curve_changed(text, ck=channel_key):
+            self._update_mix_field(device_name, motor_idx, (ck, "curve"), text)
+            _sync_param_range(text)
+
+        def on_param_changed(val, ck=channel_key):
+            self._update_mix_field(
+                device_name, motor_idx, (ck, "curve_param"), float(val)
+            )
+        curve_combo.currentTextChanged.connect(on_curve_changed)
+        param_spin.valueChanged.connect(on_param_changed)
+        lay.addWidget(curve_row)
+
+        # Mode (additive / modulate).
+        mode_row = QWidget()
+        mr = _hbox(0, 8)
+        mode_row.setLayout(mr)
+        mr.addWidget(QLabel("Mode:"))
+        mode_combo = QComboBox()
+        mode_combo.addItems(list(self._CHANNEL_MODES))
+        curr_mode = str(self._get_mix_field(
+            device_name, motor_idx, (channel_key, "mode"), "additive"
+        ))
+        if curr_mode in self._CHANNEL_MODES:
+            mode_combo.setCurrentText(curr_mode)
+        mode_combo.currentTextChanged.connect(on_mode_pick)
+        mr.addWidget(mode_combo)
+        mr.addStretch(1)
+        lay.addWidget(mode_row)
+
+        # More expander — channel-specific fine knobs.
+        more_btn = QPushButton("▸ More")
+        more_btn.setProperty("role", "secondary")
+        more_btn.setFixedHeight(BTN_HEIGHT_SMALL)
+        more_panel = QFrame()
+        more_panel.setObjectName("moreSection")
+        more_lay = _vbox(6, 4)
+        more_panel.setLayout(more_lay)
+        more_panel.setVisible(False)
+        if channel_key == "depth":
+            self._build_depth_more_knobs(more_lay, device_name, motor_idx)
+        else:
+            self._build_speed_more_knobs(more_lay, device_name, motor_idx)
+
+        def toggle_more():
+            new_state = not more_panel.isVisible()
+            more_panel.setVisible(new_state)
+            more_btn.setText("▾ More" if new_state else "▸ More")
+        more_btn.clicked.connect(toggle_more)
+        lay.addWidget(more_btn)
+        lay.addWidget(more_panel)
+
+        return frame, mode_combo
+
+    def _build_depth_more_knobs(self, parent_lay: QVBoxLayout,
+                                device_name: str, motor_idx: int) -> None:
+        """Depth channel's More expander: min_remap, max_remap."""
+        for key, label, default in (
+            ("min_remap", "Min remap:", 0.0),
+            ("max_remap", "Max remap:", 1.0),
+        ):
+            row = QWidget()
+            rl = _hbox(0, 8)
+            row.setLayout(rl)
+            rl.addWidget(QLabel(label))
+            spin = QDoubleSpinBox()
+            spin.setRange(0.0, 1.0)
+            spin.setSingleStep(0.05)
+            spin.setDecimals(2)
+            spin.setValue(float(self._get_mix_field(
+                device_name, motor_idx, ("depth", key), default
+            )))
+            spin.valueChanged.connect(
+                lambda v, k=key: self._update_mix_field(
+                    device_name, motor_idx, ("depth", k), float(v)
+                )
+            )
+            rl.addWidget(spin)
+            rl.addStretch(1)
+            parent_lay.addWidget(row)
+
+    def _build_speed_more_knobs(self, parent_lay: QVBoxLayout,
+                                device_name: str, motor_idx: int) -> None:
+        """Speed channel's More expander: the per-motor versions of the
+        speed-derivation knobs that used to be global (input_deadband,
+        output_cutoff, decay_tau)."""
+        for key, label, lo, hi, step, decimals, default in (
+            ("input_deadband", "Input deadband:", 0.0, 0.5, 0.005, 3, 0.005),
+            ("output_cutoff",  "Output cutoff:",  0.0, 0.95, 0.01, 2, 0.02),
+            ("decay_tau",      "Decay τ (s):",    0.01, 5.0, 0.01, 2, 0.30),
+        ):
+            row = QWidget()
+            rl = _hbox(0, 8)
+            row.setLayout(rl)
+            rl.addWidget(QLabel(label))
             spin = QDoubleSpinBox()
             spin.setRange(lo, hi)
             spin.setSingleStep(step)
             spin.setDecimals(decimals)
-            spin.setValue(float(tuning.get(key, 0.0)))
-            spin.setToolTip(tooltip)
-            row.addWidget(spin, 1)
+            spin.setValue(float(self._get_mix_field(
+                device_name, motor_idx, ("speed", key), default
+            )))
+            spin.valueChanged.connect(
+                lambda v, k=key: self._update_mix_field(
+                    device_name, motor_idx, ("speed", k), float(v)
+                )
+            )
+            rl.addWidget(spin)
+            rl.addStretch(1)
+            parent_lay.addWidget(row)
 
-            if key == "speed_gain":
-                row.addWidget(self._make_help_badge(
-                    "Speed Gain",
-                    "How aggressively raw motion maps to speed output. "
-                    "Higher = saturates on smaller strokes (more "
-                    "reactive); lower = needs bigger movement to ramp up. "
-                    "Currently global across all motors; Phase 2 makes "
-                    "this per-motor."
-                ))
+    def _get_mix_field(self, device_name: str, motor_idx: int,
+                       key_path: tuple, default) -> Any:
+        """Read a nested field from the per-motor mix block, falling back
+        to MotorRouter.DEFAULT_MIX_CONFIG (and then to `default`) when
+        missing."""
+        from motor_router import MotorRouter
+        mix_root = self.controller.get_profile_config(device_name, "mix", {}) or {}
+        if not isinstance(mix_root, dict):
+            mix_root = {}
+        per_motor = mix_root.get(str(motor_idx))
+        if not isinstance(per_motor, dict):
+            per_motor = MotorRouter.DEFAULT_MIX_CONFIG
+        cursor = per_motor
+        for k in key_path:
+            if isinstance(cursor, dict) and k in cursor:
+                cursor = cursor[k]
+            else:
+                d_cursor = MotorRouter.DEFAULT_MIX_CONFIG
+                for kk in key_path:
+                    if not isinstance(d_cursor, dict) or kk not in d_cursor:
+                        return default
+                    d_cursor = d_cursor[kk]
+                return d_cursor
+        return cursor
 
-            def on_value_changed(val, k=key):
-                self._on_speed_tuning_edited(k, float(val))
-
-            spin.valueChanged.connect(on_value_changed)
-            self._speed_tuning_spins.setdefault(key, []).append(spin)
-            lay.addLayout(row)
-
-        reset_btn = QPushButton("Reset to defaults")
-        reset_btn.setProperty("role", "secondary")
-        reset_btn.setFixedHeight(BTN_HEIGHT_SMALL)
-        reset_btn.setToolTip(
-            "Revert Gain, Input deadband, Output cutoff and Decay τ to "
-            "the built-in defaults."
+    def _update_mix_field(self, device_name: str, motor_idx: int,
+                          key_path: tuple, value) -> None:
+        """Update a single nested field in the per-motor mix block. Reads
+        the full mix dict, fills in missing top-level sections from
+        defaults, mutates the target field, and writes the whole mix dict
+        back via update_device_config."""
+        import copy
+        from motor_router import MotorRouter
+        mix_root = copy.deepcopy(
+            self.controller.get_profile_config(device_name, "mix", {}) or {}
         )
-        reset_btn.clicked.connect(self._on_speed_tuning_reset)
-        lay.addWidget(reset_btn)
-
-        return card
-
-    def _on_speed_tuning_edited(self, key: str, value: float) -> None:
-        """Persist the user's tuning edit through the controller and mirror
-        the post-clamp value back into every sibling spinbox so all motor
-        cards show the same number."""
-        snapshot = {}
-        if hasattr(self.controller, "set_speed_tuning_value"):
-            try:
-                snapshot = self.controller.set_speed_tuning_value(key, value) or {}
-            except Exception:
-                snapshot = {}
-        applied = float(snapshot.get(key, value))
-        self._sync_speed_tuning_spinbox(key, applied)
-
-    def _on_speed_tuning_reset(self) -> None:
-        """Call the controller's reset facade and push the returned snapshot
-        into every spinbox on every motor card."""
-        if not hasattr(self.controller, "reset_speed_tuning"):
-            return
-        try:
-            snapshot = self.controller.reset_speed_tuning() or {}
-        except Exception:
-            snapshot = {}
-        for key, value in snapshot.items():
-            self._sync_speed_tuning_spinbox(key, float(value))
-
-    def _sync_speed_tuning_spinbox(self, key: str, value: float) -> None:
-        """Write `value` into every registered spinbox for `key` without
-        re-firing their valueChanged signals — used by both the edit-sync
-        path and the Reset button."""
-        for spin in self._speed_tuning_spins.get(key, []):
-            if abs(spin.value() - value) < 10 ** -spin.decimals():
-                continue
-            spin.blockSignals(True)
-            try:
-                spin.setValue(value)
-            finally:
-                spin.blockSignals(False)
+        if not isinstance(mix_root, dict):
+            mix_root = {}
+        motor_key = str(motor_idx)
+        per_motor = mix_root.setdefault(motor_key, {})
+        for top_key, top_val in MotorRouter.DEFAULT_MIX_CONFIG.items():
+            if top_key not in per_motor:
+                per_motor[top_key] = copy.deepcopy(top_val)
+        cursor = per_motor
+        for k in key_path[:-1]:
+            sub = cursor.get(k)
+            if not isinstance(sub, dict):
+                sub = {}
+                cursor[k] = sub
+            cursor = sub
+        cursor[key_path[-1]] = value
+        self.controller.update_device_config(device_name, "mix", mix_root)
+        self.controller.save_profiles()
+        if hasattr(self.controller, 'force_recalculate'):
+            self.controller.force_recalculate()
 
     # ----------------------------------------------------------
     # Custom OSC address row (per motor)

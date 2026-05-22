@@ -132,10 +132,6 @@ class OscGoesPurrrApp(
 
         # Initialize standalone OSC routing engine
         self.motor_router = MotorRouter()
-        # Restore any persisted speed-blend tuning (kept in app settings so
-        # we can tweak the math at runtime via the debug spinboxes without
-        # editing source). Missing keys fall back to MotorRouter defaults.
-        self._apply_saved_speed_tuning()
 
         # SteamVR Haptics — independent pipeline that shares the parameter_store
         # but targets SteamVR trackers via OpenVR.
@@ -561,56 +557,6 @@ class OscGoesPurrrApp(
         """Facade method for UI to safely update app settings."""
         self.profile_manager.app_settings.set(key, value)
 
-    # ------------------------------------------------------------------
-    # Speed-blend tuning facade (UI debug knobs)
-    # ------------------------------------------------------------------
-
-    def _apply_saved_speed_tuning(self) -> None:
-        if not hasattr(self, "motor_router"):
-            return
-        overrides = {}
-        for key in self.motor_router.SPEED_TUNING_KEYS:
-            saved = self.get_app_setting(key, None)
-            if saved is not None:
-                overrides[key] = saved
-        if overrides:
-            self.motor_router.apply_speed_tuning(**overrides)
-
-    def get_speed_tuning(self) -> Dict[str, float]:
-        """Snapshot of the live speed-blend tuning values, for UI display."""
-        if not hasattr(self, "motor_router"):
-            return {}
-        return self.motor_router.get_speed_tuning()
-
-    def set_speed_tuning_value(self, key: str, value: float) -> Dict[str, float]:
-        """Update one tuning knob, persist it, and re-evaluate so the change
-        is audible immediately. Returns the clamped snapshot so the UI can
-        show the actually-applied value if it differs from the user's input.
-        """
-        if not hasattr(self, "motor_router"):
-            return {}
-        snapshot = self.motor_router.apply_speed_tuning(**{key: value})
-        # Persist the post-clamp value so a stale UI input never resurrects
-        # on the next launch.
-        self.set_app_setting(key, snapshot.get(key, value))
-        if hasattr(self, "force_recalculate"):
-            self.force_recalculate()
-        return snapshot
-
-    def reset_speed_tuning(self) -> Dict[str, float]:
-        """Revert every speed-blend tuning knob to the MotorRouter factory
-        defaults, persist them, and force a recalc so the next tick uses the
-        fresh values. Returns the applied snapshot for the UI."""
-        if not hasattr(self, "motor_router"):
-            return {}
-        defaults = self.motor_router.get_speed_tuning_defaults()
-        snapshot = self.motor_router.apply_speed_tuning(**defaults)
-        for key, value in snapshot.items():
-            self.set_app_setting(key, value)
-        if hasattr(self, "force_recalculate"):
-            self.force_recalculate()
-        return snapshot
-
     # ==================================================================
     # Feature toggles — Settings → Features panel uses these to gate the
     # expensive background subsystems (bHaptics, Hardware Monitor, SteamVR
@@ -747,9 +693,8 @@ class OscGoesPurrrApp(
         params, _version, zones = store.snapshot()
         if self.get_app_setting("simple_mode", False):
             motor_counts = self.get_device_motor_counts()
-            blend = self.get_app_setting("simple_mode_speed_blend", 0.0)
             updates = self.motor_router.reevaluate_simple_mode(
-                motor_counts, params, zones=zones, speed_blend=blend
+                motor_counts, params, zones=zones
             )
         else:
             active = self.profile_manager.get_active_profile_dict()
@@ -836,19 +781,31 @@ class OscGoesPurrrApp(
         return self.haptic_engine.get_motor_count_map()
 
     def update_linear_motor_config(self, device_name: str, motor_idx: int) -> None:
-        """Facade: read the persisted mode/idle settings for one motor and forward
-        them to the HapticEngine. Called by the UI when the user toggles the
-        per-motor Mode or Idle control, and by `_sync_linear_configs` on connect.
-        """
+        """Facade: read the persisted linear settings for one motor and forward
+        them to the HapticEngine. Phase 2 promoted the physics knobs
+        (min_pos/max_pos/resting_pos/resting_time_s) to per-motor, so this
+        forwards any that are stored alongside mode/idle."""
         if not self.haptic_engine:
             return
-        mode = self.profile_manager.get_profile_config(
-            device_name, f"motor_{motor_idx}_linear_mode", "position"
-        )
-        idle = self.profile_manager.get_profile_config(
-            device_name, f"motor_{motor_idx}_linear_idle", "rest"
-        )
-        self.haptic_engine.set_linear_config(device_name, motor_idx, mode=mode, idle=idle)
+        kwargs: Dict[str, Any] = {
+            "mode": self.profile_manager.get_profile_config(
+                device_name, f"motor_{motor_idx}_linear_mode", "position"
+            ),
+            "idle": self.profile_manager.get_profile_config(
+                device_name, f"motor_{motor_idx}_linear_idle", "rest"
+            ),
+        }
+        for key in ("min_pos", "max_pos", "resting_pos", "resting_time_s"):
+            raw = self.profile_manager.get_profile_config(
+                device_name, f"motor_{motor_idx}_{key}", None
+            )
+            if raw is None:
+                continue
+            try:
+                kwargs[key] = float(raw)
+            except (TypeError, ValueError):
+                continue
+        self.haptic_engine.set_linear_config(device_name, motor_idx, **kwargs)
 
     def _sync_linear_configs(self, devices_dict: dict) -> None:
         """Push the persisted linear mode/idle setting for every motor on every

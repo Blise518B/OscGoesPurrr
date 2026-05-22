@@ -164,193 +164,50 @@ class TestZoneContributionFilters:
         assert out == 0.0
 
 
-# ============================================================ Tier 2: speed-blend math
+# ============================================================ Tier 2: mixer math (covered in test_mixer.py)
 
-# All Tier 2 tests use the FakeClock fixture from conftest.py to drive
-# time deterministically. `router` is wired to clock.now via the fixture
-# chain.
-
-class TestSpeedBlendEndpoints:
-    def test_blend_zero_returns_position(self, router):
-        # blend == 0 → output is the raw position, regardless of speed state.
-        out = router._apply_speed_blend(("dev", 0), 0.5, blend=0.0)
-        assert out == 0.5
-
-    def test_blend_one_first_tick_returns_zero_speed(self, router):
-        # First tick has no prior position → derivative is zero.
-        out = router._apply_speed_blend(("dev", 0), 0.5, blend=1.0)
-        assert out == 0.0
-
-    def test_blend_half_is_linear_interpolation(self, router, clock):
-        # At blend=0.5, output = 0.5*position + 0.5*derived_speed.
-        # Build up a known speed at blend=1.0, then call again with dt=0 so
-        # the smoothed speed is reused verbatim and we can assert the exact
-        # formula.
-        router.apply_speed_tuning(speed_output_cutoff=0.0)
-        router._apply_speed_blend(("dev", 0), 0.0, blend=1.0)
-        clock.advance(0.1)
-        speed_only = router._apply_speed_blend(("dev", 0), 0.5, blend=1.0)
-        assert speed_only > 0.0  # sanity check the setup produced a real speed
-
-        mixed = router._apply_speed_blend(("dev", 0), 0.5, blend=0.5)
-        expected = 0.5 * 0.5 + 0.5 * speed_only
-        assert mixed == pytest.approx(expected)
-
-
-class TestSpeedSignalStatic:
-    def test_constant_position_smoothed_speed_stays_zero(self, router, clock):
-        # Same position repeated over many ticks → speed signal stays at 0.
-        for _ in range(10):
-            out = router._apply_speed_blend(("dev", 0), 0.5, blend=1.0)
-            clock.advance(0.05)
-            assert out == 0.0
-
-    def test_sub_deadband_jitter_stays_zero(self, router, clock):
-        # Position wobbles by less than speed_input_deadband — should be gated.
-        router.apply_speed_tuning(speed_input_deadband=0.05)
-        positions = [0.50, 0.51, 0.50, 0.52, 0.49, 0.50]
-        for p in positions:
-            out = router._apply_speed_blend(("dev", 0), p, blend=1.0)
-            clock.advance(0.05)
-            assert out == 0.0
-
-
-class TestSpeedSignalMoving:
-    def test_step_change_produces_positive_speed(self, router, clock):
-        # Initialize at 0.0, then jump to 0.5 over 0.05s → strong speed signal.
-        router._apply_speed_blend(("dev", 0), 0.0, blend=1.0)
-        clock.advance(0.05)
-        out = router._apply_speed_blend(("dev", 0), 0.5, blend=1.0)
-        assert out > 0.0
-
-    def test_larger_step_produces_larger_speed(self, router, clock):
-        # Two parallel motors, same dt — bigger Δposition → bigger speed.
-        # Use a low gain so neither sample saturates; otherwise both clamp
-        # to 1.0 and the comparison is meaningless.
-        router.apply_speed_tuning(speed_gain=0.1, speed_output_cutoff=0.0)
-        router._apply_speed_blend(("dev", 0), 0.0, blend=1.0)
-        router._apply_speed_blend(("dev", 1), 0.0, blend=1.0)
-        clock.advance(0.5)
-        small = router._apply_speed_blend(("dev", 0), 0.2, blend=1.0)
-        big = router._apply_speed_blend(("dev", 1), 0.8, blend=1.0)
-        assert big > small
-        assert big < 1.0  # saturation would invalidate the comparison
-
-
-class TestSpeedSignalDecay:
-    def test_decays_toward_zero_after_motion_stops(self, router, clock):
-        # Drive a speed signal high, then hold position static and watch decay.
-        router.apply_speed_tuning(speed_output_cutoff=0.0)  # don't snap to zero
-        router._apply_speed_blend(("dev", 0), 0.0, blend=1.0)
-        clock.advance(0.05)
-        peak = router._apply_speed_blend(("dev", 0), 0.8, blend=1.0)
-        assert peak > 0.0
-
-        # Now hold position; over multiple long ticks the speed must decay.
-        prev = peak
-        seen_lower = False
-        for _ in range(8):
-            clock.advance(0.2)
-            out = router._apply_speed_blend(("dev", 0), 0.8, blend=1.0)
-            if out < prev - 1e-6:
-                seen_lower = True
-            prev = out
-        assert seen_lower, "speed signal should monotonically decay after motion stops"
-        assert prev < peak
-
-    def test_smaller_tau_decays_faster(self, router, clock):
-        # Set fast decay, build speed, measure value after a fixed wait.
-        router.apply_speed_tuning(speed_decay_tau=0.05, speed_output_cutoff=0.0)
-        router._apply_speed_blend(("dev", "fast"), 0.0, blend=1.0)
-        clock.advance(0.05)
-        router._apply_speed_blend(("dev", "fast"), 0.8, blend=1.0)
-        clock.advance(0.3)
-        fast_decayed = router._apply_speed_blend(("dev", "fast"), 0.8, blend=1.0)
-
-        # Slow decay, same input pattern, same wait.
-        router.apply_speed_tuning(speed_decay_tau=1.0, speed_output_cutoff=0.0)
-        router._apply_speed_blend(("dev", "slow"), 0.0, blend=1.0)
-        clock.advance(0.05)
-        router._apply_speed_blend(("dev", "slow"), 0.8, blend=1.0)
-        clock.advance(0.3)
-        slow_decayed = router._apply_speed_blend(("dev", "slow"), 0.8, blend=1.0)
-
-        assert fast_decayed < slow_decayed
-
-
-class TestOutputCutoff:
-    def test_below_cutoff_snaps_to_zero(self, router, clock):
-        # Use a large cutoff so a low speed signal is forced to zero.
-        router.apply_speed_tuning(speed_output_cutoff=0.5)
-        router._apply_speed_blend(("dev", 0), 0.0, blend=1.0)
-        clock.advance(0.05)
-        # Tiny step — produces a small smoothed speed, well below 0.5.
-        out = router._apply_speed_blend(("dev", 0), 0.02, blend=1.0)
-        assert out == 0.0
-
-    def test_above_cutoff_is_rescaled(self, router, clock):
-        # With cutoff=0.0, output equals the raw smoothed speed.
-        router.apply_speed_tuning(speed_output_cutoff=0.0)
-        router._apply_speed_blend(("dev", 0), 0.0, blend=1.0)
-        clock.advance(0.05)
-        raw = router._apply_speed_blend(("dev", 0), 0.5, blend=1.0)
-        assert raw > 0.0
-
-    def test_at_exactly_cutoff_snaps_to_zero(self, router, clock):
-        # The cutoff comparison is <= (not <), so a smoothed value exactly
-        # equal to the cutoff still snaps to 0.
-        router.apply_speed_tuning(speed_gain=0.1, speed_output_cutoff=0.0)
-        router._apply_speed_blend(("dev", 0), 0.0, blend=1.0)
-        clock.advance(0.5)
-        smoothed = router._apply_speed_blend(("dev", 0), 0.5, blend=1.0)
-        # Sanity-check we're below the clamp ceiling so we can set cutoff to this value.
-        assert 0.0 < smoothed < 0.95
-
-        # Setting cutoff to exactly the stored smoothed value and re-evaluating
-        # with dt=0 (so the smoothed value is reused verbatim) snaps to 0.
-        router.apply_speed_tuning(speed_output_cutoff=smoothed)
-        out = router._apply_speed_blend(("dev", 0), 0.5, blend=1.0)
-        assert out == 0.0
-
-
-class TestApplySpeedTuningClamps:
-    def test_deadband_clamped_to_range(self, router):
-        router.apply_speed_tuning(speed_input_deadband=999.0)
-        assert router.speed_input_deadband == 0.5
-        router.apply_speed_tuning(speed_input_deadband=-1.0)
-        assert router.speed_input_deadband == 0.0
-
-    def test_gain_clamped_to_range(self, router):
-        router.apply_speed_tuning(speed_gain=1000.0)
-        assert router.speed_gain == 50.0
-        router.apply_speed_tuning(speed_gain=-5.0)
-        assert router.speed_gain == 0.0
-
-    def test_tau_never_zero(self, router):
-        # exp(-dt/tau) blows up at tau→0; router must keep tau strictly positive.
-        router.apply_speed_tuning(speed_decay_tau=0.0)
-        assert router.speed_decay_tau >= 0.01
-        router.apply_speed_tuning(speed_decay_tau=999.0)
-        assert router.speed_decay_tau == 5.0
-
-    def test_cutoff_clamped_to_range(self, router):
-        router.apply_speed_tuning(speed_output_cutoff=1.5)
-        assert router.speed_output_cutoff == 0.95
-        router.apply_speed_tuning(speed_output_cutoff=-0.3)
-        assert router.speed_output_cutoff == 0.0
-
-    def test_non_numeric_input_silently_ignored(self, router):
-        # Bad input must NOT raise and must NOT change the value.
-        before = router.speed_gain
-        router.apply_speed_tuning(speed_gain="not a number")
-        assert router.speed_gain == before
+# Phase 2 moved the speed-blend math out of the router into a pure-
+# function module (mixer.py); see test_mixer.py for the exhaustive
+# coverage of curves, combine modes, and smoothing. End-to-end
+# integration through _calculate_motor_target is below in Tier 3.
 
 
 # ============================================================ Tier 3: integration
 
-# Shared helpers for the integration tests. Every motor config in these
-# tests uses speed_blend=0 so the blend stage is a no-op and we test pure
-# routing logic without speed math interference.
+# Shared helpers for the integration tests. Without a `mix` block in
+# the config, _calculate_motor_target falls back to DEFAULT_MIX_CONFIG —
+# which means a moderate Δposition will produce a smoothed-output that
+# trails the raw depth signal. Tests that want to ignore the mixer
+# entirely use _disabled_speed_cfg() to mute the speed channel, leaving
+# the depth channel as a pure pass-through with no smoothing.
+
+def _pass_through_mix() -> dict:
+    """Mixer config that turns _calculate_motor_target into a depth-only
+    pass-through: speed channel disabled, smoothing disabled, linear
+    curve, gain 1.0. Used by integration tests that just want to verify
+    the depth-side compute pipeline (custom addresses + zones)."""
+    return {
+        "0": {
+            "depth": {
+                "enabled": True, "gain": 1.0,
+                "curve": "linear", "curve_param": 1.0,
+                "mode": "additive",
+                "min_remap": 0.0, "max_remap": 1.0,
+            },
+            "speed": {
+                "enabled": False, "gain": 1.0,
+                "curve": "linear", "curve_param": 1.0,
+                "mode": "additive",
+                "input_deadband": 0.005,
+                "output_cutoff": 0.02,
+                "decay_tau": 0.30,
+            },
+            "combine": "max",
+            "modulator_range": [0.5, 1.5],
+            "smoothing": {"attack_ms": 0.0, "release_ms": 0.0},
+        }
+    }
+
 
 def _basic_motor_cfg(**overrides) -> dict:
     cfg = {
@@ -358,7 +215,7 @@ def _basic_motor_cfg(**overrides) -> dict:
         "motor_0_pen": True,
         "motor_0_self": False,
         "motor_0_others": True,
-        "motor_0_speed_blend": 0.0,
+        "mix": _pass_through_mix(),
     }
     cfg.update(overrides)
     return cfg
@@ -527,13 +384,112 @@ class TestResetOutputs:
         out = router.reevaluate_state(profile, params, zones=set())
         assert len(out) == 1
 
-    def test_clears_speed_state(self, router, clock):
-        router._apply_speed_blend(("dev", 0), 0.0, blend=1.0)
+    def test_clears_motor_state(self, router, clock):
+        # The per-motor mixer state (last position / smoothed speed /
+        # smoothed output) is cleared too so a routing-mode switch can't
+        # leave a stale Δposition spike on the next tick.
+        cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.5}, zones=set())
         clock.advance(0.1)
-        router._apply_speed_blend(("dev", 0), 0.5, blend=1.0)
-        assert router._speed_state
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.5}, zones=set())
+        assert router._motor_state, "motor state should populate after a tick"
         router.reset_outputs()
-        assert router._speed_state == {}
+        assert router._motor_state == {}
+
+
+class TestMixerIntegration:
+    """End-to-end smoke tests that confirm _calculate_motor_target wires
+    the mixer correctly. The math itself is unit-tested in test_mixer.py;
+    these tests just make sure the router pulls the right fields out of
+    the per-motor mix config and threads state through."""
+
+    def _mix_cfg(self, **mix_overrides):
+        """Build a config with a custom mix block built on top of
+        _pass_through_mix's defaults."""
+        cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
+        cfg["mix"]["0"].update(mix_overrides)
+        return cfg
+
+    def test_missing_mix_block_falls_back_to_defaults(self, router):
+        # Profile without a `mix` key still produces a sensible first-tick
+        # output: dt=0 so smoothing snaps to mixed; speed defaults are
+        # enabled but s_raw=0 on the first sample → mixed=d_shaped=d_raw.
+        cfg = {
+            "motor_0_touch": True,
+            "motor_0_pen": True,
+            "motor_0_self": False,
+            "motor_0_others": True,
+            "osc_addresses": {"0": ["P"]},
+        }
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.5}, zones=set())
+        assert out == pytest.approx(0.5)
+
+    def test_depth_gain_scales_output(self, router):
+        cfg = self._mix_cfg(depth={
+            "enabled": True, "gain": 0.5,
+            "curve": "linear", "curve_param": 1.0,
+            "mode": "additive", "min_remap": 0.0, "max_remap": 1.0,
+        })
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
+        assert out == pytest.approx(0.5)
+
+    def test_depth_disabled_zeroes_depth_contribution(self, router):
+        cfg = self._mix_cfg()
+        cfg["mix"]["0"]["depth"]["enabled"] = False
+        # Speed is also disabled in _pass_through_mix → both disabled → 0
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
+        assert out == 0.0
+
+    def test_smoothing_ramps_up_on_step(self, router, clock):
+        cfg = self._mix_cfg()
+        cfg["mix"]["0"]["smoothing"] = {"attack_ms": 100.0, "release_ms": 100.0}
+        # First tick: dt=0 → snaps to mixed=0 (no input).
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        clock.advance(0.05)
+        # Step the input up. 50ms with 100ms attack gives a ~39% rise.
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
+        assert 0.0 < out < 1.0, f"expected partial rise, got {out}"
+
+    def test_per_motor_state_is_isolated(self, router, clock):
+        cfg = self._mix_cfg()
+        cfg["mix"]["0"]["smoothing"] = {"attack_ms": 100.0, "release_ms": 100.0}
+        # Seed devA at P=0 then ramp toward P=1; the second tick will be
+        # part-way up the envelope (smoothing hasn't converged yet).
+        router._calculate_motor_target("devA", 0, cfg, {"P": 0.0}, zones=set())
+        clock.advance(0.05)
+        out_a = router._calculate_motor_target("devA", 0, cfg, {"P": 1.0}, zones=set())
+        assert 0.0 < out_a < 1.0, "devA should be mid-ramp"
+        # devB starts fresh: first call has dt=0 → snaps to mixed=1.0
+        # regardless of where devA is in its envelope.
+        out_b = router._calculate_motor_target("devB", 0, cfg, {"P": 1.0}, zones=set())
+        assert out_b == pytest.approx(1.0)
+        assert out_a < out_b, "devA state shouldn't bleed into devB"
+        assert ("devA", 0) in router._motor_state
+        assert ("devB", 0) in router._motor_state
+
+    def test_curve_applied_to_depth(self, router):
+        # power(2) squares 0.5 → 0.25.
+        cfg = self._mix_cfg(depth={
+            "enabled": True, "gain": 1.0,
+            "curve": "power", "curve_param": 2.0,
+            "mode": "additive", "min_remap": 0.0, "max_remap": 1.0,
+        })
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.5}, zones=set())
+        assert out == pytest.approx(0.25)
+
+    def test_combine_max_picks_higher_channel(self, router, clock):
+        # Enable speed, drive a stroke so s_raw > d_raw, expect max-wins.
+        cfg = self._mix_cfg()
+        cfg["mix"]["0"]["speed"]["enabled"] = True
+        cfg["mix"]["0"]["combine"] = "max"
+        # First tick at 0 to seed last_position.
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        clock.advance(0.05)
+        # Big jump: position 0→0.6 in 50ms. raw_speed ~= 12, * 0.75
+        # normalization = 9 → clamped to 1.0. So s_raw=1.0 (above cutoff).
+        # d_raw = 0.6. With combine=max → out = max(0.6, 1.0) = 1.0.
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.6}, zones=set())
+        assert out == pytest.approx(1.0)
 
 
 # ============================================================ Tier 4: depth model

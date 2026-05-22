@@ -20,18 +20,9 @@ DEFAULT_APP_SETTINGS = {
     # Default ON so the first launch lands on the stripped Simple Mode panel.
     # The user can disable it from the Simple Mode panel or Settings.
     "simple_mode": True,
-    # Simple Mode Position↔Speed blend (0.0 = pure SPS depth, 1.0 = pure
-    # motion-derived speed). Per-toy profiles have their own per-motor
-    # `motor_{i}_speed_blend` key; this app-level value applies in Simple Mode.
-    "simple_mode_speed_blend": 0.0,
-    # Speed-blend tuning knobs (exposed in the UI as debug spinboxes for now —
-    # we can fold them back into hard-coded defaults once the values settle).
-    # See MotorRouter for the math; these mirror its instance attributes
-    # and must stay in sync with the `DEFAULT_SPEED_*` class constants there.
-    "speed_input_deadband": 0.005,
-    "speed_gain": 0.75,
-    "speed_decay_tau": 0.30,
-    "speed_output_cutoff": 0.02,
+    # Help Mode toggle for the Device Routing view header. Persisted so
+    # the user doesn't have to re-enable it every session.
+    "help_mode_enabled": False,
     # Feature toggles — turn off subsystems the user doesn't need so their
     # background threads / OSC traffic don't run. All default ON to match
     # pre-toggle behaviour.
