@@ -23,13 +23,13 @@ from typing import Callable, Dict, List, Optional
 # ----------------------------------------------------------
 
 def _pattern_slow_stroke(t: float) -> float:
-    """Sine at ~0.4 Hz — gentle exploratory stroke."""
-    return 0.5 + 0.5 * math.sin(2.0 * math.pi * 0.4 * t)
+    """Sine at ~0.2 Hz — slow exploratory stroke (~5s cycle)."""
+    return 0.5 + 0.5 * math.sin(2.0 * math.pi * 0.2 * t)
 
 
 def _pattern_medium_stroke(t: float) -> float:
-    """Sine at ~1 Hz — comfortable steady rhythm."""
-    return 0.5 + 0.5 * math.sin(2.0 * math.pi * 1.0 * t)
+    """Sine at ~0.5 Hz — relaxed steady rhythm (~2s cycle)."""
+    return 0.5 + 0.5 * math.sin(2.0 * math.pi * 0.5 * t)
 
 
 def _pattern_fast_stroke(t: float) -> float:
@@ -38,9 +38,9 @@ def _pattern_fast_stroke(t: float) -> float:
 
 
 def _pattern_fast_in_slow_out(t: float) -> float:
-    """Asymmetric sawtooth — sharp rise (~0.2s), gentle fall (~0.8s).
+    """Asymmetric sawtooth — sharp rise (~0.36s), gentle fall (~1.44s).
     Useful for tuning the speed channel's attack response."""
-    period = 1.0
+    period = 1.8
     rise_frac = 0.2
     phase = (t % period) / period
     if phase < rise_frac:
@@ -54,6 +54,26 @@ def _pattern_burst(t: float) -> float:
     period = 3.0
     duty_s = 1.0
     return 1.0 if (t % period) < duty_s else 0.0
+
+
+def _pattern_trapezoidal_burst(t: float) -> float:
+    """Trapezoidal envelope — smooth ramp-up (~0.4s), hold at full
+    (~0.6s), smooth ramp-down (~0.5s), rest (~1.5s). More realistic
+    than the rectangular `burst` for stroke-like motion: shows how
+    the mixer responds to gradual edges instead of hard step inputs."""
+    period = 3.0
+    ramp_up_s = 0.4
+    hold_s = 0.6
+    ramp_down_s = 0.5
+    phase = t % period
+    if phase < ramp_up_s:
+        return phase / ramp_up_s
+    if phase < ramp_up_s + hold_s:
+        return 1.0
+    fall_end = ramp_up_s + hold_s + ramp_down_s
+    if phase < fall_end:
+        return 1.0 - (phase - ramp_up_s - hold_s) / ramp_down_s
+    return 0.0
 
 
 class _TeaseState:
@@ -75,15 +95,16 @@ _TEASE_STATE = _TeaseState()
 
 
 def _pattern_tease(t: float) -> float:
-    """Random-walk-modulated sine. The walk advances on a fixed time
-    grid (~50 ms) rather than every call so the tease behaves the same
-    regardless of how often the router samples us."""
+    """Random-walk-modulated sine at ~0.8 Hz carrier. The walk
+    advances on a fixed time grid (~50 ms) rather than every call so
+    the tease behaves the same regardless of how often the router
+    samples us."""
     walk_step_s = 0.05
     if _TEASE_STATE.last_step_t is None or t - _TEASE_STATE.last_step_t >= walk_step_s:
         step = (_TEASE_STATE.rng.random() - 0.5) * 0.04
         _TEASE_STATE.walk = max(0.0, min(1.0, _TEASE_STATE.walk + step))
         _TEASE_STATE.last_step_t = t
-    carrier = 0.5 + 0.5 * math.sin(2.0 * math.pi * 1.5 * t)
+    carrier = 0.5 + 0.5 * math.sin(2.0 * math.pi * 0.8 * t)
     return _TEASE_STATE.walk * carrier
 
 
@@ -95,6 +116,7 @@ _PATTERNS: Dict[str, Callable[[float], float]] = {
     "fast_stroke": _pattern_fast_stroke,
     "fast_in_slow_out": _pattern_fast_in_slow_out,
     "burst": _pattern_burst,
+    "trapezoidal_burst": _pattern_trapezoidal_burst,
     "tease": _pattern_tease,
 }
 

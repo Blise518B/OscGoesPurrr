@@ -47,6 +47,22 @@ _SOURCE_SIMULATED = "simulated"
 _SOURCE_LIVE = "live"
 
 
+# Phase 3.5 signal-flow stages strip. Each tuple is
+# (stage_id, label, sparkline_trace_ids, focus_trace_ids).
+# `sparkline_trace_ids` are what the small per-stage TraceGraph
+# renders; `focus_trace_ids` are which traces stay visible in the big
+# graph when the user clicks the stage card. They overlap in most
+# cases — the distinction lets future stages add inputs to the
+# sparkline that they wouldn't pin in the big graph.
+_TUNE_STAGES: List[Tuple[str, str, Tuple[str, ...], Tuple[str, ...]]] = [
+    ("raw",       "Raw input",   ("d_raw", "s_raw"),       ("d_raw", "s_raw")),
+    ("channels",  "Depth/Speed", ("d_shaped", "s_shaped"), ("d_shaped", "s_shaped")),
+    ("mix",       "Mix",         ("mixed",),               ("mixed",)),
+    ("smoothing", "Smoothing",   ("mixed", "out"),         ("mixed", "out")),
+    ("output",    "Output",      ("out",),                 ("out",)),
+]
+
+
 class TuneMixin:
 
     # ----------------------------------------------------------
@@ -159,6 +175,14 @@ class TuneMixin:
         self._tune_widgets["hint"] = hint
         parent_layout.addWidget(hint)
 
+        # ---- Signal-flow stages strip ----
+        # Horizontal row of small live sparklines, one per mixer stage
+        # (Raw -> Channels -> Mix -> Smoothing -> Output). Clicking a
+        # card focuses the main graph on that stage's input/output
+        # traces; a "Show all" button restores the default visibility.
+        stages_strip = self._build_tune_stages_strip()
+        parent_layout.addWidget(stages_strip)
+
         # ---- Live multi-curve graph + per-trace legend ----
         graph = _TraceGraph(
             traces=[(t_id, color, style)
@@ -247,6 +271,19 @@ class TuneMixin:
 
         play_btn.clicked.connect(self._tune_on_play)
         stop_btn.clicked.connect(self._tune_on_stop)
+
+        # Hot-swap the playing pattern when the user picks a different
+        # one from the dropdown — only if something's currently playing,
+        # so just browsing the list doesn't auto-start. The pattern
+        # generator handles in-flight switches under its own lock.
+        def on_pattern_changed(_idx):
+            status = self.controller.tune_get_status()
+            if not status.get("pattern_running"):
+                return
+            pattern_id = pattern_combo.currentData()
+            if pattern_id:
+                self.controller.tune_start_pattern(str(pattern_id))
+        pattern_combo.currentIndexChanged.connect(on_pattern_changed)
 
         def on_send_to_toy(checked):
             self.controller.tune_set_send_to_toy(bool(checked))
@@ -354,16 +391,168 @@ class TuneMixin:
         self.controller.tune_stop_pattern()
 
     # ----------------------------------------------------------
+    # Phase 3.5 signal-flow stages strip
+    # ----------------------------------------------------------
+
+    def _build_tune_stages_strip(self) -> QWidget:
+        """Horizontal row of small per-stage sparklines that visualize
+        the signal chain Raw -> Channels -> Mix -> Smoothing -> Output.
+        Each card is clickable: a click focuses the main graph on the
+        stage's input/output traces and highlights the card."""
+        host = QFrame()
+        host.setObjectName("tuneStagesStrip")
+        host_lay = _vbox(0, 4)
+        host.setLayout(host_lay)
+
+        header_row = QWidget()
+        hr_lay = _hbox(0, 8)
+        header_row.setLayout(hr_lay)
+        header = QLabel("Signal flow")
+        hf = header.font(); hf.setBold(True)
+        header.setFont(hf)
+        hr_lay.addWidget(header)
+        hr_lay.addStretch(1)
+        show_all_btn = QPushButton("Show all traces")
+        show_all_btn.setFixedHeight(BTN_HEIGHT_SMALL)
+        show_all_btn.setProperty("role", "secondary")
+        show_all_btn.clicked.connect(self._tune_reset_trace_visibility)
+        hr_lay.addWidget(show_all_btn)
+        host_lay.addWidget(header_row)
+
+        strip = QWidget()
+        strip_lay = _hbox(0, 4)
+        strip.setLayout(strip_lay)
+
+        # Reset the stage refs each time the strip rebuilds.
+        self._tune_widgets["stages"] = {}
+
+        last_idx = len(_TUNE_STAGES) - 1
+        for idx, (stage_id, label, spark_trace_ids, focus_trace_ids) in enumerate(_TUNE_STAGES):
+            card = self._build_tune_stage_card(stage_id, label, spark_trace_ids)
+            strip_lay.addWidget(card, 1)
+            if idx < last_idx:
+                arrow = QLabel("→")
+                arrow.setAlignment(Qt.AlignCenter)
+                arrow.setProperty("muted", "true")
+                af = arrow.font(); af.setPointSize(max(af.pointSize() + 4, 14))
+                arrow.setFont(af)
+                self._repolish(arrow)
+                strip_lay.addWidget(arrow)
+        host_lay.addWidget(strip)
+        return host
+
+    def _build_tune_stage_card(self, stage_id: str, label: str,
+                               spark_trace_ids: Tuple[str, ...]) -> QFrame:
+        card = QFrame()
+        card.setObjectName("tuneStageCard")
+        card.setCursor(Qt.PointingHandCursor)
+        card.setProperty("active", "false")
+        card.setMinimumWidth(110)
+        lay = _vbox(8, 4)
+        card.setLayout(lay)
+
+        title = QLabel(label)
+        title.setAlignment(Qt.AlignHCenter)
+        tf = title.font(); tf.setBold(True)
+        title.setFont(tf)
+        lay.addWidget(title)
+
+        # Sparkline: 1-second window, traces colored to match the big
+        # graph so the two views read as the same chain.
+        spark_traces = []
+        for trace_id in spark_trace_ids:
+            color, style = self._tune_trace_spec_for_id(trace_id)
+            spark_traces.append((trace_id, color, style))
+        spark = _TraceGraph(traces=spark_traces, window_s=1.0)
+        spark.setFixedHeight(46)
+        lay.addWidget(spark)
+
+        # Whole card clickable. Buttons inside would consume their own
+        # clicks, but we have only labels and a sub-widget here, so the
+        # mousePressEvent fires on every left click in the card area.
+        def on_press(ev, sid=stage_id):
+            if ev.button() == Qt.LeftButton:
+                self._tune_focus_stage(sid)
+                ev.accept()
+            else:
+                QFrame.mousePressEvent(card, ev)
+        card.mousePressEvent = on_press
+
+        self._tune_widgets["stages"][stage_id] = {
+            "card": card,
+            "graph": spark,
+            "trace_ids": tuple(spark_trace_ids),
+        }
+        return card
+
+    def _tune_trace_spec_for_id(self, trace_id: str) -> Tuple[str, dict]:
+        """Look up the color + style dict for a trace by id. Falls back
+        to a neutral color if a stage references an unknown trace."""
+        for t_id, _label, color, _vis, style in _TUNE_TRACES:
+            if t_id == trace_id:
+                return color, style
+        return COLOR_TEXT, {}
+
+    def _tune_focus_stage(self, stage_id: str) -> None:
+        """Show only the focused stage's traces in the big graph and
+        sync the legend checkboxes to match. Highlights the active card."""
+        spec = next((s for s in _TUNE_STAGES if s[0] == stage_id), None)
+        if spec is None:
+            return
+        _id, _label, _spark, focus_ids = spec
+        focus_set = set(focus_ids)
+        self._tune_set_traces_visible(
+            {t_id: (t_id in focus_set) for t_id, *_ in _TUNE_TRACES}
+        )
+        self._tune_highlight_active_stage(stage_id)
+
+    def _tune_reset_trace_visibility(self) -> None:
+        """Restore the default per-trace visibility from _TUNE_TRACES
+        and clear any active stage highlight."""
+        self._tune_set_traces_visible(
+            {t_id: default_vis
+             for t_id, _label, _color, default_vis, _style in _TUNE_TRACES}
+        )
+        self._tune_highlight_active_stage(None)
+
+    def _tune_set_traces_visible(self, visibility: Dict[str, bool]) -> None:
+        graph = self._tune_widgets.get("graph") if hasattr(self, "_tune_widgets") else None
+        checkboxes = (self._tune_widgets.get("trace_checkboxes", {})
+                      if hasattr(self, "_tune_widgets") else {})
+        for t_id, vis in visibility.items():
+            if graph is not None:
+                graph.set_trace_visible(t_id, bool(vis))
+            cb = checkboxes.get(t_id)
+            if cb is not None:
+                cb.blockSignals(True)
+                try:
+                    cb.setChecked(bool(vis))
+                finally:
+                    cb.blockSignals(False)
+
+    def _tune_highlight_active_stage(self, active_id: Optional[str]) -> None:
+        stages = self._tune_widgets.get("stages", {})
+        for sid, refs in stages.items():
+            card = refs.get("card")
+            if card is None:
+                continue
+            card.setProperty("active", "true" if sid == active_id else "false")
+            self._repolish(card)
+
+    # ----------------------------------------------------------
     # Trace ingestion (called from main.py's queue drainer)
     # ----------------------------------------------------------
 
     def update_tune_trace(self, trace: Dict[str, Any]) -> None:
         """Receive one intermediates record from the router and push
-        each value into its trace on the graph. No-op when the trace
-        is for a different motor than the user has selected (the router
-        only subscribes one motor at a time, so this is mostly defensive
-        against in-flight messages from a just-changed selection)."""
-        graph = self._tune_widgets.get("graph") if hasattr(self, "_tune_widgets") else None
+        each value into its trace on the big graph AND every matching
+        stage sparkline. No-op when the trace is for a different motor
+        than the user has selected (the router only subscribes one
+        motor at a time, so this is mostly defensive against in-flight
+        messages from a just-changed selection)."""
+        if not hasattr(self, "_tune_widgets"):
+            return
+        graph = self._tune_widgets.get("graph")
         if graph is None:
             return
         selection = self._tune_widgets.get("current_selection")
@@ -373,11 +562,16 @@ class TuneMixin:
             return
         # Convert t_ms to seconds for the graph's window math.
         t_s = float(trace.get("t_ms", 0.0)) / 1000.0
+        stages = self._tune_widgets.get("stages", {})
         for trace_id in ("d_raw", "s_raw", "d_shaped", "s_shaped", "mixed", "out"):
             v = trace.get(trace_id)
             if v is None:
                 continue
             try:
-                graph.push_sample(trace_id, t_s, float(v))
+                fv = float(v)
             except (TypeError, ValueError):
                 continue
+            graph.push_sample(trace_id, t_s, fv)
+            for refs in stages.values():
+                if trace_id in refs.get("trace_ids", ()):
+                    refs["graph"].push_sample(trace_id, t_s, fv)

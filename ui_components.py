@@ -104,6 +104,19 @@ QFrame#motorBlock {{
     background-color: {COLOR_SURFACE};
     border-radius: 10px;
 }}
+QFrame#tuneStageCard {{
+    background-color: {COLOR_SURFACE_HOVER};
+    border-radius: 8px;
+    border: 1px solid transparent;
+    padding: 4px;
+}}
+QFrame#tuneStageCard[active="true"] {{
+    border: 1px solid {COLOR_SUCCESS};
+    background-color: {COLOR_SURFACE};
+}}
+QFrame#tuneStageCard:hover {{
+    background-color: {COLOR_SURFACE};
+}}
 QFrame#speedCard {{
     background-color: {COLOR_SURFACE_HOVER};
     border-radius: 8px;
