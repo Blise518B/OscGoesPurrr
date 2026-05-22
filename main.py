@@ -808,6 +808,35 @@ class OscGoesPurrrApp(
             return {}
         return self.haptic_engine.get_motor_count_map()
 
+    def get_intiface_status(self) -> Dict[str, Any]:
+        """Quick snapshot of the Buttplug/Intiface backend's state for
+        the Overview view's System tile. UI gets primitives only —
+        never reaches into self.haptic_engine directly."""
+        engine = getattr(self, "haptic_engine", None)
+        connected = bool(engine and engine.is_connected)
+        try:
+            device_count = len(engine.list_connected_device_names()) if connected else 0
+        except Exception:
+            device_count = 0
+        return {"connected": connected, "device_count": device_count}
+
+    def get_osc_status_snapshot(self) -> Dict[str, Any]:
+        """Quick snapshot of the VRChat OSC link's state for the
+        Overview view's System tile. UI gets primitives only — never
+        reaches into self.osc_manager directly."""
+        mgr = getattr(self, "osc_manager", None)
+        connected = bool(mgr and getattr(mgr, "is_connected", False))
+        port = None
+        try:
+            port = int(getattr(mgr, "local_listen_port", 0) or 0) or None
+        except Exception:
+            port = None
+        try:
+            packets = int(store.get_packets_received())
+        except Exception:
+            packets = 0
+        return {"connected": connected, "port": port, "packets": packets}
+
     def update_linear_motor_config(self, device_name: str, motor_idx: int) -> None:
         """Facade: read the persisted linear settings for one motor and forward
         them to the HapticEngine. Phase 2 promoted the physics knobs
