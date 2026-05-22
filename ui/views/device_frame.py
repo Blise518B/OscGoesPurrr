@@ -91,22 +91,26 @@ class DeviceFrameMixin:
             self._repolish(status_label)
             self._repolish(delete_button)
         self._reorder_device_frames()
+        # Mirror connection-state changes to Overview tiles.
+        if hasattr(self, "_overview_refresh_connection_states"):
+            self._overview_refresh_connection_states()
 
     def update_battery_label(self, device_name: str, level: float):
-        if device_name not in self.device_ui_frames:
-            return
-        battery_label: Optional[QLabel] = self.device_ui_frames[device_name].get("battery_label")
-        if battery_label is None:
-            return
-        pct = int(level * 100)
-        if pct > 50:
-            color = COLOR_SUCCESS
-        elif pct > 20:
-            color = COLOR_ALERT
-        else:
-            color = "#FF4444"
-        battery_label.setText(f"🔋 {pct}%")
-        battery_label.setStyleSheet(f"color: {color};")
+        if device_name in self.device_ui_frames:
+            battery_label: Optional[QLabel] = self.device_ui_frames[device_name].get("battery_label")
+            if battery_label is not None:
+                pct = int(level * 100)
+                if pct > 50:
+                    color = COLOR_SUCCESS
+                elif pct > 20:
+                    color = COLOR_ALERT
+                else:
+                    color = "#FF4444"
+                battery_label.setText(f"🔋 {pct}%")
+                battery_label.setStyleSheet(f"color: {color};")
+        # Mirror to Overview tile.
+        if hasattr(self, "_overview_set_battery"):
+            self._overview_set_battery(device_name, level)
 
     # ----------------------------------------------------------
     # Device card construction
@@ -1596,6 +1600,10 @@ class DeviceFrameMixin:
                 "status_label": frame_data["status_label"],
                 "delete_button": frame_data["delete_button"],
             }
+        # Active-profile change can add/remove devices — rebuild the
+        # Overview grid so its tile set matches.
+        if hasattr(self, "rebuild_overview"):
+            self.rebuild_overview()
 
     def build_device_list_ui(self, devices_dict: dict):
         controller = self.controller
@@ -1648,6 +1656,10 @@ class DeviceFrameMixin:
 
         controller.log_message(f"Connected devices: {len(devices_dict)}")
         self._reorder_device_frames()
+        # Newly-connected devices may not have been in the active
+        # profile yet — rebuild the Overview grid so they get tiles.
+        if hasattr(self, "rebuild_overview"):
+            self.rebuild_overview()
 
     def _reorder_device_frames(self):
         if self.unified_devices_layout is None:
@@ -1693,30 +1705,33 @@ class DeviceFrameMixin:
 
     def _set_motor_levels(self, device_name: str, motor_idx: int, value: float):
         """Drive the per-motor vibe meter inside the expanded card, the
-        matching mini-bar in the collapsed toy bar, and the Mix card's
-        scrolling mini-graph."""
-        if device_name not in self.device_ui_frames:
-            return
-        frame_data = self.device_ui_frames[device_name]
-        motors = frame_data.get("motors", [])
-        mini_bars = frame_data.get("mini_bars", [])
-        now = _time.monotonic()
-        if 0 <= motor_idx < len(motors):
-            mv = motors[motor_idx]
-            mv["vibe_meter"].set(value)
-            if 0 <= motor_idx < len(mini_bars):
-                mini_bars[motor_idx].set(value)
-            mg = mv.get("mini_graph")
-            if mg is not None:
-                mg.push_sample(_TraceGraph.DEFAULT_TRACE_ID, now, float(value))
-        elif motor_idx == -1:
-            for mv in motors:
+        matching mini-bar in the collapsed toy bar, the Mix card's
+        scrolling mini-graph, and the Overview tile's aggregate meter."""
+        if device_name in self.device_ui_frames:
+            frame_data = self.device_ui_frames[device_name]
+            motors = frame_data.get("motors", [])
+            mini_bars = frame_data.get("mini_bars", [])
+            now = _time.monotonic()
+            if 0 <= motor_idx < len(motors):
+                mv = motors[motor_idx]
                 mv["vibe_meter"].set(value)
+                if 0 <= motor_idx < len(mini_bars):
+                    mini_bars[motor_idx].set(value)
                 mg = mv.get("mini_graph")
                 if mg is not None:
                     mg.push_sample(_TraceGraph.DEFAULT_TRACE_ID, now, float(value))
-            for mb in mini_bars:
-                mb.set(value)
+            elif motor_idx == -1:
+                for mv in motors:
+                    mv["vibe_meter"].set(value)
+                    mg = mv.get("mini_graph")
+                    if mg is not None:
+                        mg.push_sample(_TraceGraph.DEFAULT_TRACE_ID, now, float(value))
+                for mb in mini_bars:
+                    mb.set(value)
+        # Mirror to Overview tile (no-op when the view hasn't been
+        # built yet or the device isn't on a tile).
+        if hasattr(self, "_overview_set_motor_value"):
+            self._overview_set_motor_value(device_name, motor_idx, value)
 
     def update_device_visuals(self, device_name: str, motor_idx: int, value: float):
         """Programmatic motor-value update. With the legacy intensity

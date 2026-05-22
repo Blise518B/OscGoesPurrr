@@ -69,6 +69,7 @@ from ui.views.bhaptics import BHapticsMixin
 from ui.views.hardware_monitor import HardwareMonitorMixin
 from ui.views.device_frame import DeviceFrameMixin
 from ui.views.tune import TuneMixin
+from ui.views.overview import OverviewMixin
 
 
 # ============================================================
@@ -116,6 +117,16 @@ QFrame#tuneStageCard[active="true"] {{
 }}
 QFrame#tuneStageCard:hover {{
     background-color: {COLOR_SURFACE};
+}}
+QFrame#overviewTile {{
+    background-color: {COLOR_SURFACE};
+    border-radius: 10px;
+    border: 1px solid transparent;
+    padding: 4px;
+}}
+QFrame#overviewTile:hover {{
+    background-color: {COLOR_SURFACE_HOVER};
+    border-color: {COLOR_SUCCESS};
 }}
 QFrame#speedCard {{
     background-color: {COLOR_SURFACE_HOVER};
@@ -530,6 +541,7 @@ class OscGoesPurrrUI(
     HardwareMonitorMixin,
     DeviceFrameMixin,
     TuneMixin,
+    OverviewMixin,
 ):
     """UI Component class — handles all GUI rendering and updates."""
 
@@ -671,12 +683,14 @@ class OscGoesPurrrUI(
         self.main_stack = QStackedWidget()
         root_layout.addWidget(self.main_stack, 1)
 
-        view_names = ["Dashboard", "Simple Mode", "Device Routing", "Tune",
+        view_names = ["Dashboard", "Overview", "Simple Mode",
+                      "Device Routing", "Tune",
                       "SteamVR Device Comms", "bHaptics", "Hardware Monitor",
                       "OSC Inspector", "OSC Diagnostics", "System Log",
                       "Settings", "Help"]
         builders = {
             "Dashboard": self._build_dashboard_view,
+            "Overview": self._build_overview_view,
             "Simple Mode": self._build_simple_mode_view,
             "Device Routing": self._build_device_routing_view,
             "Tune": self._build_tune_view,
@@ -751,7 +765,8 @@ class OscGoesPurrrUI(
         lay.addWidget(title)
         lay.addSpacing(20)
 
-        nav_buttons = ["Dashboard", "Simple Mode", "Device Routing", "Tune",
+        nav_buttons = ["Dashboard", "Overview", "Simple Mode",
+                       "Device Routing", "Tune",
                        "SteamVR Device Comms", "bHaptics", "Hardware Monitor",
                        "OSC Inspector", "OSC Diagnostics", "System Log",
                        "Settings", "Help"]
