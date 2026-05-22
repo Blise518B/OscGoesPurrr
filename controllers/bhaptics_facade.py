@@ -133,3 +133,30 @@ class BHapticsFacade:
         whatever the engine state is right now."""
         self._bhaptics_settings().set_osc_connected(enabled, param)
         self._bhaptics_send_connected_bool()
+
+    # ---- SPS -> bHaptics mirror ----
+
+    def get_bhaptics_sps_mirror(self) -> Dict[str, Any]:
+        """Snapshot of the SPS-mirror config block — UI populates the
+        Cross-Routing sub-tab from this. Shape:
+            {"enabled": bool, "entries": [entry, entry, ...]}
+        where each entry is the dict accepted by set_bhaptics_sps_mirror_entry.
+        """
+        return self._bhaptics_settings().get_sps_mirror()
+
+    def set_bhaptics_sps_mirror_enabled(self, enabled: bool) -> None:
+        """Master enable/disable for the entire mirror layer. When
+        disabled the bHaptics router skips the SPS-mirror compute step
+        entirely; only the existing bHapticsOSC v1 layer drives dots."""
+        self._bhaptics_settings().set_sps_mirror_enabled(enabled)
+
+    def set_bhaptics_sps_mirror_entry(self, index: int,
+                                      entry: Dict[str, Any]) -> None:
+        """Insert or update an entry at `index`. `index == len(entries)`
+        appends; out-of-range indices clamp to the nearest valid slot.
+        Per-field validation/clamping happens inside the settings
+        manager so a malformed entry can't crash the router."""
+        self._bhaptics_settings().set_sps_mirror_entry(index, entry)
+
+    def delete_bhaptics_sps_mirror_entry(self, index: int) -> None:
+        self._bhaptics_settings().delete_sps_mirror_entry(index)
