@@ -16,6 +16,7 @@ from .bhaptics_facade import BHapticsFacade
 from .hardware_monitor_facade import HardwareMonitorFacade
 from .osc_facade import OscFacade
 from .profiles_facade import ProfilesFacade
+from .tune_facade import TuneFacade
 
 __all__ = [
     "SteamVRFacade",
@@ -24,4 +25,5 @@ __all__ = [
     "HardwareMonitorFacade",
     "OscFacade",
     "ProfilesFacade",
+    "TuneFacade",
 ]

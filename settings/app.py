@@ -23,6 +23,14 @@ DEFAULT_APP_SETTINGS = {
     # Help Mode toggle for the Device Routing view header. Persisted so
     # the user doesn't have to re-enable it every session.
     "help_mode_enabled": False,
+    # How often the router re-evaluates all motors. Time-constant math
+    # (decay_tau / attack_ms / release_ms) is wall-clock-based so this
+    # is purely a CPU-vs-fidelity knob — no recalibration needed when
+    # the rate changes. 30 / 60 / 90 / 120 are the UI presets; any
+    # int in [10, 240] is accepted. Default matches the common headset
+    # refresh rate (Index, Quest 2/3) so the router stays in step with
+    # VRChat's avatar-parameter update cadence.
+    "router_poll_rate_hz": 90,
     # Feature toggles — turn off subsystems the user doesn't need so their
     # background threads / OSC traffic don't run. All default ON to match
     # pre-toggle behaviour.

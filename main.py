@@ -47,6 +47,7 @@ from controllers import (
     HardwareMonitorFacade,
     OscFacade,
     ProfilesFacade,
+    TuneFacade,
 )
 
 
@@ -57,6 +58,7 @@ class OscGoesPurrrApp(
     HardwareMonitorFacade,
     OscFacade,
     ProfilesFacade,
+    TuneFacade,
 ):
     def __init__(self):
         self.async_loop: asyncio.AbstractEventLoop = None
@@ -132,6 +134,26 @@ class OscGoesPurrrApp(
 
         # Initialize standalone OSC routing engine
         self.motor_router = MotorRouter()
+
+        # Tune view (Phase 3) state. All session-only — the safety
+        # switch defaults to OFF and no motor is subscribed until the
+        # user picks one in the Tune view. The pattern generator is
+        # pull-based: the router samples its current_value() on every
+        # tick, so the pattern is evaluated at the exact tick time and
+        # there's no sample-rate mismatch between a push thread and
+        # the router's poll rate.
+        from tune_pattern_generator import TunePatternGenerator
+        self._tune_source: str = "simulated"
+        self._tune_send_to_toy: bool = False
+        self._tune_selected_motor = None
+        self.tune_pattern_generator = TunePatternGenerator()
+        self.motor_router.set_tune_emit_callback(
+            lambda trace: self.thread_queue.put(("tune_trace", trace))
+        )
+        self.motor_router.set_tune_value_provider(
+            lambda: (self.tune_pattern_generator.current_value()
+                     if self._tune_source == "simulated" else None)
+        )
 
         # SteamVR Haptics — independent pipeline that shares the parameter_store
         # but targets SteamVR trackers via OpenVR.
@@ -419,6 +441,12 @@ class OscGoesPurrrApp(
                     self._is_updating_ui = False  # Unlock
             elif msg_type == "avatar_change":
                 self._on_avatar_change(data)
+            elif msg_type == "tune_trace":
+                # Phase 3 intermediates feed from motor_router. Hand off
+                # to the UI; the Tune view (when visible) routes the
+                # trace into its TraceGraph widget.
+                if self.ui is not None and hasattr(self.ui, "update_tune_trace"):
+                    self.ui.update_tune_trace(data)
 
         # Dispatch the coalesced haptic targets last — one command per motor
         # carrying the freshest value.
@@ -853,7 +881,15 @@ class OscGoesPurrrApp(
             return
 
         real_value = float(value)
-        engine_value = 0.0 if device_name in self._muted_devices else real_value
+        # Two ways the engine can be silenced for this motor: the per-toy
+        # session mute (Phase 1) and the Tune view's Send-to-toy safety
+        # switch (Phase 3). Either forces the engine value to 0 while
+        # the meter keeps showing the real mixer output.
+        if (device_name in self._muted_devices
+                or self.tune_should_silence(device_name, motor_index)):
+            engine_value = 0.0
+        else:
+            engine_value = real_value
 
         # Send the command safely to the Haptic Engine
         self.haptic_engine.update_target(device_name, motor_index, engine_value)
@@ -1303,12 +1339,35 @@ class OscGoesPurrrApp(
             except Exception as e:
                 self.log_message(f"Failed to start auto connect: {e}")
 
-        # Decoupled routing tick (Batches rapid OSC updates to max ~30Hz)
+        # Decoupled routing tick. The rate is user-tunable in Settings
+        # (router_poll_rate_hz, default 60 Hz); falls back to the
+        # ROUTER_POLL_RATE_MS constant if the setting is missing or
+        # malformed. Time-constant math (decay_tau / attack_ms /
+        # release_ms) is wall-clock-based so changing the rate at
+        # runtime never requires recalibrating tau values.
+        #
+        # The Tune view's pattern generator is pull-based — the router
+        # samples it on each tick — so we keep the tick firing whenever
+        # Tune has a motor subscribed even if VRChat is silent.
         def routing_tick():
-            if getattr(self, '_needs_recalculation', False):
+            needs_tick = getattr(self, '_needs_recalculation', False)
+            if not needs_tick and hasattr(self, 'motor_router'):
+                try:
+                    needs_tick = self.motor_router.has_tune_subscription()
+                except Exception:
+                    pass
+            if needs_tick:
                 self._needs_recalculation = False
                 self.force_recalculate()
-            self.ui.schedule_callback(ROUTER_POLL_RATE_MS, routing_tick)
+            # Re-read the rate on each tick so a Settings change takes
+            # effect on the very next reschedule with no restart.
+            try:
+                hz = int(self.get_app_setting("router_poll_rate_hz", 60))
+                hz = max(10, min(240, hz))
+                interval = max(1, int(round(1000.0 / hz)))
+            except (TypeError, ValueError):
+                interval = ROUTER_POLL_RATE_MS
+            self.ui.schedule_callback(interval, routing_tick)
 
         # Periodically check for UI updates from async thread
         def check_queue():
