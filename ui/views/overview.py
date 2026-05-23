@@ -29,7 +29,7 @@ persistence + QPropertyAnimation transitions + true FlowLayout."""
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QSize, QTimer
+from PySide6.QtCore import Qt, QSize, QTimer, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QButtonGroup, QFrame, QGridLayout, QLabel, QPushButton, QSizePolicy,
@@ -44,15 +44,27 @@ from ui import lovense_icons as _lovense_icons
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
 from ui.widgets import RainbowMeter as _RainbowMeter, ProgressProxy as _ProgressProxy
 from ui.icons import icon_no_battery as _icon_no_battery
+from ui.flow_layout import FlowLayout as _FlowLayout
 
 
-# Fixed grid column count for Cut 2 — Cut 3 swaps for a true
-# FlowLayout that wraps based on available width.
-_OVERVIEW_GRID_COLS = 4
+# Snap-grid tile sizes. 1x1 is sized for "essentials at a glance" —
+# small enough that 30+ tiles fit in a 1080p window. 2x1 doubles
+# width; 2x2 doubles both axes.
+_CELL_W = 196
+_CELL_H = 78
+_CELL_GAP = 6
 
-# Fixed tile size for Cut 1 / Cut 2 (1x1 base unit).
-_TILE_BASE_WIDTH = 220
-_TILE_BASE_HEIGHT = 110
+_TILE_SIZES: Dict[str, Tuple[int, int]] = {
+    "1x1": (_CELL_W, _CELL_H),
+    "2x1": (_CELL_W * 2 + _CELL_GAP, _CELL_H),
+    "2x2": (_CELL_W * 2 + _CELL_GAP, _CELL_H * 2 + _CELL_GAP),
+}
+_TILE_SIZE_CYCLE = ("1x1", "2x1", "2x2")
+_DEFAULT_TILE_SIZE = "1x1"
+
+# Animation duration when cycling sizes — long enough to read as a
+# transition, short enough not to feel sluggish.
+_RESIZE_ANIM_MS = 150
 
 # Sections in display order. Each tuple is (section_id, label,
 # editor_view_name) — the editor view is the sidebar entry clicked
@@ -95,20 +107,19 @@ class OverviewMixin:
         # at the Toys section's tiles dict.
         self._overview_tiles: Dict[str, Dict[str, Any]] = {}
 
+        # Tighten the page's own vertical rhythm so 30+ tiles can fit
+        # in a 1080p window without scrolling.
+        parent_layout.setSpacing(4)
+        parent_layout.setContentsMargins(8, 4, 8, 4)
+
         title = QLabel("Overview")
         title.setObjectName("viewTitle")
         title.setAlignment(Qt.AlignHCenter)
-        parent_layout.addWidget(title)
-
-        subtitle = QLabel(
+        title.setToolTip(
             "Read-only at-a-glance view. Click a tile to jump to its "
-            "editor view for configuration."
+            "editor view; click the ⤢ corner to resize."
         )
-        subtitle.setProperty("muted", "true")
-        subtitle.setAlignment(Qt.AlignHCenter)
-        subtitle.setWordWrap(True)
-        self._repolish(subtitle)
-        parent_layout.addWidget(subtitle)
+        parent_layout.addWidget(title)
 
         # Chip-filter row.
         visible = self._overview_load_visible_sections()
@@ -134,19 +145,16 @@ class OverviewMixin:
         # Build each section's container + grid + header.
         for sid, label, _editor in _SECTIONS:
             section_widget = QWidget()
-            section_lay = _vbox(0, 4)
+            section_lay = _vbox(0, 2)
             section_widget.setLayout(section_lay)
 
             header = QLabel(label)
-            hf = header.font(); hf.setBold(True); hf.setPointSize(12)
+            hf = header.font(); hf.setBold(True)
             header.setFont(hf)
             section_lay.addWidget(header)
 
             grid_host = QWidget()
-            grid = QGridLayout()
-            grid.setContentsMargins(0, 0, 0, 0)
-            grid.setHorizontalSpacing(8)
-            grid.setVerticalSpacing(8)
+            grid = _FlowLayout(margin=0, spacing=_CELL_GAP)
             grid_host.setLayout(grid)
             section_lay.addWidget(grid_host)
 
@@ -275,26 +283,33 @@ class OverviewMixin:
         self._overview_tiles.clear()
 
         profile = self.controller.get_active_profile_dict() or {}
-        connected = set(self.controller.get_connected_device_names())
-        names = sorted(profile.keys(), key=lambda s: (s not in connected, s.lower()))
-        if not names:
+        connected = sorted(
+            self.controller.get_connected_device_names(), key=str.lower
+        )
+        if not connected:
             self._overview_set_empty(
                 refs,
-                "No toys in the active profile yet. Connect a toy via "
-                "Intiface Central; it'll appear here automatically."
+                "No toys connected. Connect via Intiface Central — "
+                "stored-but-offline toys live in Device Routing."
             )
             return
 
-        for idx, name in enumerate(names):
-            tile = self._build_overview_toy_tile(name, profile[name],
-                                                 is_connected=(name in connected))
+        for idx, name in enumerate(connected):
+            # Connected toys may not yet be in the active profile (the
+            # seed runs at profile creation, not at hot-plug), so fall
+            # back to an empty config dict for the zones summary.
+            cfg = profile.get(name, {}) or {}
+            tile = self._build_overview_toy_tile(name, cfg, is_connected=True)
             self._overview_grid_add(refs, tile["frame"], idx)
             refs["tiles"][name] = tile
             self._overview_tiles[name] = tile
 
     def _build_overview_toy_tile(self, device_name: str, config: Dict[str, Any],
                                  is_connected: bool) -> Dict[str, Any]:
-        frame = self._overview_make_tile(self._navigate_to("Device Routing"))
+        frame = self._overview_make_tile(
+            self._navigate_to("Device Routing"),
+            section="toys", tile_id=device_name,
+        )
         frame.setProperty("connected", "true" if is_connected else "false")
         lay = frame.layout()
 
@@ -307,14 +322,14 @@ class OverviewMixin:
         icon_btn.setEnabled(False)
         icon_btn.setObjectName("lovenseIcon")
         icon_btn.setAutoRaise(True)
-        icon_btn.setFixedSize(QSize(28, 28))
-        icon_btn.setIconSize(QSize(24, 24))
+        icon_btn.setFixedSize(QSize(22, 22))
+        icon_btn.setIconSize(QSize(18, 18))
         self._apply_lovense_icon(device_name, icon_btn)
         head_lay.addWidget(icon_btn)
 
         dot = QFrame()
         dot.setObjectName("connectDot")
-        dot.setFixedSize(10, 10)
+        dot.setFixedSize(8, 8)
         self._apply_connect_dot(dot, is_connected)
         head_lay.addWidget(dot, 0, Qt.AlignVCenter)
 
@@ -343,7 +358,7 @@ class OverviewMixin:
 
         # Aggregate vibe meter (max across motors).
         vibe = _RainbowMeter(maximum=1000)
-        vibe.setFixedHeight(10)
+        vibe.setFixedHeight(8)
         lay.addWidget(vibe)
 
         return {
@@ -383,21 +398,27 @@ class OverviewMixin:
         self._overview_set_battery_label(tile["battery_label"], level)
 
     def _overview_refresh_connection_states(self) -> None:
-        if not getattr(self, "_overview_tiles", None):
+        if not getattr(self, "_overview_sections", None):
             return
         connected = set(self.controller.get_connected_device_names())
+        current_tiles = set(self._overview_tiles.keys()) if getattr(
+            self, "_overview_tiles", None
+        ) else set()
+        # Show-only-active: when the connected set differs from the
+        # tile set, rebuild the Toys section so newly-connected toys
+        # get tiles and disconnected ones go away.
+        if connected != current_tiles:
+            self._build_toys_section()
+            return
+        # Otherwise just refresh per-tile visuals (dots stay green
+        # because the set didn't change, but the call is cheap).
         for name, tile in self._overview_tiles.items():
-            is_conn = name in connected
             dot = tile.get("dot")
             if dot is not None:
-                self._apply_connect_dot(dot, is_conn)
+                self._apply_connect_dot(dot, True)
             frame: QFrame = tile["frame"]
-            frame.setProperty("connected", "true" if is_conn else "false")
+            frame.setProperty("connected", "true")
             self._repolish(frame)
-            if not is_conn:
-                bl = tile.get("battery_label")
-                if bl is not None:
-                    self._show_no_battery_glyph(bl)
 
     # ----------------------------------------------------------
     # Trackers section (SteamVR)
@@ -429,7 +450,11 @@ class OverviewMixin:
             refs["tiles"][t.get("serial", f"tracker_{idx}")] = tile
 
     def _build_overview_tracker_tile(self, tracker: Dict[str, Any]) -> Dict[str, Any]:
-        frame = self._overview_make_tile(self._navigate_to("SteamVR Device Comms"))
+        tile_id = str(tracker.get("serial") or tracker.get("model") or "tracker")
+        frame = self._overview_make_tile(
+            self._navigate_to("SteamVR Device Comms"),
+            section="trackers", tile_id=tile_id,
+        )
         lay = frame.layout()
 
         head = QWidget()
@@ -526,11 +551,18 @@ class OverviewMixin:
                 "bHaptics Player not available. Enable it in Settings."
             )
             return
-        devices = list(status.get("devices") or [])
-        if not devices:
-            self._overview_set_empty(refs, "No bHaptics positions configured.")
-            return
         connected_overall = bool(status.get("connected"))
+        # Only show positions that VRChat has actually fired at least
+        # once this session — the rest are configured-but-quiet and
+        # belong in the bHaptics editor view, not the at-a-glance tile.
+        devices = [d for d in (status.get("devices") or []) if d.get("detected")]
+        if not devices:
+            self._overview_set_empty(
+                refs,
+                "No bHaptics positions live. Stored positions live in "
+                "the bHaptics editor view."
+            )
+            return
         for idx, dev in enumerate(devices):
             tile = self._build_overview_suit_tile(dev, connected_overall)
             self._overview_grid_add(refs, tile["frame"], idx)
@@ -538,7 +570,11 @@ class OverviewMixin:
 
     def _build_overview_suit_tile(self, dev: Dict[str, Any],
                                   connected_overall: bool) -> Dict[str, Any]:
-        frame = self._overview_make_tile(self._navigate_to("bHaptics"))
+        tile_id = str(dev.get("position") or "position")
+        frame = self._overview_make_tile(
+            self._navigate_to("bHaptics"),
+            section="suit", tile_id=tile_id,
+        )
         lay = frame.layout()
 
         head = QWidget()
@@ -546,7 +582,7 @@ class OverviewMixin:
         head.setLayout(head_lay)
         dot = QFrame()
         dot.setObjectName("connectDot")
-        dot.setFixedSize(10, 10)
+        dot.setFixedSize(8, 8)
         # A position is "live" only when the Player overall is
         # connected AND the position has been detected by an OSC
         # message in the current session.
@@ -578,7 +614,7 @@ class OverviewMixin:
 
     def _refresh_suit_values(self) -> None:
         refs = self._overview_sections.get("suit")
-        if refs is None or not refs["tiles"]:
+        if refs is None:
             return
         if not hasattr(self.controller, "get_bhaptics_status"):
             return
@@ -587,6 +623,16 @@ class OverviewMixin:
             self._build_suit_section()
             return
         connected_overall = bool(status.get("connected"))
+        # Show-only-active: rebuild the section if the detected set
+        # changed since last refresh.
+        detected_now = {
+            str(d.get("position"))
+            for d in (status.get("devices") or [])
+            if d.get("detected")
+        }
+        if detected_now != set(refs["tiles"].keys()):
+            self._build_suit_section()
+            return
         for dev in (status.get("devices") or []):
             pos = str(dev.get("position", ""))
             tile = refs["tiles"].get(pos)
@@ -618,19 +664,38 @@ class OverviewMixin:
             return
         status = self.controller.get_hardware_monitor_status() or {}
         stats = status.get("stats") or {}
+        settings = status.get("settings") or {}
         if not stats.get("has_psutil", False):
             self._overview_set_empty(
                 refs, "Hardware Monitor needs `psutil` installed."
             )
             return
-        for idx, (key, label) in enumerate(self._STAT_ROWS):
+        if not settings.get("enabled", True):
+            self._overview_set_empty(
+                refs,
+                "Hardware Monitor is disabled. Enable it in the "
+                "Hardware Monitor view to see live stats."
+            )
+            return
+        # Only show stats that the monitor actually has a value for —
+        # GPU/VRAM are absent on non-NVIDIA machines, for example.
+        idx = 0
+        for key, label in self._STAT_ROWS:
+            if self._stat_value_text(key, stats) == "—":
+                continue
             tile = self._build_overview_stat_tile(key, label, stats)
             self._overview_grid_add(refs, tile["frame"], idx)
             refs["tiles"][key] = tile
+            idx += 1
+        if idx == 0:
+            self._overview_set_empty(refs, "No live stats available.")
 
     def _build_overview_stat_tile(self, stat_key: str, label: str,
                                   stats: Dict[str, Any]) -> Dict[str, Any]:
-        frame = self._overview_make_tile(self._navigate_to("Hardware Monitor"))
+        frame = self._overview_make_tile(
+            self._navigate_to("Hardware Monitor"),
+            section="stats", tile_id=stat_key,
+        )
         lay = frame.layout()
 
         title = QLabel(label)
@@ -733,7 +798,10 @@ class OverviewMixin:
         refs["tiles"]["backends"] = tile
 
     def _build_overview_osc_tile(self) -> Dict[str, Any]:
-        frame = self._overview_make_tile(self._navigate_to("OSC Inspector"))
+        frame = self._overview_make_tile(
+            self._navigate_to("OSC Inspector"),
+            section="system", tile_id="osc",
+        )
         lay = frame.layout()
         head = QWidget()
         head_lay = _hbox(0, 6)
@@ -775,7 +843,10 @@ class OverviewMixin:
         tile["_last_packets"] = packets
 
     def _build_overview_profile_tile(self) -> Dict[str, Any]:
-        frame = self._overview_make_tile(self._navigate_to("Dashboard"))
+        frame = self._overview_make_tile(
+            self._navigate_to("Dashboard"),
+            section="system", tile_id="profile",
+        )
         lay = frame.layout()
         title = QLabel("Active Profile")
         tf = title.font(); tf.setBold(True)
@@ -813,7 +884,10 @@ class OverviewMixin:
             tile["sub"].setText("Global profile")
 
     def _build_overview_backends_tile(self) -> Dict[str, Any]:
-        frame = self._overview_make_tile(self._navigate_to("Settings"))
+        frame = self._overview_make_tile(
+            self._navigate_to("Settings"),
+            section="system", tile_id="backends",
+        )
         lay = frame.layout()
         title = QLabel("Backends")
         tf = title.font(); tf.setBold(True)
@@ -882,14 +956,20 @@ class OverviewMixin:
     # Tile / section primitives
     # ----------------------------------------------------------
 
-    def _overview_make_tile(self, on_click) -> QFrame:
-        """Common tile shell: fixed 1x1 size, pointing cursor, click
-        target wired to the supplied callable."""
+    def _overview_make_tile(self, on_click,
+                            section: str, tile_id: str) -> QFrame:
+        """Common tile shell. Sized via the persisted snap-grid size
+        (1x1 / 2x1 / 2x2). Left-click on the body fires the navigate
+        callback; click on the small ⤢ button in the top-right cycles
+        through the size classes."""
         frame = QFrame()
         frame.setObjectName("overviewTile")
-        frame.setFixedSize(QSize(_TILE_BASE_WIDTH, _TILE_BASE_HEIGHT))
         frame.setCursor(Qt.PointingHandCursor)
-        lay = _vbox(8, 4)
+        size_class = self._overview_get_tile_size(section, tile_id)
+        w, h = _TILE_SIZES.get(size_class, _TILE_SIZES[_DEFAULT_TILE_SIZE])
+        frame.setFixedSize(QSize(w, h))
+        frame.setProperty("size_class", size_class)
+        lay = _vbox(5, 2)
         frame.setLayout(lay)
 
         def on_press(ev):
@@ -902,18 +982,127 @@ class OverviewMixin:
             else:
                 QFrame.mousePressEvent(frame, ev)
         frame.mousePressEvent = on_press
+
+        # The expand button is created here so every tile (Toys,
+        # Trackers, etc.) gets it without each builder needing to
+        # remember. Sits in the top-right, sized small enough not to
+        # crowd the tile content.
+        expand_btn = QToolButton(frame)
+        expand_btn.setObjectName("overviewExpand")
+        expand_btn.setText("⤢")
+        expand_btn.setCursor(Qt.PointingHandCursor)
+        expand_btn.setToolTip("Resize tile  (1×1 → 2×1 → 2×2)")
+        expand_btn.setFixedSize(14, 14)
+        expand_btn.setAutoRaise(True)
+        # Stop event propagation so clicking the button doesn't also
+        # trigger the navigate-on-click body handler.
+        expand_btn.clicked.connect(
+            lambda _=False, s=section, t=tile_id: self._overview_cycle_tile_size(s, t)
+        )
+        # Position manually after the frame is given its size — Qt
+        # widget children aren't laid out by the parent's QLayout
+        # unless explicitly added, which is what we want here.
+        expand_btn.move(w - expand_btn.width() - 4, 4)
+        expand_btn.raise_()
+        # Re-position the expand button whenever the frame resizes.
+        # We attach a resize hook so animations keep the button in
+        # the corner.
+        def on_resize(ev, btn=expand_btn, f=frame):
+            btn.move(f.width() - btn.width() - 4, 4)
+            QFrame.resizeEvent(f, ev)
+        frame.resizeEvent = on_resize
+
         return frame
 
     def _overview_grid_add(self, refs: Dict[str, Any], widget: QWidget,
-                           index: int) -> None:
-        row, col = divmod(index, _OVERVIEW_GRID_COLS)
-        refs["grid"].addWidget(widget, row, col)
+                           _index: int = 0) -> None:
+        # FlowLayout just appends — items are positioned by the layout
+        # itself. The `_index` parameter is retained for call-site
+        # compatibility but ignored.
+        refs["grid"].addWidget(widget)
+
+    # ----------------------------------------------------------
+    # Snap-grid size persistence + resize
+    # ----------------------------------------------------------
+
+    def _overview_size_storage_key(self, section: str, tile_id: str) -> str:
+        return f"{section}:{tile_id}"
+
+    def _overview_get_tile_size(self, section: str, tile_id: str) -> str:
+        sizes = self.controller.get_app_setting("dashboard_tile_sizes", {}) or {}
+        if not isinstance(sizes, dict):
+            return _DEFAULT_TILE_SIZE
+        v = sizes.get(self._overview_size_storage_key(section, tile_id))
+        if v in _TILE_SIZES:
+            return v
+        return _DEFAULT_TILE_SIZE
+
+    def _overview_persist_tile_size(self, section: str, tile_id: str,
+                                    size_class: str) -> None:
+        sizes = self.controller.get_app_setting("dashboard_tile_sizes", {}) or {}
+        if not isinstance(sizes, dict):
+            sizes = {}
+        sizes = dict(sizes)
+        sizes[self._overview_size_storage_key(section, tile_id)] = size_class
+        self.controller.set_app_setting("dashboard_tile_sizes", sizes)
+
+    def _overview_cycle_tile_size(self, section: str, tile_id: str) -> None:
+        """Called by the per-tile ⤢ button. Steps through the size
+        cycle (1x1 → 2x1 → 2x2 → 1x1), persists the new size, and
+        animates the tile to its new dimensions."""
+        current = self._overview_get_tile_size(section, tile_id)
+        try:
+            idx = _TILE_SIZE_CYCLE.index(current)
+        except ValueError:
+            idx = 0
+        next_size = _TILE_SIZE_CYCLE[(idx + 1) % len(_TILE_SIZE_CYCLE)]
+        self._overview_persist_tile_size(section, tile_id, next_size)
+        # Find the tile frame and animate it.
+        refs = self._overview_sections.get(section)
+        if refs is None:
+            return
+        tile = refs["tiles"].get(tile_id)
+        if tile is None:
+            return
+        frame: QFrame = tile.get("frame")
+        if frame is None:
+            return
+        self._overview_animate_tile_to(frame, next_size)
+        # FlowLayout reflows automatically when child sizeHints change,
+        # but we nudge it so the new size takes effect immediately.
+        host = refs.get("grid_host")
+        if host is not None:
+            host.updateGeometry()
+
+    def _overview_animate_tile_to(self, frame: QFrame, size_class: str) -> None:
+        """Animate the tile to the named size class. Uses a
+        QPropertyAnimation on minimumSize + maximumSize together so
+        the tile's fixed-size constraint stays consistent throughout
+        the transition."""
+        w, h = _TILE_SIZES.get(size_class, _TILE_SIZES[_DEFAULT_TILE_SIZE])
+        target = QSize(w, h)
+        frame.setProperty("size_class", size_class)
+
+        anim_min = QPropertyAnimation(frame, b"minimumSize", frame)
+        anim_min.setDuration(_RESIZE_ANIM_MS)
+        anim_min.setEasingCurve(QEasingCurve.OutCubic)
+        anim_min.setStartValue(frame.size())
+        anim_min.setEndValue(target)
+
+        anim_max = QPropertyAnimation(frame, b"maximumSize", frame)
+        anim_max.setDuration(_RESIZE_ANIM_MS)
+        anim_max.setEasingCurve(QEasingCurve.OutCubic)
+        anim_max.setStartValue(frame.size())
+        anim_max.setEndValue(target)
+
+        anim_min.start(QPropertyAnimation.DeleteWhenStopped)
+        anim_max.start(QPropertyAnimation.DeleteWhenStopped)
 
     def _overview_clear_section(self, refs: Dict[str, Any]) -> None:
-        grid: QGridLayout = refs["grid"]
+        grid = refs["grid"]
         while grid.count():
             item = grid.takeAt(0)
-            w = item.widget()
+            w = item.widget() if item is not None else None
             if w is not None:
                 w.setParent(None)
                 w.deleteLater()
@@ -929,7 +1118,7 @@ class OverviewMixin:
         empty.setAlignment(Qt.AlignHCenter)
         empty.setWordWrap(True)
         self._repolish(empty)
-        refs["grid"].addWidget(empty, 0, 0, 1, _OVERVIEW_GRID_COLS)
+        refs["grid"].addWidget(empty)
         refs["empty"] = empty
 
     def _overview_set_battery_label(self, label: QLabel, level: float) -> None:
