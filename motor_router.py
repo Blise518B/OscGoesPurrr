@@ -154,7 +154,12 @@ class MotorRouter:
         "modulator_range": (0.5, 1.5),
         "smoothing": {
             "attack_ms": 50.0,
-            "release_ms": 300.0,
+            # 20 ms release tau gives a perceptible decay-to-silent of
+            # ~100 ms at the default 90 Hz tick: combined with the
+            # mixer's 0.5 % snap-to-zero, the toy stops feeling the
+            # signal within ~110 ms of the input dropping. Users who
+            # want a longer drone bump this in Device Routing.
+            "release_ms": 20.0,
         },
     }
 
@@ -745,7 +750,7 @@ class MotorRouter:
             smoothing.get("attack_ms", 50.0), 50.0, 0.0, 2000.0
         )
         release_ms = self._coerce_float(
-            smoothing.get("release_ms", 300.0), 300.0, 0.0, 2000.0
+            smoothing.get("release_ms", 20.0), 20.0, 0.0, 2000.0
         )
         smoothed = smooth(
             state["smoothed_output"], mixed, dt * 1000.0, attack_ms, release_ms

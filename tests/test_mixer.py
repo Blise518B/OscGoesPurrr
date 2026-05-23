@@ -341,3 +341,38 @@ class TestSmoothDefensive:
         # Defensive: a negative tau is meaningless. Treat as instant.
         assert smooth(0.0, 1.0, 10.0, -50.0, 100.0) == pytest.approx(1.0)
         assert smooth(1.0, 0.0, 10.0, 100.0, -50.0) == pytest.approx(0.0)
+
+
+class TestSmoothTailSnap:
+    """Lock the snap-to-target behavior so the exponential tail can't
+    re-introduce a multi-second residue (toy 'stuck buzz') regression."""
+
+    def test_falling_tail_reaches_exact_zero(self):
+        # Real-world setup: 90 Hz tick (11.1 ms), 300 ms release default.
+        # Without the snap, after ~5 s the value is still ~6e-8 — non-zero
+        # forever. With the snap, it should hit exactly 0 inside a couple
+        # of seconds and stay there.
+        state = 1.0
+        for _ in range(180):  # ~2 s
+            state = smooth(state, 0.0, 11.1, 50.0, 300.0)
+        assert state == 0.0  # exact, not approx
+
+    def test_rising_tail_reaches_exact_one(self):
+        # Same idea on the rising side: a long-running attack should not
+        # leave the toy stuck a hair below the user's max.
+        state = 0.0
+        for _ in range(180):
+            state = smooth(state, 1.0, 11.1, 300.0, 50.0)
+        assert state == 1.0  # exact
+
+    def test_snaps_when_within_epsilon(self):
+        # 0.001 residue from target — well inside the 0.005 snap window.
+        out = smooth(0.001, 0.0, 11.1, 50.0, 300.0)
+        assert out == 0.0
+
+    def test_does_not_snap_far_from_target(self):
+        # 0.5 residue from target — well outside the snap window; the
+        # normal exponential math should apply.
+        out = smooth(0.5, 0.0, 11.1, 50.0, 300.0)
+        assert 0.0 < out < 0.5
+        assert out != pytest.approx(0.0)

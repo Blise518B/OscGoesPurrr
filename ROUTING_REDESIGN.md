@@ -245,7 +245,7 @@ And the smoothing stage (post-combine):
 | Field         | Type                 | Default  |
 |---------------|----------------------|----------|
 | `attack_ms`   | float (0 – 2000 ms)  | `50`     |
-| `release_ms`  | float (0 – 2000 ms)  | `300`    |
+| `release_ms`  | float (0 – 2000 ms)  | `20`     |
 
 **Rule:** at most one channel can have `mode = modulate` at a time.
 Setting one to `modulate` flips the other back to `additive` and
@@ -282,9 +282,16 @@ through an asymmetric exponential envelope follower:
 
 Setting both `attack_ms` and `release_ms` near 0 effectively
 disables smoothing (`smoothed` tracks `mixed` instantaneously).
-Defaults (~50 ms attack, ~300 ms release) give a barely-noticeable
-rise and a gentle fade — toys feel less twitchy on choppy OSC input
-without lagging the user's intent.
+Defaults (~50 ms attack, ~20 ms release) give a barely-noticeable
+rise and a near-instant release — toys feel less twitchy on choppy
+OSC input but still go silent within ~100 ms of the input dropping.
+Combined with the mixer's 0.5 % snap-to-zero (which kills the
+floating-point tail of the exponential), the user feels a clean
+release rather than a multi-second hum.
+
+Users who want a longer drone-out tail (e.g. for a "ramp down after
+the contact ends" feel) bump `release_ms` in the per-motor Mix UI;
+the smoothing math itself is unchanged.
 
 Note: smoothing here is **post-mix**, distinct from the speed
 channel's per-channel `decay_tau` which lives inside the speed-
@@ -328,7 +335,7 @@ The per-motor profile section gains a `mix` block:
     "modulator_range": [0.5, 1.5],
     "smoothing": {
       "attack_ms": 50,
-      "release_ms": 300
+      "release_ms": 20
     }
   }
 }
