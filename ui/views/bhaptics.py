@@ -47,6 +47,7 @@ from ui.widgets import (
     MainWindow as _MainWindow,
     Card as _Card,
     BHapticsDotGrid as _BHapticsDotGrid,
+    BHapticsDotPicker as _BHapticsDotPicker,
     SliderProxy as _SliderProxy,
     ProgressProxy as _ProgressProxy,
     RainbowMeter as _RainbowMeter,
@@ -78,6 +79,31 @@ class BHapticsMixin:
         title.setObjectName("viewTitle")
         title.setAlignment(Qt.AlignHCenter)
         parent_layout.addWidget(title)
+
+        # The bHaptics view is split into two tabs: "Devices" holds the
+        # existing v1-OSC plumbing (status, anti-stuck, connected-bool,
+        # per-device cards) and "Cross-Routing" is the SPS-to-suit
+        # mirror config. Both share the same engine + settings so their
+        # outputs merge inside bhaptics_router (max-wins per dot).
+        from PySide6.QtWidgets import QTabWidget as _QTabWidget
+        tabs = _QTabWidget()
+        devices_tab = QWidget()
+        devices_lay = _vbox(10, 8)
+        devices_tab.setLayout(devices_lay)
+        cross_tab = QWidget()
+        cross_lay = _vbox(10, 8)
+        cross_tab.setLayout(cross_lay)
+        tabs.addTab(devices_tab, "Devices")
+        tabs.addTab(cross_tab, "Cross-Routing")
+        parent_layout.addWidget(tabs)
+
+        # Build the Cross-Routing tab content via the dedicated builder
+        # (defined further down). The Devices tab is the existing
+        # card-stack below; we rebind `parent_layout` to its layout so
+        # the existing parent_layout.addWidget(...) calls keep working
+        # without any per-card rename.
+        self._build_bhaptics_cross_routing(cross_lay)
+        parent_layout = devices_lay
 
         parent_layout.addWidget(self._muted_label(
             "Translates v1 bHapticsOSC avatar parameters into haptic frames sent to the bHaptics Player.\n"
@@ -476,3 +502,506 @@ class BHapticsMixin:
         enabled.toggled.connect(push)
         slider.valueChanged.connect(push)
         return card
+
+    # ----------------------------------------------------------
+    # Cross-Routing sub-tab (SPS -> bHaptics mirror)
+    # ----------------------------------------------------------
+    #
+    # The user defines entries that mirror OGB SPS contacts (Touch/Pen)
+    # onto specific bHaptics dot indices. Each entry is independent and
+    # max-merges with the v1 OSC layer inside bhaptics_router. There are
+    # no baked-in suggestions — entries start empty and the user picks
+    # zones from whatever the current avatar is broadcasting.
+
+    _is_updating_bhaptics_xroute = False
+    _bhaptics_xroute_rows: List[Dict[str, Any]] = []
+    _bhaptics_xroute_positions: List[str] = []
+    # position -> (cols, rows, node_count); fed to each row's picker so
+    # the grid matches the chosen device layout.
+    _bhaptics_xroute_geom: Dict[str, tuple] = {}
+
+    def _build_bhaptics_cross_routing(self, parent_layout: QVBoxLayout):
+        parent_layout.addWidget(self._muted_label(
+            "Mirror OGB SPS contacts (Touch / Pen) into bHaptics dots. Each "
+            "entry maps one avatar zone + filter to a set of dots on one "
+            "device. Output max-merges with the regular bHapticsOSC layer — "
+            "whichever signal is strongest at any dot wins."
+        ))
+
+        # Master enable + add row
+        top_row = _hbox(0, 8)
+        self.bhaptics_xroute_enable_check = ToggleSwitch("Enable Cross-Routing")
+        self.bhaptics_xroute_enable_check.toggled.connect(
+            self._on_bhaptics_xroute_enable_changed
+        )
+        top_row.addWidget(self.bhaptics_xroute_enable_check)
+        top_row.addStretch(1)
+        refresh_btn = QPushButton("Refresh zones")
+        refresh_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+        refresh_btn.setToolTip(
+            "Re-read the avatar's detected SPS zones and refresh the "
+            "zone pickers below."
+        )
+        refresh_btn.clicked.connect(self._rebuild_bhaptics_xroute_entries)
+        top_row.addWidget(refresh_btn)
+        add_btn = QPushButton("+ Add entry")
+        add_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+        add_btn.clicked.connect(self._on_bhaptics_xroute_add)
+        top_row.addWidget(add_btn)
+        parent_layout.addLayout(top_row)
+
+        # Cache the device-position list + per-position geometry once.
+        # Prefer the live engine report; fall back to the hard-coded
+        # table if the status call ever fails so the picker is never
+        # empty. Geometry feeds the per-row dot picker — when the user
+        # changes the position combo we reconfigure the picker to the
+        # new device's (cols, rows, node_count).
+        positions: List[str] = []
+        geom: Dict[str, tuple] = {}
+        try:
+            devices = self.controller.get_bhaptics_status().get("devices", []) or []
+            for d in devices:
+                pos = d.get("position")
+                if not pos:
+                    continue
+                positions.append(pos)
+                cols, rows = d.get("grid", (1, 1))
+                geom[pos] = (int(cols), int(rows), int(d.get("node_count", 0)))
+        except Exception:
+            positions = []
+        if not positions:
+            fallback_grids = {
+                "Head": (6, 1), "VestFront": (4, 5), "VestBack": (4, 5),
+                "ForearmL": (2, 3), "ForearmR": (2, 3),
+                "HandL": (3, 1), "HandR": (3, 1),
+                "FootL": (3, 1), "FootR": (3, 1),
+            }
+            for pos, _slot, count in self._bhaptics_device_table_fallback():
+                positions.append(pos)
+                c, r = fallback_grids.get(pos, (count, 1))
+                geom[pos] = (c, r, count)
+        self._bhaptics_xroute_positions = positions
+        self._bhaptics_xroute_geom = geom
+
+        # Scroll area for entries
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        _install_rainbow_scrollbars(scroll)
+        inner = QWidget()
+        self.bhaptics_xroute_list_layout = _vbox(8, 8)
+        inner.setLayout(self.bhaptics_xroute_list_layout)
+        scroll.setWidget(inner)
+        parent_layout.addWidget(scroll, 1)
+
+        self._rebuild_bhaptics_xroute_entries()
+
+    @staticmethod
+    def _bhaptics_device_table_fallback():
+        """Static fallback so the position picker still has a sane list
+        even before the engine reports devices."""
+        return [
+            ("Head", None, 6),
+            ("VestFront", None, 20),
+            ("VestBack", None, 20),
+            ("ForearmL", None, 6),
+            ("ForearmR", None, 6),
+            ("HandL", None, 3),
+            ("HandR", None, 3),
+            ("FootL", None, 3),
+            ("FootR", None, 3),
+        ]
+
+    def _rebuild_bhaptics_xroute_entries(self):
+        """Tear down + rebuild the entry list from the persisted config.
+        Called on view init, after add/delete, and when the user hits
+        Refresh (which also re-reads detected zones)."""
+        if not hasattr(self, "bhaptics_xroute_list_layout"):
+            return
+        self._is_updating_bhaptics_xroute = True
+        try:
+            cfg = self.controller.get_bhaptics_sps_mirror()
+            self.bhaptics_xroute_enable_check.setChecked(
+                bool(cfg.get("enabled", False))
+            )
+            self._bhaptics_xroute_rows = []
+            while self.bhaptics_xroute_list_layout.count():
+                item = self.bhaptics_xroute_list_layout.takeAt(0)
+                w = item.widget()
+                if w is not None:
+                    w.deleteLater()
+            entries = cfg.get("entries", []) or []
+            if not entries:
+                self.bhaptics_xroute_list_layout.addWidget(self._muted_label(
+                    "No entries yet. Click '+ Add entry' to map an OGB SPS "
+                    "zone onto one or more bHaptics dots."
+                ))
+            else:
+                for idx, entry in enumerate(entries):
+                    card = self._build_bhaptics_xroute_entry_card(idx, entry)
+                    self.bhaptics_xroute_list_layout.addWidget(card, 0, Qt.AlignLeft)
+            self.bhaptics_xroute_list_layout.addStretch(1)
+        finally:
+            self._is_updating_bhaptics_xroute = False
+
+    def _build_bhaptics_xroute_entry_card(self, idx: int,
+                                          entry: Dict[str, Any]) -> QFrame:
+        card = _Card()
+        card.setMaximumWidth(640)
+        lay = _vbox(12, 6)
+        card.setLayout(lay)
+
+        # --- Row 1: name + delete ---
+        row1 = _hbox(0, 8)
+        row1.addWidget(QLabel("Name"))
+        name_edit = QLineEdit(str(entry.get("name", "")))
+        name_edit.setPlaceholderText("Mirror")
+        name_edit.setMinimumWidth(180)
+        name_edit.editingFinished.connect(
+            lambda i=idx: self._push_bhaptics_xroute_entry(i)
+        )
+        row1.addWidget(name_edit)
+        row1.addStretch(1)
+        del_btn = QPushButton("Delete")
+        del_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+        del_btn.clicked.connect(lambda _=False, i=idx: self._on_bhaptics_xroute_delete(i))
+        row1.addWidget(del_btn)
+        lay.addLayout(row1)
+
+        # --- Row 2: source (zone type + zone name) + filters ---
+        row2 = _hbox(0, 8)
+        row2.addWidget(QLabel("Source"))
+        ztype_combo = QComboBox()
+        ztype_combo.addItems(["Orf", "Pen"])
+        cur_ztype = str(entry.get("zone_type", "Orf"))
+        ztype_combo.setCurrentText(cur_ztype if cur_ztype in ("Orf", "Pen") else "Orf")
+        ztype_combo.currentTextChanged.connect(
+            lambda _t, i=idx: self._on_bhaptics_xroute_ztype_changed(i)
+        )
+        row2.addWidget(ztype_combo)
+
+        zone_combo = QComboBox()
+        zone_combo.setEditable(True)
+        zone_combo.setMinimumWidth(160)
+        self._populate_xroute_zone_combo(zone_combo, ztype_combo.currentText())
+        cur_zone = str(entry.get("ogb_zone", ""))
+        if cur_zone and zone_combo.findText(cur_zone) < 0:
+            zone_combo.addItem(cur_zone)
+        zone_combo.setEditText(cur_zone)
+        zone_combo.editTextChanged.connect(
+            lambda _t, i=idx: self._push_bhaptics_xroute_entry(i)
+        )
+        row2.addWidget(zone_combo, 1)
+
+        row2.addSpacing(8)
+        row2.addWidget(QLabel("Filters"))
+        filter_checks: Dict[str, QCheckBox] = {}
+        cur_filters = set(entry.get("filters") or [])
+        for fname in ("TouchSelf", "TouchOthers", "PenSelf", "PenOthers"):
+            cb = QCheckBox(fname)
+            cb.setChecked(fname in cur_filters)
+            cb.toggled.connect(
+                lambda _checked=False, i=idx: self._push_bhaptics_xroute_entry(i)
+            )
+            row2.addWidget(cb)
+            filter_checks[fname] = cb
+        lay.addLayout(row2)
+
+        # --- Row 3: output position ---
+        row3 = _hbox(0, 8)
+        row3.addWidget(QLabel("Output"))
+        pos_combo = QComboBox()
+        pos_combo.addItems(self._bhaptics_xroute_positions)
+        cur_pos = str(entry.get("position", "VestFront"))
+        if cur_pos and pos_combo.findText(cur_pos) < 0:
+            pos_combo.addItem(cur_pos)
+        pos_combo.setCurrentText(cur_pos)
+        # The currentTextChanged handler both reconfigures the picker
+        # (drops out-of-range dots silently) and pushes the entry.
+        pos_combo.currentTextChanged.connect(
+            lambda _t, i=idx: self._on_bhaptics_xroute_position_changed(i)
+        )
+        row3.addWidget(pos_combo)
+
+        row3.addStretch(1)
+        # Tiny count read-out updates from the picker's selectionChanged.
+        dot_count_lbl = QLabel("0 dots")
+        dot_count_lbl.setProperty("role", "muted")
+        row3.addWidget(dot_count_lbl)
+        lay.addLayout(row3)
+
+        # --- Row 4: visual dot picker (mirrors the chosen device's
+        # physical layout) + comma-separated text fallback for
+        # power users and paste support. The two stay in sync. ---
+        pick_row = _hbox(0, 8)
+        pick_row.addWidget(QLabel("Dots"))
+        picker = _BHapticsDotPicker()
+        cols, rows, node_count = self._bhaptics_xroute_geom.get(
+            pos_combo.currentText(), (1, 1, 0)
+        )
+        picker.set_device(cols, rows, node_count)
+        picker.set_selection(entry.get("dot_indices") or [])
+        pick_row.addWidget(picker, 0, Qt.AlignTop)
+
+        dots_edit = QLineEdit(self._fmt_dot_indices(picker.selection()))
+        dots_edit.setPlaceholderText("e.g. 5, 6, 9, 10")
+        dots_edit.setMinimumWidth(140)
+        dots_edit.setToolTip(
+            "Comma-separated 0-based dot indices. Edits here sync to the "
+            "picker above; the picker is the easier surface for most users."
+        )
+
+        def _on_picker_changed(_=None, i=idx):
+            # Picker updated the selection -> mirror into the line edit
+            # without triggering its editingFinished handler, then push.
+            sel = picker.selection()
+            dots_edit.blockSignals(True)
+            try:
+                dots_edit.setText(self._fmt_dot_indices(sel))
+            finally:
+                dots_edit.blockSignals(False)
+            dot_count_lbl.setText(f"{len(sel)} dot{'s' if len(sel) != 1 else ''}")
+            self._push_bhaptics_xroute_entry(i)
+
+        def _on_text_changed(i=idx):
+            # User typed into the text box -> parse, reflect in picker,
+            # rewrite the cleaned form back into the box (e.g. dedupe,
+            # drop garbage), and push the entry.
+            parsed = self._parse_dot_indices(dots_edit.text())
+            picker.blockSignals(True)
+            try:
+                picker.set_selection(parsed)
+            finally:
+                picker.blockSignals(False)
+            cleaned = self._fmt_dot_indices(picker.selection())
+            if cleaned != dots_edit.text():
+                dots_edit.blockSignals(True)
+                try:
+                    dots_edit.setText(cleaned)
+                finally:
+                    dots_edit.blockSignals(False)
+            dot_count_lbl.setText(
+                f"{len(picker.selection())} dot"
+                f"{'s' if len(picker.selection()) != 1 else ''}"
+            )
+            self._push_bhaptics_xroute_entry(i)
+
+        picker.selectionChanged.connect(_on_picker_changed)
+        dots_edit.editingFinished.connect(_on_text_changed)
+        # Initial count label
+        n = len(picker.selection())
+        dot_count_lbl.setText(f"{n} dot{'s' if n != 1 else ''}")
+
+        pick_col = _vbox(0, 4)
+        pick_col.addWidget(dots_edit)
+        pick_col.addStretch(1)
+        pick_row.addLayout(pick_col, 1)
+        lay.addLayout(pick_row)
+
+        # --- Row 4: gain + threshold ---
+        row4 = _hbox(0, 8)
+        row4.addWidget(QLabel("Gain"))
+        gain_spin = QDoubleSpinBox()
+        gain_spin.setRange(0.0, 2.0)
+        gain_spin.setSingleStep(0.05)
+        gain_spin.setDecimals(2)
+        try:
+            gain_spin.setValue(float(entry.get("gain", 1.0)))
+        except (TypeError, ValueError):
+            gain_spin.setValue(1.0)
+        gain_spin.valueChanged.connect(
+            lambda _v, i=idx: self._push_bhaptics_xroute_entry(i)
+        )
+        row4.addWidget(gain_spin)
+
+        row4.addSpacing(12)
+        row4.addWidget(QLabel("Threshold"))
+        thresh_spin = QDoubleSpinBox()
+        thresh_spin.setRange(0.0, 1.0)
+        thresh_spin.setSingleStep(0.05)
+        thresh_spin.setDecimals(2)
+        try:
+            thresh_spin.setValue(float(entry.get("threshold", 0.0)))
+        except (TypeError, ValueError):
+            thresh_spin.setValue(0.0)
+        thresh_spin.valueChanged.connect(
+            lambda _v, i=idx: self._push_bhaptics_xroute_entry(i)
+        )
+        row4.addWidget(thresh_spin)
+        row4.addStretch(1)
+        lay.addLayout(row4)
+
+        # Store widget refs so the push handler can read them by index.
+        # `picker` is the canonical dot-selection source; `dot_indices`
+        # is the synced text shadow we keep for tooltip / paste support.
+        self._bhaptics_xroute_rows.append({
+            "name": name_edit,
+            "zone_type": ztype_combo,
+            "ogb_zone": zone_combo,
+            "filters": filter_checks,
+            "position": pos_combo,
+            "picker": picker,
+            "dot_indices": dots_edit,
+            "dot_count_label": dot_count_lbl,
+            "gain": gain_spin,
+            "threshold": thresh_spin,
+        })
+        return card
+
+    def _populate_xroute_zone_combo(self, combo: QComboBox, zone_type: str):
+        """Fill the OGB-zone dropdown from the avatar's currently-detected
+        zones. Editable, so the user can still type a zone name we
+        haven't seen on the wire yet."""
+        combo.blockSignals(True)
+        try:
+            current = combo.currentText()
+            combo.clear()
+            try:
+                zones = self.controller.get_detected_zones() or {}
+            except Exception:
+                zones = {}
+            key = "Orifices" if zone_type == "Orf" else "Penetrators"
+            names = list(zones.get(key) or [])
+            combo.addItems(names)
+            if current:
+                if combo.findText(current) < 0:
+                    combo.addItem(current)
+                combo.setEditText(current)
+        finally:
+            combo.blockSignals(False)
+
+    @staticmethod
+    def _fmt_dot_indices(values) -> str:
+        try:
+            return ", ".join(str(int(v)) for v in values)
+        except (TypeError, ValueError):
+            return ""
+
+    @staticmethod
+    def _parse_dot_indices(text: str) -> List[int]:
+        out: List[int] = []
+        for chunk in (text or "").replace(";", ",").split(","):
+            chunk = chunk.strip()
+            if not chunk:
+                continue
+            try:
+                v = int(chunk)
+            except ValueError:
+                continue
+            if v >= 0:
+                out.append(v)
+        return sorted(set(out))
+
+    def _push_bhaptics_xroute_entry(self, idx: int):
+        """Gather every field of row `idx` and push it through the
+        controller. The settings layer clamps + coerces each field, so
+        we only need to dump what the user typed."""
+        if self._is_updating_bhaptics_xroute:
+            return
+        if idx < 0 or idx >= len(self._bhaptics_xroute_rows):
+            return
+        row = self._bhaptics_xroute_rows[idx]
+        filters = [name for name, cb in row["filters"].items() if cb.isChecked()]
+        # Picker is the canonical dot source — the text field is just a
+        # synced shadow. Reading the picker means a half-typed list in
+        # the line edit can't reach the router before editingFinished
+        # has cleaned it up.
+        picker = row.get("picker")
+        if picker is not None:
+            dot_indices = list(picker.selection())
+        else:
+            dot_indices = self._parse_dot_indices(row["dot_indices"].text())
+        entry = {
+            "name":        row["name"].text(),
+            "zone_type":   row["zone_type"].currentText(),
+            "ogb_zone":    row["ogb_zone"].currentText(),
+            "filters":     filters,
+            "position":    row["position"].currentText(),
+            "dot_indices": dot_indices,
+            "gain":        float(row["gain"].value()),
+            "threshold":   float(row["threshold"].value()),
+        }
+        try:
+            self.controller.set_bhaptics_sps_mirror_entry(idx, entry)
+        except Exception as e:
+            self.log_message(f"bHaptics SPS mirror save failed: {e}")
+
+    def _on_bhaptics_xroute_enable_changed(self, checked: bool):
+        if self._is_updating_bhaptics_xroute:
+            return
+        self.controller.set_bhaptics_sps_mirror_enabled(bool(checked))
+
+    def _on_bhaptics_xroute_add(self):
+        cfg = self.controller.get_bhaptics_sps_mirror()
+        entries = cfg.get("entries", []) or []
+        new_entry = {
+            "name":        f"Mirror {len(entries) + 1}",
+            "zone_type":   "Orf",
+            "ogb_zone":    "",
+            "filters":     ["TouchSelf", "TouchOthers"],
+            "position":    "VestFront",
+            "dot_indices": [],
+            "gain":        1.0,
+            "threshold":   0.0,
+        }
+        self.controller.set_bhaptics_sps_mirror_entry(len(entries), new_entry)
+        self._rebuild_bhaptics_xroute_entries()
+
+    def _on_bhaptics_xroute_delete(self, idx: int):
+        self.controller.delete_bhaptics_sps_mirror_entry(idx)
+        self._rebuild_bhaptics_xroute_entries()
+
+    def _on_bhaptics_xroute_position_changed(self, idx: int):
+        """User picked a different target device. Reconfigure that
+        row's picker to the new device's grid (which silently drops
+        any selected dots that no longer fit) and update the count
+        readout + line edit to match. Then push the entry."""
+        if idx < 0 or idx >= len(self._bhaptics_xroute_rows):
+            return
+        row = self._bhaptics_xroute_rows[idx]
+        picker = row.get("picker")
+        new_pos = row["position"].currentText()
+        if picker is not None:
+            cols, rows, node_count = self._bhaptics_xroute_geom.get(
+                new_pos, (1, 1, 0)
+            )
+            picker.blockSignals(True)
+            try:
+                picker.set_device(cols, rows, node_count)
+            finally:
+                picker.blockSignals(False)
+            # set_device may have dropped out-of-range dots; re-sync
+            # the line edit + count label so the UI shows the truth.
+            sel = picker.selection()
+            cleaned = self._fmt_dot_indices(sel)
+            dots_edit = row.get("dot_indices")
+            if dots_edit is not None and dots_edit.text() != cleaned:
+                dots_edit.blockSignals(True)
+                try:
+                    dots_edit.setText(cleaned)
+                finally:
+                    dots_edit.blockSignals(False)
+            count_lbl = row.get("dot_count_label")
+            if count_lbl is not None:
+                count_lbl.setText(f"{len(sel)} dot{'s' if len(sel) != 1 else ''}")
+        self._push_bhaptics_xroute_entry(idx)
+
+    def _on_bhaptics_xroute_ztype_changed(self, idx: int):
+        """User flipped the entry's Orf/Pen toggle. Refresh that row's
+        zone-name dropdown to match (orifices vs penetrators come from
+        different OGB lists) and push the entry."""
+        if idx < 0 or idx >= len(self._bhaptics_xroute_rows):
+            return
+        row = self._bhaptics_xroute_rows[idx]
+        # Clearing the editable text avoids leaving the previous-type
+        # zone name selected (e.g. switching Orf->Pen with "Boob" still
+        # showing in the box would re-create the entry as a Pen mapping
+        # against an orifice name).
+        row["ogb_zone"].blockSignals(True)
+        try:
+            row["ogb_zone"].setEditText("")
+        finally:
+            row["ogb_zone"].blockSignals(False)
+        self._populate_xroute_zone_combo(
+            row["ogb_zone"], row["zone_type"].currentText()
+        )
+        self._push_bhaptics_xroute_entry(idx)

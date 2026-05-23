@@ -47,6 +47,7 @@ from controllers import (
     HardwareMonitorFacade,
     OscFacade,
     ProfilesFacade,
+    TuneFacade,
 )
 
 
@@ -57,6 +58,7 @@ class OscGoesPurrrApp(
     HardwareMonitorFacade,
     OscFacade,
     ProfilesFacade,
+    TuneFacade,
 ):
     def __init__(self):
         self.async_loop: asyncio.AbstractEventLoop = None
@@ -111,7 +113,14 @@ class OscGoesPurrrApp(
         # so the Simple Mode panel can show a live battery icon next to each
         # connected toy.
         self._battery_cache: Dict[str, float] = {}
-        
+
+        # Per-toy soft-mute set. Session-only, never persisted: cleared on
+        # app start (trivially, by being an empty set here) and on every
+        # profile switch (see ProfilesFacade.switch_profile). Mute forces
+        # the engine target to 0 while the mixer keeps computing real
+        # values so the meter still shows what would be playing.
+        self._muted_devices: set = set()
+
         # Initialize components in correct order
         self._setup_components()
         
@@ -125,10 +134,26 @@ class OscGoesPurrrApp(
 
         # Initialize standalone OSC routing engine
         self.motor_router = MotorRouter()
-        # Restore any persisted speed-blend tuning (kept in app settings so
-        # we can tweak the math at runtime via the debug spinboxes without
-        # editing source). Missing keys fall back to MotorRouter defaults.
-        self._apply_saved_speed_tuning()
+
+        # Tune view (Phase 3) state. All session-only — the safety
+        # switch defaults to OFF and no motor is subscribed until the
+        # user picks one in the Tune view. The pattern generator is
+        # pull-based: the router samples its current_value() on every
+        # tick, so the pattern is evaluated at the exact tick time and
+        # there's no sample-rate mismatch between a push thread and
+        # the router's poll rate.
+        from tune_pattern_generator import TunePatternGenerator
+        self._tune_source: str = "simulated"
+        self._tune_send_to_toy: bool = False
+        self._tune_selected_motor = None
+        self.tune_pattern_generator = TunePatternGenerator()
+        self.motor_router.set_tune_emit_callback(
+            lambda trace: self.thread_queue.put(("tune_trace", trace))
+        )
+        self.motor_router.set_tune_value_provider(
+            lambda: (self.tune_pattern_generator.current_value()
+                     if self._tune_source == "simulated" else None)
+        )
 
         # SteamVR Haptics — independent pipeline that shares the parameter_store
         # but targets SteamVR trackers via OpenVR.
@@ -166,6 +191,7 @@ class OscGoesPurrrApp(
             engine=self.bhaptics_engine,
             get_device_configs=self._bhaptics_get_device_configs,
             get_antistuck=self._bhaptics_get_antistuck,
+            get_sps_mirror_config=self.get_bhaptics_sps_mirror,
         )
 
         # Hardware Monitor — broadcasts system stats (CPU/RAM/GPU/VRAM) to
@@ -416,6 +442,12 @@ class OscGoesPurrrApp(
                     self._is_updating_ui = False  # Unlock
             elif msg_type == "avatar_change":
                 self._on_avatar_change(data)
+            elif msg_type == "tune_trace":
+                # Phase 3 intermediates feed from motor_router. Hand off
+                # to the UI; the Tune view (when visible) routes the
+                # trace into its TraceGraph widget.
+                if self.ui is not None and hasattr(self.ui, "update_tune_trace"):
+                    self.ui.update_tune_trace(data)
 
         # Dispatch the coalesced haptic targets last — one command per motor
         # carrying the freshest value.
@@ -554,56 +586,6 @@ class OscGoesPurrrApp(
         """Facade method for UI to safely update app settings."""
         self.profile_manager.app_settings.set(key, value)
 
-    # ------------------------------------------------------------------
-    # Speed-blend tuning facade (UI debug knobs)
-    # ------------------------------------------------------------------
-
-    def _apply_saved_speed_tuning(self) -> None:
-        if not hasattr(self, "motor_router"):
-            return
-        overrides = {}
-        for key in self.motor_router.SPEED_TUNING_KEYS:
-            saved = self.get_app_setting(key, None)
-            if saved is not None:
-                overrides[key] = saved
-        if overrides:
-            self.motor_router.apply_speed_tuning(**overrides)
-
-    def get_speed_tuning(self) -> Dict[str, float]:
-        """Snapshot of the live speed-blend tuning values, for UI display."""
-        if not hasattr(self, "motor_router"):
-            return {}
-        return self.motor_router.get_speed_tuning()
-
-    def set_speed_tuning_value(self, key: str, value: float) -> Dict[str, float]:
-        """Update one tuning knob, persist it, and re-evaluate so the change
-        is audible immediately. Returns the clamped snapshot so the UI can
-        show the actually-applied value if it differs from the user's input.
-        """
-        if not hasattr(self, "motor_router"):
-            return {}
-        snapshot = self.motor_router.apply_speed_tuning(**{key: value})
-        # Persist the post-clamp value so a stale UI input never resurrects
-        # on the next launch.
-        self.set_app_setting(key, snapshot.get(key, value))
-        if hasattr(self, "force_recalculate"):
-            self.force_recalculate()
-        return snapshot
-
-    def reset_speed_tuning(self) -> Dict[str, float]:
-        """Revert every speed-blend tuning knob to the MotorRouter factory
-        defaults, persist them, and force a recalc so the next tick uses the
-        fresh values. Returns the applied snapshot for the UI."""
-        if not hasattr(self, "motor_router"):
-            return {}
-        defaults = self.motor_router.get_speed_tuning_defaults()
-        snapshot = self.motor_router.apply_speed_tuning(**defaults)
-        for key, value in snapshot.items():
-            self.set_app_setting(key, value)
-        if hasattr(self, "force_recalculate"):
-            self.force_recalculate()
-        return snapshot
-
     # ==================================================================
     # Feature toggles — Settings → Features panel uses these to gate the
     # expensive background subsystems (bHaptics, Hardware Monitor, SteamVR
@@ -740,9 +722,8 @@ class OscGoesPurrrApp(
         params, _version, zones = store.snapshot()
         if self.get_app_setting("simple_mode", False):
             motor_counts = self.get_device_motor_counts()
-            blend = self.get_app_setting("simple_mode_speed_blend", 0.0)
             updates = self.motor_router.reevaluate_simple_mode(
-                motor_counts, params, zones=zones, speed_blend=blend
+                motor_counts, params, zones=zones
             )
         else:
             active = self.profile_manager.get_active_profile_dict()
@@ -828,20 +809,61 @@ class OscGoesPurrrApp(
             return {}
         return self.haptic_engine.get_motor_count_map()
 
+    def get_intiface_status(self) -> Dict[str, Any]:
+        """Quick snapshot of the Buttplug/Intiface backend's state for
+        the Overview view's System tile. UI gets primitives only —
+        never reaches into self.haptic_engine directly."""
+        engine = getattr(self, "haptic_engine", None)
+        connected = bool(engine and engine.is_connected)
+        try:
+            device_count = len(engine.list_connected_device_names()) if connected else 0
+        except Exception:
+            device_count = 0
+        return {"connected": connected, "device_count": device_count}
+
+    def get_osc_status_snapshot(self) -> Dict[str, Any]:
+        """Quick snapshot of the VRChat OSC link's state for the
+        Overview view's System tile. UI gets primitives only — never
+        reaches into self.osc_manager directly."""
+        mgr = getattr(self, "osc_manager", None)
+        connected = bool(mgr and getattr(mgr, "is_connected", False))
+        port = None
+        try:
+            port = int(getattr(mgr, "local_listen_port", 0) or 0) or None
+        except Exception:
+            port = None
+        try:
+            packets = int(store.get_packets_received())
+        except Exception:
+            packets = 0
+        return {"connected": connected, "port": port, "packets": packets}
+
     def update_linear_motor_config(self, device_name: str, motor_idx: int) -> None:
-        """Facade: read the persisted mode/idle settings for one motor and forward
-        them to the HapticEngine. Called by the UI when the user toggles the
-        per-motor Mode or Idle control, and by `_sync_linear_configs` on connect.
-        """
+        """Facade: read the persisted linear settings for one motor and forward
+        them to the HapticEngine. Phase 2 promoted the physics knobs
+        (min_pos/max_pos/resting_pos/resting_time_s) to per-motor, so this
+        forwards any that are stored alongside mode/idle."""
         if not self.haptic_engine:
             return
-        mode = self.profile_manager.get_profile_config(
-            device_name, f"motor_{motor_idx}_linear_mode", "position"
-        )
-        idle = self.profile_manager.get_profile_config(
-            device_name, f"motor_{motor_idx}_linear_idle", "rest"
-        )
-        self.haptic_engine.set_linear_config(device_name, motor_idx, mode=mode, idle=idle)
+        kwargs: Dict[str, Any] = {
+            "mode": self.profile_manager.get_profile_config(
+                device_name, f"motor_{motor_idx}_linear_mode", "position"
+            ),
+            "idle": self.profile_manager.get_profile_config(
+                device_name, f"motor_{motor_idx}_linear_idle", "rest"
+            ),
+        }
+        for key in ("min_pos", "max_pos", "resting_pos", "resting_time_s"):
+            raw = self.profile_manager.get_profile_config(
+                device_name, f"motor_{motor_idx}_{key}", None
+            )
+            if raw is None:
+                continue
+            try:
+                kwargs[key] = float(raw)
+            except (TypeError, ValueError):
+                continue
+        self.haptic_engine.set_linear_config(device_name, motor_idx, **kwargs)
 
     def _sync_linear_configs(self, devices_dict: dict) -> None:
         """Push the persisted linear mode/idle setting for every motor on every
@@ -874,7 +896,7 @@ class OscGoesPurrrApp(
 
     def update_device_target(self, device_name: str, value: float, motor_index: int):
         """Update target intensity for a specific device and motor
-        
+
         Args:
             device_name: Name of the device
             value: New intensity value (0.0 to 1.0)
@@ -883,17 +905,86 @@ class OscGoesPurrrApp(
         # Prevent programmatic UI changes from echoing back to the controller
         if getattr(self, '_is_updating_ui', False):
             return
-        
+
         # Only send updates if connected
         if not self.haptic_engine or not self.haptic_engine.is_connected:
             return
-            
+
+        real_value = float(value)
+        # Two ways the engine can be silenced for this motor: the per-toy
+        # session mute (Phase 1) and the Tune view's Send-to-toy safety
+        # switch (Phase 3). Either forces the engine value to 0 while
+        # the meter keeps showing the real mixer output.
+        if (device_name in self._muted_devices
+                or self.tune_should_silence(device_name, motor_index)):
+            engine_value = 0.0
+        else:
+            engine_value = real_value
+
         # Send the command safely to the Haptic Engine
-        if self.haptic_engine:
-            self.haptic_engine.update_target(device_name, motor_index, float(value))
-        
-        # Update the corresponding vibe meter via the UI facade
-        self.ui.update_motor_vibe(device_name, motor_index, float(value))
+        self.haptic_engine.update_target(device_name, motor_index, engine_value)
+
+        # Vibe meter shows the pre-mute value so the user can still see what
+        # the mixer is producing while the toy is silent. The UI greys the
+        # meter while the device is muted.
+        self.ui.update_motor_vibe(device_name, motor_index, real_value)
+
+    def set_device_muted(self, device_name: str, muted: bool) -> None:
+        """Soft-mute a single toy (or unmute). When muted, the engine target
+        for every motor on this device is forced to 0; the router and mixer
+        keep computing so meters still reflect what *would* be playing.
+
+        Session-only — see `_muted_devices` for the rationale. The UI calls
+        this from the per-toy mute toggle in the collapsed bar."""
+        if muted:
+            if device_name in self._muted_devices:
+                return
+            self._muted_devices.add(device_name)
+            # Push 0 to every motor of this device right now rather than
+            # waiting for the next router tick — keeps the "mute is a safety
+            # toggle" promise honest.
+            if self.haptic_engine and self.haptic_engine.is_connected:
+                try:
+                    counts = self.haptic_engine.get_motor_count_map() or {}
+                except Exception:
+                    counts = {}
+                motor_count = int(counts.get(device_name, 1))
+                for motor_idx in range(motor_count):
+                    self.haptic_engine.update_target(device_name, motor_idx, 0.0)
+        else:
+            self._muted_devices.discard(device_name)
+            # Next router tick will push the real value back to the engine;
+            # no need to forcibly restore anything here.
+
+    def is_device_muted(self, device_name: str) -> bool:
+        return device_name in self._muted_devices
+
+    def clear_all_device_mutes(self) -> None:
+        """Drop all per-toy mutes. Called on profile switch so a previous
+        profile's safety toggle doesn't silently follow the user into a new
+        config."""
+        if not self._muted_devices:
+            return
+        self._muted_devices.clear()
+
+    def test_device(self, device_name: str) -> None:
+        """Fire a short test pulse on every vibrate motor of `device_name`.
+
+        Phase 1 spec: 0.3s at 0.5 intensity. Fire-and-forget so the UI never
+        blocks. Linear motors are intentionally skipped (same rationale as
+        Purr-Check and Simple Mode's `test_toy`). Distinct from `test_toy`,
+        which keeps its 1.0s/0.4 timing for the Simple Mode panel."""
+        if not (self.async_loop and self.haptic_engine and self.haptic_engine.is_connected):
+            return
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self.haptic_engine.async_test_device(
+                    device_name, intensity=0.5, duration_s=0.3
+                ),
+                self.async_loop,
+            )
+        except Exception as e:
+            self.log_message(f"test_device({device_name}) failed: {e}")
 
     
     def trigger_purr_check(self):
@@ -1278,17 +1369,54 @@ class OscGoesPurrrApp(
             except Exception as e:
                 self.log_message(f"Failed to start auto connect: {e}")
 
-        # Decoupled routing tick (Batches rapid OSC updates to max ~30Hz)
+        # Decoupled routing tick. The rate is user-tunable in Settings
+        # (router_poll_rate_hz, default 60 Hz); falls back to the
+        # ROUTER_POLL_RATE_MS constant if the setting is missing or
+        # malformed. Time-constant math (decay_tau / attack_ms /
+        # release_ms) is wall-clock-based so changing the rate at
+        # runtime never requires recalibrating tau values.
+        #
+        # The Tune view's pattern generator is pull-based — the router
+        # samples it on each tick — so we keep the tick firing whenever
+        # Tune has a motor subscribed even if VRChat is silent.
         def routing_tick():
-            if getattr(self, '_needs_recalculation', False):
+            needs_tick = getattr(self, '_needs_recalculation', False)
+            if not needs_tick and hasattr(self, 'motor_router'):
+                try:
+                    needs_tick = self.motor_router.has_tune_subscription()
+                except Exception:
+                    pass
+            if needs_tick:
                 self._needs_recalculation = False
                 self.force_recalculate()
-            self.ui.schedule_callback(ROUTER_POLL_RATE_MS, routing_tick)
+            # Re-read the rate on each tick so a Settings change takes
+            # effect on the very next reschedule with no restart.
+            try:
+                hz = int(self.get_app_setting("router_poll_rate_hz", 60))
+                hz = max(10, min(240, hz))
+                interval = max(1, int(round(1000.0 / hz)))
+            except (TypeError, ValueError):
+                interval = ROUTER_POLL_RATE_MS
+            self.ui.schedule_callback(interval, routing_tick)
 
         # Periodically check for UI updates from async thread
         def check_queue():
             self.process_async_queue()
             self.ui.schedule_callback(QUEUE_POLL_RATE_MS, check_queue)
+
+        # Slow heartbeat that re-syncs the per-toy connect dots from
+        # the engine's current device list. Defensive against rare
+        # event-loss paths where an Intiface device gets dropped or
+        # re-added without firing our usual `device_added` /
+        # `device_removed` callbacks (e.g. silent BLE re-pair). Cheap
+        # at 1 Hz — just a dict comparison + a stylesheet write.
+        def refresh_device_states():
+            try:
+                if self.ui is not None:
+                    self.ui.update_stored_devices_ui()
+            except Exception:
+                pass
+            self.ui.schedule_callback(1000, refresh_device_states)
 
         # Register clean shutdown handler to auto-save profiles
         self.ui.set_close_handler(self._on_closing)
@@ -1297,6 +1425,9 @@ class OscGoesPurrrApp(
 
         # Start the routing tick loop
         self.ui.schedule_callback(ROUTER_POLL_RATE_MS, routing_tick)
+
+        # Start the device-state heartbeat (1 Hz).
+        self.ui.schedule_callback(1000, refresh_device_states)
 
         # Start SteamVR Haptics router. Engine init is deferred to first refresh
         # — the router itself is cheap and just polls the parameter store.

@@ -68,6 +68,8 @@ from ui.views.steamvr import SteamVRMixin
 from ui.views.bhaptics import BHapticsMixin
 from ui.views.hardware_monitor import HardwareMonitorMixin
 from ui.views.device_frame import DeviceFrameMixin
+from ui.views.tune import TuneMixin
+from ui.views.overview import OverviewMixin
 
 
 # ============================================================
@@ -102,6 +104,29 @@ QFrame#chip {{
 QFrame#motorBlock {{
     background-color: {COLOR_SURFACE};
     border-radius: 10px;
+}}
+QFrame#tuneStageCard {{
+    background-color: {COLOR_SURFACE_HOVER};
+    border-radius: 8px;
+    border: 1px solid transparent;
+    padding: 4px;
+}}
+QFrame#tuneStageCard[active="true"] {{
+    border: 1px solid {COLOR_SUCCESS};
+    background-color: {COLOR_SURFACE};
+}}
+QFrame#tuneStageCard:hover {{
+    background-color: {COLOR_SURFACE};
+}}
+QFrame#overviewTile {{
+    background-color: {COLOR_SURFACE};
+    border-radius: 10px;
+    border: 1px solid transparent;
+    padding: 4px;
+}}
+QFrame#overviewTile:hover {{
+    background-color: {COLOR_SURFACE_HOVER};
+    border-color: {COLOR_SUCCESS};
 }}
 QFrame#speedCard {{
     background-color: {COLOR_SURFACE_HOVER};
@@ -515,6 +540,8 @@ class OscGoesPurrrUI(
     BHapticsMixin,
     HardwareMonitorMixin,
     DeviceFrameMixin,
+    TuneMixin,
+    OverviewMixin,
 ):
     """UI Component class — handles all GUI rendering and updates."""
 
@@ -559,10 +586,6 @@ class OscGoesPurrrUI(
         # ---- State that the controller reads via the facade ----
         self.device_ui_frames: Dict[str, dict] = {}
         self.stored_device_frames: Dict[str, dict] = {}
-        # Debug tuning spinboxes — each per-motor card adds its set, and
-        # editing one syncs the displayed value across siblings so the user
-        # doesn't see stale numbers on the other cards.
-        self._speed_tuning_spins: Dict[str, List[QDoubleSpinBox]] = {}
 
         # ---- Lazily-bound view widgets ----
         self.sidebar_frame: Optional[QFrame] = None
@@ -587,6 +610,11 @@ class OscGoesPurrrUI(
         self.devices_container_frame: Optional[QFrame] = None
         self.unified_devices_frame: Optional[QWidget] = None
         self.unified_devices_layout: Optional[QVBoxLayout] = None
+
+        # Help Mode badge registry. Populated by _make_help_badge as
+        # views are built; toggled in unison by _set_help_badges_visible.
+        # Persisted state lives in app_settings["help_mode_enabled"].
+        self._help_badges: list = []
 
         # Network & debug view
         self.sps_status_label: Optional[QLabel] = None
@@ -655,14 +683,17 @@ class OscGoesPurrrUI(
         self.main_stack = QStackedWidget()
         root_layout.addWidget(self.main_stack, 1)
 
-        view_names = ["Dashboard", "Simple Mode", "Device Routing",
+        view_names = ["Dashboard", "Overview", "Simple Mode",
+                      "Device Routing", "Tune",
                       "SteamVR Device Comms", "bHaptics", "Hardware Monitor",
                       "OSC Inspector", "OSC Diagnostics", "System Log",
                       "Settings", "Help"]
         builders = {
             "Dashboard": self._build_dashboard_view,
+            "Overview": self._build_overview_view,
             "Simple Mode": self._build_simple_mode_view,
             "Device Routing": self._build_device_routing_view,
+            "Tune": self._build_tune_view,
             "SteamVR Device Comms": self._build_steamvr_view,
             "bHaptics": self._build_bhaptics_view,
             "Hardware Monitor": self._build_hardware_monitor_view,
@@ -734,7 +765,8 @@ class OscGoesPurrrUI(
         lay.addWidget(title)
         lay.addSpacing(20)
 
-        nav_buttons = ["Dashboard", "Simple Mode", "Device Routing",
+        nav_buttons = ["Dashboard", "Overview", "Simple Mode",
+                       "Device Routing", "Tune",
                        "SteamVR Device Comms", "bHaptics", "Hardware Monitor",
                        "OSC Inspector", "OSC Diagnostics", "System Log",
                        "Settings", "Help"]

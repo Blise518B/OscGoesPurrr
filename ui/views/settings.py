@@ -192,6 +192,43 @@ class SettingsMixin:
         )
         ql_lay.addWidget(tray)
 
+        # Routing rate — how often the router re-evaluates motor
+        # targets. Time-constant math (decay / attack / release) is
+        # wall-clock-based so this is purely a CPU-vs-fidelity knob;
+        # changing it doesn't require re-tuning any per-channel values.
+        rate_row = QWidget()
+        rate_lay = _hbox(0, 8)
+        rate_row.setLayout(rate_lay)
+        rate_label = QLabel("Routing rate:")
+        rate_lay.addWidget(rate_label)
+        rate_combo = QComboBox()
+        rate_presets = [
+            (30, "30 Hz (lowest CPU)"),
+            (60, "60 Hz"),
+            (90, "90 Hz (default, headset-matched)"),
+            (120, "120 Hz (high-fidelity)"),
+        ]
+        for hz, label in rate_presets:
+            rate_combo.addItem(label, hz)
+        current_hz = int(self.controller.get_app_setting("router_poll_rate_hz", 90))
+        for i in range(rate_combo.count()):
+            if rate_combo.itemData(i) == current_hz:
+                rate_combo.setCurrentIndex(i)
+                break
+        rate_combo.currentIndexChanged.connect(
+            lambda idx: self.controller.set_app_setting(
+                "router_poll_rate_hz", int(rate_combo.itemData(idx))
+            )
+        )
+        rate_lay.addWidget(rate_combo)
+        rate_lay.addStretch(1)
+        ql_lay.addWidget(rate_row)
+        ql_lay.addWidget(self._muted_label(
+            "How often the router re-evaluates motors. Time constants "
+            "(decay, attack, release) are wall-clock-based so changing "
+            "this never requires re-tuning your channels."
+        ))
+
         parent_layout.addWidget(ql_card)
 
         # ---- Features Card ----

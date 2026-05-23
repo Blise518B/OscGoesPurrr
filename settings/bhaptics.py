@@ -27,6 +27,16 @@ class BHapticsSettingsManager:
         "FootR":     {"enabled": True, "intensity": 100},
     }
 
+    # SPS-mirror defaults — off, empty entries list. No pre-baked zone
+    # mappings: the user builds entries from currently-detected OGB
+    # zones via the Cross-Routing sub-tab. Keeps the avatar in the
+    # driver's seat (an avatar without "Booty" will never see a Booty
+    # entry suggested, much less created).
+    _DEFAULT_SPS_MIRROR: Dict[str, Any] = {
+        "enabled": False,
+        "entries": [],
+    }
+
     DEFAULTS: Dict[str, Any] = {
         "auto_connect": True,
         "host": "127.0.0.1",
@@ -45,6 +55,7 @@ class BHapticsSettingsManager:
         "osc_connected_enabled": True,
         "osc_connected_param": "bHaptics_Connected",
         "devices": _DEFAULT_DEVICES,
+        "sps_mirror": _DEFAULT_SPS_MIRROR,
     }
 
     def __init__(self):
@@ -62,6 +73,19 @@ class BHapticsSettingsManager:
                         devs = dict(self._DEFAULT_DEVICES)
                         devs.update(loaded.get("devices", {}) or {})
                         merged["devices"] = devs
+                        # Backfill the sps_mirror block if the loaded
+                        # config predates the feature; preserve the
+                        # user's existing entries otherwise.
+                        loaded_mirror = loaded.get("sps_mirror")
+                        if not isinstance(loaded_mirror, dict):
+                            merged["sps_mirror"] = json.loads(
+                                json.dumps(self._DEFAULT_SPS_MIRROR)
+                            )
+                        else:
+                            merged["sps_mirror"] = {
+                                "enabled": bool(loaded_mirror.get("enabled", False)),
+                                "entries": list(loaded_mirror.get("entries", [])),
+                            }
                         self.settings = merged
                         return
             except (json.JSONDecodeError, IOError) as e:
@@ -151,3 +175,89 @@ class BHapticsSettingsManager:
         devs = self.settings.setdefault("devices", {})
         devs[position] = dict(cfg)
         self._save()
+
+    # ---- SPS -> bHaptics mirror ----
+
+    def _sps_mirror_block(self) -> Dict[str, Any]:
+        """Return the live sps_mirror block, lazily filling defaults if
+        the on-disk file is from a pre-feature build."""
+        block = self.settings.get("sps_mirror")
+        if not isinstance(block, dict):
+            block = json.loads(json.dumps(self._DEFAULT_SPS_MIRROR))
+            self.settings["sps_mirror"] = block
+            self._save()
+        return block
+
+    def get_sps_mirror(self) -> Dict[str, Any]:
+        """Snapshot: {enabled: bool, entries: list of entry dicts}.
+        The entries list is a deep copy so the caller can mutate
+        without touching the persisted state."""
+        block = self._sps_mirror_block()
+        return {
+            "enabled": bool(block.get("enabled", False)),
+            "entries": [dict(e) for e in block.get("entries", [])],
+        }
+
+    def is_sps_mirror_enabled(self) -> bool:
+        return bool(self._sps_mirror_block().get("enabled", False))
+
+    def set_sps_mirror_enabled(self, enabled: bool) -> None:
+        block = self._sps_mirror_block()
+        block["enabled"] = bool(enabled)
+        self._save()
+
+    def set_sps_mirror_entry(self, index: int, entry: Dict[str, Any]) -> None:
+        """Insert or update an entry. `index == len(entries)` appends.
+        Out-of-range indices clamp to the nearest valid slot."""
+        block = self._sps_mirror_block()
+        entries = list(block.get("entries", []))
+        cleaned = self._clean_mirror_entry(entry)
+        if index < 0:
+            entries.insert(0, cleaned)
+        elif index >= len(entries):
+            entries.append(cleaned)
+        else:
+            entries[index] = cleaned
+        block["entries"] = entries
+        self._save()
+
+    def delete_sps_mirror_entry(self, index: int) -> None:
+        block = self._sps_mirror_block()
+        entries = list(block.get("entries", []))
+        if 0 <= index < len(entries):
+            entries.pop(index)
+            block["entries"] = entries
+            self._save()
+
+    @staticmethod
+    def _clean_mirror_entry(entry: Dict[str, Any]) -> Dict[str, Any]:
+        """Coerce + clamp every field of a mirror entry so a bad
+        user input or hand-edited file can't crash the router."""
+        valid_filters = ("TouchSelf", "TouchOthers", "PenSelf", "PenOthers")
+        valid_zone_types = ("Orf", "Pen")
+        try:
+            gain = float(entry.get("gain", 1.0))
+        except (TypeError, ValueError):
+            gain = 1.0
+        try:
+            threshold = float(entry.get("threshold", 0.0))
+        except (TypeError, ValueError):
+            threshold = 0.0
+        try:
+            dots = [int(d) for d in (entry.get("dot_indices") or [])]
+        except (TypeError, ValueError):
+            dots = []
+        filters = [f for f in (entry.get("filters") or []) if f in valid_filters]
+        zone_type = str(entry.get("zone_type", "Orf"))
+        if zone_type not in valid_zone_types:
+            zone_type = "Orf"
+        return {
+            "name": str(entry.get("name", "")).strip() or "Mirror",
+            "ogb_zone": str(entry.get("ogb_zone", "")).strip(),
+            "zone_type": zone_type,
+            "filters": filters,
+            "position": str(entry.get("position", "VestFront")).strip(),
+            "dot_indices": sorted(set(d for d in dots if d >= 0)),
+            "gain": max(0.0, min(2.0, gain)),
+            "threshold": max(0.0, min(1.0, threshold)),
+        }

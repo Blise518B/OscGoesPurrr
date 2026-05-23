@@ -13,7 +13,12 @@ class ProfilesFacade:
     def _refresh_profile_buttons_ui(self) -> None:
         """Tell the UI to redraw its profile buttons. No-op when self.ui is
         None or doesn't expose the method (early startup, headless tests)."""
-        self._refresh_profile_buttons_ui()
+        ui = getattr(self, "ui", None)
+        if ui is None:
+            return
+        refresh = getattr(ui, "_refresh_profile_buttons", None)
+        if refresh is not None:
+            refresh()
 
     def _seed_profile_with_known_devices(self, profile_name: str) -> None:
         """Make sure every known toy has a default entry in the given profile.
@@ -22,6 +27,8 @@ class ProfilesFacade:
         — the user gets blank-but-present device cards to configure, rather
         than having to reconnect each toy to see it.
         """
+        from motor_router import MotorRouter  # local import to avoid cycle
+        import copy as _copy
         profile = self.profile_manager.profiles.setdefault(profile_name, {})
         known = self.profile_manager.known_devices.all()
         if not known:
@@ -41,6 +48,14 @@ class ProfilesFacade:
                 suffix = f"_{i}" if motor_count > 1 else ""
                 addrs[str(i)] = [f"{name.replace(' ', '_')}{suffix}"]
             entry["osc_addresses"] = addrs
+            # Phase 2: seed a default mix block per motor so the router and UI
+            # always read a complete config. The router's _get_mix_config falls
+            # back to DEFAULT_MIX_CONFIG when keys are missing, but seeding
+            # here means the UI's spinboxes start at the right values too.
+            entry["mix"] = {
+                str(i): _copy.deepcopy(MotorRouter.DEFAULT_MIX_CONFIG)
+                for i in range(motor_count)
+            }
             profile[name] = entry
             added.append(name)
         if added:
@@ -74,6 +89,12 @@ class ProfilesFacade:
         # the next time that avatar loads, this global stays selected
         # instead of auto-switching to a bound avatar profile.
         self.profile_manager.record_choice("global", profile_name)
+
+        # Per-toy mute is a session-level safety toggle, not a configured
+        # preference — drop it whenever the profile changes so a mute from
+        # the previous config doesn't silently follow the user.
+        if hasattr(self, "clear_all_device_mutes"):
+            self.clear_all_device_mutes()
 
         # Clear cached UI frames so build_stored_devices_ui doesn't short-circuit
         # and leave the previous profile's device cards on screen when the new

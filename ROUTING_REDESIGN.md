@@ -83,8 +83,10 @@ Contents, left to right:
   draw a custom "battery with slash" QPainter glyph (see
   `ui/icons.py` for the existing pattern). No Unicode 🪫 — too
   font-dependent.
-* **Vibe meter.** Aggregate across motors: `max(motor_levels)`.
-  Greyed out when muted.
+* **Vibe meter.** One mini-bar per motor, stacked horizontally
+  inside the bar. Greyed out when muted. Per-motor (vs aggregate
+  `max`) gives at-a-glance visibility of motor imbalance without
+  having to expand the toy.
 * **⏻ Mute.** Per-toy soft-mute. When ON, the engine target for every
   motor on this toy is forced to 0; the mixer continues computing
   internally so the graph still shows real values. **Not persisted** —
@@ -171,7 +173,8 @@ Reset reverts that one channel on that one motor.
 
 ### Help Mode
 
-A single toggle in the toolbar (or sidebar). When ON:
+A toggle in the header of each view that uses it — Device Routing
+today, the Tune tab when Phase 3 lands. When ON:
 
 * A small `?` badge appears next to every knob, toggle, and section
   header in the Device Routing and Tune views.
@@ -207,16 +210,6 @@ tuning flow.
   slider may never have been persisted, in which case nothing to
   delete.
 
-### Phase 1 open decisions
-
-* **Test button behaviour.** 0.3 s pulse at 0.5? Ramp 0 → 1 → 0 over
-  1 s? Hold-to-test (press and hold)? Recommend the simple fixed
-  pulse for v1.
-* **Per-curve visibility in the bar's vibe meter.** Currently
-  proposed as `max(motors)`. Could also show one mini-bar per motor.
-  Recommend max for simplicity until multi-motor toys are more
-  common.
-
 ---
 
 ## Phase 2 — Mixer math rework
@@ -234,6 +227,11 @@ engine. Each input channel has:
 | `curve`       | enum {linear, power, s_curve} | `linear`    |
 | `curve_param` | float (depends on curve type) | `1.0`       |
 | `mode`        | enum {additive, modulate}     | `additive`  |
+
+`curve_param` semantics by curve kind: `linear` ignores it; `power`
+uses it as exponent in `[0.3, 3.0]` (`1.0` = identity); `s_curve`
+uses it as iterated-smoothstep count in `[1, 8]` (`1` = textbook
+`3x² − 2x³`; higher iterations give sharper transitions).
 
 Plus per-motor:
 
@@ -359,19 +357,6 @@ Promotes per-motor: `min_pos`, `max_pos`, `resting_pos`,
 `LINEAR_DEFAULTS`: `max_v`, `max_a`, `duration_mult` (hardware-shape
 parameters; users should not normally touch).
 
-### Phase 2 open decisions
-
-* **Curve types and parameters.** Locked candidates: `linear`,
-  `power` (with exponent `0.3 – 3.0`), `s_curve` (with steepness
-  parameter). Anything else (log, custom multi-point) is out of
-  scope for v1.
-* **Combine policy default.** `max` recommended over `sum` for
-  consistency with the motor router's existing multi-zone merging
-  ("max-wins per dot" — see ROADMAP's SPS-mirror entry) and to
-  preserve dynamic range at high gains.
-* **Whether `combine` is per-motor or per-toy.** Recommend per-motor
-  for consistency with the rest of the Mix card.
-
 ---
 
 ## Phase 3 — Tune tab with live graph and simulated input
@@ -462,11 +447,23 @@ Three new pieces:
    `tune_set_send_to_toy()`. The mixin owns the running pattern
    generator and the trace subscription.
 
-The UI side is a `QtCharts`-or-`QPainter` widget that consumes the
-trace queue. `QtCharts` is fine if the dependency is already
-acceptable; otherwise a custom `QPainter` widget with a ring buffer
-is straightforward and matches the project's "draw widgets ourselves"
-approach already used for `RainbowMeter`.
+The UI side is a custom `QPainter` widget (`TraceGraph`) that consumes
+the trace queue. It uses a per-trace ring buffer and matches the
+project's "draw widgets ourselves" convention already used by
+`RainbowMeter`, `BHapticsDotGrid`, and the icons in `ui/icons.py`.
+The same widget renders the big Tune graph and the small per-motor
+mini-graph in the Device Routing Mix subcard (see below); only the
+size and the configured trace set differ.
+
+### Mini-graph in the Device Routing Mix card
+
+Each motor's Mix subcard in Device Routing gets a small total-output
+sparkline at the bottom — the same `TraceGraph` widget, sized down
+and configured with a single trace (the final post-smoothing
+output). Data source is the existing per-motor value path
+(`update_motor_vibe`), not the Tune intermediates feed, so the cost
+stays zero when the Tune tab is closed and the router doesn't have
+to emit per-tick traces for every motor of every connected toy.
 
 ### Signal-flow visualization (stretch goal — Phase 3.5)
 
@@ -500,17 +497,6 @@ Ship the main multi-trace graph first; add the stages strip as a
 Phase 3.5 if users find the main graph cluttered or hard to map
 back to the Mix controls. Both views share the same data so the
 strip is purely a render-layer addition.
-
-### Phase 3 open decisions
-
-* **Graph window length.** Default 3 s; could expose a zoom in the
-  toolbar (1 s / 3 s / 10 s). Recommend ship with 3 s only.
-* **Mini-graph in the Device Routing motor card.** Cheap to add a
-  small total-output-only trace at the bottom of the Mix card.
-  Tempting but adds visual noise to the routing UI. Skip for v1;
-  add later if users ask.
-* **Render tech.** `QtCharts` vs custom `QPainter` — defer to
-  implementation time, no design implication.
 
 ---
 

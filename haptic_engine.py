@@ -155,16 +155,45 @@ class HapticEngine:
         self.is_connected = bool(connected)
 
     def set_linear_config(self, device_name: str, motor_idx: int,
-                          mode: str = "position", idle: str = "rest") -> None:
+                          mode: str = "position", idle: str = "rest",
+                          min_pos: Optional[float] = None,
+                          max_pos: Optional[float] = None,
+                          resting_pos: Optional[float] = None,
+                          resting_time_s: Optional[float] = None) -> None:
         """Thread-safe entry point for the controller to push per-motor linear
         actuator behavior. Only meaningful for motors whose feature kind is in
-        LINEAR_KINDS; calling for a vibrate motor is a harmless no-op at dispatch
-        time. `mode` is "position" or "speed"; `idle` is "rest" or "hold"."""
+        LINEAR_KINDS; calling for a vibrate motor is a harmless no-op at
+        dispatch time. `mode` is "position" or "speed"; `idle` is "rest"
+        or "hold". The min_pos/max_pos/resting_pos/resting_time_s kwargs
+        are Phase 2 per-motor overrides — when `None`, the actuator keeps
+        whatever it was constructed with (the LINEAR_DEFAULTS values)."""
         if mode not in ("position", "speed"):
             mode = "position"
         if idle not in ("rest", "hold"):
             idle = "rest"
-        self.linear_configs[(device_name, motor_idx)] = {"mode": mode, "idle": idle}
+        cfg: Dict[str, Any] = {"mode": mode, "idle": idle}
+        if min_pos is not None:
+            cfg["min_pos"] = float(min_pos)
+        if max_pos is not None:
+            cfg["max_pos"] = float(max_pos)
+        if resting_pos is not None:
+            cfg["resting_pos"] = float(resting_pos)
+        if resting_time_s is not None:
+            cfg["resting_time_s"] = float(resting_time_s)
+        self.linear_configs[(device_name, motor_idx)] = cfg
+        # Push the per-motor overrides into a live actuator instance so
+        # the change takes effect on the next tick without waiting for a
+        # disconnect/reconnect cycle.
+        actuator = self.linear_actuators.get((device_name, motor_idx))
+        if actuator is not None:
+            if min_pos is not None:
+                actuator.min_pos = float(min_pos)
+            if max_pos is not None:
+                actuator.max_pos = float(max_pos)
+            if resting_pos is not None:
+                actuator.resting_pos = float(resting_pos)
+            if resting_time_s is not None:
+                actuator.resting_time_ms = float(resting_time_s) * 1000.0
 
     # ------------------------------------------------------------------
     # Read-only introspection facades — return primitives only so callers

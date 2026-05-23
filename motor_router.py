@@ -4,6 +4,7 @@ import time
 from typing import Callable, Dict, List, Tuple, Any, Optional, Set
 from utilities import normalize_osc_value, strip_param_prefix, classify_ogb_zone
 from parameter_store import store as _global_store
+from mixer import apply_curve, combine, smooth
 
 _GLOB_CHARS = frozenset("*?[")
 
@@ -116,36 +117,46 @@ class MotorRouter:
     moment the penetrator tip enters the receiver radius.
     """
 
-    # Speed-blend default tuning (still exposed as class-level constants so
-    # callers/tests can reference the factory defaults, but the live values
-    # live on the instance and are overridable via `apply_speed_tuning`).
-    #
-    # `speed_input_deadband` is applied to the per-tick |Δposition| BEFORE
-    # dividing by dt. VRChat avatar parameters jitter even on a static
-    # contact, so without an input gate the smoothed speed signal never
-    # reaches zero in pure-speed mode.
-    #
-    # `speed_gain` scales the noise-gated raw speed into the 0–1 range.
-    # Realistic in-VRChat thrusts oscillate over a fraction of the full
-    # insertion range, so the gain is tuned so a moderate stroke saturates.
-    #
-    # `speed_decay_tau` is the exponential decay time-constant of the
-    # smoothed signal, so motion sustains briefly between strokes.
-    #
-    # `speed_output_cutoff` snaps decayed output to true zero once it
-    # falls below this threshold (otherwise exponential decay only
-    # asymptotes toward 0 and the toy keeps quietly humming).
-    DEFAULT_SPEED_INPUT_DEADBAND = 0.005
-    DEFAULT_SPEED_GAIN = 0.75
-    DEFAULT_SPEED_DECAY_TAU = 0.30
-    DEFAULT_SPEED_OUTPUT_CUTOFF = 0.02
+    # Internal scale applied to the raw (|Δposition|/dt) speed signal
+    # before clamping. Matches the old user-tunable speed_gain default;
+    # in Phase 2 it's fixed because the speed channel exposes its own
+    # post-curve `gain` knob for the same purpose. Realistic in-VRChat
+    # thrusts oscillate over a fraction of the full insertion range, so
+    # this value is tuned so a moderate stroke saturates.
+    _SPEED_NORMALIZATION = 0.75
 
-    SPEED_TUNING_KEYS = (
-        "speed_input_deadband",
-        "speed_gain",
-        "speed_decay_tau",
-        "speed_output_cutoff",
-    )
+    # Default per-motor mix config — used when a profile is missing
+    # the `mix` block entirely (defensive fallback; the seeder writes
+    # this on every known motor at profile creation).
+    DEFAULT_MIX_CONFIG: Dict[str, Any] = {
+        "depth": {
+            "enabled": True,
+            "gain": 1.0,
+            "curve": "linear",
+            "curve_param": 1.0,
+            "mode": "additive",
+            "min_remap": 0.0,
+            "max_remap": 1.0,
+        },
+        "speed": {
+            "enabled": True,
+            "gain": 1.0,
+            "curve": "linear",
+            "curve_param": 1.0,
+            "mode": "additive",
+            # Speed-derivation knobs (formerly global speed_*).
+            # Defaults preserve old behaviour.
+            "input_deadband": 0.005,
+            "output_cutoff": 0.02,
+            "decay_tau": 0.30,
+        },
+        "combine": "max",
+        "modulator_range": (0.5, 1.5),
+        "smoothing": {
+            "attack_ms": 50.0,
+            "release_ms": 300.0,
+        },
+    }
 
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         # `clock` is dependency-injected so tests can drive time deterministically.
@@ -153,17 +164,28 @@ class MotorRouter:
         self._clock = clock
         # Tracks last calculated outputs to prevent flooding the UI/hardware thread.
         self.last_outputs: Dict[tuple, float] = {}
-        # Live tuning — overridable at runtime via apply_speed_tuning. Bounds
-        # are enforced when values come in so a bad input can't break the
-        # math (e.g. decay_tau must stay strictly positive).
-        self.speed_input_deadband = self.DEFAULT_SPEED_INPUT_DEADBAND
-        self.speed_gain = self.DEFAULT_SPEED_GAIN
-        self.speed_decay_tau = self.DEFAULT_SPEED_DECAY_TAU
-        self.speed_output_cutoff = self.DEFAULT_SPEED_OUTPUT_CUTOFF
-        # Per-motor speed-tracker keyed by (device_name, motor_idx).
-        # Value is (last_time_s, last_position, smoothed_speed). A reserved
-        # ("__simple_mode__", 0) key is used by Simple Mode.
-        self._speed_state: Dict[Tuple[str, int], Tuple[float, float, float]] = {}
+        # Per-motor mixer state, keyed by (device_name, motor_idx). Each
+        # value is a dict with `last_time`, `last_position`,
+        # `smoothed_speed` (speed-derivation pipeline state) and
+        # `smoothed_output` (post-mix envelope follower state). Lazily
+        # created on first tick for any motor.
+        self._motor_state: Dict[Tuple[str, int], Dict[str, float]] = {}
+        # Tune intermediates feed. Off by default — when nothing has set
+        # both a subscription and a callback, the per-tick check is a
+        # single None comparison. The Tune view (Phase 3) registers a
+        # subscription via TuneFacade so it can render the six-trace
+        # graph of d_raw / s_raw / d_shaped / s_shaped / mixed / out.
+        self._tune_subscription: Optional[Tuple[str, int]] = None
+        self._tune_emit_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+        # Tune input-override hook. When set and the subscribed motor is
+        # being computed, the provider's return value replaces d_raw —
+        # bypassing zones / custom addresses entirely. Lets the
+        # simulator test the mixer's behaviour with a known clean
+        # signal regardless of how the user's zone filter is configured.
+        # Provider returns None to fall through to the normal d_raw
+        # compute (e.g. when source = live VRChat, or simulated with no
+        # pattern running).
+        self._tune_value_provider: Optional[Callable[[], Optional[float]]] = None
         # Per-zone length detectors keyed by ("Orf"|"Pen", zone_name, "self"|"others").
         self._length_detectors: Dict[Tuple[str, str, str], GameDeviceLengthDetector] = {}
         # Compiled per-motor config cache.
@@ -389,10 +411,9 @@ class MotorRouter:
         (e.g. the user toggling a checkbox) safely invalidates the entry.
         """
         addr_zone_key = f"motor_{motor_idx}_zones"
-        addr_legacy_key = f"motor_{motor_idx}_zone"
         osc_addresses = config.get("osc_addresses", {})
         raw_entry = osc_addresses.get(str(motor_idx))
-        zones_str = config.get(addr_zone_key, config.get(addr_legacy_key, ""))
+        zones_str = config.get(addr_zone_key, "")
 
         # Cheap fingerprint of the inputs that drive the compiled value.
         token = (
@@ -449,125 +470,199 @@ class MotorRouter:
         self._compiled_cfg[cache_key] = compiled
         return compiled
 
-    def _apply_speed_blend(
-        self,
-        key: Tuple[str, int],
-        position: float,
-        blend: float,
-    ) -> float:
-        """Blend a raw position signal with its derived speed signal, weighted
-        by `blend` (0.0 = pure position, 1.0 = pure speed). State for the
-        smoothed speed is kept per `key` so motors don't cross-contaminate.
+    def _get_motor_state(self, key: Tuple[str, int]) -> Dict[str, float]:
+        """Return the lazily-initialised per-motor state dict. Holds the
+        per-motor mixer's smoothing/derivation history between ticks.
+        `last_time` starts at -1.0 as a sentinel so the first tick is
+        treated as dt=0 regardless of the clock's starting value (tests
+        often use a FakeClock that begins at 0.0)."""
+        state = self._motor_state.get(key)
+        if state is None:
+            state = {
+                "last_time": -1.0,
+                "last_position": 0.0,
+                "smoothed_speed": 0.0,
+                "smoothed_output": 0.0,
+            }
+            self._motor_state[key] = state
+        return state
 
-        The tracker is updated even when blend == 0 so that flipping the
-        slider mid-session doesn't start from a stale position delta.
-        """
-        now = self._clock()
-        prev = self._speed_state.get(key)
-        if prev is None:
-            # First sample for this motor — no derivative yet.
-            self._speed_state[key] = (now, position, 0.0)
-            speed_smoothed = 0.0
+    def _get_mix_config(self, config: Dict[str, Any],
+                        motor_idx: int) -> Dict[str, Any]:
+        """Pull the per-motor `mix` block out of the device config, falling
+        back to DEFAULT_MIX_CONFIG when keys are missing. The seeder writes
+        a full block on every motor at profile creation, so on a clean
+        install this returns the stored dict verbatim; the fallbacks
+        protect against hand-edited or partially-migrated profiles."""
+        mix_root = config.get("mix") if isinstance(config, dict) else None
+        if isinstance(mix_root, dict):
+            per_motor = mix_root.get(str(motor_idx))
         else:
-            last_t, last_pos, last_speed = prev
-            dt = now - last_t
-            if dt <= 0:
-                # Clock didn't move — reuse last smoothed value as-is.
-                speed_smoothed = last_speed
+            per_motor = None
+        if not isinstance(per_motor, dict):
+            return self.DEFAULT_MIX_CONFIG
+        return per_motor
+
+    def _derive_speed_signal(self, state: Dict[str, float],
+                             position: float,
+                             speed_cfg: Dict[str, Any],
+                             dt: float) -> float:
+        """Compute the per-motor S_raw from |Δposition|/dt with the
+        speed-channel's input_deadband, output_cutoff and decay_tau knobs.
+        Updates `state["smoothed_speed"]` in place. Returns the post-
+        cutoff value in [0, 1] suitable for feeding into apply_curve.
+
+        Rate independence: `decay_tau` is a wall-clock time constant.
+        `decay = exp(-dt / decay_tau)` compensates for the elapsed
+        interval, so the perceived decay envelope is identical at any
+        router rate. Never recalibrate decay_tau when the router's
+        tick rate changes. raw_speed = (|delta| - deadband) / dt is
+        also a per-second rate so it's directly comparable across
+        sample rates."""
+        last_pos = state["last_position"]
+        prev_smoothed = state["smoothed_speed"]
+
+        deadband_cfg = speed_cfg.get("input_deadband",
+                                     self.DEFAULT_MIX_CONFIG["speed"]["input_deadband"])
+        decay_tau_cfg = speed_cfg.get("decay_tau",
+                                      self.DEFAULT_MIX_CONFIG["speed"]["decay_tau"])
+        cutoff_cfg = speed_cfg.get("output_cutoff",
+                                   self.DEFAULT_MIX_CONFIG["speed"]["output_cutoff"])
+        try:
+            deadband = max(0.0, min(0.5, float(deadband_cfg)))
+        except (TypeError, ValueError):
+            deadband = 0.005
+        try:
+            decay_tau = max(0.01, min(5.0, float(decay_tau_cfg)))
+        except (TypeError, ValueError):
+            decay_tau = 0.30
+        try:
+            cutoff = max(0.0, min(0.95, float(cutoff_cfg)))
+        except (TypeError, ValueError):
+            cutoff = 0.02
+
+        if dt <= 0.0:
+            # First sample or clock didn't move — reuse last smoothed value.
+            smoothed = prev_smoothed
+        else:
+            delta = abs(position - last_pos)
+            if delta <= deadband:
+                raw_speed = 0.0
             else:
-                # Input deadband: |Δposition| below `speed_input_deadband` is
-                # treated as static jitter, so a static contact with sub-1%
-                # OSC noise contributes nothing to speed. Subtracting the
-                # deadband (instead of hard-gating) keeps the response
-                # continuous as movements grow past the threshold.
-                delta = abs(position - last_pos)
-                if delta <= self.speed_input_deadband:
-                    raw_speed = 0.0
-                else:
-                    raw_speed = (delta - self.speed_input_deadband) / dt
-                speed_signal = raw_speed * self.speed_gain
-                if speed_signal > 1.0:
-                    speed_signal = 1.0
-                # Exponential decay: smoothed value attacks instantly on
-                # rising edge and falls off with time-constant `speed_decay_tau`.
-                tau = self.speed_decay_tau if self.speed_decay_tau > 1e-4 else 1e-4
-                decay = math.exp(-dt / tau)
-                speed_smoothed = max(speed_signal, last_speed * decay)
-            self._speed_state[key] = (now, position, speed_smoothed)
+                raw_speed = (delta - deadband) / dt
+            signal = min(1.0, raw_speed * self._SPEED_NORMALIZATION)
+            decay = math.exp(-dt / decay_tau)
+            smoothed = max(signal, prev_smoothed * decay)
 
-        # Output deadzone: snap to true 0 once the smoothed signal decays
-        # below the cutoff, otherwise the exponential tail keeps a tiny
-        # output alive forever. Above the cutoff, rescale [cutoff, 1] back
-        # into [0, 1] so there's no visible step at the threshold.
-        cutoff = self.speed_output_cutoff
-        if speed_smoothed <= cutoff:
-            output_speed = 0.0
-        else:
-            denom = max(1.0 - cutoff, 1e-6)
-            output_speed = (speed_smoothed - cutoff) / denom
-            if output_speed > 1.0:
-                output_speed = 1.0
+        state["smoothed_speed"] = smoothed
 
-        if blend <= 0.0:
-            return position
-        if blend >= 1.0:
-            return output_speed
-        return (1.0 - blend) * position + blend * output_speed
+        if smoothed <= cutoff:
+            return 0.0
+        denom = max(1.0 - cutoff, 1e-6)
+        return min(1.0, (smoothed - cutoff) / denom)
 
-    def apply_speed_tuning(self, **overrides: Any) -> Dict[str, float]:
-        """Update one or more speed-tuning knobs at runtime.
+    def set_tune_emit_callback(self,
+                               callback: Optional[Callable[[Dict[str, Any]], None]]
+                               ) -> None:
+        """Register (or clear) the callback that receives per-tick
+        intermediates for the currently-subscribed motor. The Tune
+        facade wires this to a thread_queue push so the UI thread can
+        drain trace records in its existing queue-processing loop."""
+        self._tune_emit_callback = callback
 
-        Each value is coerced to float and clamped into a safe range so the
-        UI can pass user input straight through without sanitising it
-        first. Returns the post-clamp snapshot so callers (and the saver)
-        always persist what's actually in use.
-        """
-        for key, raw in overrides.items():
-            try:
-                v = float(raw)
-            except (TypeError, ValueError):
-                continue
-            if key == "speed_input_deadband":
-                self.speed_input_deadband = max(0.0, min(0.5, v))
-            elif key == "speed_gain":
-                self.speed_gain = max(0.0, min(50.0, v))
-            elif key == "speed_decay_tau":
-                # Strictly positive — exp(-dt/tau) blows up at tau→0.
-                self.speed_decay_tau = max(0.01, min(5.0, v))
-            elif key == "speed_output_cutoff":
-                self.speed_output_cutoff = max(0.0, min(0.95, v))
-        return self.get_speed_tuning()
+    def set_tune_subscription(self, device_name: str, motor_idx: int) -> None:
+        """Subscribe the Tune view to one motor's intermediates feed.
+        Cheap — only one motor is ever traced at a time, so the
+        per-tick check is just `if subscription == (dev, idx)`."""
+        self._tune_subscription = (str(device_name), int(motor_idx))
 
-    def get_speed_tuning(self) -> Dict[str, float]:
-        return {
-            "speed_input_deadband": self.speed_input_deadband,
-            "speed_gain": self.speed_gain,
-            "speed_decay_tau": self.speed_decay_tau,
-            "speed_output_cutoff": self.speed_output_cutoff,
-        }
+    def clear_tune_subscription(self) -> None:
+        self._tune_subscription = None
 
-    @classmethod
-    def get_speed_tuning_defaults(cls) -> Dict[str, float]:
-        """Factory defaults for the speed-blend tuning knobs. Used by the
-        Reset button to revert without depending on app_settings state."""
-        return {
-            "speed_input_deadband": cls.DEFAULT_SPEED_INPUT_DEADBAND,
-            "speed_gain": cls.DEFAULT_SPEED_GAIN,
-            "speed_decay_tau": cls.DEFAULT_SPEED_DECAY_TAU,
-            "speed_output_cutoff": cls.DEFAULT_SPEED_OUTPUT_CUTOFF,
-        }
+    def has_tune_subscription(self) -> bool:
+        """True when the Tune view is actively watching a motor — the
+        controller's routing tick uses this to keep the tick firing
+        even when VRChat is silent, so the trace graph stays current."""
+        return self._tune_subscription is not None
+
+    def set_tune_value_provider(self,
+                                provider: Optional[Callable[[], Optional[float]]]
+                                ) -> None:
+        """Register a callable that supplies the simulated d_raw value
+        for the subscribed motor each tick. Pass None to clear. When
+        the provider returns None the router falls back to normal
+        zone/address routing for that motor."""
+        self._tune_value_provider = provider
 
     @staticmethod
-    def _coerce_blend(raw: Any) -> float:
+    def _coerce_float(value: Any, default: float,
+                      lo: float = -1e9, hi: float = 1e9) -> float:
+        """Defensive numeric coercion — bad values silently fall back to
+        the default. Used for every mix-config field read so a malformed
+        profile can't crash the router."""
         try:
-            blend = float(raw)
+            v = float(value)
         except (TypeError, ValueError):
-            return 0.0
-        if blend < 0.0:
-            return 0.0
-        if blend > 1.0:
-            return 1.0
-        return blend
+            return default
+        if v < lo:
+            return lo
+        if v > hi:
+            return hi
+        return v
+
+    def _compute_d_raw_from_inputs(
+        self,
+        compiled: Dict[str, Any],
+        all_params: Dict[str, Any],
+        config: Dict[str, Any],
+        motor_idx: int,
+        zones: Set[Tuple[str, str]],
+    ) -> float:
+        """Max-wins combine of every input the motor listens to:
+        - Literal custom OSC addresses (O(1) dict lookups)
+        - Custom OSC address globs (fnmatch sweep)
+        - SPS zone contributions (when the motor's zone filter is set)
+        Returns a value in [0, 1]. Pure function of its inputs — used
+        by both live routing and as the fallback for the Tune view's
+        input override."""
+        d_raw = 0.0
+        for literal in compiled["literals"]:
+            param_val = all_params.get(literal)
+            if param_val is None:
+                continue
+            try:
+                v = float(param_val)
+            except (ValueError, TypeError):
+                continue
+            cand = normalize_osc_value(v)
+            if cand > d_raw:
+                d_raw = cand
+
+        if compiled["globs"]:
+            for param_name, param_val in all_params.items():
+                if not any(fnmatch.fnmatch(param_name, g) for g in compiled["globs"]):
+                    continue
+                try:
+                    v = float(param_val)
+                except (ValueError, TypeError):
+                    continue
+                cand = normalize_osc_value(v)
+                if cand > d_raw:
+                    d_raw = cand
+
+        if compiled["has_zone_filter"]:
+            is_all_sps = compiled["is_all_sps"]
+            allowed_zone_set = compiled["allowed_zones"]
+            best = d_raw
+            for zone_type, zone_name in zones:
+                if is_all_sps or zone_name in allowed_zone_set:
+                    contribution = self._zone_contribution(
+                        zone_type, zone_name, config, motor_idx, all_params
+                    )
+                    if contribution > best:
+                        best = contribution
+            d_raw = best
+        return d_raw
 
     # ------------------------------------------------------------------ public
     def _calculate_motor_target(
@@ -579,75 +674,127 @@ class MotorRouter:
         zones: Set[Tuple[str, str]],
         profile_dict: Optional[Dict[str, Any]] = None,
     ) -> float:
-        target_val = 0.0
-
         compiled = self._compile_motor_config(
             profile_dict if profile_dict is not None else config,
             device_name, motor_idx, config,
         )
 
-        # --- 1. Custom Override Addresses --------------------------------------------
-        # Literal addresses get an O(1) dict lookup; globs fall back to the
-        # fnmatch sweep over all params. Each contribution feeds max().
-        for literal in compiled["literals"]:
-            param_val = all_params.get(literal)
-            if param_val is None:
-                continue
+        # --- 1. D_raw: custom override addresses + SPS zones (max-wins) ---
+        # Phase 3 Tune view input override: when this is the subscribed
+        # motor and the provider returns a value, use it as d_raw and
+        # skip the normal compute. Lets the simulator test the mixer's
+        # behaviour with a known clean signal regardless of how the
+        # user's zone filter is configured. Other motors are unaffected.
+        sim_d_raw: Optional[float] = None
+        if (self._tune_value_provider is not None
+                and self._tune_subscription == (device_name, motor_idx)):
             try:
-                v = float(param_val)
-            except (ValueError, TypeError):
-                continue
-            cand = normalize_osc_value(v)
-            if cand > target_val:
-                target_val = cand
+                sim_d_raw = self._tune_value_provider()
+            except Exception:
+                sim_d_raw = None
 
-        if compiled["globs"]:
-            for param_name, param_val in all_params.items():
-                if not any(fnmatch.fnmatch(param_name, g) for g in compiled["globs"]):
-                    continue
-                try:
-                    v = float(param_val)
-                except (ValueError, TypeError):
-                    continue
-                cand = normalize_osc_value(v)
-                if cand > target_val:
-                    target_val = cand
+        if sim_d_raw is not None:
+            d_raw = max(0.0, min(1.0, float(sim_d_raw)))
+        else:
+            d_raw = self._compute_d_raw_from_inputs(
+                compiled, all_params, config, motor_idx, zones
+            )
 
-        # --- 2. SPS Zones ------------------------------------------------------------
-        if compiled["has_zone_filter"]:
-            is_all_sps = compiled["is_all_sps"]
-            allowed_zone_set = compiled["allowed_zones"]
-            best = target_val
-            for zone_type, zone_name in zones:
-                if is_all_sps or zone_name in allowed_zone_set:
-                    contribution = self._zone_contribution(zone_type, zone_name, config, motor_idx, all_params)
-                    if contribution > best:
-                        best = contribution
-            target_val = best
+        # --- 2. Mixer: per-channel shaping → combine → smoothing ---
+        mix = self._get_mix_config(config, motor_idx)
+        state = self._get_motor_state((device_name, motor_idx))
 
-        # --- 3. Position ↔ Speed blend ----------------------------------------------
-        # The slider is stored per-motor in the profile; 0.0 keeps the legacy
-        # position-only behavior. The tracker is updated unconditionally so a
-        # later slider change picks up from a current sample.
-        blend = self._coerce_blend(config.get(f"motor_{motor_idx}_speed_blend", 0.0))
-        return self._apply_speed_blend((device_name, motor_idx), target_val, blend)
+        now = self._clock()
+        last_t = state["last_time"]
+        # last_time == -1.0 is the sentinel for "no prior tick"; otherwise
+        # any monotonic value (including 0.0 from a FakeClock) is valid.
+        dt = (now - last_t) if last_t >= 0.0 else 0.0
 
-    _SIMPLE_MODE_SPEED_KEY: Tuple[str, int] = ("__simple_mode__", 0)
+        s_raw = self._derive_speed_signal(state, d_raw, mix["speed"], dt)
+
+        depth = mix["depth"]
+        speed = mix["speed"]
+        d_shaped = apply_curve(
+            d_raw,
+            str(depth.get("curve", "linear")),
+            self._coerce_float(depth.get("curve_param", 1.0), 1.0),
+        ) * self._coerce_float(depth.get("gain", 1.0), 1.0, 0.0, 2.0)
+        s_shaped = apply_curve(
+            s_raw,
+            str(speed.get("curve", "linear")),
+            self._coerce_float(speed.get("curve_param", 1.0), 1.0),
+        ) * self._coerce_float(speed.get("gain", 1.0), 1.0, 0.0, 2.0)
+
+        mod_range = mix.get("modulator_range", (0.5, 1.5))
+        try:
+            mod_min = float(mod_range[0])
+            mod_max = float(mod_range[1])
+        except (TypeError, ValueError, IndexError):
+            mod_min, mod_max = 0.5, 1.5
+
+        mixed = combine(
+            d_shaped, s_shaped,
+            bool(depth.get("enabled", True)), str(depth.get("mode", "additive")),
+            bool(speed.get("enabled", True)), str(speed.get("mode", "additive")),
+            str(mix.get("combine", "max")),
+            mod_min, mod_max,
+        )
+
+        smoothing = mix.get("smoothing", {})
+        attack_ms = self._coerce_float(
+            smoothing.get("attack_ms", 50.0), 50.0, 0.0, 2000.0
+        )
+        release_ms = self._coerce_float(
+            smoothing.get("release_ms", 300.0), 300.0, 0.0, 2000.0
+        )
+        smoothed = smooth(
+            state["smoothed_output"], mixed, dt * 1000.0, attack_ms, release_ms
+        )
+
+        # Persist per-tick state for the next call.
+        state["smoothed_output"] = smoothed
+        state["last_position"] = d_raw
+        state["last_time"] = now
+
+        # Emit Tune intermediates if subscribed. Zero cost when both
+        # `_tune_subscription` and `_tune_emit_callback` are None.
+        if (self._tune_subscription is not None
+                and self._tune_emit_callback is not None
+                and self._tune_subscription == (device_name, motor_idx)):
+            try:
+                self._tune_emit_callback({
+                    "type": "tune_trace",
+                    "device": device_name,
+                    "motor": motor_idx,
+                    "t_ms": now * 1000.0,
+                    "d_raw": d_raw,
+                    "s_raw": s_raw,
+                    "d_shaped": d_shaped,
+                    "s_shaped": s_shaped,
+                    "mixed": mixed,
+                    "out": smoothed,
+                })
+            except Exception:
+                # A misbehaving Tune callback must never break the
+                # router's hot path. Silently drop.
+                pass
+
+        return smoothed
 
     def compute_simple_mode_value(
         self,
         all_params: Dict[str, Any],
         zones: Optional[Set[Tuple[str, str]]] = None,
-        speed_blend: float = 0.0,
     ) -> float:
         """Simple-mode max: return the strongest contribution across every
-        detected SPS zone, ignoring per-toy profile config. Touch + pen from
-        others are allowed; self-contact is excluded so the user doesn't get
-        unexpected output from their own contacts firing the gates.
+        detected SPS zone, ignoring per-toy profile config. Touch + pen
+        from others are allowed; self-contact is excluded so the user
+        doesn't get unexpected output from their own contacts firing
+        the gates.
 
-        `speed_blend` mirrors the per-motor Position↔Speed slider but applies
-        globally because Simple Mode pushes the same value to every motor.
-        """
+        Phase 2 simplification: Simple Mode is now pure depth (no speed
+        derivation, no curves, no smoothing). Users who want speed
+        contribution or per-toy tuning use full Device Routing instead."""
         zones = self._get_zone_tuples(all_params, zones)
         self._update_length_detectors(all_params, zones)
         # Synthetic config: allow everything except self, mirroring the
@@ -663,24 +810,19 @@ class MotorRouter:
             contribution = self._zone_contribution(zone_type, zone_name, cfg, 0, all_params)
             if contribution > best:
                 best = contribution
-        return self._apply_speed_blend(
-            self._SIMPLE_MODE_SPEED_KEY, best, self._coerce_blend(speed_blend)
-        )
+        return best
 
     def reevaluate_simple_mode(
         self,
         device_motor_counts: Dict[str, int],
         all_params: Dict[str, Any],
         zones: Optional[Set[Tuple[str, str]]] = None,
-        speed_blend: float = 0.0,
     ) -> List[Tuple[str, float, int]]:
         """Simple-mode routing: push the same global SPS max value to every
         connected device's every motor. Returns only entries whose target
         value changed (same debounce semantics as `reevaluate_state`)."""
         zones = self._get_zone_tuples(all_params, zones)
-        value = self.compute_simple_mode_value(
-            all_params, zones=zones, speed_blend=speed_blend
-        )
+        value = self.compute_simple_mode_value(all_params, zones=zones)
         updates: List[Tuple[str, float, int]] = []
         for device_name, motor_count in device_motor_counts.items():
             for motor_idx in range(motor_count):
@@ -695,10 +837,11 @@ class MotorRouter:
         motor as changed. Used when switching routing modes so motors don't
         get stuck at the previous mode's last value."""
         self.last_outputs.clear()
-        # Clearing speed state too prevents a stale Δposition spike the next
-        # tick when the user flips a mode change (a routing switch can leave
-        # the last-seen position arbitrarily far from the new computation).
-        self._speed_state.clear()
+        # Clearing motor state too prevents a stale Δposition spike the
+        # next tick when the user flips a mode change (a routing switch
+        # can leave the last-seen position arbitrarily far from the new
+        # computation).
+        self._motor_state.clear()
 
     def reevaluate_state(
         self,

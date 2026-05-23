@@ -14,7 +14,7 @@
 #   Foot_Left/Right  → FootL/R     (3)
 
 import threading
-from typing import Callable, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from parameter_store import store
 from bhaptics_engine import BHapticsEngine, DeviceConfig, NODE_COUNTS
@@ -62,6 +62,102 @@ def _truthy(value) -> bool:
         return False
 
 
+# ----------------------------------------------------------
+# SPS -> bHaptics mirror compute
+# ----------------------------------------------------------
+
+def _sps_entry_strength(entry: Dict[str, Any],
+                        params: Dict[str, Any]) -> float:
+    """Look up an SPS-mirror entry's OGB contact params and return the
+    max value (0..1) across the entry's enabled filters. A filter is
+    skipped when its companion `<filter>Close` key is present and
+    false — same close-gate convention as motor_router. When the
+    Close key is absent, the filter is treated as live (assume open)."""
+    zone_name = str(entry.get("ogb_zone", "")).strip()
+    if not zone_name:
+        return 0.0
+    filters = entry.get("filters") or []
+    if not filters:
+        return 0.0
+    zone_type = str(entry.get("zone_type", "Orf")).strip() or "Orf"
+    prefix = f"OGB/{zone_type}/{zone_name}"
+    best = 0.0
+    for fname in filters:
+        close_key = f"{prefix}/{fname}Close"
+        if close_key in params and not _truthy(params.get(close_key)):
+            continue
+        val = params.get(f"{prefix}/{fname}")
+        if val is None:
+            continue
+        try:
+            f = max(0.0, min(1.0, float(val)))
+        except (TypeError, ValueError):
+            continue
+        if f > best:
+            best = f
+    return best
+
+
+def compute_sps_mirror_dots(sps_cfg: Optional[Dict[str, Any]],
+                            params: Dict[str, Any],
+                            enabled_positions: Optional[set] = None,
+                            ) -> Dict[str, Dict[int, float]]:
+    """Project every enabled SPS-mirror entry onto its target dots.
+    Returns `{position: {dot_index: intensity_0_1}}`. Multiple entries
+    landing on the same dot merge via max-wins. Entries targeting a
+    position that isn't in `enabled_positions` (when supplied) are
+    dropped — matches the per-device enable toggle in the main router
+    loop.
+
+    Pure function: caller supplies the config and param snapshots so
+    this is trivially unit-testable without the router's polling
+    thread or engine."""
+    if not isinstance(sps_cfg, dict) or not sps_cfg.get("enabled", False):
+        return {}
+    entries = sps_cfg.get("entries") or []
+    if not entries:
+        return {}
+    out: Dict[str, Dict[int, float]] = {}
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        position = str(entry.get("position", "")).strip()
+        if not position:
+            continue
+        if enabled_positions is not None and position not in enabled_positions:
+            continue
+        strength = _sps_entry_strength(entry, params)
+        if strength <= 0.0:
+            continue
+        try:
+            threshold = float(entry.get("threshold", 0.0))
+        except (TypeError, ValueError):
+            threshold = 0.0
+        try:
+            gain = float(entry.get("gain", 1.0))
+        except (TypeError, ValueError):
+            gain = 1.0
+        if strength <= threshold:
+            continue
+        shaped = (strength - threshold) * gain
+        if shaped <= 0.0:
+            continue
+        if shaped > 1.0:
+            shaped = 1.0
+        dot_indices = entry.get("dot_indices") or []
+        for raw_idx in dot_indices:
+            try:
+                d = int(raw_idx)
+            except (TypeError, ValueError):
+                continue
+            if d < 0:
+                continue
+            pos_map = out.setdefault(position, {})
+            if shaped > pos_map.get(d, 0.0):
+                pos_map[d] = shaped
+    return out
+
+
 class BHapticsRouter(PollingThread):
     """Polls parameter_store and pushes per-device frames to the engine."""
 
@@ -69,7 +165,8 @@ class BHapticsRouter(PollingThread):
                  engine: BHapticsEngine,
                  get_device_configs: Callable[[], Dict[str, DeviceConfig]],
                  poll_rate_s: float = 0.05,
-                 get_antistuck: Callable[[], Dict[str, float]] | None = None):
+                 get_antistuck: Callable[[], Dict[str, float]] | None = None,
+                 get_sps_mirror_config: Callable[[], Dict[str, Any]] | None = None):
         super().__init__("bHapticsRouter")
         self.engine = engine
         self.get_device_configs = get_device_configs
@@ -77,6 +174,11 @@ class BHapticsRouter(PollingThread):
         # Returns {"enabled": bool, "hold_s": float, "ramp_s": float}.
         # Read on every tick so config changes apply live.
         self.get_antistuck = get_antistuck or (lambda: {"enabled": False, "hold_s": 2.0, "ramp_s": 2.0})
+        # Returns the sps_mirror dict (see BHapticsSettingsManager) or
+        # None. When None or `enabled=False`, the SPS layer contributes
+        # nothing and the existing v1 OSC bool/float paths drive dots
+        # unchanged. Read on every tick so live edits apply.
+        self.get_sps_mirror_config = get_sps_mirror_config or (lambda: None)
         # Track last submitted dot tuple per device so we can debounce, and so
         # the debug UI can read what's currently being driven.
         self._last_dots: Dict[str, Tuple[int, ...]] = {}
@@ -154,6 +256,19 @@ class BHapticsRouter(PollingThread):
         as_enabled = bool(antistuck.get("enabled", False))
         as_hold = max(0.0, float(antistuck.get("hold_s", 2.0)))
         as_ramp = max(0.01, float(antistuck.get("ramp_s", 2.0)))
+        # Compute the SPS-mirror per-dot contribution once per tick;
+        # the per-position loop folds it into `raw` alongside the v1
+        # OSC bool/float values via max-wins. Empty dict when the
+        # mirror is disabled or has no entries — costs nothing.
+        sps_cfg = None
+        try:
+            sps_cfg = self.get_sps_mirror_config()
+        except Exception:
+            sps_cfg = None
+        enabled_positions = {
+            pos for pos, cfg in (configs or {}).items() if cfg and cfg.enabled
+        }
+        sps_per_dot = compute_sps_mirror_dots(sps_cfg, params, enabled_positions)
         now = time.time()
         for position, slot, count in _DEVICE_TABLE:
             cfg = configs.get(position)
@@ -219,7 +334,12 @@ class BHapticsRouter(PollingThread):
                     except (TypeError, ValueError):
                         from_float = 0
 
-                raw = max(from_bool, from_float)
+                # SPS-mirror layer (0..1 float, scaled by the device's
+                # intensity setting the same way the v1 float layer is).
+                sps_strength = sps_per_dot.get(position, {}).get(n - 1, 0.0)
+                from_sps = int(round(sps_strength * intensity)) if sps_strength > 0 else 0
+
+                raw = max(from_bool, from_float, from_sps)
                 raw_dots.append(raw)
 
                 # --- Anti-stuck ramp-down -----------------------------------
