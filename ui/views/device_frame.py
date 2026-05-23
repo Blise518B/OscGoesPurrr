@@ -1706,7 +1706,21 @@ class DeviceFrameMixin:
     def _set_motor_levels(self, device_name: str, motor_idx: int, value: float):
         """Drive the per-motor vibe meter inside the expanded card, the
         matching mini-bar in the collapsed toy bar, the Mix card's
-        scrolling mini-graph, and the Overview tile's aggregate meter."""
+        scrolling mini-graph, and the Overview tile's aggregate meter.
+
+        Phantom-update guard: the router still computes targets for
+        every motor in the active profile, including stored-but-offline
+        toys. The engine drops those values on the floor (the toy
+        isn't there to receive them), but if the UI shows the meter
+        moving anyway it reads as 'the toy is live' which is a lie.
+        So when the device isn't currently connected, we force the
+        displayed value to 0."""
+        try:
+            connected = self.controller.get_connected_device_names()
+            if device_name not in connected:
+                value = 0.0
+        except Exception:
+            pass
         if device_name in self.device_ui_frames:
             frame_data = self.device_ui_frames[device_name]
             motors = frame_data.get("motors", [])
