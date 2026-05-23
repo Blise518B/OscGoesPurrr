@@ -13,12 +13,15 @@ from ._paths import (
     HARDWARE_MONITOR_SETTINGS_FILE,
     KNOWN_DEVICES_FILE,
     PROFILE_FILE,
+    SESSIONS_DIR,
+    SESSIONS_SETTINGS_FILE,
     STEAMVR_SETTINGS_FILE,
 )
 from .app import AppSettingsManager, DEFAULT_APP_SETTINGS
 from .bhaptics import BHapticsSettingsManager
 from .hardware_monitor import HardwareMonitorSettingsManager
 from .known_devices import KnownDevicesRegistry
+from .sessions import SessionSettingsManager
 from .steamvr import SteamVRSettingsManager
 
 __all__ = [
@@ -28,11 +31,14 @@ __all__ = [
     "HARDWARE_MONITOR_SETTINGS_FILE",
     "KNOWN_DEVICES_FILE",
     "PROFILE_FILE",
+    "SESSIONS_DIR",
+    "SESSIONS_SETTINGS_FILE",
     "STEAMVR_SETTINGS_FILE",
     "AppSettingsManager",
     "BHapticsSettingsManager",
     "DEFAULT_APP_SETTINGS",
     "HardwareMonitorSettingsManager",
     "KnownDevicesRegistry",
+    "SessionSettingsManager",
     "SteamVRSettingsManager",
 ]

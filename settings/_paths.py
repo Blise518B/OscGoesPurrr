@@ -34,5 +34,12 @@ HARDWARE_MONITOR_SETTINGS_FILE = APPDATA_DIR / "hardware_monitor_settings.json"
 # previously-seen toys with default settings.
 KNOWN_DEVICES_FILE = APPDATA_DIR / "known_devices.json"
 
+# Session logger: a directory holding one JSONL file per recorded VR
+# session, plus a tiny settings file for the engine's enable / auto-start
+# / retention preferences. The directory is created at first session
+# start, not on import, because it's empty until the user opts in.
+SESSIONS_DIR = APPDATA_DIR / "sessions"
+SESSIONS_SETTINGS_FILE = APPDATA_DIR / "sessions_settings.json"
+
 
 os.makedirs(APPDATA_DIR, exist_ok=True)
