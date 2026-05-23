@@ -47,6 +47,7 @@ from ui.widgets import (
     MainWindow as _MainWindow,
     Card as _Card,
     BHapticsDotGrid as _BHapticsDotGrid,
+    BHapticsDotPicker as _BHapticsDotPicker,
     SliderProxy as _SliderProxy,
     ProgressProxy as _ProgressProxy,
     RainbowMeter as _RainbowMeter,
@@ -515,6 +516,9 @@ class BHapticsMixin:
     _is_updating_bhaptics_xroute = False
     _bhaptics_xroute_rows: List[Dict[str, Any]] = []
     _bhaptics_xroute_positions: List[str] = []
+    # position -> (cols, rows, node_count); fed to each row's picker so
+    # the grid matches the chosen device layout.
+    _bhaptics_xroute_geom: Dict[str, tuple] = {}
 
     def _build_bhaptics_cross_routing(self, parent_layout: QVBoxLayout):
         parent_layout.addWidget(self._muted_label(
@@ -546,17 +550,38 @@ class BHapticsMixin:
         top_row.addWidget(add_btn)
         parent_layout.addLayout(top_row)
 
-        # Cache the device-position list once. Prefer the live engine
-        # report; fall back to the hard-coded table if the status call
-        # ever fails so the picker is never empty.
+        # Cache the device-position list + per-position geometry once.
+        # Prefer the live engine report; fall back to the hard-coded
+        # table if the status call ever fails so the picker is never
+        # empty. Geometry feeds the per-row dot picker — when the user
+        # changes the position combo we reconfigure the picker to the
+        # new device's (cols, rows, node_count).
+        positions: List[str] = []
+        geom: Dict[str, tuple] = {}
         try:
             devices = self.controller.get_bhaptics_status().get("devices", []) or []
-            positions = [d["position"] for d in devices if d.get("position")]
+            for d in devices:
+                pos = d.get("position")
+                if not pos:
+                    continue
+                positions.append(pos)
+                cols, rows = d.get("grid", (1, 1))
+                geom[pos] = (int(cols), int(rows), int(d.get("node_count", 0)))
         except Exception:
             positions = []
         if not positions:
-            positions = [pos for pos, _slot, _count in self._bhaptics_device_table_fallback()]
+            fallback_grids = {
+                "Head": (6, 1), "VestFront": (4, 5), "VestBack": (4, 5),
+                "ForearmL": (2, 3), "ForearmR": (2, 3),
+                "HandL": (3, 1), "HandR": (3, 1),
+                "FootL": (3, 1), "FootR": (3, 1),
+            }
+            for pos, _slot, count in self._bhaptics_device_table_fallback():
+                positions.append(pos)
+                c, r = fallback_grids.get(pos, (count, 1))
+                geom[pos] = (c, r, count)
         self._bhaptics_xroute_positions = positions
+        self._bhaptics_xroute_geom = geom
 
         # Scroll area for entries
         scroll = QScrollArea()
@@ -681,7 +706,7 @@ class BHapticsMixin:
             filter_checks[fname] = cb
         lay.addLayout(row2)
 
-        # --- Row 3: output (position + dots) ---
+        # --- Row 3: output position ---
         row3 = _hbox(0, 8)
         row3.addWidget(QLabel("Output"))
         pos_combo = QComboBox()
@@ -690,21 +715,87 @@ class BHapticsMixin:
         if cur_pos and pos_combo.findText(cur_pos) < 0:
             pos_combo.addItem(cur_pos)
         pos_combo.setCurrentText(cur_pos)
+        # The currentTextChanged handler both reconfigures the picker
+        # (drops out-of-range dots silently) and pushes the entry.
         pos_combo.currentTextChanged.connect(
-            lambda _t, i=idx: self._push_bhaptics_xroute_entry(i)
+            lambda _t, i=idx: self._on_bhaptics_xroute_position_changed(i)
         )
         row3.addWidget(pos_combo)
 
-        row3.addSpacing(8)
-        row3.addWidget(QLabel("Dots"))
-        dots_edit = QLineEdit(self._fmt_dot_indices(entry.get("dot_indices") or []))
-        dots_edit.setPlaceholderText("e.g. 5, 6, 9, 10")
-        dots_edit.setMinimumWidth(160)
-        dots_edit.editingFinished.connect(
-            lambda i=idx: self._push_bhaptics_xroute_entry(i)
-        )
-        row3.addWidget(dots_edit, 1)
+        row3.addStretch(1)
+        # Tiny count read-out updates from the picker's selectionChanged.
+        dot_count_lbl = QLabel("0 dots")
+        dot_count_lbl.setProperty("role", "muted")
+        row3.addWidget(dot_count_lbl)
         lay.addLayout(row3)
+
+        # --- Row 4: visual dot picker (mirrors the chosen device's
+        # physical layout) + comma-separated text fallback for
+        # power users and paste support. The two stay in sync. ---
+        pick_row = _hbox(0, 8)
+        pick_row.addWidget(QLabel("Dots"))
+        picker = _BHapticsDotPicker()
+        cols, rows, node_count = self._bhaptics_xroute_geom.get(
+            pos_combo.currentText(), (1, 1, 0)
+        )
+        picker.set_device(cols, rows, node_count)
+        picker.set_selection(entry.get("dot_indices") or [])
+        pick_row.addWidget(picker, 0, Qt.AlignTop)
+
+        dots_edit = QLineEdit(self._fmt_dot_indices(picker.selection()))
+        dots_edit.setPlaceholderText("e.g. 5, 6, 9, 10")
+        dots_edit.setMinimumWidth(140)
+        dots_edit.setToolTip(
+            "Comma-separated 0-based dot indices. Edits here sync to the "
+            "picker above; the picker is the easier surface for most users."
+        )
+
+        def _on_picker_changed(_=None, i=idx):
+            # Picker updated the selection -> mirror into the line edit
+            # without triggering its editingFinished handler, then push.
+            sel = picker.selection()
+            dots_edit.blockSignals(True)
+            try:
+                dots_edit.setText(self._fmt_dot_indices(sel))
+            finally:
+                dots_edit.blockSignals(False)
+            dot_count_lbl.setText(f"{len(sel)} dot{'s' if len(sel) != 1 else ''}")
+            self._push_bhaptics_xroute_entry(i)
+
+        def _on_text_changed(i=idx):
+            # User typed into the text box -> parse, reflect in picker,
+            # rewrite the cleaned form back into the box (e.g. dedupe,
+            # drop garbage), and push the entry.
+            parsed = self._parse_dot_indices(dots_edit.text())
+            picker.blockSignals(True)
+            try:
+                picker.set_selection(parsed)
+            finally:
+                picker.blockSignals(False)
+            cleaned = self._fmt_dot_indices(picker.selection())
+            if cleaned != dots_edit.text():
+                dots_edit.blockSignals(True)
+                try:
+                    dots_edit.setText(cleaned)
+                finally:
+                    dots_edit.blockSignals(False)
+            dot_count_lbl.setText(
+                f"{len(picker.selection())} dot"
+                f"{'s' if len(picker.selection()) != 1 else ''}"
+            )
+            self._push_bhaptics_xroute_entry(i)
+
+        picker.selectionChanged.connect(_on_picker_changed)
+        dots_edit.editingFinished.connect(_on_text_changed)
+        # Initial count label
+        n = len(picker.selection())
+        dot_count_lbl.setText(f"{n} dot{'s' if n != 1 else ''}")
+
+        pick_col = _vbox(0, 4)
+        pick_col.addWidget(dots_edit)
+        pick_col.addStretch(1)
+        pick_row.addLayout(pick_col, 1)
+        lay.addLayout(pick_row)
 
         # --- Row 4: gain + threshold ---
         row4 = _hbox(0, 8)
@@ -740,13 +831,17 @@ class BHapticsMixin:
         lay.addLayout(row4)
 
         # Store widget refs so the push handler can read them by index.
+        # `picker` is the canonical dot-selection source; `dot_indices`
+        # is the synced text shadow we keep for tooltip / paste support.
         self._bhaptics_xroute_rows.append({
             "name": name_edit,
             "zone_type": ztype_combo,
             "ogb_zone": zone_combo,
             "filters": filter_checks,
             "position": pos_combo,
+            "picker": picker,
             "dot_indices": dots_edit,
+            "dot_count_label": dot_count_lbl,
             "gain": gain_spin,
             "threshold": thresh_spin,
         })
@@ -806,13 +901,22 @@ class BHapticsMixin:
             return
         row = self._bhaptics_xroute_rows[idx]
         filters = [name for name, cb in row["filters"].items() if cb.isChecked()]
+        # Picker is the canonical dot source — the text field is just a
+        # synced shadow. Reading the picker means a half-typed list in
+        # the line edit can't reach the router before editingFinished
+        # has cleaned it up.
+        picker = row.get("picker")
+        if picker is not None:
+            dot_indices = list(picker.selection())
+        else:
+            dot_indices = self._parse_dot_indices(row["dot_indices"].text())
         entry = {
             "name":        row["name"].text(),
             "zone_type":   row["zone_type"].currentText(),
             "ogb_zone":    row["ogb_zone"].currentText(),
             "filters":     filters,
             "position":    row["position"].currentText(),
-            "dot_indices": self._parse_dot_indices(row["dot_indices"].text()),
+            "dot_indices": dot_indices,
             "gain":        float(row["gain"].value()),
             "threshold":   float(row["threshold"].value()),
         }
@@ -845,6 +949,41 @@ class BHapticsMixin:
     def _on_bhaptics_xroute_delete(self, idx: int):
         self.controller.delete_bhaptics_sps_mirror_entry(idx)
         self._rebuild_bhaptics_xroute_entries()
+
+    def _on_bhaptics_xroute_position_changed(self, idx: int):
+        """User picked a different target device. Reconfigure that
+        row's picker to the new device's grid (which silently drops
+        any selected dots that no longer fit) and update the count
+        readout + line edit to match. Then push the entry."""
+        if idx < 0 or idx >= len(self._bhaptics_xroute_rows):
+            return
+        row = self._bhaptics_xroute_rows[idx]
+        picker = row.get("picker")
+        new_pos = row["position"].currentText()
+        if picker is not None:
+            cols, rows, node_count = self._bhaptics_xroute_geom.get(
+                new_pos, (1, 1, 0)
+            )
+            picker.blockSignals(True)
+            try:
+                picker.set_device(cols, rows, node_count)
+            finally:
+                picker.blockSignals(False)
+            # set_device may have dropped out-of-range dots; re-sync
+            # the line edit + count label so the UI shows the truth.
+            sel = picker.selection()
+            cleaned = self._fmt_dot_indices(sel)
+            dots_edit = row.get("dot_indices")
+            if dots_edit is not None and dots_edit.text() != cleaned:
+                dots_edit.blockSignals(True)
+                try:
+                    dots_edit.setText(cleaned)
+                finally:
+                    dots_edit.blockSignals(False)
+            count_lbl = row.get("dot_count_label")
+            if count_lbl is not None:
+                count_lbl.setText(f"{len(sel)} dot{'s' if len(sel) != 1 else ''}")
+        self._push_bhaptics_xroute_entry(idx)
 
     def _on_bhaptics_xroute_ztype_changed(self, idx: int):
         """User flipped the entry's Orf/Pen toggle. Refresh that row's

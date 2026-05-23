@@ -333,6 +333,181 @@ class BHapticsDotGrid(QWidget):
         super().leaveEvent(ev)
 
 
+class BHapticsDotPicker(QWidget):
+    """Click-to-toggle grid for choosing a subset of dot indices on a
+    single bHaptics device. Used by the SPS-mirror entry editor: each
+    entry maps one OGB zone onto these picked dots.
+
+    Visual differs from `BHapticsDotGrid` deliberately:
+      * No animated intensity colors — picker dots are either selected
+        (bright accent) or unselected (dim grey).
+      * Each dot shows its 0-based index in small text so the user can
+        match what they see here against bHaptics docs / the live-debug
+        grid (which uses the same numbering).
+      * Click toggles membership; click-and-drag paint-toggles with the
+        first dot's new state, so it's quick to fill or clear a region.
+    """
+
+    DOT_PX = 24
+    SPACING = 5
+    PADDING = 6
+
+    selectionChanged = Signal()
+
+    def __init__(self, parent: Optional[QWidget] = None):
+        super().__init__(parent)
+        self.node_count = 0
+        self.cols = 1
+        self.rows = 1
+        self._selected: set = set()
+        # Drag-paint state: when the mouse press toggles a dot, the new
+        # state of that dot becomes the "paint value" for the rest of
+        # the drag. Mouse-move dots get forced to that state — so the
+        # user paints in or paints out cleanly without flickering.
+        self._drag_paint_state: Optional[bool] = None
+        self._hover_idx: int = -1
+        self.setMouseTracking(True)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip(
+            "Click a dot to toggle. Click and drag to paint multiple dots "
+            "in one motion (the first dot's new state is painted onto the rest)."
+        )
+
+    def set_device(self, cols: int, rows: int, node_count: int) -> None:
+        """Reconfigure the picker for a different device layout. Any
+        previously-selected indices that no longer fit on the new
+        device are dropped silently."""
+        self.cols = max(1, int(cols))
+        self.rows = max(1, int(rows))
+        self.node_count = max(0, int(node_count))
+        w = self.PADDING * 2 + self.cols * self.DOT_PX + (self.cols - 1) * self.SPACING
+        h = self.PADDING * 2 + self.rows * self.DOT_PX + (self.rows - 1) * self.SPACING
+        self.setFixedSize(int(w), int(h))
+        # Drop out-of-range selections so a position change doesn't
+        # silently keep dot 17 selected when the new device has 6 nodes.
+        self._selected = {i for i in self._selected if 0 <= i < self.node_count}
+        self.update()
+
+    def set_selection(self, indices) -> None:
+        """Replace the selection set. Does NOT emit selectionChanged —
+        meant for syncing the widget from a parallel source (e.g. the
+        text line edit) without ping-ponging the signal."""
+        try:
+            new_sel = {int(i) for i in (indices or [])
+                       if 0 <= int(i) < self.node_count}
+        except (TypeError, ValueError):
+            new_sel = set()
+        if new_sel != self._selected:
+            self._selected = new_sel
+            self.update()
+
+    def selection(self) -> List[int]:
+        return sorted(self._selected)
+
+    def _dot_at(self, pos) -> int:
+        diameter = self.DOT_PX
+        x = pos.x()
+        y = pos.y()
+        for i in range(self.node_count):
+            col = i % self.cols
+            row = i // self.cols
+            if row >= self.rows:
+                break
+            dx = self.PADDING + col * (diameter + self.SPACING)
+            dy = self.PADDING + row * (diameter + self.SPACING)
+            if dx <= x <= dx + diameter and dy <= y <= dy + diameter:
+                return i
+        return -1
+
+    def _paint_dot(self, idx: int, on: bool) -> bool:
+        """Set dot `idx` to `on`; return True if anything changed."""
+        if idx < 0 or idx >= self.node_count:
+            return False
+        if on and idx not in self._selected:
+            self._selected.add(idx)
+            return True
+        if (not on) and idx in self._selected:
+            self._selected.discard(idx)
+            return True
+        return False
+
+    def mousePressEvent(self, ev):
+        if ev.button() != Qt.LeftButton:
+            super().mousePressEvent(ev)
+            return
+        idx = self._dot_at(ev.position().toPoint())
+        if idx < 0:
+            ev.accept()
+            return
+        # Toggle this dot; remember the new state so the rest of the
+        # drag follows it.
+        new_state = idx not in self._selected
+        if self._paint_dot(idx, new_state):
+            self._drag_paint_state = new_state
+            self.update()
+            self.selectionChanged.emit()
+        else:
+            self._drag_paint_state = new_state
+        ev.accept()
+
+    def mouseMoveEvent(self, ev):
+        idx = self._dot_at(ev.position().toPoint())
+        if idx != self._hover_idx:
+            self._hover_idx = idx
+            self.update()
+        if self._drag_paint_state is not None and (ev.buttons() & Qt.LeftButton):
+            if idx >= 0 and self._paint_dot(idx, self._drag_paint_state):
+                self.update()
+                self.selectionChanged.emit()
+        ev.accept()
+
+    def mouseReleaseEvent(self, ev):
+        if ev.button() == Qt.LeftButton:
+            self._drag_paint_state = None
+            ev.accept()
+            return
+        super().mouseReleaseEvent(ev)
+
+    def leaveEvent(self, ev):
+        if self._hover_idx != -1:
+            self._hover_idx = -1
+            self.update()
+        super().leaveEvent(ev)
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.fillRect(self.rect(), QColor("#1A1A26"))
+
+        fill_on = QColor("#4FC3F7")    # bright cyan — selected
+        fill_off = QColor("#33344A")   # dim — unselected
+        pen_off = QPen(QColor(80, 80, 100, 180)); pen_off.setWidth(1)
+        pen_on = QPen(QColor("#80DCFF")); pen_on.setWidth(2)
+        pen_hover = QPen(QColor("#FFFFFF")); pen_hover.setWidth(2)
+        text_on = QColor("#0B1A28")    # dark text on bright dot
+        text_off = QColor(180, 180, 200)
+
+        f = p.font(); f.setPointSize(7); f.setBold(True); p.setFont(f)
+        diameter = self.DOT_PX
+        for i in range(self.node_count):
+            col = i % self.cols
+            row = i // self.cols
+            if row >= self.rows:
+                break
+            x = self.PADDING + col * (diameter + self.SPACING)
+            y = self.PADDING + row * (diameter + self.SPACING)
+            is_sel = i in self._selected
+            if i == self._hover_idx:
+                p.setPen(pen_hover)
+            else:
+                p.setPen(pen_on if is_sel else pen_off)
+            p.setBrush(QBrush(fill_on if is_sel else fill_off))
+            p.drawEllipse(x, y, diameter, diameter)
+            p.setPen(text_on if is_sel else text_off)
+            p.drawText(QRectF(x, y, diameter, diameter), Qt.AlignCenter, str(i))
+        p.end()
+
+
 class SliderProxy:
     """Wraps a QSlider so the controller can speak in floats 0.0–1.0
     instead of the slider's integer range."""
