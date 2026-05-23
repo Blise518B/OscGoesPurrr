@@ -182,6 +182,14 @@ class MotorRouter:
         # graph of d_raw / s_raw / d_shaped / s_shaped / mixed / out.
         self._tune_subscription: Optional[Tuple[str, int]] = None
         self._tune_emit_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+        # Session-logger broadcast hook. When set, fires once per motor
+        # per tick (unlike the Tune subscription which is per-motor).
+        # The session facade registers a callback while a session is
+        # recording and clears it on stop, so the per-tick check is a
+        # single `is not None` when nothing is listening.
+        self._session_broadcast: Optional[
+            Callable[[str, int, Dict[str, Any]], None]
+        ] = None
         # Tune input-override hook. When set and the subscribed motor is
         # being computed, the provider's return value replaces d_raw —
         # bypassing zones / custom addresses entirely. Lets the
@@ -590,6 +598,25 @@ class MotorRouter:
         even when VRChat is silent, so the trace graph stays current."""
         return self._tune_subscription is not None
 
+    def set_session_broadcast(self,
+                              callback: Optional[
+                                  Callable[[str, int, Dict[str, Any]], None]
+                              ]) -> None:
+        """Subscribe to *every* motor's intermediates per tick. Pass
+        None to clear. Distinct from the Tune subscription (which is
+        per-motor and gated by `_tune_subscription`).
+
+        The callback is invoked from the routing thread inside
+        `_compute_motor_target`, after the existing Tune emit. It
+        receives `(device_name, motor_idx, intermediates_dict)` where
+        the dict has `t_unix` (wall-clock seconds) plus d_raw, s_raw,
+        d_shaped, s_shaped, mixed, out. The session facade computes
+        relative t_ms from t_unix before logging.
+
+        Exceptions raised inside the callback are swallowed so a
+        misbehaving logger can never break the hot path."""
+        self._session_broadcast = callback
+
     def set_tune_value_provider(self,
                                 provider: Optional[Callable[[], Optional[float]]]
                                 ) -> None:
@@ -782,6 +809,23 @@ class MotorRouter:
             except Exception:
                 # A misbehaving Tune callback must never break the
                 # router's hot path. Silently drop.
+                pass
+
+        # Session-logger broadcast — fires for EVERY motor every tick
+        # (unlike Tune which is gated by a single subscription). Single
+        # None comparison when no session is recording.
+        if self._session_broadcast is not None:
+            try:
+                self._session_broadcast(device_name, motor_idx, {
+                    "t_unix":   now,
+                    "d_raw":    d_raw,
+                    "s_raw":    s_raw,
+                    "d_shaped": d_shaped,
+                    "s_shaped": s_shaped,
+                    "mixed":    mixed,
+                    "out":      smoothed,
+                })
+            except Exception:
                 pass
 
         return smoothed

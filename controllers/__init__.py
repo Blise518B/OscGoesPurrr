@@ -16,6 +16,7 @@ from .bhaptics_facade import BHapticsFacade
 from .hardware_monitor_facade import HardwareMonitorFacade
 from .osc_facade import OscFacade
 from .profiles_facade import ProfilesFacade
+from .sessions_facade import SessionsFacade
 from .tune_facade import TuneFacade
 
 __all__ = [
@@ -25,5 +26,6 @@ __all__ = [
     "HardwareMonitorFacade",
     "OscFacade",
     "ProfilesFacade",
+    "SessionsFacade",
     "TuneFacade",
 ]

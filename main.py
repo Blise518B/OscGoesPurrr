@@ -47,6 +47,7 @@ from controllers import (
     HardwareMonitorFacade,
     OscFacade,
     ProfilesFacade,
+    SessionsFacade,
     TuneFacade,
 )
 
@@ -58,6 +59,7 @@ class OscGoesPurrrApp(
     HardwareMonitorFacade,
     OscFacade,
     ProfilesFacade,
+    SessionsFacade,
     TuneFacade,
 ):
     def __init__(self):
@@ -154,6 +156,13 @@ class OscGoesPurrrApp(
             lambda: (self.tune_pattern_generator.current_value()
                      if self._tune_source == "simulated" else None)
         )
+
+        # VR session logger — built dead by default. The actual file
+        # only opens once start_session_logging() is called (manually
+        # from the UI, or automatically via _session_auto_start_if_configured
+        # when the user has enabled both `enabled` and `auto_start`).
+        # See SESSION_LOGGING.md for the architecture and on-disk format.
+        self._session_init_components()
 
         # SteamVR Haptics — independent pipeline that shares the parameter_store
         # but targets SteamVR trackers via OpenVR.
@@ -1285,6 +1294,14 @@ class OscGoesPurrrApp(
 
         self.save_profiles()
 
+        # Close any active session file with a footer + final flush.
+        # Best-effort: if the worker thread is wedged this just times
+        # out and the file is what it is.
+        try:
+            self._session_stop_for_shutdown()
+        except Exception:
+            pass
+
         # Cleanly disconnect Intiface so its log doesn't show an abrupt
         # websocket drop and so it stops scanning when we leave. Best-effort
         # with a short timeout — daemon-killing the async thread on exit is
@@ -1386,9 +1403,28 @@ class OscGoesPurrrApp(
                     needs_tick = self.motor_router.has_tune_subscription()
                 except Exception:
                     pass
+            # Session logging samples on every tick — keep the recompute
+            # firing so the motor broadcast hits the logger consistently
+            # at the configured router rate, even when VRChat is silent.
+            if not needs_tick and hasattr(self, 'is_session_logging_active'):
+                try:
+                    if self.is_session_logging_active():
+                        needs_tick = True
+                except Exception:
+                    pass
             if needs_tick:
                 self._needs_recalculation = False
                 self.force_recalculate()
+            # After recompute, hand the OGB + bHaptics snapshots to the
+            # session logger if it's recording. The logger's internal
+            # change-diff drops the OGB event when nothing changed, so
+            # idle ticks are cheap.
+            if hasattr(self, 'is_session_logging_active'):
+                try:
+                    if self.is_session_logging_active():
+                        self._session_sample_tick()
+                except Exception:
+                    pass
             # Re-read the rate on each tick so a Settings change takes
             # effect on the very next reschedule with no restart.
             try:
@@ -1428,6 +1464,13 @@ class OscGoesPurrrApp(
 
         # Start the device-state heartbeat (1 Hz).
         self.ui.schedule_callback(1000, refresh_device_states)
+
+        # If the user has opted into auto-starting session logging on
+        # launch, open a session file now. No-op otherwise.
+        try:
+            self._session_auto_start_if_configured()
+        except Exception as e:
+            self.log_message(f"Session logger auto-start error: {e}")
 
         # Start SteamVR Haptics router. Engine init is deferred to first refresh
         # — the router itself is cheap and just polls the parameter store.
