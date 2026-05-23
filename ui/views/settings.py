@@ -66,6 +66,29 @@ class SettingsMixin:
         title.setAlignment(Qt.AlignHCenter)
         parent_layout.addWidget(title)
 
+        # Two tabs: the existing settings cards live under "General"
+        # unchanged; the session-logger UI lives under "Sessions". Same
+        # rebinding trick as the bHaptics view — `parent_layout` is
+        # repointed at the General tab's layout so the existing
+        # parent_layout.addWidget(...) calls below keep working without
+        # any rename.
+        from PySide6.QtWidgets import QTabWidget as _QTabWidget
+        tabs = _QTabWidget()
+        general_tab = QWidget()
+        general_lay = _vbox(10, 8)
+        general_tab.setLayout(general_lay)
+        sessions_tab = QWidget()
+        sessions_lay = _vbox(10, 8)
+        sessions_tab.setLayout(sessions_lay)
+        tabs.addTab(general_tab, "General")
+        tabs.addTab(sessions_tab, "Sessions")
+        parent_layout.addWidget(tabs)
+
+        # SessionsMixin renders the Sessions tab content; General keeps
+        # the original card stack.
+        self._build_sessions_panel(sessions_lay)
+        parent_layout = general_lay
+
         # ---- Simple Mode Card ----
         # Settings is the always-visible escape hatch back to Simple Mode
         # when the user has turned it off and wants the stripped UI again.

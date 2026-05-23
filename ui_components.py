@@ -64,6 +64,7 @@ from ui.widgets import (
 from ui.views.dashboard import DashboardMixin
 from ui.views.diagnostics import DiagnosticsMixin
 from ui.views.settings import SettingsMixin
+from ui.views.sessions import SessionsMixin
 from ui.views.steamvr import SteamVRMixin
 from ui.views.bhaptics import BHapticsMixin
 from ui.views.hardware_monitor import HardwareMonitorMixin
@@ -536,6 +537,7 @@ class OscGoesPurrrUI(
     DashboardMixin,
     DiagnosticsMixin,
     SettingsMixin,
+    SessionsMixin,
     SteamVRMixin,
     BHapticsMixin,
     HardwareMonitorMixin,
