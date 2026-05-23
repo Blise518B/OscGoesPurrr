@@ -121,6 +121,20 @@ def combine(d_shaped: float, s_shaped: float,
 # smooth
 # ----------------------------------------------------------
 
+# Snap-to-target threshold for the exponential follower. Pure
+# `prev + (mixed-prev)*alpha` decays toward the target but never
+# reaches it — a `1.0 → 0.0` fall at the default 300 ms release
+# tau (90 Hz tick) is still at ~0.005 after 1.6 s and ~0.001 after
+# 2.1 s. Toy hardware that quantizes floats to integer command
+# steps can hold that residue as a faint motor command, so the
+# user feels a "stuck" buzz long after the input signal stopped.
+# Snapping to target inside the epsilon kills the floating-point
+# tail without changing the audible envelope shape — 0.5% is well
+# below any common toy's perceivable step (Lovense quantizes to
+# 5% steps, bHaptics to 1%).
+_SMOOTH_SNAP_EPSILON = 0.005
+
+
 def smooth(prev: float, mixed: float, dt_ms: float,
            attack_ms: float, release_ms: float) -> float:
     """Asymmetric exponential envelope follower. Returns the new
@@ -136,7 +150,12 @@ def smooth(prev: float, mixed: float, dt_ms: float,
     time constants. The `1 - exp(-dt/tau)` factor compensates for the
     elapsed interval, so the perceived envelope shape is identical at
     any sampling rate. Never recalibrate these values when the
-    router's tick rate changes."""
+    router's tick rate changes.
+
+    Tail snap: once the smoothed value is within `_SMOOTH_SNAP_EPSILON`
+    of the target, return the target exactly. Without this, the
+    floating-point residue from exponential decay holds a faint motor
+    command for seconds after the input stopped."""
     prev_f = float(prev)
     mixed_f = float(mixed)
     dt = float(dt_ms)
@@ -144,7 +163,10 @@ def smooth(prev: float, mixed: float, dt_ms: float,
     if tau <= 0.0 or dt <= 0.0:
         return mixed_f
     alpha = 1.0 - math.exp(-dt / tau)
-    return prev_f + (mixed_f - prev_f) * alpha
+    new = prev_f + (mixed_f - prev_f) * alpha
+    if abs(new - mixed_f) < _SMOOTH_SNAP_EPSILON:
+        return mixed_f
+    return new
 
 
 # ----------------------------------------------------------

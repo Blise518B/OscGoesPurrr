@@ -793,6 +793,30 @@ class DeviceFrameMixin:
         lay = _vbox(10, 8)
         card.setLayout(lay)
 
+        # Header row: "Mix" label + a Reset button that wipes this
+        # motor's entire mix block back to MotorRouter.DEFAULT_MIX_CONFIG.
+        # Single escape hatch for users who've tuned themselves into a
+        # corner; covers all channels, combine policy, modulator range,
+        # and smoothing in one click.
+        header_row = _hbox(0, 8)
+        mix_header = QLabel("Mix")
+        mhf = mix_header.font(); mhf.setBold(True)
+        mix_header.setFont(mhf)
+        header_row.addWidget(mix_header)
+        header_row.addStretch(1)
+        reset_btn = QPushButton("Reset to defaults")
+        reset_btn.setFixedHeight(BTN_HEIGHT_SMALL)
+        reset_btn.setToolTip(
+            "Wipe every Mix setting for this motor (channels, curves, "
+            "combine, modulator, smoothing) back to the built-in defaults."
+        )
+        reset_btn.clicked.connect(
+            lambda _=False, d=device_name, m=motor_idx:
+                self._reset_mix_to_defaults(d, m)
+        )
+        header_row.addWidget(reset_btn)
+        lay.addLayout(header_row)
+
         mode_widgets: Dict[str, QComboBox] = {}
         mod_range_holder: list = [None]  # mutable cell for closure access
 
@@ -970,7 +994,7 @@ class DeviceFrameMixin:
         release_spin.setDecimals(0)
         release_spin.setSuffix(" ms")
         release_spin.setValue(float(self._get_mix_field(
-            device_name, motor_idx, ("smoothing", "release_ms"), 300.0
+            device_name, motor_idx, ("smoothing", "release_ms"), 20.0
         )))
         sm_lay.addWidget(release_spin)
         sm_lay.addStretch(1)
@@ -1254,6 +1278,38 @@ class DeviceFrameMixin:
         self.controller.save_profiles()
         if hasattr(self.controller, 'force_recalculate'):
             self.controller.force_recalculate()
+
+    def _reset_mix_to_defaults(self, device_name: str, motor_idx: int) -> None:
+        """Replace this motor's entire `mix` block with a fresh deepcopy
+        of MotorRouter.DEFAULT_MIX_CONFIG. Other motors on the same device
+        are untouched; the rest of the profile (OSC addresses, motor
+        counts, etc.) stays as-is.
+
+        Writes the new mix dict back through the same plumbing as a
+        single-field update, then tears down and rebuilds the device
+        cards so the spinboxes / combos visually reflect the new values
+        — they'd otherwise show stale text until the user manually
+        closed and reopened the panel."""
+        import copy
+        from motor_router import MotorRouter
+        mix_root = copy.deepcopy(
+            self.controller.get_profile_config(device_name, "mix", {}) or {}
+        )
+        if not isinstance(mix_root, dict):
+            mix_root = {}
+        mix_root[str(motor_idx)] = copy.deepcopy(MotorRouter.DEFAULT_MIX_CONFIG)
+        self.controller.update_device_config(device_name, "mix", mix_root)
+        self.controller.save_profiles()
+        if hasattr(self.controller, 'force_recalculate'):
+            self.controller.force_recalculate()
+        # Rebuild the device card stack so the just-reset spinboxes /
+        # combos pick up their default values immediately. Without this
+        # the controls stay frozen on the previous user-tuned numbers
+        # until the user expands/collapses the card.
+        try:
+            self.build_stored_devices_ui()
+        except Exception:
+            pass
 
     # ----------------------------------------------------------
     # Custom OSC address row (per motor)
