@@ -39,6 +39,16 @@ from haptic_actuators import (
 # what each motor actually does. Concrete case: the Lovense Max's pump
 # (CONSTRICT) was previously labelled "Vibrate" on the motor card,
 # which was misleading even though dispatch was correct.
+#
+# Ordering note: _classify_feature walks this list in order and
+# returns the first OutputType a feature declares (`feature.has_output`).
+# The buttplug device config currently splits each motor into its
+# own single-output feature (e.g. the Max is two separate features,
+# vibrate + constrict), so the ordering only matters as a tiebreaker
+# for the hypothetical case of a feature that declares multiple
+# OutputTypes simultaneously. If such a device shows up and is
+# misclassified, reorder this list — don't promote a feature's
+# secondary outputs separately.
 _FEATURE_PRIORITY: List[Tuple[OutputType, str]] = [
     (OutputType.VIBRATE, "vibrate"),
     (OutputType.OSCILLATE, "oscillate"),

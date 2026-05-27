@@ -343,8 +343,13 @@ _STAGE_BORDER_HIGH = "#FF40A0"  # vivid pink
 _STAGE_BORDER_EPSILON = 0.02
 
 # Subtitle refresh cadence — picks up external profile edits
-# without a notification path. 500ms is plenty for UI feedback.
-_STAGE_SUBTITLE_REFRESH_MS = 500
+# without a notification path. 1.5 s is fine because the only edits
+# that change subtitle content also come from THIS widget's own
+# controls (gain spinboxes, curve combos, etc.), which the user
+# expects to see reflected on the next stage click; external profile
+# rewrites already destroy + rebuild the widget. Slower interval
+# reduces polling without changing perceived responsiveness.
+_STAGE_SUBTITLE_REFRESH_MS = 1500
 
 
 # Overview disclosure trace set (Cut 8a). Six traces matching the
@@ -364,6 +369,35 @@ _DRIVE_BOTH = "Both"
 _DRIVE_CHAIN_1 = "Chain 1 only"
 _DRIVE_CHAIN_2 = "Chain 2 only"
 _DRIVE_MODES = (_DRIVE_BOTH, _DRIVE_CHAIN_1, _DRIVE_CHAIN_2)
+
+
+# Per-motor-kind display strings. One source of truth for the three
+# UI surfaces that need to talk about a continuous motor's role:
+#   * Motor card title suffix (after "Motor N · ")
+#   * Output stage editor's "drives the X" note
+#   * Output stage card subtitle (three letters)
+# Kinds come from haptic_engine._FEATURE_PRIORITY. Linear actuators
+# get a fundamentally different Output editor and aren't in this
+# table — they're special-cased in each call site.
+class _KindDisplay:
+    __slots__ = ("suffix", "output_phrase", "subtitle")
+
+    def __init__(self, suffix: str, output_phrase: str, subtitle: str) -> None:
+        self.suffix = suffix
+        self.output_phrase = output_phrase
+        self.subtitle = subtitle
+
+
+_KIND_DISPLAY: Dict[str, _KindDisplay] = {
+    "vibrate":     _KindDisplay("Vibrate",   "vibration intensity",   "vib"),
+    "constrict":   _KindDisplay("Contract",  "contraction strength",  "con"),
+    "oscillate":   _KindDisplay("Oscillate", "oscillation intensity", "osc"),
+    "rotate":      _KindDisplay("Rotate",    "rotation speed",        "rot"),
+    "spray":       _KindDisplay("Spray",     "spray output",          "spr"),
+    "temperature": _KindDisplay("Heat",      "heater temperature",    "tmp"),
+    "led":         _KindDisplay("LED",       "LED brightness",        "led"),
+}
+_DEFAULT_KIND_DISPLAY = _KIND_DISPLAY["vibrate"]
 
 
 def _trace_spec(trace_id: str) -> Tuple[str, str, dict]:
@@ -488,9 +522,12 @@ class ValveIndicator(QFrame):
             self._current = min(self._target, self._current + self._LERP_PER_TICK)
         else:
             self._current = max(self._target, self._current - self._LERP_PER_TICK)
-        # Stop the timer the same tick the lerp lands exactly at the
-        # target so the next tick doesn't fire just to no-op.
-        if self._current == self._target:
+        # Stop the timer the same tick the lerp lands at the target
+        # so the next tick doesn't fire just to no-op. Tolerance check
+        # rather than `==` so future tweaks to `_LERP_PER_TICK` that
+        # break exact divisibility don't leave a phantom-active timer.
+        if abs(self._current - self._target) < 1e-9:
+            self._current = self._target
             self._anim_timer.stop()
         self.update()
 
@@ -528,13 +565,11 @@ class MotorSignalChainWidget(QFrame):
     reads/writes go through `ui.controller`.
 
     Public API:
-        set_motor_value(value)      → drives the vibe meter
-        set_activity(meter, open_)  → drives the gate's activity bar
-                                       (deprecated as of Cut 6 — the
-                                       widget now drives it from its
-                                       own intermediates subscription;
-                                       this method stays as a no-op
-                                       shim until Cut 8 cleanup)
+        set_motor_value(value)  → drives the vibe meter
+        teardown()              → unsubscribes from router intermediates
+
+    Activity-meter updates are driven by the widget's own
+    intermediates subscription — no external setter needed.
 
     Live trace data flows from the router's per-(motor, chain)
     intermediates subscription. The router callback fires from the
@@ -571,29 +606,17 @@ class MotorSignalChainWidget(QFrame):
         # When wrapped in a multi-chain layout (Cut 5) the title gains
         # a "Chain N" suffix so the user can tell the two stacks apart.
         # Single-chain motors omit it for backward visual familiarity.
-        # Title suffix per buttplug.io OutputType. The kinds come from
-        # haptic_engine._FEATURE_PRIORITY; keep this in sync if new
-        # OutputType variants land upstream.
+        # Title suffix per buttplug.io OutputType — looked up from
+        # the shared _KIND_DISPLAY table. Linear actuators are
+        # special-cased because they get a structurally different
+        # Output editor, not just a different label.
         title_text = f"Motor {motor_idx}"
         if self._is_linear:
             title_text += " · Thrust (linear)"
-        elif motor_kind == "vibrate":
-            title_text += " · Vibrate"
-        elif motor_kind == "constrict":
-            # Lovense Max-style contraction pump — emphatically not a
-            # vibrator even though buttplug.io's CONSTRICT shares the
-            # continuous-send dispatch path with vibrate.
-            title_text += " · Contract"
-        elif motor_kind == "oscillate":
-            title_text += " · Oscillate"
-        elif motor_kind == "rotate":
-            title_text += " · Rotate"
-        elif motor_kind == "spray":
-            title_text += " · Spray"
-        elif motor_kind == "temperature":
-            title_text += " · Heat"
-        elif motor_kind == "led":
-            title_text += " · LED"
+        else:
+            info = _KIND_DISPLAY.get(motor_kind)
+            if info is not None:
+                title_text += f" · {info.suffix}"
         if self._chain_idx > 0:
             title_text += f" · Chain {self._chain_idx + 1}"
         title = QLabel(title_text)
@@ -695,19 +718,6 @@ class MotorSignalChainWidget(QFrame):
             self._vibe_proxy.set(float(value))
         except RuntimeError:
             # Underlying C++ widget already destroyed.
-            pass
-
-    def set_activity(self, meter: float, is_open: bool) -> None:
-        """Drive the gate's activity bar. The router pushes these
-        values for the Tune-subscribed motor; other motors leave the
-        bar at its last-rendered state until the gate stage is opened
-        and reads fresh values from the profile."""
-        if self._activity_meter is None:
-            return
-        try:
-            self._activity_meter.set_value(meter)
-            self._activity_meter.set_open(is_open)
-        except RuntimeError:
             pass
 
     # ------------------------------------------------------------ stages
@@ -853,20 +863,14 @@ class MotorSignalChainWidget(QFrame):
             fall = float(sm.get("fall_ms", 20))
             return f"↑{rise:.0f}/↓{fall:.0f}ms"
         if stage_id == STAGE_OUTPUT:
-            # 3-char subtitle. One entry per kind in
-            # haptic_engine._FEATURE_PRIORITY; default keeps the "vib"
-            # short label for vibrate + any unknown future kinds.
+            # 3-char subtitle. Linear is special-cased; everything
+            # else reads from the shared _KIND_DISPLAY table, with
+            # _DEFAULT_KIND_DISPLAY ("vib") for any kind the table
+            # doesn't know yet.
             if self._is_linear:
                 return "lin"
-            short = {
-                "constrict":   "con",
-                "oscillate":   "osc",
-                "rotate":      "rot",
-                "spray":       "spr",
-                "temperature": "tmp",
-                "led":         "led",
-            }.get(self._motor_kind)
-            return short if short is not None else "vib"
+            info = _KIND_DISPLAY.get(self._motor_kind, _DEFAULT_KIND_DISPLAY)
+            return info.subtitle
         return ""
 
     def _refresh_stage_subtitles(self) -> None:
@@ -1423,24 +1427,14 @@ class MotorSignalChainWidget(QFrame):
         if not self._is_linear:
             # Continuous-output actuator — the chain's post-smoothing
             # value drives whichever physical effect the buttplug.io
-            # OutputType describes. Label the effect by name so each
-            # actuator type reads honestly (a Lovense Max's pump
-            # shouldn't say "vibration", an LED-equipped toy shouldn't
-            # say "vibration" either, etc.). Kinds come from
-            # haptic_engine._FEATURE_PRIORITY.
-            what_for_kind = {
-                "constrict":   "contraction strength",
-                "oscillate":   "oscillation intensity",
-                "rotate":      "rotation speed",
-                "spray":       "spray output",
-                "temperature": "heater temperature",
-                "led":         "LED brightness",
-            }
-            what = what_for_kind.get(self._motor_kind, "vibration intensity")
+            # OutputType describes. Phrase looked up from the shared
+            # _KIND_DISPLAY table; unknown kinds fall back to the
+            # vibrate phrasing.
+            info = _KIND_DISPLAY.get(self._motor_kind, _DEFAULT_KIND_DISPLAY)
             note = QLabel(
                 f"Continuous output — final post-smoothing value drives "
-                f"the {what}. Use the meter below the chain to see the "
-                f"live output."
+                f"the {info.output_phrase}. Use the meter below the "
+                f"chain to see the live output."
             )
             note.setProperty("muted", "true")
             note.setWordWrap(True)
@@ -1608,12 +1602,11 @@ class MotorChainListWidget(QFrame):
     Public API (same shape as MotorSignalChainWidget — both
     Device Routing and Tune talk to the wrapper the same way they
     used to talk to the single widget):
-        set_motor_value(value)      → routes to every chain's vibe meter
-        set_activity(meter, open_)  → routes to every chain's gate
-                                       meter (only chain 0 receives
-                                       fresh data in Cut 5 since Tune
-                                       only subscribes one chain at a
-                                       time and defaults to 0)
+        set_motor_value(value)  → routes to every chain's vibe meter
+
+    Activity-meter and per-stage trace updates are driven by each
+    chain widget's own router subscription — no wrapper-level fan-out
+    needed for those signals.
     """
 
     def __init__(self, ui, device_name: str, motor_idx: int,
@@ -1720,18 +1713,6 @@ class MotorChainListWidget(QFrame):
         for w in self._chain_widgets:
             try:
                 w.set_motor_value(value)
-            except RuntimeError:
-                pass
-
-    def set_activity(self, meter: float, is_open: bool) -> None:
-        """Drive every chain widget's activity meter. Today the
-        router emits only the subscribed chain's activity (chain 0 by
-        default), so chain 1's meter will mirror chain 0's until
-        per-chain emit lands. Acceptable visual approximation —
-        clearly documented in the chain widget's gate stage hint."""
-        for w in self._chain_widgets:
-            try:
-                w.set_activity(meter, is_open)
             except RuntimeError:
                 pass
 
