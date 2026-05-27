@@ -571,11 +571,29 @@ class MotorSignalChainWidget(QFrame):
         # When wrapped in a multi-chain layout (Cut 5) the title gains
         # a "Chain N" suffix so the user can tell the two stacks apart.
         # Single-chain motors omit it for backward visual familiarity.
+        # Title suffix per buttplug.io OutputType. The kinds come from
+        # haptic_engine._FEATURE_PRIORITY; keep this in sync if new
+        # OutputType variants land upstream.
         title_text = f"Motor {motor_idx}"
         if self._is_linear:
             title_text += " · Thrust (linear)"
         elif motor_kind == "vibrate":
             title_text += " · Vibrate"
+        elif motor_kind == "constrict":
+            # Lovense Max-style contraction pump — emphatically not a
+            # vibrator even though buttplug.io's CONSTRICT shares the
+            # continuous-send dispatch path with vibrate.
+            title_text += " · Contract"
+        elif motor_kind == "oscillate":
+            title_text += " · Oscillate"
+        elif motor_kind == "rotate":
+            title_text += " · Rotate"
+        elif motor_kind == "spray":
+            title_text += " · Spray"
+        elif motor_kind == "temperature":
+            title_text += " · Heat"
+        elif motor_kind == "led":
+            title_text += " · LED"
         if self._chain_idx > 0:
             title_text += f" · Chain {self._chain_idx + 1}"
         title = QLabel(title_text)
@@ -835,7 +853,20 @@ class MotorSignalChainWidget(QFrame):
             fall = float(sm.get("fall_ms", 20))
             return f"↑{rise:.0f}/↓{fall:.0f}ms"
         if stage_id == STAGE_OUTPUT:
-            return "lin" if self._is_linear else "vib"
+            # 3-char subtitle. One entry per kind in
+            # haptic_engine._FEATURE_PRIORITY; default keeps the "vib"
+            # short label for vibrate + any unknown future kinds.
+            if self._is_linear:
+                return "lin"
+            short = {
+                "constrict":   "con",
+                "oscillate":   "osc",
+                "rotate":      "rot",
+                "spray":       "spr",
+                "temperature": "tmp",
+                "led":         "led",
+            }.get(self._motor_kind)
+            return short if short is not None else "vib"
         return ""
 
     def _refresh_stage_subtitles(self) -> None:
@@ -1390,10 +1421,26 @@ class MotorSignalChainWidget(QFrame):
         lay.addWidget(header)
 
         if not self._is_linear:
+            # Continuous-output actuator — the chain's post-smoothing
+            # value drives whichever physical effect the buttplug.io
+            # OutputType describes. Label the effect by name so each
+            # actuator type reads honestly (a Lovense Max's pump
+            # shouldn't say "vibration", an LED-equipped toy shouldn't
+            # say "vibration" either, etc.). Kinds come from
+            # haptic_engine._FEATURE_PRIORITY.
+            what_for_kind = {
+                "constrict":   "contraction strength",
+                "oscillate":   "oscillation intensity",
+                "rotate":      "rotation speed",
+                "spray":       "spray output",
+                "temperature": "heater temperature",
+                "led":         "LED brightness",
+            }
+            what = what_for_kind.get(self._motor_kind, "vibration intensity")
             note = QLabel(
-                "Vibrate motor — final post-smoothing value drives the "
-                "vibration intensity. Use the meter below the chain to "
-                "see the live output."
+                f"Continuous output — final post-smoothing value drives "
+                f"the {what}. Use the meter below the chain to see the "
+                f"live output."
             )
             note.setProperty("muted", "true")
             note.setWordWrap(True)
