@@ -85,6 +85,56 @@ class ProfilesFacade:
         if refreshed:
             print(f"[profiles] refreshed structural facts in profile '{profile_name}' for: {refreshed}")
 
+    def _refresh_avatar_profile_motor_facts(self) -> bool:
+        """Walk every avatar-bound profile and refresh motor_count +
+        motor_kinds for each device entry from the global
+        known_devices registry. Mirrors what
+        _seed_profile_with_known_devices does for regular profiles —
+        but the startup seed loop only iterates regular profiles, so
+        avatar profiles need their own pass to pick up engine
+        re-classifications (e.g. CONSTRICT separating out of
+        VIBRATE for the Lovense Max's pump).
+
+        Returns True if any avatar profile was changed (caller can
+        use the signal to trigger a UI rebuild if the active profile
+        is avatar-bound).
+
+        Idempotent: a no-op when every avatar-profile entry already
+        matches known_devices. Doesn't touch user-editable fields
+        (zones, OSC, mix, filters)."""
+        known = self.profile_manager.known_devices.all()
+        if not known:
+            return False
+        refreshed = []
+        for profile_name, profile in self.profile_manager.avatar_profiles.items():
+            if not isinstance(profile, dict):
+                continue
+            for device_name, cfg in profile.items():
+                if not isinstance(cfg, dict):
+                    continue
+                meta = known.get(device_name)
+                if not isinstance(meta, dict):
+                    continue
+                meta_count = int(meta.get("motor_count", 1))
+                meta_kinds = meta.get("motor_kinds")
+                local_changed = False
+                if meta_count > 0 and cfg.get("motor_count") != meta_count:
+                    cfg["motor_count"] = meta_count
+                    local_changed = True
+                if meta_kinds and cfg.get("motor_kinds") != list(meta_kinds):
+                    cfg["motor_kinds"] = list(meta_kinds)
+                    local_changed = True
+                if local_changed:
+                    refreshed.append((profile_name, device_name))
+        if refreshed:
+            self.profile_manager.save_profiles()
+            for prof, dev in refreshed:
+                print(
+                    f"[profiles] refreshed structural facts in avatar "
+                    f"profile '{prof}': {dev}"
+                )
+        return bool(refreshed)
+
     def switch_profile(self, profile_name: str):
         """Switch to a different profile and reload the device UI.
 
