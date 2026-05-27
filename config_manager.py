@@ -139,6 +139,18 @@ class ProfileManager:
         self._backfill_known_devices()
 
     def _backfill_known_devices(self) -> None:
+        # Recovery path: when known_devices.json is empty (fresh
+        # install, deleted cache) but profiles already have device
+        # entries, seed known_devices from those entries so the
+        # registry isn't empty until each toy reconnects.
+        #
+        # Defensive: skip entries already present in known_devices.
+        # A profile snapshot can hold stale structural facts
+        # (motor_count, motor_kinds) when the engine's classification
+        # table grew between sessions — overwriting a freshly-
+        # classified known_devices entry with stale profile data
+        # silently regresses the kind labels. The engine's last
+        # report wins; backfill only fills gaps.
         added = 0
         for source in (self.profiles, self.avatar_profiles):
             for profile in source.values():
@@ -146,6 +158,8 @@ class ProfileManager:
                     continue
                 for name, cfg in profile.items():
                     if not isinstance(cfg, dict):
+                        continue
+                    if name in self.known_devices.devices:
                         continue
                     if self.known_devices.register(
                         name,

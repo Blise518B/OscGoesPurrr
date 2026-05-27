@@ -75,6 +75,11 @@ class OscGoesPurrrApp(
         # existed gets unified the first time you launch the new build.
         for _pname in list(self.profile_manager.profiles.keys()):
             self._seed_profile_with_known_devices(_pname)
+        # Avatar profiles aren't iterated by the seed loop above, so
+        # any stale motor_count / motor_kinds in them (e.g. seeded
+        # before the engine's kind table grew) need their own
+        # structural-facts refresh against known_devices.
+        self._refresh_avatar_profile_motor_facts()
         print(f"[profiles] known toys: {list(self.profile_manager.known_devices.all().keys())}")
 
         # Keep aliases for backward compatibility during refactoring
@@ -912,6 +917,12 @@ class OscGoesPurrrApp(
                 )
             for motor_idx in range(motor_count):
                 self.update_linear_motor_config(device_name, motor_idx)
+        if kinds_changed:
+            # Propagate the engine's fresh classification to every
+            # avatar profile that holds this device, so switching to
+            # an avatar profile mid-session (or on next startup)
+            # doesn't surface the old labels again.
+            self._refresh_avatar_profile_motor_facts()
         return kinds_changed
 
     def update_device_target(self, device_name: str, value: float, motor_index: int):
