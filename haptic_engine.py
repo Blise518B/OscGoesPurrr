@@ -33,10 +33,16 @@ from haptic_actuators import (
 #
 # Kinds are granular for diagnostics ("2x vibrate, 1x linear, 1x led" in the
 # connect log) but dispatch only cares whether the kind is in LINEAR_KINDS.
+# Non-linear kinds all go through the same continuous-send path (see the
+# `else` branch of the dispatch loop), so distinct labels for oscillate /
+# constrict cost nothing at dispatch time but let the UI tell the user
+# what each motor actually does. Concrete case: the Lovense Max's pump
+# (CONSTRICT) was previously labelled "Vibrate" on the motor card,
+# which was misleading even though dispatch was correct.
 _FEATURE_PRIORITY: List[Tuple[OutputType, str]] = [
     (OutputType.VIBRATE, "vibrate"),
-    (OutputType.OSCILLATE, "vibrate"),
-    (OutputType.CONSTRICT, "vibrate"),
+    (OutputType.OSCILLATE, "oscillate"),
+    (OutputType.CONSTRICT, "constrict"),
     (OutputType.ROTATE, "rotate"),
     (OutputType.POSITION_WITH_DURATION, "linear-d"),
     (OutputType.POSITION, "linear"),
@@ -64,9 +70,13 @@ def get_motor_features_for_device(device) -> List[Tuple[str, OutputType, object]
     """Return `[(kind, output_type, feature), ...]` for every controllable feature on
     a device, preserving the device's own feature index order.
 
-    `kind` is one of: `"vibrate"` (also covers oscillate / constrict), `"rotate"`,
-    `"linear-d"` (POSITION_WITH_DURATION, preferred for stroker hardware that accepts a
-    duration), `"linear"` (POSITION), `"led"`, `"temperature"`, `"spray"`.
+    `kind` is one of: `"vibrate"`, `"oscillate"`, `"constrict"` (e.g. Lovense Max's
+    contraction pump), `"rotate"`, `"linear-d"` (POSITION_WITH_DURATION, preferred
+    for stroker hardware that accepts a duration), `"linear"` (POSITION), `"led"`,
+    `"temperature"`, `"spray"`. Only the linear kinds change the dispatch path;
+    everything else flows through the same continuous-send loop with its
+    feature-specific `OutputType` attached, so distinct kinds are purely a
+    UI-labelling concern.
     """
     result: List[Tuple[str, OutputType, object]] = []
     try:
