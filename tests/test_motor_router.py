@@ -183,28 +183,26 @@ class TestZoneContributionFilters:
 
 def _pass_through_mix() -> dict:
     """Mixer config that turns _calculate_motor_target into a depth-only
-    pass-through: speed channel disabled, smoothing disabled, linear
-    curve, gain 1.0. Used by integration tests that just want to verify
-    the depth-side compute pipeline (custom addresses + zones)."""
+    pass-through: speed channel gain=0 (so it contributes nothing under
+    `combine=max`), gate disabled, smoothing disabled, linear curve at
+    unit gain on depth. Used by integration tests that just want to
+    verify the depth-side compute pipeline (custom addresses + zones)."""
     return {
         "0": {
-            "depth": {
-                "enabled": True, "gain": 1.0,
-                "curve": "linear", "curve_param": 1.0,
-                "mode": "additive",
-                "min_remap": 0.0, "max_remap": 1.0,
-            },
-            "speed": {
-                "enabled": False, "gain": 1.0,
-                "curve": "linear", "curve_param": 1.0,
-                "mode": "additive",
-                "input_deadband": 0.005,
-                "output_cutoff": 0.02,
-                "decay_tau": 0.30,
-            },
-            "combine": "max",
-            "modulator_range": [0.5, 1.5],
-            "smoothing": {"attack_ms": 0.0, "release_ms": 0.0},
+            "chains": [
+                {
+                    "depth": {"gain": 1.0, "curve": "linear", "curve_param": 1.0},
+                    "speed": {"gain": 0.0, "curve": "linear", "curve_param": 1.0},
+                    "combine": "max",
+                    "gate": {
+                        "enabled": False,
+                        "wake_threshold": 0.05,
+                        "sleep_delay_s": 0.5,
+                    },
+                    "smoothing": {"rise_ms": 0.0, "fall_ms": 0.0},
+                },
+            ],
+            "merge": "max",
         }
     }
 
@@ -403,17 +401,22 @@ class TestMixerIntegration:
     these tests just make sure the router pulls the right fields out of
     the per-motor mix config and threads state through."""
 
-    def _mix_cfg(self, **mix_overrides):
-        """Build a config with a custom mix block built on top of
-        _pass_through_mix's defaults."""
+    def _chain(self, cfg):
+        """Convenience: return the (only) chain dict from the per-motor
+        mix block built by _pass_through_mix."""
+        return cfg["mix"]["0"]["chains"][0]
+
+    def _mix_cfg(self, **chain_overrides):
+        """Build a config with the first chain partially overridden on
+        top of _pass_through_mix's defaults."""
         cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
-        cfg["mix"]["0"].update(mix_overrides)
+        self._chain(cfg).update(chain_overrides)
         return cfg
 
     def test_missing_mix_block_falls_back_to_defaults(self, router):
         # Profile without a `mix` key still produces a sensible first-tick
-        # output: dt=0 so smoothing snaps to mixed; speed defaults are
-        # enabled but s_raw=0 on the first sample → mixed=d_shaped=d_raw.
+        # output: dt=0 so smoothing snaps to mixed; speed default has
+        # gain 1.0 but s_raw=0 on the first sample → mixed=d_shaped=d_raw.
         cfg = {
             "motor_0_touch": True,
             "motor_0_pen": True,
@@ -426,33 +429,33 @@ class TestMixerIntegration:
 
     def test_depth_gain_scales_output(self, router):
         cfg = self._mix_cfg(depth={
-            "enabled": True, "gain": 0.5,
-            "curve": "linear", "curve_param": 1.0,
-            "mode": "additive", "min_remap": 0.0, "max_remap": 1.0,
+            "gain": 0.5, "curve": "linear", "curve_param": 1.0,
         })
         out = router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
         assert out == pytest.approx(0.5)
 
-    def test_depth_disabled_zeroes_depth_contribution(self, router):
+    def test_zero_gain_on_both_channels_zeroes_output(self, router):
+        # No "enabled" flag in the new schema — gain=0 is how a channel
+        # gets silenced. Depth=0, speed=0 → mixed=0 regardless of input.
         cfg = self._mix_cfg()
-        cfg["mix"]["0"]["depth"]["enabled"] = False
-        # Speed is also disabled in _pass_through_mix → both disabled → 0
+        self._chain(cfg)["depth"]["gain"] = 0.0
+        self._chain(cfg)["speed"]["gain"] = 0.0
         out = router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
         assert out == 0.0
 
     def test_smoothing_ramps_up_on_step(self, router, clock):
         cfg = self._mix_cfg()
-        cfg["mix"]["0"]["smoothing"] = {"attack_ms": 100.0, "release_ms": 100.0}
+        self._chain(cfg)["smoothing"] = {"rise_ms": 100.0, "fall_ms": 100.0}
         # First tick: dt=0 → snaps to mixed=0 (no input).
         router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
         clock.advance(0.05)
-        # Step the input up. 50ms with 100ms attack gives a ~39% rise.
+        # Step the input up. 50ms with 100ms rise gives a ~39% rise.
         out = router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
         assert 0.0 < out < 1.0, f"expected partial rise, got {out}"
 
     def test_per_motor_state_is_isolated(self, router, clock):
         cfg = self._mix_cfg()
-        cfg["mix"]["0"]["smoothing"] = {"attack_ms": 100.0, "release_ms": 100.0}
+        self._chain(cfg)["smoothing"] = {"rise_ms": 100.0, "fall_ms": 100.0}
         # Seed devA at P=0 then ramp toward P=1; the second tick will be
         # part-way up the envelope (smoothing hasn't converged yet).
         router._calculate_motor_target("devA", 0, cfg, {"P": 0.0}, zones=set())
@@ -470,18 +473,17 @@ class TestMixerIntegration:
     def test_curve_applied_to_depth(self, router):
         # power(2) squares 0.5 → 0.25.
         cfg = self._mix_cfg(depth={
-            "enabled": True, "gain": 1.0,
-            "curve": "power", "curve_param": 2.0,
-            "mode": "additive", "min_remap": 0.0, "max_remap": 1.0,
+            "gain": 1.0, "curve": "power", "curve_param": 2.0,
         })
         out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.5}, zones=set())
         assert out == pytest.approx(0.25)
 
     def test_combine_max_picks_higher_channel(self, router, clock):
-        # Enable speed, drive a stroke so s_raw > d_raw, expect max-wins.
+        # Enable speed (gain=1.0), drive a stroke so s_raw > d_raw,
+        # expect max-wins.
         cfg = self._mix_cfg()
-        cfg["mix"]["0"]["speed"]["enabled"] = True
-        cfg["mix"]["0"]["combine"] = "max"
+        self._chain(cfg)["speed"]["gain"] = 1.0
+        self._chain(cfg)["combine"] = "max"
         # First tick at 0 to seed last_position.
         router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
         clock.advance(0.05)
@@ -490,6 +492,561 @@ class TestMixerIntegration:
         # d_raw = 0.6. With combine=max → out = max(0.6, 1.0) = 1.0.
         out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.6}, zones=set())
         assert out == pytest.approx(1.0)
+
+    def test_combine_add_sums_channels(self, router, clock):
+        cfg = self._mix_cfg()
+        self._chain(cfg)["speed"]["gain"] = 1.0
+        self._chain(cfg)["combine"] = "add"
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        clock.advance(0.05)
+        # Same stroke as above gives s_raw=1.0. d_raw=0.3 → out = clamp(0.3+1.0) = 1.0.
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.3}, zones=set())
+        assert out == pytest.approx(1.0)
+
+    def test_combine_multiply_zero_channel_zeroes_output(self, router):
+        # Locked semantics: multiply with zero in either channel → 0.
+        # Speed at gain 0 → s_shaped = 0 → multiply gives 0 regardless
+        # of depth. Visible in the diagram, no hidden bypass.
+        cfg = self._mix_cfg()
+        self._chain(cfg)["speed"]["gain"] = 0.0
+        self._chain(cfg)["combine"] = "multiply"
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.9}, zones=set())
+        assert out == 0.0
+
+
+# ============================================================ Tier 3.5: activity gate
+
+class TestActivityGateIntegration:
+    """Gate state machine threaded through _calculate_motor_target.
+    Validates the sidechain placement (gate observes the speed-detector
+    output, gates the combined signal before smoothing)."""
+
+    def _gate_cfg(self, **gate_overrides):
+        """Pass-through chain + gate enabled. Smoothing disabled so
+        the gated output appears immediately on the tick the gate
+        flips, simplifying assertions."""
+        cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
+        chain = cfg["mix"]["0"]["chains"][0]
+        chain["gate"] = {
+            "enabled": True,
+            "wake_threshold": 0.1,
+            "sleep_delay_s": 0.5,
+        }
+        chain["gate"].update(gate_overrides)
+        chain["smoothing"] = {"rise_ms": 0.0, "fall_ms": 0.0}
+        return cfg
+
+    def test_gate_disabled_passes_signal_through(self, router):
+        # Sanity: identical setup with gate disabled = today's behavior.
+        cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.7}, zones=set())
+        assert out == pytest.approx(0.7)
+
+    def test_static_input_does_not_open_gate(self, router, clock):
+        # Static depth never produces speed → activity meter stays at 0
+        # → gate stays closed → output suppressed.
+        cfg = self._gate_cfg()
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.5}, zones=set())
+        # Hold the same value for several ticks. No movement, no activity.
+        for _ in range(20):
+            clock.advance(0.05)
+            out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.5}, zones=set())
+        assert out == 0.0
+        chain_state = router._motor_state[("dev", 0)]["chains"][0]
+        assert chain_state["gate_open"] is False
+
+    def test_sustained_movement_opens_gate(self, router, clock):
+        # Oscillating input produces s_raw > 0 → activity meter rises
+        # → crosses wake_threshold → gate opens → signal passes.
+        cfg = self._gate_cfg(wake_threshold=0.1, sleep_delay_s=0.5)
+        # Seed at 0 with dt=0.
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        # Drive ~30 Hz oscillation by toggling P between 0.0 and 0.5.
+        # Each big delta produces a strong s_raw which the activity
+        # meter (50 ms attack tau) integrates rapidly.
+        out = 0.0
+        for i in range(20):
+            clock.advance(0.03)
+            p = 0.5 if i % 2 == 0 else 0.0
+            out = router._calculate_motor_target("dev", 0, cfg, {"P": p}, zones=set())
+        # By now the meter should be well above 0.1 → gate open →
+        # output reflects the non-zero half of the oscillation.
+        chain_state = router._motor_state[("dev", 0)]["chains"][0]
+        assert chain_state["gate_open"] is True
+        assert chain_state["activity_meter"] > 0.1
+
+    def test_gate_closes_after_sleep_delay(self, router, clock):
+        # Open the gate with movement, then let it sit still longer
+        # than sleep_delay_s and verify it closes.
+        cfg = self._gate_cfg(wake_threshold=0.1, sleep_delay_s=0.3)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        # Drive activity to open the gate.
+        for i in range(20):
+            clock.advance(0.03)
+            p = 0.5 if i % 2 == 0 else 0.0
+            router._calculate_motor_target("dev", 0, cfg, {"P": p}, zones=set())
+        assert router._motor_state[("dev", 0)]["chains"][0]["gate_open"] is True
+
+        # Now hold P at a steady value. Activity decays (500 ms release)
+        # → eventually falls below threshold → after sleep_delay → close.
+        # Run long enough for the meter to decay AND the delay to elapse.
+        for _ in range(60):
+            clock.advance(0.05)  # 3.0 s total
+            out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.4}, zones=set())
+        assert router._motor_state[("dev", 0)]["chains"][0]["gate_open"] is False
+        assert out == 0.0
+
+    def test_gate_observes_speed_detector_not_per_channel_shaping(self, router, clock):
+        # Critical placement test: changing depth gain/curve must NOT
+        # affect when the gate opens. Two configs with different depth
+        # gains but identical motion should produce identical gate
+        # state at the same tick.
+        def run(depth_gain: float):
+            r = type(router)(clock=router._clock)
+            cfg = self._gate_cfg(wake_threshold=0.1, sleep_delay_s=0.5)
+            cfg["mix"]["0"]["chains"][0]["depth"]["gain"] = depth_gain
+            return r, cfg
+
+        # We need a deterministic FakeClock; reset via fresh router
+        # below. Easiest: use the existing router but reset its state.
+        cfg_a = self._gate_cfg()
+        cfg_b = self._gate_cfg()
+        cfg_a["mix"]["0"]["chains"][0]["depth"]["gain"] = 0.1
+        cfg_b["mix"]["0"]["chains"][0]["depth"]["gain"] = 2.0
+
+        # Drive both motors with identical motion.
+        router._calculate_motor_target("devA", 0, cfg_a, {"P": 0.0}, zones=set())
+        router._calculate_motor_target("devB", 0, cfg_b, {"P": 0.0}, zones=set())
+        for i in range(15):
+            clock.advance(0.03)
+            p = 0.5 if i % 2 == 0 else 0.0
+            router._calculate_motor_target("devA", 0, cfg_a, {"P": p}, zones=set())
+            router._calculate_motor_target("devB", 0, cfg_b, {"P": p}, zones=set())
+
+        state_a = router._motor_state[("devA", 0)]["chains"][0]
+        state_b = router._motor_state[("devB", 0)]["chains"][0]
+        # The activity meters should be identical to numerical precision
+        # — depth gain does not enter the gate's input path.
+        assert state_a["activity_meter"] == pytest.approx(state_b["activity_meter"])
+        assert state_a["gate_open"] == state_b["gate_open"]
+
+    def test_smoothing_applies_to_gate_close(self, router, clock):
+        # Gate-close steps the signal from `mixed` to 0. With non-zero
+        # fall_ms the output decays smoothly across ticks rather than
+        # snapping to 0 in one step.
+        cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
+        chain = cfg["mix"]["0"]["chains"][0]
+        chain["gate"] = {
+            "enabled": True,
+            "wake_threshold": 0.1,
+            "sleep_delay_s": 0.0,  # close immediately when below
+        }
+        chain["smoothing"] = {"rise_ms": 0.0, "fall_ms": 200.0}
+
+        # Pre-seed chain 0's `smoothed_output` to 0.8 by hand-walking
+        # the state; easier than driving the gate open and then
+        # asserting on the tick the gate flips closed.
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        chain_state = router._motor_state[("dev", 0)]["chains"][0]
+        chain_state["smoothed_output"] = 0.8
+        chain_state["gate_open"] = True
+        chain_state["activity_meter"] = 0.0  # already below threshold
+
+        clock.advance(0.05)
+        # First post-close tick: gated input is 0, prev smoothed_output
+        # is 0.8 → smoothing falls from 0.8 toward 0 with 200 ms tau.
+        # 50 ms with 200 ms fall: alpha = 1 - exp(-0.25) ≈ 0.221.
+        # new = 0.8 + (0 - 0.8) * 0.221 = 0.623.
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        # Output is between previous 0.8 and target 0 → smoothing applied.
+        assert 0.0 < out < 0.8, f"expected partial decay, got {out}"
+        assert router._motor_state[("dev", 0)]["chains"][0]["gate_open"] is False
+
+
+# ============================================================ Tier 3.6: multi-chain (Cut 5)
+
+class TestMultiChainRouting:
+    """End-to-end coverage of the multi-chain compute path. Each
+    chain processes the same input independently; their outputs
+    merge per the per-motor `merge` op."""
+
+    def _two_chain_cfg(self, *, gain_a: float = 1.0, gain_b: float = 1.0,
+                       merge_op: str = "max"):
+        """Pass-through both chains: linear curve, no smoothing, gate
+        off. `gain_a` / `gain_b` set the depth gain on chain 0 / 1
+        respectively so tests can produce distinct per-chain outputs."""
+        def _chain(gain):
+            return {
+                "depth": {"gain": gain, "curve": "linear", "curve_param": 1.0},
+                "speed": {"gain": 0.0, "curve": "linear", "curve_param": 1.0},
+                "combine": "max",
+                "gate": {"enabled": False, "wake_threshold": 0.05,
+                         "sleep_delay_s": 0.5},
+                "smoothing": {"rise_ms": 0.0, "fall_ms": 0.0},
+            }
+        cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
+        cfg["mix"]["0"] = {
+            "chains": [_chain(gain_a), _chain(gain_b)],
+            "merge":  merge_op,
+        }
+        return cfg
+
+    def test_merge_max_two_chains(self, router):
+        # gain_a=0.5 → chain 0 out = 0.5 * input; gain_b=1.5 (clamped)
+        # → chain 1 out = clamp(1.5*input). With input=0.4: chain0=0.2,
+        # chain1=0.6 → merged max = 0.6.
+        cfg = self._two_chain_cfg(gain_a=0.5, gain_b=1.5, merge_op="max")
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.4}, zones=set())
+        assert out == pytest.approx(0.6)
+
+    def test_merge_add_clamps(self, router):
+        # gain_a=1, gain_b=1, input=0.7 → both chains = 0.7 → add
+        # would give 1.4 → clamped to 1.0.
+        cfg = self._two_chain_cfg(gain_a=1.0, gain_b=1.0, merge_op="add")
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.7}, zones=set())
+        assert out == pytest.approx(1.0)
+
+    def test_merge_multiply_zero_chain_zeroes_output(self, router):
+        # chain B has gain 0 → its output is 0 → multiply gives 0
+        # regardless of chain A. Locked semantics from the doc.
+        cfg = self._two_chain_cfg(gain_a=1.0, gain_b=0.0, merge_op="multiply")
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.9}, zones=set())
+        assert out == 0.0
+
+    def test_caps_chains_at_two(self, router):
+        # A profile asking for 3 chains is silently truncated by the
+        # router (UI also enforces). With three chains all gain 1.0
+        # and merge=add, the output should reflect TWO chains added
+        # (clamped), not three.
+        chain = {
+            "depth": {"gain": 1.0, "curve": "linear", "curve_param": 1.0},
+            "speed": {"gain": 0.0, "curve": "linear", "curve_param": 1.0},
+            "combine": "max",
+            "gate": {"enabled": False, "wake_threshold": 0.05,
+                     "sleep_delay_s": 0.5},
+            "smoothing": {"rise_ms": 0.0, "fall_ms": 0.0},
+        }
+        cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
+        # input=0.3, two chains added = 0.6; three would have been 0.9
+        cfg["mix"]["0"] = {
+            "chains": [
+                {**chain, "depth": {**chain["depth"], "gain": 1.0}},
+                {**chain, "depth": {**chain["depth"], "gain": 1.0}},
+                {**chain, "depth": {**chain["depth"], "gain": 1.0}},
+            ],
+            "merge": "add",
+        }
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.3}, zones=set())
+        assert out == pytest.approx(0.6)
+        # Per-motor state only allocated for two chains, confirming
+        # the third was dropped before any state was created.
+        state = router._motor_state[("dev", 0)]
+        assert len(state["chains"]) == 2
+
+    def test_per_chain_gate_state_is_independent(self, router, clock):
+        # Two chains, one with a gate (low threshold so activity opens
+        # it), the other gate-disabled (state parked at "False" /
+        # signal passes through unconditionally). After driving
+        # activity, the per-chain `gate_open` flags must differ —
+        # proves each chain owns its own gate state machine.
+        gate_on = {
+            "depth": {"gain": 1.0, "curve": "linear", "curve_param": 1.0},
+            "speed": {"gain": 0.0, "curve": "linear", "curve_param": 1.0},
+            "combine": "max",
+            "gate": {"enabled": True, "wake_threshold": 0.05,
+                     "sleep_delay_s": 0.5},
+            "smoothing": {"rise_ms": 0.0, "fall_ms": 0.0},
+        }
+        gate_off = {
+            "depth": {"gain": 1.0, "curve": "linear", "curve_param": 1.0},
+            "speed": {"gain": 0.0, "curve": "linear", "curve_param": 1.0},
+            "combine": "max",
+            "gate": {"enabled": False, "wake_threshold": 0.05,
+                     "sleep_delay_s": 0.5},
+            "smoothing": {"rise_ms": 0.0, "fall_ms": 0.0},
+        }
+        cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
+        cfg["mix"]["0"] = {"chains": [gate_on, gate_off], "merge": "max"}
+        # Seed + drive activity (oscillation produces s_raw → meter
+        # rises → chain 0's gate opens; chain 1's state stays parked).
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        for i in range(10):
+            clock.advance(0.03)
+            p = 0.5 if i % 2 == 0 else 0.0
+            router._calculate_motor_target("dev", 0, cfg, {"P": p}, zones=set())
+        chain_states = router._motor_state[("dev", 0)]["chains"]
+        # Chain 0: gate enabled, activity above threshold → open.
+        assert chain_states[0]["gate_open"] is True
+        assert chain_states[0]["activity_meter"] > 0.05
+        # Chain 1: gate disabled, state parked at rest. Meter is held
+        # at 0 because the disabled branch resets it every tick.
+        assert chain_states[1]["gate_open"] is False
+        assert chain_states[1]["activity_meter"] == 0.0
+        # Structural: the two chain states are distinct dict objects,
+        # never aliased. Mutation through one must not affect the other.
+        assert chain_states[0] is not chain_states[1]
+
+    def test_session_broadcast_carries_chains_array(self, router):
+        # The session broadcast now includes a `chains` array
+        # alongside the flat fields. The flat fields reflect chain 0
+        # (backward-compat with SessionLogger.log_motor's six-field
+        # signature); `out` is the merged final.
+        records = []
+        router.set_session_broadcast(
+            lambda dev, midx, intermediates: records.append((dev, midx, intermediates))
+        )
+        cfg = self._two_chain_cfg(gain_a=0.5, gain_b=1.0, merge_op="max")
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.4}, zones=set())
+        assert len(records) == 1
+        _, _, payload = records[0]
+        assert payload["d_raw"] == pytest.approx(0.4)
+        # Flat `d_shaped` is chain 0's value (0.5 gain * 0.4 = 0.2).
+        assert payload["d_shaped"] == pytest.approx(0.2)
+        # `out` is the merged final (max(0.2, 0.4) = 0.4).
+        assert payload["out"] == pytest.approx(0.4)
+        assert payload["out"] == pytest.approx(out)
+        # `chains` array carries per-chain detail.
+        assert isinstance(payload.get("chains"), list)
+        assert len(payload["chains"]) == 2
+        assert payload["chains"][0]["d_shaped"] == pytest.approx(0.2)
+        assert payload["chains"][1]["d_shaped"] == pytest.approx(0.4)
+        assert payload["merge"] == "max"
+
+# ============================================================ Tier 3.7: per-(motor, chain) subscribers (Cut 6)
+
+class TestIntermediatesSubscribers:
+    """The per-(motor, chain) subscriber API powers the chain
+    widget's per-stage mini-graphs. Multiple subscribers per key
+    allowed; subscription state controls `has_tune_subscription` so
+    main.py's routing tick keeps firing while traces are live."""
+
+    def _pass_through(self):
+        return _basic_motor_cfg(osc_addresses={"0": ["P"]})
+
+    def test_subscribe_then_callback_fires(self, router):
+        records = []
+        router.subscribe_intermediates(
+            "dev", 0, 0, lambda payload: records.append(payload)
+        )
+        router._calculate_motor_target("dev", 0, self._pass_through(),
+                                       {"P": 0.5}, zones=set())
+        assert len(records) == 1
+        assert records[0]["chain_idx"] == 0
+        assert records[0]["d_raw"] == pytest.approx(0.5)
+
+    def test_unsubscribe_stops_callback(self, router):
+        records = []
+        cb = lambda payload: records.append(payload)
+        router.subscribe_intermediates("dev", 0, 0, cb)
+        router._calculate_motor_target("dev", 0, self._pass_through(),
+                                       {"P": 0.5}, zones=set())
+        router.unsubscribe_intermediates("dev", 0, 0, cb)
+        router._calculate_motor_target("dev", 0, self._pass_through(),
+                                       {"P": 0.5}, zones=set())
+        # Only the first tick fired the callback.
+        assert len(records) == 1
+
+    def test_unsubscribe_unknown_callback_is_noop(self, router):
+        # Defensive: removing a callback that was never registered
+        # should not raise.
+        router.unsubscribe_intermediates("dev", 0, 0, lambda p: None)
+
+    def test_multiple_subscribers_per_key_all_fire(self, router):
+        a_records = []
+        b_records = []
+        router.subscribe_intermediates(
+            "dev", 0, 0, lambda p: a_records.append(p)
+        )
+        router.subscribe_intermediates(
+            "dev", 0, 0, lambda p: b_records.append(p)
+        )
+        router._calculate_motor_target("dev", 0, self._pass_through(),
+                                       {"P": 0.3}, zones=set())
+        assert len(a_records) == 1
+        assert len(b_records) == 1
+
+    def test_different_chains_get_different_subscribers(self, router):
+        # Subscribe to chain 0 and chain 1 with separate callbacks;
+        # each gets its own chain's data.
+        a_records = []
+        b_records = []
+        router.subscribe_intermediates(
+            "dev", 0, 0, lambda p: a_records.append(p)
+        )
+        router.subscribe_intermediates(
+            "dev", 0, 1, lambda p: b_records.append(p)
+        )
+        # Two-chain profile so chain 1 exists.
+        cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
+        cfg["mix"]["0"]["chains"].append({
+            "depth": {"gain": 2.0, "curve": "linear", "curve_param": 1.0},
+            "speed": {"gain": 0.0, "curve": "linear", "curve_param": 1.0},
+            "combine": "max",
+            "gate": {"enabled": False, "wake_threshold": 0.05,
+                     "sleep_delay_s": 0.5},
+            "smoothing": {"rise_ms": 0.0, "fall_ms": 0.0},
+        })
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.3}, zones=set())
+        assert len(a_records) == 1
+        assert len(b_records) == 1
+        # Chain 0 has gain 1.0 (from _pass_through_mix); chain 1 has gain 2.0.
+        assert a_records[0]["d_shaped"] == pytest.approx(0.3)
+        assert b_records[0]["d_shaped"] == pytest.approx(0.6)
+        # chain_idx fields differ.
+        assert a_records[0]["chain_idx"] == 0
+        assert b_records[0]["chain_idx"] == 1
+
+    def test_no_subscribers_means_zero_cost(self, router):
+        # Sanity: with no subscribers, the per-tick emit loop must
+        # not call any callback. We can't directly measure cost, but
+        # we can verify nothing was invoked and the dict is empty.
+        router._calculate_motor_target("dev", 0, self._pass_through(),
+                                       {"P": 0.5}, zones=set())
+        assert router._intermediates_subscribers == {}
+
+    def test_has_tune_subscription_reflects_subscriber_state(self, router):
+        # main.py's routing tick uses has_tune_subscription to keep
+        # ticking while UI surfaces need data. Cut 8 retired the
+        # legacy single-slot subscription; the method now reports on
+        # the per-(motor, chain) subscriber dict + chain providers.
+        assert router.has_tune_subscription() is False
+        router.subscribe_intermediates("dev", 0, 0, lambda p: None)
+        assert router.has_tune_subscription() is True
+        assert router.has_intermediates_subscribers() is True
+
+    def test_subscriber_exceptions_dont_break_hot_path(self, router):
+        # A misbehaving callback must be silently swallowed so the
+        # routing tick keeps running.
+        def boom(_payload):
+            raise RuntimeError("subscriber blew up")
+        router.subscribe_intermediates("dev", 0, 0, boom)
+        # Should not raise.
+        out = router._calculate_motor_target(
+            "dev", 0, self._pass_through(), {"P": 0.5}, zones=set()
+        )
+        assert out == pytest.approx(0.5)
+
+
+# ============================================================ Tier 3.8: per-chain providers + toy suppression (Cut 7)
+
+class TestChainValueProviders:
+    """Per-chain d_raw overrides — the new path that the wrapper's
+    parametric simulator uses."""
+
+    def _two_chain_cfg(self):
+        chain_template = {
+            "depth": {"gain": 1.0, "curve": "linear", "curve_param": 1.0},
+            "speed": {"gain": 0.0, "curve": "linear", "curve_param": 1.0},
+            "combine": "max",
+            "gate": {"enabled": False, "wake_threshold": 0.05,
+                     "sleep_delay_s": 0.5},
+            "smoothing": {"rise_ms": 0.0, "fall_ms": 0.0},
+        }
+        cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
+        # Use deep-copy templates so changing one doesn't poison the other.
+        import copy as _c
+        cfg["mix"]["0"] = {
+            "chains": [_c.deepcopy(chain_template), _c.deepcopy(chain_template)],
+            "merge": "max",
+        }
+        return cfg
+
+    def test_chain_provider_overrides_live_d_raw_per_chain(self, router):
+        # Live input is 0.4; chain 0's provider returns 0.9, chain 1
+        # has no provider. The two chains should produce different
+        # outputs even though they share the same motor + zones.
+        records = []
+        router.subscribe_intermediates(
+            "dev", 0, 0, lambda p: records.append(("c0", p))
+        )
+        router.subscribe_intermediates(
+            "dev", 0, 1, lambda p: records.append(("c1", p))
+        )
+        router.set_chain_value_provider("dev", 0, 0, lambda: 0.9)
+        cfg = self._two_chain_cfg()
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.4}, zones=set())
+        c0 = next(p for tag, p in records if tag == "c0")
+        c1 = next(p for tag, p in records if tag == "c1")
+        # Chain 0 got the provider's 0.9; chain 1 got live 0.4.
+        assert c0["d_raw"] == pytest.approx(0.9)
+        assert c1["d_raw"] == pytest.approx(0.4)
+
+    def test_chain_provider_returning_none_falls_through_to_live(self, router):
+        # Provider that returns None on every call must NOT override
+        # the chain's d_raw — it should see live input as if no
+        # provider were registered.
+        router.set_chain_value_provider("dev", 0, 0, lambda: None)
+        cfg = self._two_chain_cfg()
+        out = router._calculate_motor_target(
+            "dev", 0, cfg, {"P": 0.4}, zones=set()
+        )
+        assert out == pytest.approx(0.4)
+
+    def test_chain_provider_clamped_to_unit_interval(self, router):
+        # Provider that returns out-of-range values must be clamped
+        # so a misbehaving simulator can't drive d_raw negative or
+        # past 1.0.
+        router.set_chain_value_provider("dev", 0, 0, lambda: 1.7)
+        cfg = self._two_chain_cfg()
+        out = router._calculate_motor_target(
+            "dev", 0, cfg, {"P": 0.0}, zones=set()
+        )
+        assert out == pytest.approx(1.0)
+
+    def test_clear_chain_value_provider_restores_live(self, router):
+        router.set_chain_value_provider("dev", 0, 0, lambda: 0.9)
+        router.clear_chain_value_provider("dev", 0, 0)
+        cfg = self._two_chain_cfg()
+        out = router._calculate_motor_target(
+            "dev", 0, cfg, {"P": 0.4}, zones=set()
+        )
+        assert out == pytest.approx(0.4)
+
+    def test_has_chain_value_providers_reflects_state(self, router):
+        assert router.has_chain_value_providers() is False
+        router.set_chain_value_provider("dev", 0, 0, lambda: 0.5)
+        assert router.has_chain_value_providers() is True
+        # has_tune_subscription now also includes simulator state.
+        assert router.has_tune_subscription() is True
+        router.clear_chain_value_provider("dev", 0, 0)
+        assert router.has_chain_value_providers() is False
+
+    def test_provider_exception_does_not_break_hot_path(self, router):
+        def boom():
+            raise RuntimeError("provider blew up")
+        router.set_chain_value_provider("dev", 0, 0, boom)
+        cfg = self._two_chain_cfg()
+        # Should not raise; chain falls through to live d_raw.
+        out = router._calculate_motor_target(
+            "dev", 0, cfg, {"P": 0.4}, zones=set()
+        )
+        assert out == pytest.approx(0.4)
+
+
+class TestToyOutputSuppression:
+    """should_send_to_toy gates the controller's engine call. The
+    router itself keeps computing — meters and traces stay accurate
+    — but the engine receives 0 while a motor is suppressed."""
+
+    def test_default_is_send(self, router):
+        assert router.should_send_to_toy("dev", 0) is True
+
+    def test_suppress_and_unsuppress(self, router):
+        router.suppress_toy_output("dev", 0)
+        assert router.should_send_to_toy("dev", 0) is False
+        # Other motors on the same device unaffected.
+        assert router.should_send_to_toy("dev", 1) is True
+        # Other devices unaffected.
+        assert router.should_send_to_toy("other", 0) is True
+        router.unsuppress_toy_output("dev", 0)
+        assert router.should_send_to_toy("dev", 0) is True
+
+    def test_unsuppress_unknown_is_noop(self, router):
+        # Defensive: removing an entry that was never added should
+        # not raise (matches how the wrapper sometimes calls
+        # unsuppress on stop without checking state).
+        router.unsuppress_toy_output("dev", 0)
+        assert router.should_send_to_toy("dev", 0) is True
 
 
 # ============================================================ Tier 4: depth model

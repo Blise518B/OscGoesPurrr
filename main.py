@@ -48,7 +48,6 @@ from controllers import (
     OscFacade,
     ProfilesFacade,
     SessionsFacade,
-    TuneFacade,
 )
 
 
@@ -60,7 +59,6 @@ class OscGoesPurrrApp(
     OscFacade,
     ProfilesFacade,
     SessionsFacade,
-    TuneFacade,
 ):
     def __init__(self):
         self.async_loop: asyncio.AbstractEventLoop = None
@@ -137,25 +135,13 @@ class OscGoesPurrrApp(
         # Initialize standalone OSC routing engine
         self.motor_router = MotorRouter()
 
-        # Tune view (Phase 3) state. All session-only — the safety
-        # switch defaults to OFF and no motor is subscribed until the
-        # user picks one in the Tune view. The pattern generator is
-        # pull-based: the router samples its current_value() on every
-        # tick, so the pattern is evaluated at the exact tick time and
-        # there's no sample-rate mismatch between a push thread and
-        # the router's poll rate.
-        from tune_pattern_generator import TunePatternGenerator
-        self._tune_source: str = "simulated"
-        self._tune_send_to_toy: bool = False
-        self._tune_selected_motor = None
-        self.tune_pattern_generator = TunePatternGenerator()
-        self.motor_router.set_tune_emit_callback(
-            lambda trace: self.thread_queue.put(("tune_trace", trace))
-        )
-        self.motor_router.set_tune_value_provider(
-            lambda: (self.tune_pattern_generator.current_value()
-                     if self._tune_source == "simulated" else None)
-        )
+        # Tune view's pattern player + source picker were deleted in
+        # Cut 8 of the chain-inlined-tuning redesign; the parametric
+        # simulator now lives on MotorChainListWidget itself and uses
+        # the router's per-(motor, chain) value-provider API and
+        # toy-output suppression set (see CHAIN_INLINED_TUNING.md
+        # § "Phased delivery"). The router exposes these via
+        # `set_chain_value_provider` / `should_send_to_toy`.
 
         # VR session logger — built dead by default. The actual file
         # only opens once start_session_logging() is called (manually
@@ -451,12 +437,6 @@ class OscGoesPurrrApp(
                     self._is_updating_ui = False  # Unlock
             elif msg_type == "avatar_change":
                 self._on_avatar_change(data)
-            elif msg_type == "tune_trace":
-                # Phase 3 intermediates feed from motor_router. Hand off
-                # to the UI; the Tune view (when visible) routes the
-                # trace into its TraceGraph widget.
-                if self.ui is not None and hasattr(self.ui, "update_tune_trace"):
-                    self.ui.update_tune_trace(data)
 
         # Dispatch the coalesced haptic targets last — one command per motor
         # carrying the freshest value.
@@ -920,12 +900,18 @@ class OscGoesPurrrApp(
             return
 
         real_value = float(value)
-        # Two ways the engine can be silenced for this motor: the per-toy
-        # session mute (Phase 1) and the Tune view's Send-to-toy safety
-        # switch (Phase 3). Either forces the engine value to 0 while
-        # the meter keeps showing the real mixer output.
+        # Two ways the engine can be silenced for this motor:
+        #   1. Per-toy session mute (Phase 1).
+        #   2. Per-motor simulator suppression from the wrapper's
+        #      Send-to-toy toggle (Cut 7). The router holds the
+        #      suppression set; `should_send_to_toy` returns False
+        #      while the wrapper has the toggle off mid-simulation.
+        # Either forces the engine value to 0 while the meter keeps
+        # showing the real mixer output.
         if (device_name in self._muted_devices
-                or self.tune_should_silence(device_name, motor_index)):
+                or not self.motor_router.should_send_to_toy(
+                    device_name, motor_index
+                )):
             engine_value = 0.0
         else:
             engine_value = real_value

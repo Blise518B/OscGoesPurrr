@@ -1,14 +1,17 @@
 """Tests for the pure-function mixer in `mixer.py`.
 
-These functions are stateless; the router maintains smoothing
+These functions are stateless; the router maintains per-motor
 prev-state outside of them. Each function is tested in isolation
-against the math documented in ROUTING_REDESIGN.md § Phase 2."""
+against the math documented in MOTOR_SIGNAL_CHAIN.md."""
 
 import math
 
 import pytest
 
-from mixer import apply_curve, combine, smooth
+from mixer import (
+    apply_curve, combine, smooth, activity_meter, activity_gate, merge_chains,
+    sample_pattern, WAVEFORMS,
+)
 
 
 # ============================================================ apply_curve
@@ -128,126 +131,369 @@ class TestApplyCurveDefensive:
 
 # ============================================================ combine
 
-class TestCombineEnabled:
+class TestCombineAdd:
 
-    def test_both_disabled_returns_zero(self):
-        assert combine(0.5, 0.5, False, "additive", False, "additive",
-                       "sum", 0.5, 1.5) == 0.0
-        assert combine(0.5, 0.5, False, "additive", False, "additive",
-                       "max", 0.5, 1.5) == 0.0
+    def test_adds_normally(self):
+        assert combine(0.3, 0.4, "add") == pytest.approx(0.7)
 
-    def test_only_depth_enabled_passes_depth_clamped(self):
-        assert combine(0.7, 0.3, True, "additive", False, "additive",
-                       "max", 0.5, 1.5) == pytest.approx(0.7)
-        # Depth shaped value can exceed 1 (gain > 1) — combine clamps.
-        assert combine(1.5, 0.0, True, "additive", False, "additive",
-                       "max", 0.5, 1.5) == pytest.approx(1.0)
+    def test_zero_left_passes_right(self):
+        assert combine(0.0, 0.6, "add") == pytest.approx(0.6)
 
-    def test_only_speed_enabled_passes_speed_clamped(self):
-        assert combine(0.7, 0.3, False, "additive", True, "additive",
-                       "max", 0.5, 1.5) == pytest.approx(0.3)
-        assert combine(0.0, 1.5, False, "additive", True, "additive",
-                       "max", 0.5, 1.5) == pytest.approx(1.0)
+    def test_zero_right_passes_left(self):
+        assert combine(0.7, 0.0, "add") == pytest.approx(0.7)
+
+    def test_clamps_overflow(self):
+        assert combine(0.6, 0.7, "add") == pytest.approx(1.0)
+        assert combine(1.0, 1.0, "add") == pytest.approx(1.0)
 
 
-class TestCombineAdditive:
+class TestCombineMax:
 
-    def test_sum_adds_normally(self):
-        assert combine(0.3, 0.4, True, "additive", True, "additive",
-                       "sum", 0.5, 1.5) == pytest.approx(0.7)
+    def test_picks_higher(self):
+        assert combine(0.3, 0.7, "max") == pytest.approx(0.7)
+        assert combine(0.9, 0.4, "max") == pytest.approx(0.9)
+        assert combine(0.5, 0.5, "max") == pytest.approx(0.5)
 
-    def test_sum_clamps_overflow(self):
-        assert combine(0.6, 0.7, True, "additive", True, "additive",
-                       "sum", 0.5, 1.5) == pytest.approx(1.0)
-        assert combine(1.0, 1.0, True, "additive", True, "additive",
-                       "sum", 0.5, 1.5) == pytest.approx(1.0)
-
-    def test_sum_endpoints(self):
-        assert combine(0.0, 0.0, True, "additive", True, "additive",
-                       "sum", 0.5, 1.5) == pytest.approx(0.0)
-
-    def test_max_picks_higher(self):
-        assert combine(0.3, 0.7, True, "additive", True, "additive",
-                       "max", 0.5, 1.5) == pytest.approx(0.7)
-        assert combine(0.9, 0.4, True, "additive", True, "additive",
-                       "max", 0.5, 1.5) == pytest.approx(0.9)
-        assert combine(0.5, 0.5, True, "additive", True, "additive",
-                       "max", 0.5, 1.5) == pytest.approx(0.5)
-
-    def test_unknown_combine_op_falls_back_to_max(self):
-        assert combine(0.3, 0.7, True, "additive", True, "additive",
-                       "unknown_op", 0.5, 1.5) == pytest.approx(0.7)
+    def test_zero_channel_does_not_dominate(self):
+        # Max passes the non-zero channel through unchanged.
+        assert combine(0.0, 0.6, "max") == pytest.approx(0.6)
+        assert combine(0.7, 0.0, "max") == pytest.approx(0.7)
 
 
-class TestCombineModulate:
+class TestCombineMultiply:
 
-    def test_speed_modulates_depth_at_zero(self):
-        # S=0 → factor = mod_min = 0.5; D=0.8 → out = 0.8 * 0.5 = 0.4
-        assert combine(0.8, 0.0, True, "additive", True, "modulate",
-                       "max", 0.5, 1.5) == pytest.approx(0.4)
+    def test_product(self):
+        assert combine(0.5, 0.5, "multiply") == pytest.approx(0.25)
+        assert combine(0.8, 0.5, "multiply") == pytest.approx(0.4)
 
-    def test_speed_modulates_depth_at_full(self):
-        # S=1 → factor = mod_max = 1.5; D=0.8 → out = 1.2 → clamped to 1.0
-        assert combine(0.8, 1.0, True, "additive", True, "modulate",
-                       "max", 0.5, 1.5) == pytest.approx(1.0)
+    def test_zero_channel_zeroes_output(self):
+        # Locked behavior per MOTOR_SIGNAL_CHAIN.md "Multiply + zero
+        # channel": no hidden bypass. The diagram makes this visible.
+        assert combine(0.0, 0.9, "multiply") == 0.0
+        assert combine(0.9, 0.0, "multiply") == 0.0
+        assert combine(0.0, 0.0, "multiply") == 0.0
 
-    def test_speed_modulates_depth_at_half(self):
-        # S=0.5 → factor = 1.0 (midpoint of 0.5..1.5); out = D
-        assert combine(0.6, 0.5, True, "additive", True, "modulate",
-                       "max", 0.5, 1.5) == pytest.approx(0.6)
-
-    def test_depth_modulates_speed_at_zero(self):
-        # D=0 → factor = 0.5; S=0.8 → out = 0.4
-        assert combine(0.0, 0.8, True, "modulate", True, "additive",
-                       "max", 0.5, 1.5) == pytest.approx(0.4)
-
-    def test_depth_modulates_speed_at_full(self):
-        # D=1 → factor = 1.5; S=0.8 → out = 1.2 → clamped to 1.0
-        assert combine(1.0, 0.8, True, "modulate", True, "additive",
-                       "max", 0.5, 1.5) == pytest.approx(1.0)
-
-    def test_both_modulate_depth_wins(self):
-        # Defensive: UI prevents both-modulate. If it slips through,
-        # depth's mode wins (i.e. depth modulates speed).
-        # D=0.5 → factor=1.0; S=0.7 → out = 0.7 * 1.0 = 0.7
-        assert combine(0.5, 0.7, True, "modulate", True, "modulate",
-                       "max", 0.5, 1.5) == pytest.approx(0.7)
-
-    def test_modulator_range_can_be_below_one(self):
-        # Pure attenuation range: 0.0 to 1.0.
-        # S=1.0 → factor=1.0; D=0.8 → out=0.8
-        assert combine(0.8, 1.0, True, "additive", True, "modulate",
-                       "max", 0.0, 1.0) == pytest.approx(0.8)
-        # S=0.0 → factor=0.0; D=0.8 → out=0.0 (full cut)
-        assert combine(0.8, 0.0, True, "additive", True, "modulate",
-                       "max", 0.0, 1.0) == pytest.approx(0.0)
-
-    def test_modulator_range_can_amplify(self):
-        # Pure boost range: 1.0 to 2.0.
-        # S=0.0 → factor=1.0; D=0.5 → out=0.5 (no change)
-        assert combine(0.5, 0.0, True, "additive", True, "modulate",
-                       "max", 1.0, 2.0) == pytest.approx(0.5)
-        # S=1.0 → factor=2.0; D=0.5 → out=1.0
-        assert combine(0.5, 1.0, True, "additive", True, "modulate",
-                       "max", 1.0, 2.0) == pytest.approx(1.0)
+    def test_one_channel_passes_other(self):
+        # Symmetric pass-through when the other channel is at unity.
+        assert combine(1.0, 0.6, "multiply") == pytest.approx(0.6)
+        assert combine(0.6, 1.0, "multiply") == pytest.approx(0.6)
 
 
 class TestCombineDefensive:
 
+    def test_unknown_op_falls_back_to_max(self):
+        assert combine(0.3, 0.7, "unknown_op") == pytest.approx(0.7)
+        assert combine(0.5, 0.5, "") == pytest.approx(0.5)
+
     def test_output_always_in_unit_interval(self):
         # Extreme positive inputs.
-        assert 0.0 <= combine(1.5, 1.5, True, "additive", True, "additive",
-                              "sum", 0.5, 1.5) <= 1.0
+        assert 0.0 <= combine(1.5, 1.5, "add") <= 1.0
         # Extreme negative inputs (shouldn't happen but defensive).
-        assert 0.0 <= combine(-0.5, -0.5, True, "additive", True, "additive",
-                              "sum", 0.5, 1.5) <= 1.0
+        assert 0.0 <= combine(-0.5, -0.5, "add") <= 1.0
+
+
+# ============================================================ merge_chains
+
+class TestMergeChainsBoundary:
+
+    def test_empty_list_returns_zero(self):
+        assert merge_chains([], "max") == 0.0
+        assert merge_chains([], "add") == 0.0
+        assert merge_chains([], "multiply") == 0.0
+
+    def test_single_value_passes_through_clamped(self):
+        assert merge_chains([0.3], "max") == pytest.approx(0.3)
+        assert merge_chains([0.7], "add") == pytest.approx(0.7)
+        assert merge_chains([0.5], "multiply") == pytest.approx(0.5)
+        # Out-of-range single-element clamps.
+        assert merge_chains([1.5], "max") == 1.0
+        assert merge_chains([-0.5], "max") == 0.0
+
+
+class TestMergeChainsAdd:
+
+    def test_two_chains_sum(self):
+        assert merge_chains([0.3, 0.4], "add") == pytest.approx(0.7)
+
+    def test_clamps_overflow(self):
+        assert merge_chains([0.7, 0.6], "add") == pytest.approx(1.0)
+        assert merge_chains([1.0, 1.0], "add") == pytest.approx(1.0)
+
+
+class TestMergeChainsMax:
+
+    def test_picks_higher(self):
+        assert merge_chains([0.3, 0.7], "max") == pytest.approx(0.7)
+        assert merge_chains([0.9, 0.4], "max") == pytest.approx(0.9)
+
+    def test_default_for_unknown_op(self):
+        assert merge_chains([0.3, 0.7], "garbage") == pytest.approx(0.7)
+
+
+class TestMergeChainsMultiply:
+
+    def test_product(self):
+        assert merge_chains([0.5, 0.5], "multiply") == pytest.approx(0.25)
+
+    def test_zero_chain_zeros_output(self):
+        # Locked semantics — same as combine's multiply: no hidden bypass.
+        assert merge_chains([0.0, 0.9], "multiply") == 0.0
+        assert merge_chains([0.9, 0.0], "multiply") == 0.0
+
+
+# ============================================================ sample_pattern
+
+class TestSamplePatternEdge:
+
+    def test_zero_freq_returns_zero(self):
+        # No oscillation at zero or negative frequency.
+        assert sample_pattern(0.0, 1.0, "sine", 0.5) == 0.0
+        assert sample_pattern(-1.0, 1.0, "sine", 0.5) == 0.0
+
+    def test_unknown_waveform_returns_zero(self):
+        assert sample_pattern(1.0, 1.0, "noise", 0.5) == 0.0
+        assert sample_pattern(1.0, 1.0, "", 0.5) == 0.0
+
+    def test_known_waveforms_covered_by_constant(self):
+        # Sanity: the public WAVEFORMS tuple matches what we test.
+        assert set(WAVEFORMS) == {"sine", "square", "triangle", "sawtooth"}
+
+
+class TestSamplePatternSine:
+
+    def test_starts_at_midpoint(self):
+        # sin(0) = 0 → shifted/scaled → 0.5 * amp.
+        assert sample_pattern(1.0, 1.0, "sine", 0.0) == pytest.approx(0.5)
+        assert sample_pattern(1.0, 0.6, "sine", 0.0) == pytest.approx(0.3)
+
+    def test_peak_at_quarter_period(self):
+        # sin(π/2) = 1 → 1.0 * amp. At freq=1 Hz, quarter period = 0.25 s.
+        assert sample_pattern(1.0, 1.0, "sine", 0.25) == pytest.approx(1.0)
+
+    def test_trough_at_three_quarters_period(self):
+        # sin(3π/2) = -1 → 0.0 * amp.
+        assert sample_pattern(1.0, 1.0, "sine", 0.75) == pytest.approx(0.0, abs=1e-9)
+
+    def test_returns_to_midpoint_after_full_period(self):
+        assert sample_pattern(1.0, 1.0, "sine", 1.0) == pytest.approx(0.5)
+
+
+class TestSamplePatternSquare:
+
+    def test_high_first_half(self):
+        assert sample_pattern(1.0, 1.0, "square", 0.0) == 1.0
+        assert sample_pattern(1.0, 1.0, "square", 0.25) == 1.0
+        assert sample_pattern(1.0, 0.7, "square", 0.25) == pytest.approx(0.7)
+
+    def test_low_second_half(self):
+        assert sample_pattern(1.0, 1.0, "square", 0.5) == 0.0
+        assert sample_pattern(1.0, 1.0, "square", 0.75) == 0.0
+
+
+class TestSamplePatternTriangle:
+
+    def test_starts_at_zero(self):
+        assert sample_pattern(1.0, 1.0, "triangle", 0.0) == 0.0
+
+    def test_peak_at_half_period(self):
+        assert sample_pattern(1.0, 1.0, "triangle", 0.5) == pytest.approx(1.0)
+
+    def test_returns_to_zero_at_end_of_period(self):
+        # At φ=1.0 the modulo wraps to 0 → ramp starts again at 0.
+        assert sample_pattern(1.0, 1.0, "triangle", 1.0) == 0.0
+
+    def test_linear_ramp_up(self):
+        # At quarter-cycle, should be half of amp on the way up.
+        assert sample_pattern(1.0, 1.0, "triangle", 0.25) == pytest.approx(0.5)
+
+    def test_linear_ramp_down(self):
+        # At three-quarter-cycle, should be half of amp on the way down.
+        assert sample_pattern(1.0, 1.0, "triangle", 0.75) == pytest.approx(0.5)
+
+
+class TestSamplePatternSawtooth:
+
+    def test_starts_at_zero(self):
+        assert sample_pattern(1.0, 1.0, "sawtooth", 0.0) == 0.0
+
+    def test_ramps_linearly_to_amp(self):
+        # Just before φ=1, value ≈ amp; modulo wraps at exactly 1.
+        assert sample_pattern(1.0, 1.0, "sawtooth", 0.5) == pytest.approx(0.5)
+        assert sample_pattern(1.0, 0.8, "sawtooth", 0.5) == pytest.approx(0.4)
+
+    def test_wraps_to_zero_at_period_boundary(self):
+        assert sample_pattern(1.0, 1.0, "sawtooth", 1.0) == 0.0
+
+
+class TestSamplePatternFrequency:
+
+    def test_frequency_scales_phase(self):
+        # 2 Hz at t=0.25 = half a period of a 2 Hz sine → midpoint to peak.
+        # phase = 2*0.25 % 1 = 0.5; sine at φ=0.5 ≈ midpoint (sin(π) = 0 → 0.5*amp)
+        assert sample_pattern(2.0, 1.0, "sine", 0.25) == pytest.approx(0.5, abs=1e-9)
+
+    def test_high_frequency_completes_many_cycles(self):
+        # 10 Hz sawtooth at t=1 should wrap exactly 10 times → back to 0.
+        assert sample_pattern(10.0, 1.0, "sawtooth", 1.0) == pytest.approx(0.0)
+
+
+# ============================================================ activity_meter
+
+class TestActivityMeter:
+    """Asymmetric EMA with locked time constants (50 ms attack,
+    500 ms release). Output always clamped to [0, 1]."""
+
+    def test_zero_dt_returns_prev(self):
+        # No time has passed — meter can't integrate. Output = prev.
+        assert activity_meter(0.4, 1.0, 0.0) == pytest.approx(0.4)
+        assert activity_meter(0.0, 0.5, -0.1) == pytest.approx(0.0)
+
+    def test_zero_signal_zero_prev_stays_zero(self):
+        assert activity_meter(0.0, 0.0, 0.1) == pytest.approx(0.0)
+
+    def test_rising_uses_fast_attack(self):
+        # prev=0, signal=1, dt=0.05 s, tau=0.05 s → alpha = 1-exp(-1) ≈ 0.632
+        result = activity_meter(0.0, 1.0, 0.05)
+        expected = 1.0 - math.exp(-1.0)
+        assert result == pytest.approx(expected, abs=1e-9)
+
+    def test_falling_uses_slow_release(self):
+        # prev=1, signal=0, dt=0.5 s, tau=0.5 s → alpha = 1-exp(-1) ≈ 0.632
+        # smoothed = 1 + (0-1)*0.632 = 0.368
+        result = activity_meter(1.0, 0.0, 0.5)
+        expected = math.exp(-1.0)
+        assert result == pytest.approx(expected, abs=1e-9)
+
+    def test_attack_faster_than_release(self):
+        # 100 ms rise from 0→1 covers more ground than 100 ms fall from 1→0.
+        rising = activity_meter(0.0, 1.0, 0.1)
+        falling = activity_meter(1.0, 0.0, 0.1)
+        # `rising` is how much we covered up; `1 - falling` is how much
+        # we covered down. Attack 50 ms vs release 500 ms → asymmetric.
+        assert rising > (1.0 - falling)
+
+    def test_clamps_above_one(self):
+        # Defensive: a signal > 1 still gives meter ≤ 1 (anti-windup).
+        result = activity_meter(0.95, 5.0, 0.01)
+        assert 0.0 <= result <= 1.0
+
+    def test_clamps_below_zero(self):
+        # Defensive: negative signals don't drive the meter below 0.
+        result = activity_meter(0.5, -1.0, 0.05)
+        assert result >= 0.0
+
+    def test_converges_to_signal_when_held(self):
+        # Hold a constant signal and tick repeatedly — the meter
+        # should approach the signal value.
+        meter = 0.0
+        for _ in range(200):
+            meter = activity_meter(meter, 0.7, 0.01)
+        assert meter == pytest.approx(0.7, abs=1e-3)
+
+
+# ============================================================ activity_gate
+
+class TestActivityGate:
+    """State machine: opens instantly above wake_threshold, closes
+    after meter has stayed below threshold for sleep_delay_s seconds
+    while open."""
+
+    def test_opens_when_meter_crosses_threshold(self):
+        # Closed → above threshold → opens, below_since cleared.
+        open_, below = activity_gate(
+            prev_open=False, below_since=None,
+            meter=0.5, now_s=1.0,
+            wake_threshold=0.4, sleep_delay_s=0.5,
+        )
+        assert open_ is True
+        assert below is None
+
+    def test_stays_closed_below_threshold(self):
+        # Closed + below threshold → still closed, no count starts.
+        open_, below = activity_gate(
+            prev_open=False, below_since=None,
+            meter=0.1, now_s=1.0,
+            wake_threshold=0.4, sleep_delay_s=0.5,
+        )
+        assert open_ is False
+        assert below is None
+
+    def test_stays_open_above_threshold(self):
+        # Open + still above threshold → stays open, below_since cleared.
+        open_, below = activity_gate(
+            prev_open=True, below_since=None,
+            meter=0.6, now_s=2.0,
+            wake_threshold=0.4, sleep_delay_s=0.5,
+        )
+        assert open_ is True
+        assert below is None
+
+    def test_recovery_resets_below_since(self):
+        # Open + had been counting → meter goes above again → counter cleared.
+        open_, below = activity_gate(
+            prev_open=True, below_since=1.5,
+            meter=0.7, now_s=1.8,
+            wake_threshold=0.4, sleep_delay_s=0.5,
+        )
+        assert open_ is True
+        assert below is None
+
+    def test_open_to_below_starts_count(self):
+        # Open + first sample below → start counting, stay open.
+        open_, below = activity_gate(
+            prev_open=True, below_since=None,
+            meter=0.1, now_s=2.0,
+            wake_threshold=0.4, sleep_delay_s=0.5,
+        )
+        assert open_ is True
+        assert below == pytest.approx(2.0)
+
+    def test_close_after_sleep_delay(self):
+        # Open + below since t=2.0, now=2.6, delay=0.5 → elapsed 0.6 ≥ 0.5 → close.
+        open_, below = activity_gate(
+            prev_open=True, below_since=2.0,
+            meter=0.1, now_s=2.6,
+            wake_threshold=0.4, sleep_delay_s=0.5,
+        )
+        assert open_ is False
+        assert below is None
+
+    def test_no_close_before_sleep_delay(self):
+        # Open + below since t=2.0, now=2.3, delay=0.5 → elapsed 0.3 < 0.5 → still open.
+        open_, below = activity_gate(
+            prev_open=True, below_since=2.0,
+            meter=0.1, now_s=2.3,
+            wake_threshold=0.4, sleep_delay_s=0.5,
+        )
+        assert open_ is True
+        assert below == pytest.approx(2.0)
+
+    def test_zero_sleep_delay_closes_immediately(self):
+        # Open + first sample below + delay=0 → closes that tick.
+        open_, below = activity_gate(
+            prev_open=True, below_since=None,
+            meter=0.1, now_s=5.0,
+            wake_threshold=0.4, sleep_delay_s=0.0,
+        )
+        assert open_ is False
+        assert below is None
+
+    def test_threshold_exact_match_opens(self):
+        # Boundary: meter == threshold counts as "at threshold" → open.
+        open_, below = activity_gate(
+            prev_open=False, below_since=None,
+            meter=0.4, now_s=1.0,
+            wake_threshold=0.4, sleep_delay_s=0.5,
+        )
+        assert open_ is True
+        assert below is None
 
 
 # ============================================================ smooth
 
 class TestSmoothInstant:
 
-    def test_zero_attack_zero_release_snaps_to_input(self):
+    def test_zero_rise_zero_fall_snaps_to_input(self):
         assert smooth(0.0, 0.5, 10.0, 0.0, 0.0) == pytest.approx(0.5)
         assert smooth(0.8, 0.2, 10.0, 0.0, 0.0) == pytest.approx(0.2)
         assert smooth(0.3, 0.3, 10.0, 0.0, 0.0) == pytest.approx(0.3)
@@ -260,41 +506,39 @@ class TestSmoothInstant:
 
 class TestSmoothRising:
 
-    def test_uses_attack_rate(self):
-        # prev=0, mixed=1, attack=100ms, dt=100ms.
+    def test_uses_rise_rate(self):
+        # prev=0, mixed=1, rise=100ms, dt=100ms.
         # alpha = 1 - exp(-1) ≈ 0.632
-        # smoothed = 0 + 1 * 0.632 = 0.632
         result = smooth(0.0, 1.0, 100.0, 100.0, 1000.0)
         expected = 1.0 - math.exp(-1.0)
         assert result == pytest.approx(expected, abs=1e-9)
 
-    def test_release_unused_when_rising(self):
-        # Same dt and prev<mixed; different release values shouldn't matter.
-        with_long_release = smooth(0.0, 1.0, 100.0, 100.0, 5000.0)
-        with_short_release = smooth(0.0, 1.0, 100.0, 100.0, 1.0)
-        assert with_long_release == pytest.approx(with_short_release)
+    def test_fall_unused_when_rising(self):
+        # Same dt and prev<mixed; different fall values shouldn't matter.
+        with_long_fall = smooth(0.0, 1.0, 100.0, 100.0, 5000.0)
+        with_short_fall = smooth(0.0, 1.0, 100.0, 100.0, 1.0)
+        assert with_long_fall == pytest.approx(with_short_fall)
 
-    def test_attack_zero_snaps_up(self):
-        # Rising with attack=0 → instant rise to mixed.
+    def test_rise_zero_snaps_up(self):
+        # Rising with rise=0 → instant rise to mixed.
         assert smooth(0.0, 1.0, 100.0, 0.0, 500.0) == pytest.approx(1.0)
 
 
 class TestSmoothFalling:
 
-    def test_uses_release_rate(self):
-        # prev=1, mixed=0, release=100ms, dt=100ms.
+    def test_uses_fall_rate(self):
+        # prev=1, mixed=0, fall=100ms, dt=100ms.
         # alpha = 1 - exp(-1) ≈ 0.632
-        # smoothed = 1 + (0-1) * 0.632 = 1 - 0.632 = 0.368
         result = smooth(1.0, 0.0, 100.0, 1000.0, 100.0)
         expected = math.exp(-1.0)
         assert result == pytest.approx(expected, abs=1e-9)
 
-    def test_attack_unused_when_falling(self):
-        with_long_attack = smooth(1.0, 0.0, 100.0, 5000.0, 100.0)
-        with_short_attack = smooth(1.0, 0.0, 100.0, 1.0, 100.0)
-        assert with_long_attack == pytest.approx(with_short_attack)
+    def test_rise_unused_when_falling(self):
+        with_long_rise = smooth(1.0, 0.0, 100.0, 5000.0, 100.0)
+        with_short_rise = smooth(1.0, 0.0, 100.0, 1.0, 100.0)
+        assert with_long_rise == pytest.approx(with_short_rise)
 
-    def test_release_zero_snaps_down(self):
+    def test_fall_zero_snaps_down(self):
         assert smooth(1.0, 0.0, 100.0, 500.0, 0.0) == pytest.approx(0.0)
 
 
@@ -309,7 +553,7 @@ class TestSmoothSteady:
 class TestSmoothConvergence:
 
     def test_rising_converges_to_target(self):
-        # Repeated 10ms ticks toward target=1.0 with attack=50ms.
+        # Repeated 10ms ticks toward target=1.0 with rise=50ms.
         state = 0.0
         for _ in range(100):
             state = smooth(state, 1.0, 10.0, 50.0, 1000.0)
@@ -323,7 +567,7 @@ class TestSmoothConvergence:
 
     def test_asymmetric_envelope_rises_faster_than_falls(self):
         # Symmetric step: 0 → 1 (rise) vs 1 → 0 (fall) at the same dt.
-        # With attack << release, the rise covers more ground than the fall.
+        # With rise << fall, the rise covers more ground than the fall.
         dt = 10.0
         rising = smooth(0.0, 1.0, dt, 10.0, 1000.0)
         falling = smooth(1.0, 0.0, dt, 10.0, 1000.0)
@@ -348,7 +592,7 @@ class TestSmoothTailSnap:
     re-introduce a multi-second residue (toy 'stuck buzz') regression."""
 
     def test_falling_tail_reaches_exact_zero(self):
-        # Real-world setup: 90 Hz tick (11.1 ms), 300 ms release default.
+        # Real-world setup: 90 Hz tick (11.1 ms), 300 ms fall.
         # Without the snap, after ~5 s the value is still ~6e-8 — non-zero
         # forever. With the snap, it should hit exactly 0 inside a couple
         # of seconds and stay there.
@@ -358,7 +602,7 @@ class TestSmoothTailSnap:
         assert state == 0.0  # exact, not approx
 
     def test_rising_tail_reaches_exact_one(self):
-        # Same idea on the rising side: a long-running attack should not
+        # Same idea on the rising side: a long-running rise should not
         # leave the toy stuck a hair below the user's max.
         state = 0.0
         for _ in range(180):
