@@ -34,13 +34,33 @@ class ProfilesFacade:
         if not known:
             return
         added = []
+        refreshed = []
         for name, meta in known.items():
+            meta_count = int(meta.get("motor_count", 1))
+            meta_kinds = meta.get("motor_kinds")
             if name in profile:
+                # Existing entry: refresh structural facts only
+                # (motor_count + motor_kinds). These describe the toy's
+                # hardware and aren't user-customisable, so a fresh
+                # classification from the engine should always win over
+                # a stale profile snapshot. Without this, a profile
+                # seeded before the kind table grew (e.g. before
+                # CONSTRICT got its own kind for Lovense Max's pump)
+                # keeps rendering with the old "Vibrate" label until
+                # the entry is deleted and recreated.
+                entry = profile[name]
+                if meta_count > 0 and entry.get("motor_count") != meta_count:
+                    entry["motor_count"] = meta_count
+                    refreshed.append(name)
+                if meta_kinds and entry.get("motor_kinds") != list(meta_kinds):
+                    entry["motor_kinds"] = list(meta_kinds)
+                    if name not in refreshed:
+                        refreshed.append(name)
                 continue
-            motor_count = int(meta.get("motor_count", 1))
+            motor_count = meta_count
             entry = {"motor_count": motor_count}
-            if meta.get("motor_kinds"):
-                entry["motor_kinds"] = list(meta["motor_kinds"])
+            if meta_kinds:
+                entry["motor_kinds"] = list(meta_kinds)
             # Default per-motor OSC addresses match what build_device_list_ui
             # would seed for a freshly-discovered device.
             addrs = {}
@@ -58,9 +78,12 @@ class ProfilesFacade:
             }
             profile[name] = entry
             added.append(name)
-        if added:
+        if added or refreshed:
             self.profile_manager.save_profiles()
+        if added:
             print(f"[profiles] seeded profile '{profile_name}' with {len(added)} known toy(s): {added}")
+        if refreshed:
+            print(f"[profiles] refreshed structural facts in profile '{profile_name}' for: {refreshed}")
 
     def switch_profile(self, profile_name: str):
         """Switch to a different profile and reload the device UI.

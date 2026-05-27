@@ -331,11 +331,22 @@ class OscGoesPurrrApp(
                             _info.get("motor_kinds"),
                         )
                 self.ui.build_device_list_ui(data)
-                self._sync_linear_configs(data)
-                # Re-evaluate the green-check vs yellow-warning icons on
-                # every stored device frame so reconnects flip back to
-                # connected immediately.
-                self.ui.update_stored_devices_ui()
+                kinds_changed = self._sync_linear_configs(data)
+                if kinds_changed and hasattr(self.ui, "clear_device_caches"):
+                    # Motor card structure depends on motor_kind (linear
+                    # vs continuous-output choose different Output stage
+                    # editors). When the engine reports a different
+                    # kind for a toy that already has a UI frame, the
+                    # cached frame is stale — rebuild from scratch so
+                    # the user sees the right labels and stage editor
+                    # without having to restart the app.
+                    self.ui.clear_device_caches()
+                    self.ui.build_stored_devices_ui()
+                else:
+                    # Re-evaluate the green-check vs yellow-warning icons
+                    # on every stored device frame so reconnects flip
+                    # back to connected immediately.
+                    self.ui.update_stored_devices_ui()
                 # Mirror the new device list into the SteamVR toy driver
                 # (no-op when the feature is disabled).
                 try:
@@ -854,12 +865,19 @@ class OscGoesPurrrApp(
                 continue
         self.haptic_engine.set_linear_config(device_name, motor_idx, **kwargs)
 
-    def _sync_linear_configs(self, devices_dict: dict) -> None:
+    def _sync_linear_configs(self, devices_dict: dict) -> bool:
         """Push the persisted linear mode/idle setting for every motor on every
         freshly discovered device into the engine. Called once on `devices_found`
         so the engine starts with the right behavior even before the user touches
         the UI.
+
+        Returns True when at least one device's persisted motor_kinds
+        differed from what the engine just reported — that signal tells
+        the queue handler to rebuild the device frames so motor cards
+        pick up the new kinds (the cards bake the kind into their
+        widget at construction time and don't track changes otherwise).
         """
+        kinds_changed = False
         for index, info in (devices_dict or {}).items():
             if isinstance(info, dict):
                 device_name = info.get("name")
@@ -879,9 +897,22 @@ class OscGoesPurrrApp(
                 self.profile_manager.update_device_config(device_name, "motor_count", motor_count)
             kinds = info.get("motor_kinds")
             if kinds is not None:
-                self.profile_manager.update_device_config(device_name, "motor_kinds", list(kinds))
+                # Only flag kinds_changed when the entry already had
+                # kinds and they differ — first-time-connect populates
+                # from None and is handled by build_device_list_ui's
+                # fresh-frame construction path; no rebuild needed.
+                existing = self.profile_manager.get_profile_config(
+                    device_name, "motor_kinds", None
+                )
+                fresh = list(kinds)
+                if existing is not None and existing != fresh:
+                    kinds_changed = True
+                self.profile_manager.update_device_config(
+                    device_name, "motor_kinds", fresh
+                )
             for motor_idx in range(motor_count):
                 self.update_linear_motor_config(device_name, motor_idx)
+        return kinds_changed
 
     def update_device_target(self, device_name: str, value: float, motor_index: int):
         """Update target intensity for a specific device and motor
