@@ -4,7 +4,9 @@ import time
 from typing import Callable, Dict, List, Tuple, Any, Optional, Set
 from utilities import normalize_osc_value, strip_param_prefix, classify_ogb_zone
 from parameter_store import store as _global_store
-from mixer import apply_curve, combine, smooth
+from mixer import (
+    apply_curve, combine, smooth, activity_meter, activity_gate, merge_chains,
+)
 
 _GLOB_CHARS = frozenset("*?[")
 
@@ -118,49 +120,52 @@ class MotorRouter:
     """
 
     # Internal scale applied to the raw (|Δposition|/dt) speed signal
-    # before clamping. Matches the old user-tunable speed_gain default;
-    # in Phase 2 it's fixed because the speed channel exposes its own
-    # post-curve `gain` knob for the same purpose. Realistic in-VRChat
-    # thrusts oscillate over a fraction of the full insertion range, so
-    # this value is tuned so a moderate stroke saturates.
+    # before clamping. Realistic in-VRChat thrusts oscillate over a
+    # fraction of the full insertion range, so this value is tuned so
+    # a moderate stroke saturates.
     _SPEED_NORMALIZATION = 0.75
+
+    # Speed-detector constants. Previously per-motor knobs; baked here
+    # because the activity gate (a per-motor knob) covers the user-
+    # facing "ignore micro-movement" problem these used to address.
+    # If a future need to retune surfaces, they move to a single
+    # hidden Advanced panel in Settings, not back into the per-motor
+    # card. See MOTOR_SIGNAL_CHAIN.md § "Speed-detector constants".
+    _SPEED_INPUT_DEADBAND = 0.005
+    _SPEED_OUTPUT_CUTOFF = 0.02
+    _SPEED_DECAY_TAU_S = 0.30
+
+    # Cap on chains per motor (per the design lock in
+    # MOTOR_SIGNAL_CHAIN.md § "Future: optional secondary chain").
+    # Profiles with more than this are silently truncated by the
+    # router — UI also enforces the cap. Raising this is a design
+    # decision, not a constant tweak.
+    _MAX_CHAINS_PER_MOTOR = 2
 
     # Default per-motor mix config — used when a profile is missing
     # the `mix` block entirely (defensive fallback; the seeder writes
     # this on every known motor at profile creation).
+    #
+    # Ships from Cut 1 as a list of chains, always length 1 in cuts
+    # 1–4, so Cut 5 (optional secondary chain) is purely additive
+    # with no schema migration. See MOTOR_SIGNAL_CHAIN.md § Storage
+    # and § "Future: optional secondary chain".
     DEFAULT_MIX_CONFIG: Dict[str, Any] = {
-        "depth": {
-            "enabled": True,
-            "gain": 1.0,
-            "curve": "linear",
-            "curve_param": 1.0,
-            "mode": "additive",
-            "min_remap": 0.0,
-            "max_remap": 1.0,
-        },
-        "speed": {
-            "enabled": True,
-            "gain": 1.0,
-            "curve": "linear",
-            "curve_param": 1.0,
-            "mode": "additive",
-            # Speed-derivation knobs (formerly global speed_*).
-            # Defaults preserve old behaviour.
-            "input_deadband": 0.005,
-            "output_cutoff": 0.02,
-            "decay_tau": 0.30,
-        },
-        "combine": "max",
-        "modulator_range": (0.5, 1.5),
-        "smoothing": {
-            "attack_ms": 50.0,
-            # 20 ms release tau gives a perceptible decay-to-silent of
-            # ~100 ms at the default 90 Hz tick: combined with the
-            # mixer's 0.5 % snap-to-zero, the toy stops feeling the
-            # signal within ~110 ms of the input dropping. Users who
-            # want a longer drone bump this in Device Routing.
-            "release_ms": 20.0,
-        },
+        "chains": [
+            {
+                "depth": {"gain": 1.0, "curve": "linear", "curve_param": 1.0},
+                "speed": {"gain": 1.0, "curve": "linear", "curve_param": 1.0},
+                "combine": "max",
+                "gate": {
+                    "enabled": False,
+                    "wake_threshold": 0.05,
+                    "sleep_delay_s": 0.5,
+                },
+                "smoothing": {"rise_ms": 50.0, "fall_ms": 20.0},
+            },
+        ],
+        # Only meaningful when len(chains) > 1; harmless otherwise.
+        "merge": "max",
     }
 
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
@@ -175,13 +180,19 @@ class MotorRouter:
         # `smoothed_output` (post-mix envelope follower state). Lazily
         # created on first tick for any motor.
         self._motor_state: Dict[Tuple[str, int], Dict[str, float]] = {}
-        # Tune intermediates feed. Off by default — when nothing has set
-        # both a subscription and a callback, the per-tick check is a
-        # single None comparison. The Tune view (Phase 3) registers a
-        # subscription via TuneFacade so it can render the six-trace
-        # graph of d_raw / s_raw / d_shaped / s_shaped / mixed / out.
-        self._tune_subscription: Optional[Tuple[str, int]] = None
-        self._tune_emit_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+        # Per-(device, motor, chain) intermediates subscriber map
+        # (Cut 6). Each chain widget registers its own callback so its
+        # per-stage mini-graph can render that specific chain's traces
+        # without piggybacking on the legacy Tune subscription. Zero
+        # cost when nothing has subscribed — the per-tick emit walks
+        # `chain_emits` and only fires callbacks for keys present in
+        # this dict. Multiple subscribers per key are allowed (e.g.
+        # chain widget + the wrapper's overview graph both watching
+        # the same chain).
+        self._intermediates_subscribers: Dict[
+            Tuple[str, int, int],
+            List[Callable[[Dict[str, Any]], None]],
+        ] = {}
         # Session-logger broadcast hook. When set, fires once per motor
         # per tick (unlike the Tune subscription which is per-motor).
         # The session facade registers a callback while a session is
@@ -190,15 +201,22 @@ class MotorRouter:
         self._session_broadcast: Optional[
             Callable[[str, int, Dict[str, Any]], None]
         ] = None
-        # Tune input-override hook. When set and the subscribed motor is
-        # being computed, the provider's return value replaces d_raw —
-        # bypassing zones / custom addresses entirely. Lets the
-        # simulator test the mixer's behaviour with a known clean
-        # signal regardless of how the user's zone filter is configured.
-        # Provider returns None to fall through to the normal d_raw
-        # compute (e.g. when source = live VRChat, or simulated with no
-        # pattern running).
-        self._tune_value_provider: Optional[Callable[[], Optional[float]]] = None
+        # Per-(device, motor, chain) input overrides (Cut 7). Each
+        # entry is a callable returning either a simulated d_raw in
+        # [0, 1] or None (fall through to live d_raw). The wrapper's
+        # parametric simulator registers one entry per chain in its
+        # Drive mask; per-chain providers take precedence over the
+        # legacy `_tune_value_provider` so the new simulator can
+        # coexist cleanly with the soon-to-die preset player.
+        self._chain_value_providers: Dict[
+            Tuple[str, int, int], Callable[[], Optional[float]],
+        ] = {}
+
+        # Per-motor "do not forward to engine" suppression set (Cut 7).
+        # The wrapper toggles entries when the simulator's Send-to-toy
+        # safety switch is off. Read by the controller's
+        # update_device_target via `should_send_to_toy`.
+        self._toy_output_suppressed: Set[Tuple[str, int]] = set()
         # Per-zone length detectors keyed by ("Orf"|"Pen", zone_name, "self"|"others").
         self._length_detectors: Dict[Tuple[str, str, str], GameDeviceLengthDetector] = {}
         # Compiled per-motor config cache.
@@ -483,22 +501,57 @@ class MotorRouter:
         self._compiled_cfg[cache_key] = compiled
         return compiled
 
-    def _get_motor_state(self, key: Tuple[str, int]) -> Dict[str, float]:
-        """Return the lazily-initialised per-motor state dict. Holds the
-        per-motor mixer's smoothing/derivation history between ticks.
-        `last_time` starts at -1.0 as a sentinel so the first tick is
-        treated as dt=0 regardless of the clock's starting value (tests
-        often use a FakeClock that begins at 0.0)."""
+    @staticmethod
+    def _make_chain_state() -> Dict[str, Any]:
+        """Fresh per-chain state record. Each chain owns its own
+        speed-detector history (`last_position`, `smoothed_speed`)
+        because the simulator can drive different chains with
+        different `d_raw` streams on the same tick — sharing speed
+        state would couple them spuriously. See
+        CHAIN_INLINED_TUNING.md § "Per-chain speed state"."""
+        return {
+            "last_position":   0.0,
+            "smoothed_speed":  0.0,
+            "smoothed_output": 0.0,
+            "activity_meter":  0.0,
+            "gate_open":       False,
+            "below_since":     None,
+        }
+
+    def _get_motor_state(self, key: Tuple[str, int]) -> Dict[str, Any]:
+        """Return the lazily-initialised per-motor state dict.
+
+        Motor-level state (shared across chains):
+        * `last_time` (sentinel -1.0 = no prior tick) — dt is
+          identical for both chains, so the timestamp is shared.
+
+        Per-chain state lives in `state["chains"]`, a list of dicts
+        with the per-chain speed detector (`last_position`,
+        `smoothed_speed`), smoothing envelope (`smoothed_output`),
+        and activity-gate state (`activity_meter`, `gate_open`,
+        `below_since`). The list grows lazily via
+        `_ensure_chain_state` when a motor's profile gains a second
+        chain."""
         state = self._motor_state.get(key)
         if state is None:
             state = {
                 "last_time": -1.0,
-                "last_position": 0.0,
-                "smoothed_speed": 0.0,
-                "smoothed_output": 0.0,
+                "chains": [self._make_chain_state()],
             }
             self._motor_state[key] = state
         return state
+
+    def _ensure_chain_state(self, state: Dict[str, Any], n: int) -> None:
+        """Grow `state["chains"]` to at least `n` entries with fresh
+        defaults. Called once per tick before iterating the chains so
+        a profile that just gained a second chain doesn't crash on
+        first read."""
+        chains = state.get("chains")
+        if not isinstance(chains, list):
+            chains = [self._make_chain_state()]
+            state["chains"] = chains
+        while len(chains) < n:
+            chains.append(self._make_chain_state())
 
     def _get_mix_config(self, config: Dict[str, Any],
                         motor_idx: int) -> Dict[str, Any]:
@@ -516,43 +569,33 @@ class MotorRouter:
             return self.DEFAULT_MIX_CONFIG
         return per_motor
 
-    def _derive_speed_signal(self, state: Dict[str, float],
+    def _derive_speed_signal(self, chain_state: Dict[str, Any],
                              position: float,
-                             speed_cfg: Dict[str, Any],
                              dt: float) -> float:
-        """Compute the per-motor S_raw from |Δposition|/dt with the
-        speed-channel's input_deadband, output_cutoff and decay_tau knobs.
-        Updates `state["smoothed_speed"]` in place. Returns the post-
-        cutoff value in [0, 1] suitable for feeding into apply_curve.
+        """Compute the per-chain S_raw from |Δposition|/dt with the
+        baked-in input deadband, output cutoff, and decay tau (see
+        _SPEED_INPUT_DEADBAND / _SPEED_OUTPUT_CUTOFF /
+        _SPEED_DECAY_TAU_S). Updates `chain_state["smoothed_speed"]`
+        and `chain_state["last_position"]` in place. Returns the
+        post-cutoff value in [0, 1] suitable for feeding into
+        apply_curve.
 
         Rate independence: `decay_tau` is a wall-clock time constant.
         `decay = exp(-dt / decay_tau)` compensates for the elapsed
         interval, so the perceived decay envelope is identical at any
-        router rate. Never recalibrate decay_tau when the router's
-        tick rate changes. raw_speed = (|delta| - deadband) / dt is
-        also a per-second rate so it's directly comparable across
-        sample rates."""
-        last_pos = state["last_position"]
-        prev_smoothed = state["smoothed_speed"]
+        router rate. raw_speed = (|delta| - deadband) / dt is also a
+        per-second rate, directly comparable across sample rates.
 
-        deadband_cfg = speed_cfg.get("input_deadband",
-                                     self.DEFAULT_MIX_CONFIG["speed"]["input_deadband"])
-        decay_tau_cfg = speed_cfg.get("decay_tau",
-                                      self.DEFAULT_MIX_CONFIG["speed"]["decay_tau"])
-        cutoff_cfg = speed_cfg.get("output_cutoff",
-                                   self.DEFAULT_MIX_CONFIG["speed"]["output_cutoff"])
-        try:
-            deadband = max(0.0, min(0.5, float(deadband_cfg)))
-        except (TypeError, ValueError):
-            deadband = 0.005
-        try:
-            decay_tau = max(0.01, min(5.0, float(decay_tau_cfg)))
-        except (TypeError, ValueError):
-            decay_tau = 0.30
-        try:
-            cutoff = max(0.0, min(0.95, float(cutoff_cfg)))
-        except (TypeError, ValueError):
-            cutoff = 0.02
+        Per-chain — each chain in a multi-chain motor maintains its
+        own speed history because the simulator's Drive mask can feed
+        different `d_raw` streams to different chains on the same
+        tick (CHAIN_INLINED_TUNING.md § "Per-chain speed state")."""
+        last_pos = chain_state["last_position"]
+        prev_smoothed = chain_state["smoothed_speed"]
+
+        deadband = self._SPEED_INPUT_DEADBAND
+        decay_tau = self._SPEED_DECAY_TAU_S
+        cutoff = self._SPEED_OUTPUT_CUTOFF
 
         if dt <= 0.0:
             # First sample or clock didn't move — reuse last smoothed value.
@@ -567,36 +610,69 @@ class MotorRouter:
             decay = math.exp(-dt / decay_tau)
             smoothed = max(signal, prev_smoothed * decay)
 
-        state["smoothed_speed"] = smoothed
+        chain_state["smoothed_speed"] = smoothed
+        chain_state["last_position"] = position
 
         if smoothed <= cutoff:
             return 0.0
         denom = max(1.0 - cutoff, 1e-6)
         return min(1.0, (smoothed - cutoff) / denom)
 
-    def set_tune_emit_callback(self,
-                               callback: Optional[Callable[[Dict[str, Any]], None]]
-                               ) -> None:
-        """Register (or clear) the callback that receives per-tick
-        intermediates for the currently-subscribed motor. The Tune
-        facade wires this to a thread_queue push so the UI thread can
-        drain trace records in its existing queue-processing loop."""
-        self._tune_emit_callback = callback
-
-    def set_tune_subscription(self, device_name: str, motor_idx: int) -> None:
-        """Subscribe the Tune view to one motor's intermediates feed.
-        Cheap — only one motor is ever traced at a time, so the
-        per-tick check is just `if subscription == (dev, idx)`."""
-        self._tune_subscription = (str(device_name), int(motor_idx))
-
-    def clear_tune_subscription(self) -> None:
-        self._tune_subscription = None
-
     def has_tune_subscription(self) -> bool:
-        """True when the Tune view is actively watching a motor — the
-        controller's routing tick uses this to keep the tick firing
-        even when VRChat is silent, so the trace graph stays current."""
-        return self._tune_subscription is not None
+        """True when any UI surface needs the routing tick to keep
+        firing even with VRChat silent — covers per-(motor, chain)
+        intermediates subscribers (Cut 6) and the parametric simulator
+        (Cut 7), which needs ticks to advance its phase regardless of
+        live input.
+
+        Kept under the legacy name so main.py's tick loop doesn't
+        need a rename — the broader semantics are correct."""
+        return (bool(self._intermediates_subscribers)
+                or bool(self._chain_value_providers))
+
+    # ----------------------------------------------------------
+    # Per-(motor, chain) intermediates subscribers (Cut 6).
+    #
+    # Each chain widget that wants per-stage mini-graphs registers a
+    # callback against its (device, motor, chain_idx). The router
+    # fires every subscriber that matches the chain being computed
+    # on each tick. Multiple subscribers per key are allowed.
+    # ----------------------------------------------------------
+
+    def subscribe_intermediates(self, device_name: str, motor_idx: int,
+                                chain_idx: int,
+                                callback: Callable[[Dict[str, Any]], None]
+                                ) -> None:
+        """Register a callback to receive per-tick intermediates for
+        one (device, motor, chain). Same callback registered twice
+        for the same key is allowed but pointless — the dispatcher
+        will fire it twice."""
+        key = (str(device_name), int(motor_idx), int(chain_idx))
+        self._intermediates_subscribers.setdefault(key, []).append(callback)
+
+    def unsubscribe_intermediates(self, device_name: str, motor_idx: int,
+                                  chain_idx: int,
+                                  callback: Callable[[Dict[str, Any]], None]
+                                  ) -> None:
+        """Remove a previously-registered callback. No-op if the
+        callback isn't currently registered for that key. Cleans up
+        the list entry when it empties so `has_intermediates_subscribers`
+        stays cheap."""
+        key = (str(device_name), int(motor_idx), int(chain_idx))
+        callbacks = self._intermediates_subscribers.get(key)
+        if not callbacks:
+            return
+        try:
+            callbacks.remove(callback)
+        except ValueError:
+            return
+        if not callbacks:
+            del self._intermediates_subscribers[key]
+
+    def has_intermediates_subscribers(self) -> bool:
+        """True when at least one chain widget has subscribed for its
+        per-stage graph data."""
+        return bool(self._intermediates_subscribers)
 
     def set_session_broadcast(self,
                               callback: Optional[
@@ -617,14 +693,65 @@ class MotorRouter:
         misbehaving logger can never break the hot path."""
         self._session_broadcast = callback
 
-    def set_tune_value_provider(self,
-                                provider: Optional[Callable[[], Optional[float]]]
-                                ) -> None:
-        """Register a callable that supplies the simulated d_raw value
-        for the subscribed motor each tick. Pass None to clear. When
-        the provider returns None the router falls back to normal
-        zone/address routing for that motor."""
-        self._tune_value_provider = provider
+    # ----------------------------------------------------------
+    # Per-chain input overrides + toy-output suppression (Cut 7).
+    # ----------------------------------------------------------
+
+    def set_chain_value_provider(self, device_name: str, motor_idx: int,
+                                 chain_idx: int,
+                                 provider: Optional[
+                                     Callable[[], Optional[float]]
+                                 ]) -> None:
+        """Register (or clear) a per-(motor, chain) `d_raw` override.
+        The provider is called every tick when this motor is being
+        computed; if it returns a non-None float, that value replaces
+        the live `d_raw` for that chain only. Other chains on the
+        same motor stay on live input.
+
+        Pass `None` to clear the override for this chain."""
+        key = (str(device_name), int(motor_idx), int(chain_idx))
+        if provider is None:
+            self._chain_value_providers.pop(key, None)
+            return
+        self._chain_value_providers[key] = provider
+
+    def clear_chain_value_provider(self, device_name: str,
+                                   motor_idx: int, chain_idx: int) -> None:
+        """Convenience alias for `set_chain_value_provider(..., None)`."""
+        self._chain_value_providers.pop(
+            (str(device_name), int(motor_idx), int(chain_idx)), None
+        )
+
+    def has_chain_value_providers(self) -> bool:
+        """True when any chain provider is registered. Used by the
+        controller to keep ticking when the simulator is running
+        even with VRChat silent (same role as
+        `has_intermediates_subscribers`)."""
+        return bool(self._chain_value_providers)
+
+    def suppress_toy_output(self, device_name: str, motor_idx: int) -> None:
+        """Mark this motor as "do not forward to engine". The wrapper's
+        Send-to-toy safety toggle adds the entry while the simulator
+        is running with the toggle off; the controller's
+        `update_device_target` checks `should_send_to_toy` and drops
+        the value. The router itself keeps computing so meters and
+        traces still show the simulated signal."""
+        self._toy_output_suppressed.add((str(device_name), int(motor_idx)))
+
+    def unsuppress_toy_output(self, device_name: str, motor_idx: int) -> None:
+        """Remove the suppression entry. No-op if not currently
+        suppressed."""
+        self._toy_output_suppressed.discard(
+            (str(device_name), int(motor_idx))
+        )
+
+    def should_send_to_toy(self, device_name: str, motor_idx: int) -> bool:
+        """True when the engine should receive this motor's target.
+        False when the simulator has explicitly suppressed it
+        (Send-to-toy off). The controller's `update_device_target`
+        ANDs this with the per-toy mute check before forwarding to
+        the engine."""
+        return (str(device_name), int(motor_idx)) not in self._toy_output_suppressed
 
     @staticmethod
     def _coerce_float(value: Any, default: float,
@@ -711,30 +838,29 @@ class MotorRouter:
             device_name, motor_idx, config,
         )
 
-        # --- 1. D_raw: custom override addresses + SPS zones (max-wins) ---
-        # Phase 3 Tune view input override: when this is the subscribed
-        # motor and the provider returns a value, use it as d_raw and
-        # skip the normal compute. Lets the simulator test the mixer's
-        # behaviour with a known clean signal regardless of how the
-        # user's zone filter is configured. Other motors are unaffected.
-        sim_d_raw: Optional[float] = None
-        if (self._tune_value_provider is not None
-                and self._tune_subscription == (device_name, motor_idx)):
-            try:
-                sim_d_raw = self._tune_value_provider()
-            except Exception:
-                sim_d_raw = None
+        # --- 1. live d_raw (per-chain overrides applied inside the
+        # chain loop below via _chain_value_providers).
+        live_d_raw = self._compute_d_raw_from_inputs(
+            compiled, all_params, config, motor_idx, zones
+        )
 
-        if sim_d_raw is not None:
-            d_raw = max(0.0, min(1.0, float(sim_d_raw)))
-        else:
-            d_raw = self._compute_d_raw_from_inputs(
-                compiled, all_params, config, motor_idx, zones
-            )
-
-        # --- 2. Mixer: per-channel shaping → combine → smoothing ---
+        # --- 2. Signal chain(s): per-channel shaping → combine → gate → smoothing ---
+        # The per-motor `mix` block holds a list of chains (length 1
+        # in cuts 1–4; up to 2 from Cut 5 onward) plus a `merge` op
+        # that says how their outputs combine into the final motor
+        # target. Each chain has independent gate + smoothing state;
+        # the speed detector is shared because `|d/dt|` is a property
+        # of the input.
         mix = self._get_mix_config(config, motor_idx)
+        chains_cfg = mix.get("chains") if isinstance(mix, dict) else None
+        if not isinstance(chains_cfg, list) or not chains_cfg:
+            chains_cfg = self.DEFAULT_MIX_CONFIG["chains"]
+        # Cap silently — UI also enforces the cap; this is the safety net.
+        chains_cfg = chains_cfg[: self._MAX_CHAINS_PER_MOTOR]
+        merge_op = str(mix.get("merge", "max")) if isinstance(mix, dict) else "max"
+
         state = self._get_motor_state((device_name, motor_idx))
+        self._ensure_chain_state(state, len(chains_cfg))
 
         now = self._clock()
         last_t = state["last_time"]
@@ -742,93 +868,199 @@ class MotorRouter:
         # any monotonic value (including 0.0 from a FakeClock) is valid.
         dt = (now - last_t) if last_t >= 0.0 else 0.0
 
-        s_raw = self._derive_speed_signal(state, d_raw, mix["speed"], dt)
+        # Per-chain compute. The fall-through to DEFAULT_MIX_CONFIG's
+        # first chain on a malformed entry keeps a hand-edited profile
+        # from crashing the router; the UI never writes non-dict chains.
+        # Speed derivation also lives inside this loop now — each chain
+        # owns its own speed history because the simulator can drive
+        # different chains with different `d_raw` streams. In Cut 6,
+        # before the parametric simulator (Cut 7) lands, both chains
+        # always see the same `d_raw`, so their speed states converge.
+        chain_emits: List[Dict[str, Any]] = []
+        chain_outputs: List[float] = []
+        for chain_idx, chain in enumerate(chains_cfg):
+            if not isinstance(chain, dict):
+                chain = self.DEFAULT_MIX_CONFIG["chains"][0]
+            chain_state = state["chains"][chain_idx]
 
-        depth = mix["depth"]
-        speed = mix["speed"]
-        d_shaped = apply_curve(
-            d_raw,
-            str(depth.get("curve", "linear")),
-            self._coerce_float(depth.get("curve_param", 1.0), 1.0),
-        ) * self._coerce_float(depth.get("gain", 1.0), 1.0, 0.0, 2.0)
-        s_shaped = apply_curve(
-            s_raw,
-            str(speed.get("curve", "linear")),
-            self._coerce_float(speed.get("curve_param", 1.0), 1.0),
-        ) * self._coerce_float(speed.get("gain", 1.0), 1.0, 0.0, 2.0)
+            # Per-chain input override (Cut 7). When the chain has no
+            # provider registered, it sees the motor's live `d_raw`.
+            chain_provider = self._chain_value_providers.get(
+                (device_name, motor_idx, chain_idx)
+            )
+            chain_d_raw = live_d_raw
+            if chain_provider is not None:
+                try:
+                    v = chain_provider()
+                    if v is not None:
+                        chain_d_raw = max(0.0, min(1.0, float(v)))
+                except Exception:
+                    pass
 
-        mod_range = mix.get("modulator_range", (0.5, 1.5))
-        try:
-            mod_min = float(mod_range[0])
-            mod_max = float(mod_range[1])
-        except (TypeError, ValueError, IndexError):
-            mod_min, mod_max = 0.5, 1.5
+            s_raw = self._derive_speed_signal(chain_state, chain_d_raw, dt)
 
-        mixed = combine(
-            d_shaped, s_shaped,
-            bool(depth.get("enabled", True)), str(depth.get("mode", "additive")),
-            bool(speed.get("enabled", True)), str(speed.get("mode", "additive")),
-            str(mix.get("combine", "max")),
-            mod_min, mod_max,
-        )
+            depth = chain.get("depth", {}) if isinstance(chain, dict) else {}
+            speed = chain.get("speed", {}) if isinstance(chain, dict) else {}
+            d_shaped = apply_curve(
+                chain_d_raw,
+                str(depth.get("curve", "linear")),
+                self._coerce_float(depth.get("curve_param", 1.0), 1.0),
+            ) * self._coerce_float(depth.get("gain", 1.0), 1.0, 0.0, 2.0)
+            s_shaped = apply_curve(
+                s_raw,
+                str(speed.get("curve", "linear")),
+                self._coerce_float(speed.get("curve_param", 1.0), 1.0),
+            ) * self._coerce_float(speed.get("gain", 1.0), 1.0, 0.0, 2.0)
 
-        smoothing = mix.get("smoothing", {})
-        attack_ms = self._coerce_float(
-            smoothing.get("attack_ms", 50.0), 50.0, 0.0, 2000.0
-        )
-        release_ms = self._coerce_float(
-            smoothing.get("release_ms", 20.0), 20.0, 0.0, 2000.0
-        )
-        smoothed = smooth(
-            state["smoothed_output"], mixed, dt * 1000.0, attack_ms, release_ms
-        )
+            mixed = combine(d_shaped, s_shaped, str(chain.get("combine", "max")))
 
-        # Persist per-tick state for the next call.
-        state["smoothed_output"] = smoothed
-        state["last_position"] = d_raw
+            # Activity gate — sidechain on s_raw. Per-chain state so
+            # two chains on the same motor can hold different gate
+            # states at the same instant (e.g. chain 0 wide-open while
+            # chain 1's tighter threshold is still asleep).
+            gate_cfg = chain.get("gate", {}) if isinstance(chain, dict) else {}
+            gate_enabled = bool(gate_cfg.get("enabled", False))
+            if gate_enabled:
+                wake_threshold = self._coerce_float(
+                    gate_cfg.get("wake_threshold", 0.05), 0.05, 0.0, 1.0
+                )
+                sleep_delay_s = self._coerce_float(
+                    gate_cfg.get("sleep_delay_s", 0.5), 0.5, 0.0, 60.0
+                )
+                new_meter = activity_meter(
+                    chain_state["activity_meter"], s_raw, dt
+                )
+                chain_state["activity_meter"] = new_meter
+                new_open, new_below_since = activity_gate(
+                    bool(chain_state["gate_open"]),
+                    chain_state["below_since"],
+                    new_meter,
+                    now,
+                    wake_threshold,
+                    sleep_delay_s,
+                )
+                chain_state["gate_open"] = new_open
+                chain_state["below_since"] = new_below_since
+                gated = mixed if new_open else 0.0
+                gate_open_emit = new_open
+                activity_emit = new_meter
+            else:
+                # Hold meter + gate at rest so a future enable starts fresh.
+                chain_state["activity_meter"] = 0.0
+                chain_state["gate_open"] = False
+                chain_state["below_since"] = None
+                gated = mixed
+                gate_open_emit = True
+                activity_emit = 0.0
+
+            smoothing = chain.get("smoothing", {}) if isinstance(chain, dict) else {}
+            rise_ms = self._coerce_float(
+                smoothing.get("rise_ms", 50.0), 50.0, 0.0, 2000.0
+            )
+            fall_ms = self._coerce_float(
+                smoothing.get("fall_ms", 20.0), 20.0, 0.0, 2000.0
+            )
+            smoothed_chain = smooth(
+                chain_state["smoothed_output"], gated, dt * 1000.0, rise_ms, fall_ms
+            )
+            chain_state["smoothed_output"] = smoothed_chain
+
+            chain_outputs.append(smoothed_chain)
+            chain_emits.append({
+                "d_raw":     chain_d_raw,
+                "s_raw":     s_raw,
+                "d_shaped":  d_shaped,
+                "s_shaped":  s_shaped,
+                "mixed":     mixed,
+                "activity":  activity_emit,
+                "gate_open": gate_open_emit,
+                "gated":     gated,
+                "out":       smoothed_chain,
+            })
+
+        # Merge chain outputs into the final motor target. For a
+        # single-chain motor this is a no-op pass-through; for two
+        # chains it's the user's chosen op (add/max/multiply).
+        final_out = merge_chains(chain_outputs, merge_op)
+
+        # Persist motor-level state. Per-chain `last_position` and
+        # `smoothed_speed` were updated inside `_derive_speed_signal`;
+        # only `last_time` is shared.
         state["last_time"] = now
 
-        # Emit Tune intermediates if subscribed. Zero cost when both
-        # `_tune_subscription` and `_tune_emit_callback` are None.
-        if (self._tune_subscription is not None
-                and self._tune_emit_callback is not None
-                and self._tune_subscription == (device_name, motor_idx)):
-            try:
-                self._tune_emit_callback({
-                    "type": "tune_trace",
-                    "device": device_name,
-                    "motor": motor_idx,
-                    "t_ms": now * 1000.0,
-                    "d_raw": d_raw,
-                    "s_raw": s_raw,
-                    "d_shaped": d_shaped,
-                    "s_shaped": s_shaped,
-                    "mixed": mixed,
-                    "out": smoothed,
-                })
-            except Exception:
-                # A misbehaving Tune callback must never break the
-                # router's hot path. Silently drop.
-                pass
+        # Cut 6 per-(motor, chain) intermediates dispatch. Chain
+        # widgets that want per-stage mini-graphs subscribe via
+        # `subscribe_intermediates`; this loop fires their callbacks
+        # with the same emit-dict shape the legacy Tune callback gets.
+        # Zero cost when nothing is subscribed (empty dict short-
+        # circuits the `if` below).
+        if self._intermediates_subscribers:
+            for chain_idx, emit in enumerate(chain_emits):
+                key = (device_name, motor_idx, chain_idx)
+                subscribers = self._intermediates_subscribers.get(key)
+                if not subscribers:
+                    continue
+                payload = {
+                    "type":      "tune_trace",
+                    "device":    device_name,
+                    "motor":     motor_idx,
+                    "chain_idx": chain_idx,
+                    "t_ms":      now * 1000.0,
+                    "d_raw":     emit["d_raw"],
+                    "s_raw":     emit["s_raw"],
+                    "d_shaped":  emit["d_shaped"],
+                    "s_shaped":  emit["s_shaped"],
+                    "mixed":     emit["mixed"],
+                    "activity":  emit["activity"],
+                    "gate_open": emit["gate_open"],
+                    "gated":     emit["gated"],
+                    "out":       emit["out"],
+                    "final_out": final_out,
+                }
+                # Iterate over a copy so a subscriber that unsubscribes
+                # itself inside its own callback doesn't corrupt the
+                # iteration. Rare in practice but cheap to defend.
+                for cb in list(subscribers):
+                    try:
+                        cb(payload)
+                    except Exception:
+                        # A misbehaving subscriber must never break
+                        # the router's hot path.
+                        pass
 
         # Session-logger broadcast — fires for EVERY motor every tick
-        # (unlike Tune which is gated by a single subscription). Single
-        # None comparison when no session is recording.
+        # (unlike Tune which is gated by a single subscription). Flat
+        # fields preserve chain 0's per-stage values for backward
+        # compatibility with SessionLogger.log_motor's six-field
+        # signature; `chains` carries the full per-chain detail for
+        # multi-chain-aware consumers; `out` is the merged final the
+        # toy actually feels.
         if self._session_broadcast is not None:
             try:
+                first = chain_emits[0] if chain_emits else {
+                    "d_raw": 0.0, "s_raw": 0.0,
+                    "d_shaped": 0.0, "s_shaped": 0.0, "mixed": 0.0,
+                    "activity": 0.0, "gate_open": True, "gated": 0.0,
+                    "out": 0.0,
+                }
                 self._session_broadcast(device_name, motor_idx, {
-                    "t_unix":   now,
-                    "d_raw":    d_raw,
-                    "s_raw":    s_raw,
-                    "d_shaped": d_shaped,
-                    "s_shaped": s_shaped,
-                    "mixed":    mixed,
-                    "out":      smoothed,
+                    "t_unix":    now,
+                    "d_raw":     first["d_raw"],
+                    "s_raw":     first["s_raw"],
+                    "d_shaped":  first["d_shaped"],
+                    "s_shaped":  first["s_shaped"],
+                    "mixed":     first["mixed"],
+                    "activity":  first["activity"],
+                    "gate_open": first["gate_open"],
+                    "gated":     first["gated"],
+                    "out":       final_out,
+                    "chains":    chain_emits,
+                    "merge":     merge_op,
                 })
             except Exception:
                 pass
 
-        return smoothed
+        return final_out
 
     def compute_simple_mode_value(
         self,

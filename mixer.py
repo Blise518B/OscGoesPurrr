@@ -1,27 +1,32 @@
-"""Pure-function mixer math for the Phase 2 router rework.
+"""Pure-function mixer math for the motor signal chain.
 
-Three responsibilities, kept as stateless functions so the unit tests
-can exercise them without a full router instance:
+Stateless helpers that the router composes into the per-motor pipeline:
 
 * `apply_curve(x, kind, param)` — shape a [0, 1] signal through one
   of the supported curves (linear / power / s_curve).
-* `combine(...)` — merge the Depth and Speed channels' shaped values
-  into a single pre-smoothing target, honouring per-channel `mode`
-  (additive vs modulate) and the per-motor `combine` policy
-  (sum vs max).
-* `smooth(prev, mixed, dt_ms, attack_ms, release_ms)` — asymmetric
-  exponential envelope follower. The caller maintains the per-motor
-  `prev` state between ticks.
+* `combine(d_shaped, s_shaped, op)` — merge the Depth and Speed
+  channels with the per-motor combine policy (`add` / `max` /
+  `multiply`).
+* `activity_meter(prev, signal, dt_s)` — asymmetric EMA over the
+  speed-detector output. Time constants are hidden constants so the
+  user-facing gate knobs stay in consistent units.
+* `activity_gate(prev_open, below_since, meter, now_s, wake, sleep)`
+  — gate state machine. Opens instantly when the meter crosses the
+  wake threshold; closes after the meter has stayed below for
+  `sleep_delay_s` seconds.
+* `smooth(prev, mixed, dt_ms, rise_ms, fall_ms)` — asymmetric
+  exponential envelope follower. Rising uses `rise_ms`, falling
+  uses `fall_ms`.
 
 These functions don't know anything about profiles, devices, or the
 parameter store — they take primitive numbers and return primitive
-numbers. The router (Cut B) reads the per-motor `mix` config block,
-extracts the fields, calls these in order, and pushes the final
-target into the engine.
+numbers. The router reads the per-motor chain config, extracts the
+fields, and calls these in order.
 
-Schema and defaults are documented in ROUTING_REDESIGN.md § Phase 2."""
+Schema and defaults are documented in MOTOR_SIGNAL_CHAIN.md."""
 
 import math
+from typing import Optional, Tuple
 
 
 # ----------------------------------------------------------
@@ -67,54 +72,141 @@ def apply_curve(x: float, kind: str, param: float = 1.0) -> float:
 # combine
 # ----------------------------------------------------------
 
-def combine(d_shaped: float, s_shaped: float,
-            depth_enabled: bool, depth_mode: str,
-            speed_enabled: bool, speed_mode: str,
-            combine_op: str,
-            mod_min: float, mod_max: float) -> float:
+def combine(d_shaped: float, s_shaped: float, combine_op: str) -> float:
     """Merge the two per-channel shaped values into a single
-    pre-smoothing target. Output is clamped to [0, 1].
+    pre-gate target. Output is clamped to [0, 1].
 
-    Disabled channels are treated as not contributing:
-    - Both disabled → 0.
-    - Only one enabled → that channel's value (clamped).
+    - `add`: clamped addition. Either channel at 0 passes the other
+      through unchanged.
+    - `max`: element-wise max. Default; matches the "loudest wins"
+      convention used across the router.
+    - `multiply`: element-wise product. Either channel at 0 forces
+      the output to 0 — the diagram makes this visible, no hidden
+      bypass.
 
-    With both enabled, the per-channel `mode` decides:
-    - One channel `modulate`: that channel scales the *other* (the
-      carrier) by `lerp(mod_min, mod_max, modulator_value)`. With the
-      default `(0.5, 1.5)` range: the carrier feels at 50% when the
-      modulator is 0, 150% at full modulator (clamped to 1.0).
-    - Both `additive`: `combine_op` decides. `'sum'` → clamped
-      addition; anything else (including `'max'`) → element-wise max.
-
-    Defensive: if both channels somehow end up in `modulate` (UI
-    prevents this; on-disk profiles might not), depth's mode wins
-    (depth modulates speed)."""
-    d_shaped = float(d_shaped) if depth_enabled else 0.0
-    s_shaped = float(s_shaped) if speed_enabled else 0.0
-
-    if not depth_enabled and not speed_enabled:
-        return 0.0
-    if not depth_enabled:
-        return _clamp_unit(s_shaped)
-    if not speed_enabled:
-        return _clamp_unit(d_shaped)
-
-    if depth_mode == "modulate":
-        # Depth modulates speed (depth is the modulator, speed the carrier).
-        factor = _lerp(mod_min, mod_max, d_shaped)
-        out = s_shaped * factor
-    elif speed_mode == "modulate":
-        # Speed modulates depth.
-        factor = _lerp(mod_min, mod_max, s_shaped)
-        out = d_shaped * factor
-    elif combine_op == "sum":
-        out = d_shaped + s_shaped
+    Unknown `combine_op` falls back to `max`."""
+    d = float(d_shaped)
+    s = float(s_shaped)
+    if combine_op == "add":
+        out = d + s
+    elif combine_op == "multiply":
+        out = d * s
     else:
-        # Default + any unrecognised combine_op falls through to max
-        # (the project-wide max-wins convention).
-        out = max(d_shaped, s_shaped)
+        # Default + any unrecognised op falls through to max.
+        out = max(d, s)
     return _clamp_unit(out)
+
+
+def merge_chains(values, op: str) -> float:
+    """Merge multiple chain outputs into the final motor target.
+    Same semantic family as `combine` but generalised over a list of
+    chain post-smoothing values. Output is clamped to [0, 1].
+
+    - Empty list → 0.0 (no chains, no output).
+    - Single-element list → that value clamped (no merge needed).
+    - 2+: fold with the op:
+      * `add`: clamped sum.
+      * `max`: element-wise max (default).
+      * `multiply`: element-wise product. Any chain at 0 zeros the
+        final output — the same "no hidden bypass" semantics as
+        combine's multiply.
+
+    The list shape — rather than a fixed 2-arg signature — keeps the
+    router clean if the design ever decides to allow 3+ chains.
+    The doc currently caps at 2 in the UI, but the math is N-safe.
+    Unknown `op` falls back to `max`."""
+    if not values:
+        return 0.0
+    if len(values) == 1:
+        return _clamp_unit(float(values[0]))
+    result = float(values[0])
+    for v in values[1:]:
+        v = float(v)
+        if op == "add":
+            result = result + v
+        elif op == "multiply":
+            result = result * v
+        else:
+            # Default + any unrecognised op falls through to max.
+            if v > result:
+                result = v
+    return _clamp_unit(result)
+
+
+# ----------------------------------------------------------
+# activity meter + gate
+# ----------------------------------------------------------
+
+# Hidden time constants for the activity meter. Locked so the
+# user-facing `wake_threshold` / `sleep_delay_s` knobs stay in
+# consistent units across motors and profiles. Attack is fast so new
+# movement registers immediately; release is slow so brief stillness
+# does not instantly drop the meter below threshold.
+_ACTIVITY_ATTACK_TAU_S = 0.05
+_ACTIVITY_RELEASE_TAU_S = 0.50
+
+
+def activity_meter(prev: float, signal: float, dt_s: float) -> float:
+    """Asymmetric EMA on the speed-detector output, clamped to
+    `[0, 1]` (anti-windup). Returns the new meter value given the
+    previous meter, the current speed signal, and the elapsed
+    seconds since the last update.
+
+    Rising uses `_ACTIVITY_ATTACK_TAU_S` (50 ms by default), falling
+    uses `_ACTIVITY_RELEASE_TAU_S` (500 ms). A non-positive `dt_s`
+    returns `prev` unchanged — no integration can happen in zero
+    elapsed time, and clock-rewind shouldn't blow up the meter."""
+    prev_f = float(prev)
+    sig = _clamp_unit(float(signal))
+    dt = float(dt_s)
+    if dt <= 0.0:
+        return prev_f
+    tau = _ACTIVITY_ATTACK_TAU_S if sig > prev_f else _ACTIVITY_RELEASE_TAU_S
+    alpha = 1.0 - math.exp(-dt / tau)
+    new = prev_f + (sig - prev_f) * alpha
+    return _clamp_unit(new)
+
+
+def activity_gate(prev_open: bool,
+                  below_since: Optional[float],
+                  meter: float,
+                  now_s: float,
+                  wake_threshold: float,
+                  sleep_delay_s: float) -> Tuple[bool, Optional[float]]:
+    """Update the activity gate's open/closed state.
+
+    Returns `(new_open, new_below_since)`. `below_since` is the wall
+    time when the meter most recently dropped below `wake_threshold`
+    while the gate was open, or `None` if the meter has been at-or-
+    above threshold (or the gate has been closed).
+
+    Transitions:
+    - Closed + meter ≥ threshold → open (instant). `below_since` reset
+      to `None`.
+    - Closed + meter < threshold → stays closed. `below_since` stays
+      `None` (irrelevant while closed).
+    - Open + meter ≥ threshold → stays open. `below_since` reset to
+      `None` (the meter recovered).
+    - Open + meter < threshold:
+      - `below_since is None` → start counting: `below_since = now_s`.
+      - Else if `now_s - below_since ≥ sleep_delay_s` → close gate.
+      - Else → stays open, still counting.
+
+    A `sleep_delay_s ≤ 0` makes the gate close immediately when the
+    meter dips below threshold."""
+    above = float(meter) >= float(wake_threshold)
+    if above:
+        return True, None
+    # below threshold
+    if not prev_open:
+        return False, None
+    # gate is open, meter has just gone (or stayed) below threshold
+    if below_since is None:
+        below_since = float(now_s)
+    elapsed = float(now_s) - float(below_since)
+    if elapsed >= float(sleep_delay_s):
+        return False, None
+    return True, below_since
 
 
 # ----------------------------------------------------------
@@ -136,18 +228,24 @@ _SMOOTH_SNAP_EPSILON = 0.005
 
 
 def smooth(prev: float, mixed: float, dt_ms: float,
-           attack_ms: float, release_ms: float) -> float:
+           rise_ms: float, fall_ms: float) -> float:
     """Asymmetric exponential envelope follower. Returns the new
     smoothed value given the previous smoothed value, the incoming
     raw mixed value, and the elapsed milliseconds since the last call.
 
-    Rising (`mixed > prev`) uses `attack_ms`; falling uses
-    `release_ms`. Either tau at zero (or below) disables that
-    direction — the output snaps to `mixed` for that polarity. A
-    non-positive `dt_ms` also disables smoothing for safety.
+    Rising (`mixed > prev`) uses `rise_ms`; falling uses `fall_ms`.
+    Either tau at zero (or below) disables that direction — the
+    output snaps to `mixed` for that polarity. A non-positive
+    `dt_ms` also disables smoothing for safety.
 
-    Rate independence: `attack_ms` and `release_ms` are wall-clock
-    time constants. The `1 - exp(-dt/tau)` factor compensates for the
+    Gate transitions step the input from `combined` to 0 (close) or
+    0 to `combined` (open). Because closes are falling and opens are
+    rising, `fall_ms` rounds the close and `rise_ms` rounds the open
+    — the rise/fall knobs the user already tuned automatically handle
+    gate transitions without a separate set of constants.
+
+    Rate independence: `rise_ms` and `fall_ms` are wall-clock time
+    constants. The `1 - exp(-dt/tau)` factor compensates for the
     elapsed interval, so the perceived envelope shape is identical at
     any sampling rate. Never recalibrate these values when the
     router's tick rate changes.
@@ -159,7 +257,7 @@ def smooth(prev: float, mixed: float, dt_ms: float,
     prev_f = float(prev)
     mixed_f = float(mixed)
     dt = float(dt_ms)
-    tau = float(attack_ms) if mixed_f > prev_f else float(release_ms)
+    tau = float(rise_ms) if mixed_f > prev_f else float(fall_ms)
     if tau <= 0.0 or dt <= 0.0:
         return mixed_f
     alpha = 1.0 - math.exp(-dt / tau)
@@ -167,6 +265,60 @@ def smooth(prev: float, mixed: float, dt_ms: float,
     if abs(new - mixed_f) < _SMOOTH_SNAP_EPSILON:
         return mixed_f
     return new
+
+
+# ----------------------------------------------------------
+# sample_pattern — parametric simulator generator (Cut 7).
+# Replaces the preset-zoo pattern generator with a frequency + amp
+# + waveform sampler. See CHAIN_INLINED_TUNING.md § "Simulator panel"
+# for the locked design.
+# ----------------------------------------------------------
+
+# Known waveform identifiers — kept here so consumers (UI dropdowns)
+# can import a single source of truth.
+WAVEFORMS = ("sine", "square", "triangle", "sawtooth")
+
+
+def sample_pattern(freq_hz: float, amp: float, waveform: str,
+                   t_s: float) -> float:
+    """Compute one sample of a parametric periodic signal at time
+    `t_s` seconds, frequency `freq_hz`, amplitude `amp`, in waveform
+    `waveform`. Output is normalised to `[0, amp]` (not `[-amp, +amp]`)
+    because `d_raw` is unsigned by convention in this codebase.
+
+    Waveforms:
+      * `sine`     — shifted sine, `0` at φ=0, peak `amp` at φ=0.5.
+      * `square`   — `amp` for the first half of the cycle, `0` for the second.
+      * `triangle` — ramp up to `amp` at φ=0.5, back to `0` at φ=1.
+      * `sawtooth` — linear ramp `0` → `amp` over the cycle.
+
+    Edge cases:
+      * `freq_hz <= 0` → returns `0.0` (no oscillation).
+      * Negative `amp` → wraps at the math; not clamped here (the
+        caller's chain pipeline does its own clamping downstream).
+      * Unknown `waveform` → returns `0.0` (silence — defensive).
+      * `t_s` may be any real number; the phase calculation uses
+        `% 1.0` so negative or large `t_s` values still produce a
+        sensible phase in `[0, 1)`.
+
+    Pure function — no state, safe to call from any thread."""
+    if freq_hz <= 0.0:
+        return 0.0
+    phase = (float(freq_hz) * float(t_s)) % 1.0
+    if waveform == "sine":
+        # sin(2πφ) ∈ [-1, 1] → shifted/scaled to [0, 1] then * amp.
+        return float(amp) * (0.5 + 0.5 * math.sin(2.0 * math.pi * phase))
+    if waveform == "square":
+        return float(amp) if phase < 0.5 else 0.0
+    if waveform == "triangle":
+        # /\ peak at φ=0.5
+        if phase < 0.5:
+            return float(amp) * (2.0 * phase)
+        return float(amp) * (2.0 * (1.0 - phase))
+    if waveform == "sawtooth":
+        # / ramp 0→amp over the cycle
+        return float(amp) * phase
+    return 0.0
 
 
 # ----------------------------------------------------------
@@ -179,10 +331,3 @@ def _clamp_unit(x: float) -> float:
     if x > 1.0:
         return 1.0
     return x
-
-
-def _lerp(a: float, b: float, t: float) -> float:
-    """Linear interpolation between `a` and `b` by `t`. `t` is not
-    clamped — callers (modulator math) intentionally pass values that
-    may exceed [0, 1] when a channel's `gain > 1`."""
-    return a + (b - a) * t

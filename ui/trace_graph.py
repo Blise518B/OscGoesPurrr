@@ -1,5 +1,7 @@
-"""Custom-painted scrolling time-series widget for the Phase 3 Tune
-view and the per-motor mini-graphs in Device Routing.
+"""Custom-painted scrolling time-series widget used throughout the
+chain visual: per-stage mini-graphs in `MotorSignalChainWidget`, the
+optional six-trace Overview disclosure in `MotorChainListWidget`, and
+any other place that wants a live signal plot.
 
 Designed to be data-source-agnostic: callers push samples via
 `push_sample(trace_id, t_s, value)` and the widget owns the per-trace
@@ -7,10 +9,8 @@ ring buffers and the paint. No internal timer — the widget repaints
 on every push, so paint frequency naturally tracks the data source's
 tick rate.
 
-The same widget is used at two sizes: a small single-trace sparkline
-inside each Device Routing Mix subcard (driven by `update_motor_vibe`)
-and a full multi-trace graph inside the Tune view (driven by the
-router's per-tick intermediates queue, when Phase 3 Cut B lands)."""
+Pushes are fed by the router's per-(motor, chain) intermediates
+subscribers (see `MotorRouter.subscribe_intermediates`)."""
 
 from collections import deque
 from typing import Iterable, Optional, Tuple
