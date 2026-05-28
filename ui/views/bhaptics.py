@@ -861,6 +861,15 @@ class BHapticsMixin:
                 zones = {}
             key = "Orifices" if zone_type == "Orf" else "Penetrators"
             names = list(zones.get(key) or [])
+            # Synthetic SPS sources of this type appear alongside detected
+            # zones; bhaptics_router resolves the name against the source map.
+            try:
+                custom = self.controller.get_sps_source_names_by_type() or {}
+            except Exception:
+                custom = {}
+            for nm in (custom.get(key) or []):
+                if nm not in names:
+                    names.append(nm)
             combo.addItems(names)
             if current:
                 if combo.findText(current) < 0:

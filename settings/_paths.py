@@ -34,6 +34,12 @@ HARDWARE_MONITOR_SETTINGS_FILE = APPDATA_DIR / "hardware_monitor_settings.json"
 # previously-seen toys with default settings.
 KNOWN_DEVICES_FILE = APPDATA_DIR / "known_devices.json"
 
+# Synthetic SPS sources file path — global registry of user-defined virtual
+# contact zones (proximity + activation gate + velocity multiplier). Global,
+# like known_devices, so the sources are shared across profiles and visible
+# to both the Buttplug and bHaptics routers. See sps_source.py.
+SPS_SOURCES_FILE = APPDATA_DIR / "sps_sources.json"
+
 # Session logger: a directory holding one JSONL file per recorded VR
 # session, plus a tiny settings file for the engine's enable / auto-start
 # / retention preferences. The directory is created at first session

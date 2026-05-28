@@ -48,6 +48,7 @@ from controllers import (
     OscFacade,
     ProfilesFacade,
     SessionsFacade,
+    SpsSourcesFacade,
 )
 
 
@@ -59,6 +60,7 @@ class OscGoesPurrrApp(
     OscFacade,
     ProfilesFacade,
     SessionsFacade,
+    SpsSourcesFacade,
 ):
     def __init__(self):
         self.async_loop: asyncio.AbstractEventLoop = None
@@ -192,6 +194,7 @@ class OscGoesPurrrApp(
             get_device_configs=self._bhaptics_get_device_configs,
             get_antistuck=self._bhaptics_get_antistuck,
             get_sps_mirror_config=self.get_bhaptics_sps_mirror,
+            get_sps_sources=self._get_sps_source_map,
         )
 
         # Hardware Monitor — broadcasts system stats (CPU/RAM/GPU/VRAM) to
@@ -741,7 +744,10 @@ class OscGoesPurrrApp(
             active = self.profile_manager.get_active_profile_dict()
             if active is None:
                 return
-            updates = self.motor_router.reevaluate_state(active, params, zones=zones)
+            updates = self.motor_router.reevaluate_state(
+                active, params, zones=zones,
+                sps_sources=self._get_sps_source_map(),
+            )
         for device_name, target_val, motor_idx in updates:
             self.thread_queue.put(("osc_haptic_update", (device_name, target_val, motor_idx)))
 

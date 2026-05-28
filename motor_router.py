@@ -7,6 +7,7 @@ from parameter_store import store as _global_store
 from mixer import (
     apply_curve, combine, smooth, activity_meter, activity_gate, merge_chains,
 )
+from sps_source import evaluate_sps_source
 
 _GLOB_CHARS = frozenset("*?[")
 
@@ -776,11 +777,14 @@ class MotorRouter:
         config: Dict[str, Any],
         motor_idx: int,
         zones: Set[Tuple[str, str]],
+        sps_sources: Optional[Dict[str, Any]] = None,
     ) -> float:
         """Max-wins combine of every input the motor listens to:
         - Literal custom OSC addresses (O(1) dict lookups)
         - Custom OSC address globs (fnmatch sweep)
         - SPS zone contributions (when the motor's zone filter is set)
+        - Synthetic SPS sources (selected by name; evaluated from the
+          `sps_sources` map the controller passes in each tick)
         Returns a value in [0, 1]. Pure function of its inputs — used
         by both live routing and as the fallback for the Tune view's
         input override."""
@@ -821,6 +825,22 @@ class MotorRouter:
                     if contribution > best:
                         best = contribution
             d_raw = best
+
+        # Synthetic SPS sources — resolved by explicit name only (never
+        # swept up by "All SPS"). A selected name that matches a defined
+        # source contributes its evaluated value, max-wins like everything
+        # else. Filter-agnostic: a synthetic source carries its own gating
+        # logic, so the per-motor Touch/Pen/Self/Others flags don't apply.
+        if sps_sources and compiled["allowed_zones"]:
+            best = d_raw
+            for name in compiled["allowed_zones"]:
+                defn = sps_sources.get(name)
+                if defn is None:
+                    continue
+                val = evaluate_sps_source(defn, all_params)
+                if val > best:
+                    best = val
+            d_raw = best
         return d_raw
 
     # ------------------------------------------------------------------ public
@@ -832,6 +852,7 @@ class MotorRouter:
         all_params: Dict[str, Any],
         zones: Set[Tuple[str, str]],
         profile_dict: Optional[Dict[str, Any]] = None,
+        sps_sources: Optional[Dict[str, Any]] = None,
     ) -> float:
         compiled = self._compile_motor_config(
             profile_dict if profile_dict is not None else config,
@@ -841,7 +862,7 @@ class MotorRouter:
         # --- 1. live d_raw (per-chain overrides applied inside the
         # chain loop below via _chain_value_providers).
         live_d_raw = self._compute_d_raw_from_inputs(
-            compiled, all_params, config, motor_idx, zones
+            compiled, all_params, config, motor_idx, zones, sps_sources
         )
 
         # --- 2. Signal chain(s): per-channel shaping → combine → gate → smoothing ---
@@ -1129,9 +1150,14 @@ class MotorRouter:
         active_profile: Dict[str, Any],
         all_params: Dict[str, Any],
         zones: Optional[Set[Tuple[str, str]]] = None,
+        sps_sources: Optional[Dict[str, Any]] = None,
     ) -> List[Tuple[str, float, int]]:
         """Recalculate motor outputs for every configured device/motor based on the
-        live Shadow State, returning only entries whose target value changed."""
+        live Shadow State, returning only entries whose target value changed.
+
+        `sps_sources` is the `name -> definition` map of enabled synthetic
+        SPS sources (from the controller). A motor that selected a source by
+        name picks up its evaluated value; None disables the feature."""
         zones = self._get_zone_tuples(all_params, zones)
         # Refresh length calibrations first so all motor calculations see fresh state.
         self._update_length_detectors(all_params, zones)
@@ -1143,6 +1169,7 @@ class MotorRouter:
                 target_val = self._calculate_motor_target(
                     device_name, motor_idx, config, all_params,
                     zones=zones, profile_dict=active_profile,
+                    sps_sources=sps_sources,
                 )
 
                 state_key = (device_name, motor_idx)
