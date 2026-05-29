@@ -600,6 +600,7 @@ class OscGoesPurrrUI(
         # Sidebar status widgets
         self.status_label: Optional[QLabel] = None
         self.connection_button: Optional[QPushButton] = None
+        self.scan_toys_button: Optional[QPushButton] = None
         self.osc_status_label: Optional[QLabel] = None
         self.osc_port_label: Optional[QLabel] = None
         self.osc_connection_button: Optional[QPushButton] = None
@@ -831,6 +832,18 @@ class OscGoesPurrrUI(
         self.connection_button.setMinimumHeight(BTN_HEIGHT_LARGE)
         self.connection_button.clicked.connect(self.controller.connect_to_intiface)
         intiface_lay.addWidget(self.connection_button)
+
+        # Manual "scan now" for toys powered on AFTER connecting. The engine
+        # already auto-rescans every AUTO_REFRESH_RATE_S, but this lets the user
+        # pick up a freshly switched-on toy immediately instead of waiting out
+        # the interval. Disabled until connected; the controller facade also
+        # no-ops safely if called while disconnected.
+        self.scan_toys_button = QPushButton("🔍 Scan for new toys")
+        self.scan_toys_button.setMinimumHeight(BTN_HEIGHT_SMALL)
+        self.scan_toys_button.setProperty("role", "secondary")
+        self.scan_toys_button.setEnabled(False)
+        self.scan_toys_button.clicked.connect(self.controller.scan_for_toys)
+        intiface_lay.addWidget(self.scan_toys_button)
         intiface_lay.addSpacing(8)
 
         lay.addWidget(self.intiface_sidebar_section)
@@ -895,6 +908,10 @@ class OscGoesPurrrUI(
                 self.connection_button.setText("Connect to Intiface")
                 self.connection_button.setProperty("role", "")
             self._repolish(self.connection_button)
+
+        if self.scan_toys_button is not None:
+            # A manual rescan only makes sense once the server is up.
+            self.scan_toys_button.setEnabled(connected)
 
         if self.status_label is not None:
             self.status_label.setProperty("role", "pill")

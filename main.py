@@ -37,6 +37,7 @@ from hardware_monitor import HardwareMonitorEngine
 from constants import *
 from utilities import value_to_hex_color, toggle_windows_console, create_default_icon
 from version import __version__
+import debug_log
 
 # Per-engine facade mixins extend the controller's call surface without
 # bloating main.py — each mixin's docstring covers its assumed attributes.
@@ -138,6 +139,16 @@ class OscGoesPurrrApp(
         """Initialize UI component and backend services."""
         # Instantiate Haptic Engine (now owns its own state)
         self.haptic_engine = HapticEngine(self.thread_queue)
+
+        # Tell the engine how to provision the Buttplug server: spawn our own
+        # bundled intiface-engine ("integrated", the default) or connect to a
+        # user-run Intiface Central ("external"). Read from the persisted
+        # setting; the live toggle goes through set_intiface_integrated().
+        self.haptic_engine.set_connection_mode(
+            "integrated"
+            if self.profile_manager.app_settings.get("use_integrated_intiface", True)
+            else "external"
+        )
 
         # Initialize standalone OSC routing engine
         self.motor_router = MotorRouter()
@@ -267,6 +278,9 @@ class OscGoesPurrrApp(
             asyncio.set_event_loop(loop)
 
             self.async_loop = loop
+            # Surface otherwise-hidden async failures (fire-and-forget task
+            # exceptions, etc.) into the debug log.
+            debug_log.install_asyncio_handler(loop)
             # Tell the main thread the loop is ready; `run()` waits on this
             # instead of polling-sleeping until self.async_loop becomes non-None.
             self._loop_ready.set()
@@ -274,6 +288,12 @@ class OscGoesPurrrApp(
             try:
                 # Run the haptic engine async worker (main hardware loop)
                 loop.run_until_complete(self.haptic_engine.async_worker())
+            except BaseException:
+                # If the hardware loop ever dies, the toy pipeline goes silent
+                # with no visible error under the windowed build — log it.
+                debug_log.get_logger().critical(
+                    "haptic async_worker exited unexpectedly", exc_info=True
+                )
             finally:
                 loop.close()
 
@@ -319,6 +339,10 @@ class OscGoesPurrrApp(
             msg_type, data = msg
 
             if msg_type == "ui_update":
+                try:
+                    debug_log.get_logger("engine").info("%s", data)
+                except Exception:
+                    pass
                 self.ui.log_message(data)
             elif msg_type == "connection_status":
                 connected, server = data
@@ -471,6 +495,10 @@ class OscGoesPurrrApp(
     
     def log_message(self, message: str):
         """Add a message to the log text box (main thread only)"""
+        try:
+            debug_log.get_logger().info("%s", message)
+        except Exception:
+            pass
         self.ui.log_message(message)
     
     def update_connection_status(self, connected: bool, server: str):
@@ -478,12 +506,20 @@ class OscGoesPurrrApp(
         # Sync with haptic engine (haptic_engine.is_connected is now the single source of truth)
         if self.haptic_engine:
             self.haptic_engine.mark_connected(connected)
-        
+
         # Update UI via ui component
         self.ui.update_connection_status(connected, server)
-        
+
+        if connected:
+            # Kick off the periodic rescan so toys powered on AFTER connect get
+            # discovered automatically. This is the single choke point for "we
+            # just connected" regardless of path (manual button, auto-connect,
+            # or reconnect-after-drop) — previously only the manual button
+            # started it, so a startup auto-connect never rescanned and newly
+            # powered-on toys never appeared without a manual reconnect.
+            self._ensure_auto_refresh_running()
         # If auto-connect is enabled and we just disconnected, restart the retry loop
-        if not connected and self.auto_connect_enabled and self.async_loop:
+        elif self.auto_connect_enabled and self.async_loop:
             try:
                 self._auto_connect_task = asyncio.run_coroutine_threadsafe(
                     self._async_auto_connect_loop(),
@@ -491,6 +527,22 @@ class OscGoesPurrrApp(
                 )
             except Exception as e:
                 self.log_message(f"Auto-reconnect restart failed: {e}")
+
+    def _ensure_auto_refresh_running(self) -> None:
+        """Start the periodic device-rescan loop if auto-refresh is enabled and
+        it isn't already running. Idempotent — safe to call on every connect."""
+        if not (self.auto_refresh_enabled and self.async_loop):
+            return
+        task = self._auto_refresh_task
+        if task is not None and not task.done():
+            return  # already running
+        try:
+            self._auto_refresh_task = asyncio.run_coroutine_threadsafe(
+                self._async_auto_refresh_loop(),
+                self.async_loop,
+            )
+        except Exception as e:
+            self.log_message(f"Failed to start auto refresh: {e}")
     
     def toggle_auto_connect(self):
         """Handle auto-connect checkbox toggle from UI"""
@@ -1152,6 +1204,47 @@ class OscGoesPurrrApp(
         VRChat OSC link. Setter-only so the UI never holds the object."""
         if hasattr(self, 'haptic_engine') and self.haptic_engine:
             self.haptic_engine.mark_connected(connected)
+
+    def set_intiface_integrated(self, enabled: bool) -> None:
+        """Facade for the Settings → Intiface Engine toggle. Persists the
+        choice, pushes the new provisioning mode to the engine, and — if a
+        session is live — bounces the connection so the new backend takes
+        effect immediately (the running server can't be swapped under an open
+        websocket). UI passes a bool only; it never touches the engine."""
+        enabled = bool(enabled)
+        self.set_app_setting("use_integrated_intiface", enabled)
+        mode = "integrated" if enabled else "external"
+        if self.haptic_engine:
+            self.haptic_engine.set_connection_mode(mode)
+        self.log_message(
+            "Intiface engine mode: "
+            + ("Built-in (no Intiface Central needed)" if enabled
+               else "External (run Intiface Central yourself)")
+        )
+
+        # Apply live only when already connected — otherwise the next connect
+        # picks up the new mode on its own.
+        if not (self.haptic_engine and self.haptic_engine.is_connected and self.async_loop):
+            return
+        self.log_message("Reconnecting Intiface to apply the new engine mode…")
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                self.haptic_engine.async_disconnect(), self.async_loop
+            )
+            future.result(timeout=6)
+        except Exception as e:
+            self.log_message(f"Disconnect during Intiface mode switch failed: {e}")
+        # update_connection_status restarts the auto-reconnect loop when
+        # auto-connect is on; only kick a manual attempt when it isn't, so we
+        # never fire two overlapping connects.
+        self.update_connection_status(False, "")
+        if not self.auto_connect_enabled and self.get_feature_enabled("feature_intiface"):
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self._async_attempt_connection(), self.async_loop
+                )
+            except Exception as e:
+                self.log_message(f"Reconnect during Intiface mode switch failed: {e}")
     
     def toggle_auto_refresh(self):
         """Handle auto-refresh checkbox toggle from UI"""
@@ -1222,6 +1315,21 @@ class OscGoesPurrrApp(
                     await self._async_start_scanning()
                 except Exception as e:
                     pass  # Errors are logged in _async_start_scanning
+
+    def scan_for_toys(self) -> None:
+        """Facade: trigger an immediate one-shot rescan for newly powered-on
+        toys (a manual "scan now"). Fire-and-forget so the UI never blocks.
+        Complements the periodic auto-refresh loop for users who don't want to
+        wait up to AUTO_REFRESH_RATE_S after switching a toy on. No-op (with a
+        hint) when not connected. UI calls this facade — never the engine."""
+        if not (self.async_loop and self.haptic_engine and self.haptic_engine.is_connected):
+            self.log_message("Scan for toys: connect to Intiface first.")
+            return
+        self.log_message("Scanning for new toys…")
+        try:
+            asyncio.run_coroutine_threadsafe(self._async_start_scanning(), self.async_loop)
+        except Exception as e:
+            self.log_message(f"Scan for toys failed: {e}")
     
     def connect_to_intiface(self):
         """Handle connection button click - connects/disconnects from main thread"""
@@ -1249,16 +1357,11 @@ class OscGoesPurrrApp(
                 # Wait for result with a timeout
                 future.result(timeout=5)
                 self.log_message("Connected to Intiface successfully")
-                
-                # Start auto-refresh scanning loop if enabled
-                if self.auto_refresh_enabled:
-                    try:
-                        self._auto_refresh_task = asyncio.run_coroutine_threadsafe(
-                            self._async_auto_refresh_loop(),
-                            self.async_loop
-                        )
-                    except Exception as e:
-                        self.log_message(f"Failed to start auto refresh: {e}")
+
+                # Start the periodic rescan loop (guarded; update_connection_status
+                # also calls this when the connection_status event lands, so the
+                # helper de-dupes).
+                self._ensure_auto_refresh_running()
             except Exception as e:
                 error_msg = f"Connection failed: {e}"
                 self.log_message(error_msg)
@@ -1306,7 +1409,14 @@ class OscGoesPurrrApp(
     
     def _on_closing(self):
         """Handle window close event: either minimize to tray or fully quit."""
-        if self.get_app_setting("minimize_to_tray", False):
+        to_tray = self.get_app_setting("minimize_to_tray", False)
+        try:
+            debug_log.get_logger().info(
+                "window close requested (minimize_to_tray=%s)", to_tray
+            )
+        except Exception:
+            pass
+        if to_tray:
             self.minimize_to_tray()
         else:
             self.quit_app()
@@ -1337,6 +1447,10 @@ class OscGoesPurrrApp(
 
     def quit_app(self):
         """Executes the final, clean shutdown sequence."""
+        try:
+            debug_log.get_logger().info("quit_app() called — beginning clean shutdown")
+        except Exception:
+            pass
         self.log_message("Shutting down...")
         current_geometry = self.ui.get_geometry()
         if current_geometry:
@@ -1364,6 +1478,16 @@ class OscGoesPurrrApp(
                     self.async_loop,
                 )
                 future.result(timeout=2.0)
+        except Exception:
+            pass
+
+        # Hard safety net for integrated mode: make sure any intiface-engine we
+        # spawned is stopped even if we weren't "connected" at quit (e.g. it
+        # launched but its websocket never came up). The Windows Job Object
+        # would also kill it when our process exits; this just doesn't wait.
+        try:
+            if self.haptic_engine:
+                self.haptic_engine.release_managed_server()
         except Exception:
             pass
 
@@ -1581,5 +1705,12 @@ class OscGoesPurrrApp(
 
 
 if __name__ == "__main__":
-    app = OscGoesPurrrApp()
-    app.run()
+    # Set up durable logging + crash handlers FIRST, so even a failure during
+    # app construction lands in the log file (the windowed build has no console).
+    debug_log.setup_logging()
+    try:
+        app = OscGoesPurrrApp()
+        app.run()
+    except BaseException:
+        debug_log.get_logger().critical("fatal error in __main__", exc_info=True)
+        raise

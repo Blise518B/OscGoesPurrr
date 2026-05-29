@@ -16,12 +16,17 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 from buttplug import ButtplugClient, DeviceOutputCommand, OutputType
-from constants import APP_NAME, HAPTIC_POLL_RATE, INTIFACE_WS_URL
+from constants import APP_NAME, HAPTIC_POLL_RATE
 from haptic_actuators import (
     LINEAR_DEFAULTS,
     STROKE_SPEED_DEFAULTS,
     LinearActuator,
     StrokeSpeedActuator,
+)
+from intiface_connection import (
+    MODE_EXTERNAL,
+    MODE_INTEGRATED,
+    make_intiface_connection,
 )
 
 
@@ -137,6 +142,16 @@ class HapticEngine:
         # Hardware clients - these will be set when async_worker runs
         self.buttplug_client: Optional[ButtplugClient] = None
 
+        # How the Buttplug server is provisioned: "integrated" (we spawn and
+        # supervise a bundled intiface-engine) or "external" (connect to a
+        # user-run Intiface Central). Set by the controller from the
+        # `use_integrated_intiface` app setting via set_connection_mode().
+        # The active provider object is built lazily at connect time and kept
+        # across reconnects so a transient websocket drop reuses the same
+        # running engine instead of respawning it. See intiface_connection.py.
+        self._connection_mode = MODE_INTEGRATED
+        self._connection = None
+
         # Connection state
         self.is_connected = False
 
@@ -173,6 +188,30 @@ class HapticEngine:
         the engine's internal state owned by the engine (ARCHITECTURE.md
         rule #3)."""
         self.is_connected = bool(connected)
+
+    def set_connection_mode(self, mode: str) -> None:
+        """Primitive facade: choose how the Buttplug server is provisioned —
+        "integrated" (spawn our own intiface-engine) or "external" (a user-run
+        Intiface Central). Takes effect on the next connect; the controller is
+        responsible for bouncing an active connection if the user flips this
+        mid-session. A plain string write, owned by the engine like
+        `is_connected` (ARCHITECTURE.md rule #3)."""
+        self._connection_mode = (
+            MODE_EXTERNAL if mode == MODE_EXTERNAL else MODE_INTEGRATED
+        )
+
+    def release_managed_server(self) -> None:
+        """Best-effort, synchronous teardown of any server this engine spawned
+        (the integrated intiface-engine). No-op in external mode or when
+        nothing was started. Called from the app-quit path so a clean exit
+        doesn't momentarily leave the engine holding the Bluetooth radio while
+        the OS reclaims the process. Safe to call from the main thread."""
+        conn = self._connection
+        if conn is not None:
+            try:
+                conn.terminate()
+            except Exception:
+                pass
 
     def set_linear_config(self, device_name: str, motor_idx: int,
                           mode: str = "position", idle: str = "rest",
@@ -558,10 +597,32 @@ class HapticEngine:
         self.push_connection_status(False, "")
 
     async def async_connect(self):
-        """Internal async method to connect to Intiface"""
+        """Internal async method to connect to the Buttplug server.
+
+        The server is provisioned by the active connection provider — either
+        spawning our bundled intiface-engine ("integrated") or just pointing at
+        a user-run Intiface Central ("external"). Everything after the
+        websocket connect is identical for both modes.
+        """
+        # (Re)build the provider only when missing or when the user switched
+        # modes since the last connect. Reusing a live provider lets the
+        # integrated engine survive a transient websocket drop + auto-reconnect.
+        if self._connection is not None and self._connection.mode != self._connection_mode:
+            try:
+                await self._connection.shutdown()
+            except Exception:
+                pass
+            self._connection = None
+        if self._connection is None:
+            self._connection = make_intiface_connection(
+                self._connection_mode, log=self.push_ui_update
+            )
+
+        ws_url = await self._connection.prepare()
+
         self.buttplug_client = ButtplugClient(APP_NAME)
 
-        await self.buttplug_client.connect(INTIFACE_WS_URL)
+        await self.buttplug_client.connect(ws_url)
 
         # Register the server-disconnect event hook so we notice the moment Intiface
         # closes the websocket, even when no haptic commands are currently flowing.
@@ -622,7 +683,7 @@ class HapticEngine:
 
         # Update connection status before triggering UI rebuild (fixes race condition)
         self.mark_connected(True)
-        self.push_connection_status(True, "Intiface")
+        self.push_connection_status(True, self._connection.status_label)
 
         # Register device add/remove hooks AFTER the initial bulk sync. Doing it
         # earlier would cause per-device callbacks to fire during the initial
@@ -642,12 +703,25 @@ class HapticEngine:
         self.push_ui_update(f"Scan complete. Devices found: {len(self.buttplug_client.devices)}")
 
     async def async_disconnect(self):
-        """Internal async method to disconnect from Intiface"""
+        """Internal async method to disconnect from the Buttplug server.
+
+        Beyond closing the websocket, this tears down the active connection
+        provider — which, in integrated mode, stops the intiface-engine we
+        spawned. The provider is dropped so the next connect rebuilds it
+        (and respawns the engine) fresh. A websocket-only drop does NOT come
+        through here, so auto-reconnect still reuses a live engine.
+        """
         if self.buttplug_client:
             try:
                 await self.buttplug_client.disconnect()
             except Exception:
                 pass
+        if self._connection is not None:
+            try:
+                await self._connection.shutdown()
+            except Exception:
+                pass
+            self._connection = None
         self.mark_connected(False)
         self._motor_features.clear()
         self.linear_actuators.clear()

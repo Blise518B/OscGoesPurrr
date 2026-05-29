@@ -70,7 +70,7 @@ echo.
 echo === Build succeeded.
 echo Output: %~dp0bin\win64\driver_oscgoespurrr.dll
 echo.
-echo You can now close this window. Next: re-run the outer build.bat to
+echo You can now close this window. Next: re-run the outer build_OGP.bat to
 echo bundle the fresh DLL into a new OscGoesPurrr EXE.
 echo.
 pause

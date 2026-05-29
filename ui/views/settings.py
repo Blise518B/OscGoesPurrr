@@ -183,6 +183,33 @@ class SettingsMixin:
 
         parent_layout.addWidget(conn_card)
 
+        # ---- Intiface Engine Card ----
+        # How the Buttplug toy server is provided: the built-in engine we
+        # bundle and launch ourselves (default — nothing else to run), or an
+        # external Intiface Central the user starts separately.
+        ife_card = _Card()
+        ife_lay = _vbox(20, 6)
+        ife_card.setLayout(ife_lay)
+
+        hdr = QLabel("Intiface Engine")
+        hdr.setObjectName("cardHeader")
+        ife_lay.addWidget(hdr)
+        ife_lay.addWidget(self._muted_label(
+            "Built-in mode runs a bundled Intiface engine for you, so you don't "
+            "have to launch Intiface Central separately. Turn this off to "
+            "connect to your own running Intiface Central instead. Changing this "
+            "reconnects automatically."
+        ))
+        self.intiface_integrated_toggle = ToggleSwitch("Use built-in Intiface engine")
+        self.intiface_integrated_toggle.setChecked(
+            bool(self.controller.get_app_setting("use_integrated_intiface", True))
+        )
+        self.intiface_integrated_toggle.toggled.connect(
+            lambda checked: self.controller.set_intiface_integrated(bool(checked))
+        )
+        ife_lay.addWidget(self.intiface_integrated_toggle)
+        parent_layout.addWidget(ife_card)
+
         # ---- Quality of Life Card ----
         ql_card = _Card()
         ql_lay = _vbox(20, 8)

@@ -1,0 +1,67 @@
+Built-in ("integrated") Intiface engine
+========================================
+
+OscGoesPurrr's default Intiface mode launches and supervises its own Buttplug
+server so you don't have to run Intiface Central separately. That server is the
+headless `intiface-engine` binary, which is NOT checked into this repository
+because it is a large, per-platform native executable.
+
+To enable integrated mode, drop the engine binary into THIS folder:
+
+    intiface-engine/intiface-engine.exe      (Windows)
+    intiface-engine/intiface-engine          (Linux / macOS)
+
+
+IMPORTANT — which engine, and why the "official releases" do NOT work
+---------------------------------------------------------------------
+OGP's Python `buttplug` client speaks Buttplug protocol **spec v4**
+(`ProtocolVersionMajor: 4`, with no downgrade path). The engine MUST speak v4
+or it rejects the handshake and integrated mode never connects.
+
+  - DO NOT use https://github.com/intiface/intiface-engine/releases — that
+    standalone repo is DEPRECATED and frozen at v1.4.8 / v3.0.8, which only
+    understand spec v3. They will fail with a JSON-schema "AnyOf" handshake
+    error against OGP's v4 client. (This is the single most common reason
+    integrated mode "launches but never connects.")
+
+  - The current, v4-capable engine moved INTO the buttplug monorepo:
+    https://github.com/buttplugio/buttplug  →  crates/intiface_engine
+    It is version 4.0.2+, built against buttplug 10.x (spec v4 is the default;
+    no feature flag needed), and is BSD-3-Clause licensed. It still produces a
+    standalone CLI binary (`[[bin]] name = "intiface-engine"`).
+
+
+How to build it (Windows, ~1-2 min once Rust is installed)
+----------------------------------------------------------
+  1. Install the Rust toolchain (MSVC target) via https://rustup.rs/ — you also
+     need the VS Build Tools "Desktop development with C++" workload + a Windows
+     SDK for the linker and the WinRT Bluetooth crates.
+  2. Clone the monorepo:
+        git clone https://github.com/buttplugio/buttplug
+  3. Build just the engine binary (release):
+        cd buttplug
+        cargo build --release --bin intiface-engine
+  4. Copy the result here using exactly the filename above:
+        buttplug\target\release\intiface-engine.exe  ->  intiface-engine\intiface-engine.exe
+  5. Verify:  intiface-engine\intiface-engine.exe --version   (should report 4.0.2+)
+
+
+Notes:
+  - OscGoesPurrr launches the engine with: --websocket-port 12345
+    --use-bluetooth-le  (see intiface_integrated.py). If you need other
+    transports (serial, HID, Lovense dongle, XInput), add the flags in
+    _BASE_ENGINE_ARGS there.
+  - Do NOT pass --stay-open: it is not a valid flag on this engine and makes it
+    exit immediately. The engine stays serving until OGP kills it, which is what
+    the supervise/teardown model wants.
+  - (Optional) To override the toy database, place a
+    `buttplug-device-config.json` in this folder; it is auto-detected and
+    passed via --device-config-file.
+  - The engine's stdout/stderr is captured to
+    %APPDATA%\OscGoesPurrr\intiface_engine.log for troubleshooting.
+  - build_OGP.bat bundles this binary into the frozen .exe automatically when
+    it is present (and silently builds without it when it is not).
+
+Don't have / don't want to build the binary? Turn off "Use built-in Intiface
+engine" in Settings -> Intiface Engine and OscGoesPurrr will connect to a copy
+of Intiface Central that you start yourself (the original behavior).

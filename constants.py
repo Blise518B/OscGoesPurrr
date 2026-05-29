@@ -66,5 +66,16 @@ AUTO_REFRESH_RATE_S = 30.0
 INTIFACE_WS_URL = "ws://127.0.0.1:12345"
 VRC_DEFAULT_PORT = 9000
 
+# --- Integrated Intiface engine ---
+# When the user runs in "integrated" mode (the default), OscGoesPurrr spawns
+# and supervises its own bundled `intiface-engine` instead of relying on a
+# separately-launched Intiface Central. The binary is looked up in this
+# folder (next to the source, or under the PyInstaller _MEIPASS at runtime).
+# See intiface_integrated.py.
+INTIFACE_ENGINE_DIRNAME = "intiface-engine"
+# How long to wait for the spawned engine to start serving its websocket
+# before giving up and reporting a connect failure.
+INTIFACE_ENGINE_STARTUP_TIMEOUT_S = 15.0
+
 # --- Application Data ---
 APP_NAME = "OscGoesPurrr"

@@ -43,7 +43,8 @@ following anti-tangling rules:
    primitive-only facade and (where applicable) via the shared
    `thread_queue`.
    * `HapticEngine` exposes `update_target()`, `set_linear_config()`,
-     `mark_connected()`, `list_connected_device_names()`,
+     `mark_connected()`, `set_connection_mode()`,
+     `release_managed_server()`, `list_connected_device_names()`,
      `get_motor_count_map()`, `snapshot_discovered_devices()`,
      `async_start_scan()`, `async_connect()`, `async_disconnect()`,
      `async_purr_check()`, `async_test_device()`. It never exposes
@@ -101,7 +102,21 @@ controller fans incoming OSC state out to whichever engines have config.
   `asyncio` event loop in a worker thread. Owns the
   `ButtplugClient`, the discovered-devices list, and the per-motor
   `device_targets` map. The async loop is bootstrapped from
-  `main.start_async_loop()`.
+  `main.start_async_loop()`. It does **not** know how the Buttplug server
+  is provisioned — that is delegated to a swappable connection provider
+  (see below), selected via `set_connection_mode()`.
+  * **Intiface connection providers.** Two self-contained modules implement
+    the same tiny contract (`prepare()` → ws URL, `shutdown()`,
+    `terminate()`, `status_label`); `intiface_connection.py` is the seam
+    that picks one via `make_intiface_connection(mode)`:
+    * `intiface_external.py` — connect to a user-run Intiface Central
+      (the original behavior; owns no server lifecycle).
+    * `intiface_integrated.py` — spawn and supervise a bundled
+      `intiface-engine` (hidden console, Windows Job Object kill-on-close,
+      websocket-readiness probe) so everything runs in one program. This is
+      the default, gated by the `use_integrated_intiface` app setting
+      (Settings → Intiface Engine). The engine binary is not in the repo;
+      it lives in `intiface-engine/` and is bundled by `build_OGP.bat`.
 * **`steamvr_engine.py` — SteamVR tracker haptics.** Talks to OpenVR,
   enumerates trackers, fires `TriggerHapticPulse`. Paired with
   `steamvr_router.py` (the per-tick calculator) and
@@ -271,7 +286,11 @@ All handled in `ProfileManager`:
 ## Auxiliary modules
 
 * `constants.py` — app-wide constants (`APP_NAME`, `INTIFACE_WS_URL`,
+  `INTIFACE_ENGINE_DIRNAME`, `INTIFACE_ENGINE_STARTUP_TIMEOUT_S`,
   default window geometry, OSC defaults).
+* `intiface_connection.py` / `intiface_external.py` /
+  `intiface_integrated.py` — the Buttplug-server connection providers and
+  their selecting factory (see the haptic_engine entry above).
 * `utilities.py` — small helpers (`value_to_hex_color`,
   `toggle_windows_console`, `create_default_icon`).
 * `version.py` — single source of truth for `__version__`.

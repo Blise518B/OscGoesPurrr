@@ -8,7 +8,7 @@
 #   1.0.51-dev(3)     (on dev, 3 commits ahead of main)
 #   1.0.51-fix-foo(2) (on fix/foo, slashes replaced with dashes)
 #
-# Frozen (PyInstaller) builds: build.bat writes `_version_baked.py` next to
+# Frozen (PyInstaller) builds: build_OGP.bat writes `_version_baked.py` next to
 # this module before running PyInstaller and removes it during cleanup. When
 # that file is bundled into the exe, the import below short-circuits the git
 # lookups — important because each subprocess.run on a --windowed exe would
@@ -17,7 +17,7 @@
 import re
 import subprocess
 
-BASE_VERSION = "1.1"
+BASE_VERSION = "1.2"
 RELEASE_BRANCH = "main"
 
 

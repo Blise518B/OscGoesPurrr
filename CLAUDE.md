@@ -26,7 +26,7 @@ What you **can** do in the sandbox:
 - Type-check, lint, refactor.
 - Commit and push back to GitHub for the user to pull on Windows.
 
-Do not try to invoke `python main.py`, `run.bat`, or `build.bat` in
+Do not try to invoke `python main.py`, `run.bat`, or `build_OGP.bat` in
 the sandbox — they will fail and waste time. State the limitation and
 hand the work back if a change genuinely needs a live run.
 

@@ -40,6 +40,12 @@ DEFAULT_APP_SETTINGS = {
     "feature_steamvr_haptics": True,
     "feature_steamvr_battery": True,
     "feature_intiface": True,
+    # Intiface server provisioning. True (default) = OscGoesPurrr spawns and
+    # supervises its own bundled intiface-engine, so no separate Intiface
+    # Central launch is needed. False = connect to a user-run Intiface Central
+    # (the original behavior). See intiface_connection.py and the Settings →
+    # Intiface Engine toggle.
+    "use_integrated_intiface": True,
 }
 
 

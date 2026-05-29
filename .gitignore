@@ -135,3 +135,9 @@ dmypy.json
 # OS files
 .DS_Store
 Thumbs.db
+
+# Bundled Intiface engine: the native binary is downloaded per-machine and
+# bundled by build_OGP.bat, not committed (see the placeholder note, which
+# stays tracked). Same for an optional user-supplied device-config override.
+/intiface-engine/*
+!/intiface-engine/PLACE_INTIFACE_ENGINE_HERE.txt

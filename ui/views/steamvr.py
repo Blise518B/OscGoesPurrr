@@ -261,7 +261,7 @@ class SteamVRMixin:
             self.log_message(
                 "Reinstall failed: the bundled DLL is missing from this build "
                 "of OscGoesPurrr. Rebuild the C++ driver (build_driver.bat) "
-                "and then rebuild the OscGoesPurrr EXE (build.bat)."
+                "and then rebuild the OscGoesPurrr EXE (build_OGP.bat)."
             )
         elif kind == "register_failed":
             self.log_message(

@@ -66,6 +66,16 @@ REM PyInstaller automatically analyzes imports, so all .py modules are bundled
 REM Temp files are cleaned up after successful build in step 4
 set EXE_NAME=OscGoesPurrr_!BUILD_VERSION!
 
+REM intiface-engine: bundle the built-in Intiface server binary so "integrated"
+REM mode works in the frozen build. The engine is a native per-platform
+REM executable that is NOT checked into the repo, so only add the data flag
+REM when the binary is actually present — otherwise PyInstaller aborts on a
+REM missing --add-data source. Drop intiface-engine.exe into intiface-engine\
+REM (see intiface-engine\PLACE_INTIFACE_ENGINE_HERE.txt) to ship integrated mode.
+set ENGINE_DATA=
+if exist "intiface-engine\intiface-engine.exe" set ENGINE_DATA=--add-data "intiface-engine;intiface-engine"
+if defined ENGINE_DATA (echo Bundling built-in intiface-engine.) else (echo intiface-engine binary NOT found in intiface-engine\ - building WITHOUT integrated mode. Drop intiface-engine.exe there to enable it.)
+
 REM steamvr_toy_driver: bundle the prebuilt DLL + manifest + resources so the
 REM installer can lay them into %LOCALAPPDATA% at runtime. Only the runtime
 REM payload (manifest, bin/win64/*.dll, resources/) needs to ship; src/, include/,
@@ -84,6 +94,7 @@ pyinstaller --noconfirm ^
     --add-data "steamvr_toy_driver\bin;steamvr_toy_driver\bin" ^
     --add-data "steamvr_toy_driver\resources;steamvr_toy_driver\resources" ^
     --add-data "steamvr_toy_driver\icon_assets_64;steamvr_toy_driver\icon_assets_64" ^
+    %ENGINE_DATA% ^
     --collect-all openvr ^
     --name "!EXE_NAME!" ^
     main.py

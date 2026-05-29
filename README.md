@@ -41,8 +41,12 @@ toys, SteamVR trackers, bHaptics suits, and the SteamVR overlay.
 
 **Prerequisites:**
 1. [Python 3.10+](https://www.python.org/downloads/).
-2. [Intiface Central](https://intiface.com/central/) — required for
-   the Buttplug.io toy backend.
+2. *(Optional)* [Intiface Central](https://intiface.com/central/) — only
+   needed if you switch off the built-in Intiface engine in
+   Settings → Intiface Engine. By default OscGoesPurrr runs its own bundled
+   `intiface-engine` (drop the binary into `intiface-engine/`; see that
+   folder's note), so no separate launch is required for the Buttplug.io
+   toy backend.
 3. *(Optional)* [SteamVR](https://store.steampowered.com/app/250820/)
    — required for the SteamVR tracker, SteamVR Toy Driver, and
    battery-broadcaster features.
@@ -67,12 +71,12 @@ toys, SteamVR trackers, bHaptics suits, and the SteamVR overlay.
 
 ### Prebuilt Windows executable
 
-A standalone `.exe` is produced by `build.bat` (PyInstaller, one-file,
+A standalone `.exe` is produced by `build_OGP.bat` (PyInstaller, one-file,
 windowed). Built binaries live under `dist/`. Just double-click the
 exe — no Python install required.
 
 ```bash
-build.bat
+build_OGP.bat
 ```
 
 ## 🧭 Tour of the UI
