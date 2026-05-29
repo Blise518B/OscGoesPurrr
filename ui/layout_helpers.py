@@ -25,6 +25,11 @@ def clear_layout(layout):
         item = layout.takeAt(0)
         w = item.widget()
         if w is not None:
+            # Hide before detaching: reparenting a still-visible child to
+            # None can briefly realise it as a top-level window (a flash)
+            # before deleteLater() destroys it. Hiding first keeps the
+            # teardown invisible.
+            w.hide()
             w.setParent(None)
             w.deleteLater()
         else:

@@ -312,9 +312,12 @@ class DeviceFrameMixin:
         if not hasattr(self, "_help_badges"):
             self._help_badges = []
         self._help_badges.append(badge)
-        badge.setVisible(
-            bool(self.controller.get_app_setting("help_mode_enabled", False))
-        )
+        # Start hidden: the caller reparents the badge via addWidget() right
+        # after this returns, but calling setVisible(True) while it's still
+        # parentless would briefly realise it as a top-level window (a flash).
+        # Real visibility is resolved by _set_help_badges_visible() once the
+        # rebuild has parented every badge.
+        badge.setVisible(False)
         return badge
 
     def _set_help_badges_visible(self, visible: bool) -> None:
@@ -761,6 +764,9 @@ class DeviceFrameMixin:
                 w = item.widget()
                 if w is not None:
                     self.unified_devices_layout.takeAt(i)
+                    # Hide before detaching: a still-visible child reparented
+                    # to None briefly realises as a top-level window (a flash).
+                    w.hide()
                     w.setParent(None)
                     w.deleteLater()
                 else:
@@ -818,6 +824,13 @@ class DeviceFrameMixin:
         # Overview grid so its tile set matches.
         if hasattr(self, "rebuild_overview"):
             self.rebuild_overview()
+
+        # Badges were created hidden (see _make_help_badge) to avoid a
+        # parentless-top-level flash; now that the rebuild has parented them,
+        # reveal them if Help Mode is on.
+        self._set_help_badges_visible(
+            controller.get_app_setting("help_mode_enabled", False)
+        )
 
     def build_device_list_ui(self, devices_dict: dict):
         controller = self.controller
@@ -976,6 +989,7 @@ class DeviceFrameMixin:
             frame: Optional[QWidget] = frame_data.get("frame")
             if frame is not None:
                 try:
+                    frame.hide()
                     frame.setParent(None)
                     frame.deleteLater()
                 except Exception:
@@ -989,6 +1003,7 @@ class DeviceFrameMixin:
             for data in list(self.device_ui_frames.values()):
                 frame = data.get("frame")
                 if frame is not None:
+                    frame.hide()
                     frame.setParent(None)
                     frame.deleteLater()
         self.device_ui_frames.clear()

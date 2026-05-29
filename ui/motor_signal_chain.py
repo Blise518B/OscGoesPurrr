@@ -1757,6 +1757,9 @@ class MotorChainListWidget(QFrame):
             item = self._root_lay.takeAt(0)
             w = item.widget()
             if w is not None:
+                # Hide before detaching: a still-visible child reparented to
+                # None briefly realises as a top-level window (a flash).
+                w.hide()
                 w.setParent(None)
                 w.deleteLater()
             else:
@@ -1767,6 +1770,7 @@ class MotorChainListWidget(QFrame):
                         sub = lay.takeAt(0)
                         sw = sub.widget()
                         if sw is not None:
+                            sw.hide()
                             sw.setParent(None)
                             sw.deleteLater()
         self._chain_widgets.clear()
@@ -1933,7 +1937,6 @@ class MotorChainListWidget(QFrame):
         body.setObjectName("simulatorBody")
         body_lay = _vbox(6, 6)
         body.setLayout(body_lay)
-        body.setVisible(self._sim_expanded)
 
         # Row 1: frequency + amplitude + waveform
         r1 = _hbox(0, 12)
@@ -2006,6 +2009,10 @@ class MotorChainListWidget(QFrame):
         body_lay.addLayout(r2)
 
         lay.addWidget(body)
+        # Set visibility only after `body` is parented into `lay`: calling
+        # setVisible(True) while it's still parentless makes Qt briefly realise
+        # it as a top-level window, flashing a 640x480 box centre-screen.
+        body.setVisible(self._sim_expanded)
 
         # Header toggles the body. mousePressEvent on the header
         # widget; buttons/spinboxes inside the body consume their own
@@ -2222,7 +2229,6 @@ class MotorChainListWidget(QFrame):
         body.setObjectName("chainOverviewBody")
         body_lay = _vbox(0, 0)
         body.setLayout(body_lay)
-        body.setVisible(self._overview_expanded)
 
         if self._overview_expanded:
             graph = self._make_overview_graph()
@@ -2242,6 +2248,10 @@ class MotorChainListWidget(QFrame):
 
         lay.addWidget(header)
         lay.addWidget(body)
+        # Set visibility only after `body` is parented into `lay`: calling
+        # setVisible(True) while it's still parentless makes Qt briefly realise
+        # it as a top-level window, flashing a 640x480 box centre-screen.
+        body.setVisible(self._overview_expanded)
         return panel
 
     def _make_overview_graph(self) -> _TraceGraph:
@@ -2269,6 +2279,7 @@ class MotorChainListWidget(QFrame):
                 item = body_lay.itemAt(i)
                 w = item.widget() if item is not None else None
                 if w is not None:
+                    w.hide()
                     w.setParent(None)
                     w.deleteLater()
             self._overview_graph = None

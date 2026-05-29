@@ -1104,10 +1104,14 @@ class OverviewMixin:
             item = grid.takeAt(0)
             w = item.widget() if item is not None else None
             if w is not None:
+                # Hide before detaching: a still-visible child reparented to
+                # None briefly realises as a top-level window (a flash).
+                w.hide()
                 w.setParent(None)
                 w.deleteLater()
         refs["tiles"].clear()
         if refs.get("empty") is not None:
+            refs["empty"].hide()
             refs["empty"].setParent(None)
             refs["empty"].deleteLater()
             refs["empty"] = None

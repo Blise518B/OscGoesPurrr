@@ -509,6 +509,9 @@ class SimulatorMainWindow(QMainWindow):
             item = layout.takeAt(0)
             w = item.widget()
             if w is not None:
+                # Hide before detaching: a still-visible child reparented to
+                # None briefly realises as a top-level window (a flash).
+                w.hide()
                 w.setParent(None)
                 w.deleteLater()
             else:
