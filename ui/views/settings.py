@@ -442,6 +442,17 @@ Under each motor, the "+ Add Variable" button lets you map any number of OSC par
 The picker shows live avatar parameters captured by the OSC inspector. Double-click a row to add it, or use the manual entry field. The × on each chip removes that mapping for the current profile only.
 """)
 
+        section("SPS Sources — synthetic contact zones", """
+The SPS Sources tab lets you build a "virtual" SPS zone out of raw VRChat contact receivers, for spots your avatar doesn't expose as an OGB zone. Each source combines:
+
+  • Proximity — one or more proximity receivers. The loudest one wins.
+  • Activation — binary gate contacts. The proximity only counts while at least one activation contact is firing, so you can pin the signal to a very specific spot. Leave empty for no gate.
+  • Velocity — binary on-enter contacts. While any of them fires, the output is multiplied by the "Velocity ×" amount (a thrust/speed boost).
+  • Max value — caps the raw proximity before the multiplier is applied.
+
+Type all the contact parameter names comma-separated (the /avatar/parameters/ prefix is optional). Each source you define then appears — by its name — in the Device Routing zone picker (under "Custom Sources") and in the bHaptics Cross-Routing picker, where it routes exactly like an auto-detected zone. The sources are global (shared by every profile).
+""")
+
         section("SteamVR Device Communication", """
 A two-way bridge between VRChat OSC and your SteamVR devices.
 

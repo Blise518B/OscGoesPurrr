@@ -71,6 +71,7 @@ from ui.views.hardware_monitor import HardwareMonitorMixin
 from ui.views.device_frame import DeviceFrameMixin
 from ui.views.tune import TuneMixin
 from ui.views.overview import OverviewMixin
+from ui.views.sps_sources import SpsSourcesMixin
 
 
 # ============================================================
@@ -544,6 +545,7 @@ class OscGoesPurrrUI(
     DeviceFrameMixin,
     TuneMixin,
     OverviewMixin,
+    SpsSourcesMixin,
 ):
     """UI Component class — handles all GUI rendering and updates."""
 
@@ -686,7 +688,7 @@ class OscGoesPurrrUI(
         root_layout.addWidget(self.main_stack, 1)
 
         view_names = ["Dashboard", "Overview", "Simple Mode",
-                      "Device Routing", "Tune",
+                      "Device Routing", "SPS Sources", "Tune",
                       "SteamVR Device Comms", "bHaptics", "Hardware Monitor",
                       "OSC Inspector", "OSC Diagnostics", "System Log",
                       "Settings", "Help"]
@@ -695,6 +697,7 @@ class OscGoesPurrrUI(
             "Overview": self._build_overview_view,
             "Simple Mode": self._build_simple_mode_view,
             "Device Routing": self._build_device_routing_view,
+            "SPS Sources": self._build_sps_sources_view,
             "Tune": self._build_tune_view,
             "SteamVR Device Comms": self._build_steamvr_view,
             "bHaptics": self._build_bhaptics_view,
@@ -768,7 +771,7 @@ class OscGoesPurrrUI(
         lay.addSpacing(20)
 
         nav_buttons = ["Dashboard", "Overview", "Simple Mode",
-                       "Device Routing", "Tune",
+                       "Device Routing", "SPS Sources", "Tune",
                        "SteamVR Device Comms", "bHaptics", "Hardware Monitor",
                        "OSC Inspector", "OSC Diagnostics", "System Log",
                        "Settings", "Help"]

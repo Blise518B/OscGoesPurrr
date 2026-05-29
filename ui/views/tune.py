@@ -184,6 +184,9 @@ class TuneMixin:
             item = cc_lay.takeAt(0)
             w = item.widget()
             if w is not None:
+                # Hide before detaching: a still-visible child reparented to
+                # None briefly realises as a top-level window (a flash).
+                w.hide()
                 w.setParent(None)
                 w.deleteLater()
         self._tune_widgets["chain_widget"] = None

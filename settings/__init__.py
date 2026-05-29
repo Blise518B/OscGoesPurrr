@@ -15,6 +15,7 @@ from ._paths import (
     PROFILE_FILE,
     SESSIONS_DIR,
     SESSIONS_SETTINGS_FILE,
+    SPS_SOURCES_FILE,
     STEAMVR_SETTINGS_FILE,
 )
 from .app import AppSettingsManager, DEFAULT_APP_SETTINGS
@@ -22,6 +23,7 @@ from .bhaptics import BHapticsSettingsManager
 from .hardware_monitor import HardwareMonitorSettingsManager
 from .known_devices import KnownDevicesRegistry
 from .sessions import SessionSettingsManager
+from .sps_sources import SpsSourceManager
 from .steamvr import SteamVRSettingsManager
 
 __all__ = [
@@ -33,6 +35,7 @@ __all__ = [
     "PROFILE_FILE",
     "SESSIONS_DIR",
     "SESSIONS_SETTINGS_FILE",
+    "SPS_SOURCES_FILE",
     "STEAMVR_SETTINGS_FILE",
     "AppSettingsManager",
     "BHapticsSettingsManager",
@@ -40,5 +43,6 @@ __all__ = [
     "HardwareMonitorSettingsManager",
     "KnownDevicesRegistry",
     "SessionSettingsManager",
+    "SpsSourceManager",
     "SteamVRSettingsManager",
 ]

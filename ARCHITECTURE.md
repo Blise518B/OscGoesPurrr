@@ -234,6 +234,14 @@ owns several sibling stores:
   enabled flag, OSC send toggles, poll rate, per-stat addresses.
 * **`known_devices`** (`KnownDevicesRegistry`) — global registry of
   every toy ever seen; profiles inherit from it on first creation.
+* **`sps_sources`** (`SpsSourceManager`) — global registry of
+  user-defined *synthetic SPS sources*: virtual contact zones assembled
+  from raw VRChat receivers (proximity + activation gate + velocity
+  multiplier + max-value clamp). Global, like `known_devices`, so a
+  source is selectable from any profile. The pure evaluation math lives
+  in `sps_source.py`; both `motor_router` and `bhaptics_router` resolve a
+  selected source name against the map the controller passes in each
+  tick, so a synthetic source routes exactly like a detected OGB zone.
 
 ### Active-profile resolution
 

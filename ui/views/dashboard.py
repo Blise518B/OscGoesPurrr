@@ -818,7 +818,7 @@ class DashboardMixin:
     # onboarding mode where the user shouldn't be surprised by SteamVR,
     # bHaptics, the OSC inspector, etc. before they've connected a toy.
     _SIMPLE_MODE_HIDDEN_VIEWS = (
-        "Dashboard", "Device Routing", "SteamVR Device Comms",
+        "Dashboard", "Device Routing", "SPS Sources", "SteamVR Device Comms",
         "bHaptics", "Hardware Monitor", "OSC Inspector", "System Log",
     )
 

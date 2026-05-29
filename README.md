@@ -87,6 +87,13 @@ Sidebar views (toggle from the left rail):
 * **Device Routing** — the full per-toy / per-motor matrix: zone
   bindings, touch/pen/self/other filters, speed-blend tuning, linear
   actuator config.
+* **SPS Sources** — build *synthetic* SPS sources from raw VRChat
+  contact receivers: a proximity receiver gated by "activation" binary
+  contacts (so it only fires in a very specific spot), boosted by
+  "velocity" on-enter contacts (a shared multiplier), and capped by a
+  max value. Each source becomes selectable in the Device Routing zone
+  picker and the bHaptics Cross-Routing picker, just like an
+  auto-detected zone.
 * **SteamVR Device Comms** — list of detected SteamVR trackers,
   per-tracker pattern + address config, autostart toggle, battery
   interval, no-data fallback.
@@ -134,6 +141,7 @@ All user state is stored under `%APPDATA%\OscGoesPurrr\`:
   device configs + antistuck.
 * `hardware_monitor_settings.json` — CPU/RAM/GPU broadcaster config.
 * `known_devices.json` — global registry of every toy ever seen.
+* `sps_sources.json` — user-defined synthetic SPS sources.
 
 Delete a file to reset that subsystem to defaults; the app re-creates
 it on next launch.

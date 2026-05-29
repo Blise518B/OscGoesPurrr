@@ -8,7 +8,7 @@ import os
 import sys
 
 from PySide6.QtCore import (
-    Qt, QTimer, Signal, QObject, QEvent, QSize, QPointF, QRectF
+    Qt, Signal, QObject, QEvent, QSize, QPointF, QRectF
 )
 from PySide6.QtGui import (
     QFont, QColor, QTextCharFormat, QTextCursor, QIcon,
@@ -18,14 +18,12 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QCheckBox, QLineEdit, QSlider, QProgressBar,
     QFrame, QScrollArea, QTextEdit, QPlainTextEdit, QSizePolicy, QSpacerItem,
-    QDialog, QMessageBox, QTreeWidget, QTreeWidgetItem, QHeaderView,
     QButtonGroup, QStackedWidget, QTableWidget, QTableWidgetItem,
     QAbstractItemView, QComboBox, QSpinBox, QDoubleSpinBox, QToolButton,
 )
 from ui import lovense_icons as _lovense_icons
 
 from constants import *
-from parameter_store import store
 from utilities import strip_param_prefix
 
 from ui.geometry import parse_tk_geometry as _parse_tk_geometry
@@ -55,6 +53,7 @@ from ui.widgets import (
 )
 from ui.help_mode import HelpBadge as _HelpBadge
 from ui.motor_signal_chain import MotorChainListWidget as _MotorChainListWidget
+from ui.osc_variable_picker import open_osc_variable_picker
 
 
 class DeviceFrameMixin:
@@ -313,9 +312,12 @@ class DeviceFrameMixin:
         if not hasattr(self, "_help_badges"):
             self._help_badges = []
         self._help_badges.append(badge)
-        badge.setVisible(
-            bool(self.controller.get_app_setting("help_mode_enabled", False))
-        )
+        # Start hidden: the caller reparents the badge via addWidget() right
+        # after this returns, but calling setVisible(True) while it's still
+        # parentless would briefly realise it as a top-level window (a flash).
+        # Real visibility is resolved by _set_help_badges_visible() once the
+        # rebuild has parented every badge.
+        badge.setVisible(False)
         return badge
 
     def _set_help_badges_visible(self, visible: bool) -> None:
@@ -420,10 +422,16 @@ class DeviceFrameMixin:
             fresh_zones.extend(detected.get("Orifices", []))
             fresh_zones.extend(detected.get("Penetrators", []))
 
-            if not fresh_zones:
+            try:
+                custom_sources = list(self.controller.get_sps_source_names_flat() or [])
+            except Exception:
+                custom_sources = []
+
+            if not fresh_zones and not custom_sources:
                 lbl = QLabel(
                     "No zones detected yet.\n"
-                    "Make sure VRChat is running and avatar loaded."
+                    "Make sure VRChat is running and avatar loaded.\n"
+                    "(Or define a synthetic source in the SPS Sources tab.)"
                 )
                 lbl.setProperty("role", "alert")
                 panel_lay.addWidget(lbl)
@@ -454,12 +462,6 @@ class DeviceFrameMixin:
             all_sps_cb.toggled.connect(on_all_sps)
             panel_lay.addWidget(all_sps_cb)
 
-            sep_lbl = QLabel("─── Detected Zones ───")
-            sep_lbl.setProperty("muted", "true")
-            sep_lbl.setAlignment(Qt.AlignHCenter)
-            self._repolish(sep_lbl)
-            panel_lay.addWidget(sep_lbl)
-
             def make_toggle(zone):
                 def _toggle(checked):
                     sel = [z.strip() for z in state["value"].split(",") if z.strip()]
@@ -472,13 +474,36 @@ class DeviceFrameMixin:
                     persist(", ".join(sel))
                 return _toggle
 
-            for zone in fresh_zones:
-                if zone == "None":
-                    continue
-                cb = ToggleSwitch(zone)
-                cb.setChecked(zone in current_selected)
-                cb.toggled.connect(make_toggle(zone))
-                panel_lay.addWidget(cb)
+            if fresh_zones:
+                sep_lbl = QLabel("─── Detected Zones ───")
+                sep_lbl.setProperty("muted", "true")
+                sep_lbl.setAlignment(Qt.AlignHCenter)
+                self._repolish(sep_lbl)
+                panel_lay.addWidget(sep_lbl)
+
+                for zone in fresh_zones:
+                    if zone == "None":
+                        continue
+                    cb = ToggleSwitch(zone)
+                    cb.setChecked(zone in current_selected)
+                    cb.toggled.connect(make_toggle(zone))
+                    panel_lay.addWidget(cb)
+
+            # Synthetic SPS sources (built in the SPS Sources tab). Selecting
+            # one writes its name into motor_X_zones exactly like a detected
+            # zone; the router resolves the name against the source map.
+            if custom_sources:
+                csep = QLabel("─── Custom Sources ───")
+                csep.setProperty("muted", "true")
+                csep.setAlignment(Qt.AlignHCenter)
+                self._repolish(csep)
+                panel_lay.addWidget(csep)
+
+                for zone in custom_sources:
+                    cb = ToggleSwitch(zone)
+                    cb.setChecked(zone in current_selected)
+                    cb.toggled.connect(make_toggle(zone))
+                    panel_lay.addWidget(cb)
 
         def toggle_zone_panel(state=zones_state, btn=zone_btn, panel=zone_panel,
                               build=build_zone_panel):
@@ -692,170 +717,10 @@ class DeviceFrameMixin:
     # ----------------------------------------------------------
 
     def _open_variable_picker(self, on_pick: Callable[[str], None]):
-        dlg = QDialog(self.window)
-        dlg.setWindowTitle("Add OSC Variable")
-        dlg.resize(560, 600)
-        dlg.setModal(True)
-
-        lay = _vbox(12, 6)
-        dlg.setLayout(lay)
-
-        title = QLabel("Add OSC Variable")
-        title.setObjectName("sectionTitle")
-        title.setAlignment(Qt.AlignHCenter)
-        lay.addWidget(title)
-
-        sub = QLabel(
-            "Pick from live avatar parameters (double-click to add) or enter one manually."
-        )
-        sub.setProperty("muted", "true")
-        sub.setAlignment(Qt.AlignHCenter)
-        sub.setWordWrap(True)
-        lay.addWidget(sub)
-
-        search = QLineEdit()
-        search.setPlaceholderText("Search avatar parameters...")
-        lay.addWidget(search)
-
-        show_all = ToggleSwitch("Include non-avatar parameters (OGB/SPS, system, etc.)")
-        lay.addWidget(show_all)
-
-        tree = QTreeWidget()
-        tree.setColumnCount(2)
-        tree.setHeaderLabels(["Parameter", "Value"])
-        tree.setRootIsDecorated(False)
-        tree.setAlternatingRowColors(False)
-        tree.header().setStretchLastSection(False)
-        tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
-        tree.header().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        lay.addWidget(tree, 1)
-
-        empty_lbl = QLabel("No avatar parameters seen yet.")
-        empty_lbl.setProperty("muted", "true")
-        empty_lbl.setAlignment(Qt.AlignHCenter)
-        empty_lbl.setVisible(False)
-        lay.addWidget(empty_lbl)
-
-        # Bottom card: manual entry + actions
-        bottom = _Card()
-        b_lay = _vbox(8, 6)
-        bottom.setLayout(b_lay)
-
-        b_lay.addWidget(self._muted_label(
-            "Or add manually (wildcards allowed, e.g. OGB/Tail/*):"
-        ))
-        manual_row = QWidget()
-        m_lay = _hbox(0, 6)
-        manual_row.setLayout(m_lay)
-        manual_entry = QLineEdit()
-        manual_entry.setPlaceholderText("e.g. OGB/Tail/Touch")
-        m_lay.addWidget(manual_entry, 1)
-        manual_add = QPushButton("Add Manual")
-        manual_add.setProperty("role", "secondary")
-        m_lay.addWidget(manual_add)
-        b_lay.addWidget(manual_row)
-
-        action_row = QWidget()
-        a_lay = _hbox(0, 6)
-        action_row.setLayout(a_lay)
-        a_lay.addStretch(1)
-        add_selected_btn = QPushButton("Add Selected")
-        a_lay.addWidget(add_selected_btn)
-        b_lay.addWidget(action_row)
-
-        lay.addWidget(bottom)
-
-        # ---- behavior ----
-        state = {"last_keys": None, "last_query": None, "last_filtered": ()}
-
-        def is_avatar_param(addr: str) -> bool:
-            return not addr.startswith("OGB/")
-
-        def fmt(val):
-            if isinstance(val, float):
-                return f"{val:.2f}"
-            return str(val)
-
-        def rebuild(filtered, params):
-            tree.clear()
-            for key in filtered:
-                item = QTreeWidgetItem([key, fmt(params.get(key, ""))])
-                tree.addTopLevelItem(item)
-
-        def update_values(filtered, params):
-            for i in range(tree.topLevelItemCount()):
-                item = tree.topLevelItem(i)
-                key = item.text(0)
-                item.setText(1, fmt(params.get(key, "")))
-
-        def refresh():
-            params = store.get_all_parameters()
-            include_all = show_all.isChecked()
-            if include_all:
-                keys = tuple(sorted(params.keys()))
-            else:
-                keys = tuple(sorted(k for k in params.keys() if is_avatar_param(k)))
-            query = search.text().strip().lower()
-
-            keys_changed = keys != state["last_keys"]
-            query_changed = query != state["last_query"]
-            state["last_keys"] = keys
-            state["last_query"] = query
-
-            if not keys:
-                tree.clear()
-                empty_lbl.setVisible(True)
-                state["last_filtered"] = ()
-                return
-
-            empty_lbl.setVisible(False)
-            if keys_changed or query_changed:
-                filtered = tuple(k for k in keys if not query or query in k.lower())
-                state["last_filtered"] = filtered
-                rebuild(filtered, params)
-            else:
-                update_values(state["last_filtered"], params)
-
-        def add_and_close(addr: str):
-            try:
-                on_pick(addr)
-            finally:
-                dlg.accept()
-
-        def add_selected_action():
-            items = tree.selectedItems()
-            if items:
-                add_and_close(items[0].text(0))
-
-        def submit_manual():
-            text = manual_entry.get() if hasattr(manual_entry, "get") else manual_entry.text()
-            text = (text or "").strip()
-            if text:
-                add_and_close(text)
-
-        # Periodic value refresh while dialog is open.
-        tick = QTimer(dlg)
-        tick.setInterval(1500)
-        tick.timeout.connect(refresh)
-        tick.start()
-
-        # Debounce search input.
-        debounce = QTimer(dlg)
-        debounce.setSingleShot(True)
-        debounce.setInterval(180)
-        debounce.timeout.connect(refresh)
-
-        search.textChanged.connect(lambda _=None: debounce.start())
-        show_all.toggled.connect(lambda _=False: refresh())
-
-        tree.itemDoubleClicked.connect(lambda item, _col: add_and_close(item.text(0)))
-        add_selected_btn.clicked.connect(add_selected_action)
-        manual_entry.returnPressed.connect(submit_manual)
-        manual_add.clicked.connect(submit_manual)
-
-        refresh()
-        search.setFocus()
-        dlg.exec()
+        """Thin wrapper over the shared OSC variable picker
+        (ui/osc_variable_picker.py). Kept as a method so the existing call
+        sites in this view stay unchanged."""
+        open_osc_variable_picker(self.window, on_pick)
 
     def _muted_label(self, text: str) -> QLabel:
         lbl = QLabel(text)
@@ -899,6 +764,9 @@ class DeviceFrameMixin:
                 w = item.widget()
                 if w is not None:
                     self.unified_devices_layout.takeAt(i)
+                    # Hide before detaching: a still-visible child reparented
+                    # to None briefly realises as a top-level window (a flash).
+                    w.hide()
                     w.setParent(None)
                     w.deleteLater()
                 else:
@@ -956,6 +824,13 @@ class DeviceFrameMixin:
         # Overview grid so its tile set matches.
         if hasattr(self, "rebuild_overview"):
             self.rebuild_overview()
+
+        # Badges were created hidden (see _make_help_badge) to avoid a
+        # parentless-top-level flash; now that the rebuild has parented them,
+        # reveal them if Help Mode is on.
+        self._set_help_badges_visible(
+            controller.get_app_setting("help_mode_enabled", False)
+        )
 
     def build_device_list_ui(self, devices_dict: dict):
         controller = self.controller
@@ -1114,6 +989,7 @@ class DeviceFrameMixin:
             frame: Optional[QWidget] = frame_data.get("frame")
             if frame is not None:
                 try:
+                    frame.hide()
                     frame.setParent(None)
                     frame.deleteLater()
                 except Exception:
@@ -1127,6 +1003,7 @@ class DeviceFrameMixin:
             for data in list(self.device_ui_frames.values()):
                 frame = data.get("frame")
                 if frame is not None:
+                    frame.hide()
                     frame.setParent(None)
                     frame.deleteLater()
         self.device_ui_frames.clear()

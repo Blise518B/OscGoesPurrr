@@ -19,6 +19,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from parameter_store import store
 from bhaptics_engine import BHapticsEngine, DeviceConfig, NODE_COUNTS
 from polling import PollingThread
+from sps_source import evaluate_sps_source
 
 
 # (position, v1_slot, node_count)
@@ -67,15 +68,25 @@ def _truthy(value) -> bool:
 # ----------------------------------------------------------
 
 def _sps_entry_strength(entry: Dict[str, Any],
-                        params: Dict[str, Any]) -> float:
+                        params: Dict[str, Any],
+                        sps_sources: Optional[Dict[str, Any]] = None) -> float:
     """Look up an SPS-mirror entry's OGB contact params and return the
     max value (0..1) across the entry's enabled filters. A filter is
     skipped when its companion `<filter>Close` key is present and
     false — same close-gate convention as motor_router. When the
-    Close key is absent, the filter is treated as live (assume open)."""
+    Close key is absent, the filter is treated as live (assume open).
+
+    When the entry's zone name matches a synthetic SPS source (in the
+    `sps_sources` map), that source's evaluated value is returned
+    directly — synthetic sources carry their own gating, so the entry's
+    filters / zone_type don't apply."""
     zone_name = str(entry.get("ogb_zone", "")).strip()
     if not zone_name:
         return 0.0
+    if sps_sources:
+        defn = sps_sources.get(zone_name)
+        if defn is not None:
+            return evaluate_sps_source(defn, params)
     filters = entry.get("filters") or []
     if not filters:
         return 0.0
@@ -101,6 +112,7 @@ def _sps_entry_strength(entry: Dict[str, Any],
 def compute_sps_mirror_dots(sps_cfg: Optional[Dict[str, Any]],
                             params: Dict[str, Any],
                             enabled_positions: Optional[set] = None,
+                            sps_sources: Optional[Dict[str, Any]] = None,
                             ) -> Dict[str, Dict[int, float]]:
     """Project every enabled SPS-mirror entry onto its target dots.
     Returns `{position: {dot_index: intensity_0_1}}`. Multiple entries
@@ -126,7 +138,7 @@ def compute_sps_mirror_dots(sps_cfg: Optional[Dict[str, Any]],
             continue
         if enabled_positions is not None and position not in enabled_positions:
             continue
-        strength = _sps_entry_strength(entry, params)
+        strength = _sps_entry_strength(entry, params, sps_sources)
         if strength <= 0.0:
             continue
         try:
@@ -166,7 +178,8 @@ class BHapticsRouter(PollingThread):
                  get_device_configs: Callable[[], Dict[str, DeviceConfig]],
                  poll_rate_s: float = 0.05,
                  get_antistuck: Callable[[], Dict[str, float]] | None = None,
-                 get_sps_mirror_config: Callable[[], Dict[str, Any]] | None = None):
+                 get_sps_mirror_config: Callable[[], Dict[str, Any]] | None = None,
+                 get_sps_sources: Callable[[], Dict[str, Any]] | None = None):
         super().__init__("bHapticsRouter")
         self.engine = engine
         self.get_device_configs = get_device_configs
@@ -179,6 +192,11 @@ class BHapticsRouter(PollingThread):
         # nothing and the existing v1 OSC bool/float paths drive dots
         # unchanged. Read on every tick so live edits apply.
         self.get_sps_mirror_config = get_sps_mirror_config or (lambda: None)
+        # Returns the enabled synthetic-SPS-source map (name -> definition)
+        # or None. A Cross-Routing entry whose zone name matches a source
+        # resolves to that source's evaluated value. Read every tick so
+        # live edits to a source apply without a restart.
+        self.get_sps_sources = get_sps_sources or (lambda: None)
         # Track last submitted dot tuple per device so we can debounce, and so
         # the debug UI can read what's currently being driven.
         self._last_dots: Dict[str, Tuple[int, ...]] = {}
@@ -265,10 +283,17 @@ class BHapticsRouter(PollingThread):
             sps_cfg = self.get_sps_mirror_config()
         except Exception:
             sps_cfg = None
+        sps_sources = None
+        try:
+            sps_sources = self.get_sps_sources()
+        except Exception:
+            sps_sources = None
         enabled_positions = {
             pos for pos, cfg in (configs or {}).items() if cfg and cfg.enabled
         }
-        sps_per_dot = compute_sps_mirror_dots(sps_cfg, params, enabled_positions)
+        sps_per_dot = compute_sps_mirror_dots(
+            sps_cfg, params, enabled_positions, sps_sources
+        )
         now = time.time()
         for position, slot, count in _DEVICE_TABLE:
             cfg = configs.get(position)

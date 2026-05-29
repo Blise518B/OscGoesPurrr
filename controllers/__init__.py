@@ -17,6 +17,7 @@ from .hardware_monitor_facade import HardwareMonitorFacade
 from .osc_facade import OscFacade
 from .profiles_facade import ProfilesFacade
 from .sessions_facade import SessionsFacade
+from .sps_sources_facade import SpsSourcesFacade
 
 __all__ = [
     "SteamVRFacade",
@@ -26,4 +27,5 @@ __all__ = [
     "OscFacade",
     "ProfilesFacade",
     "SessionsFacade",
+    "SpsSourcesFacade",
 ]
