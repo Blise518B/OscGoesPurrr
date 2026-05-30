@@ -293,13 +293,20 @@ class IntegratedIntifaceConnection:
                 # do NOT probe the socket (see _await_engine_startup): a probe
                 # would make the engine exit.
                 return INTIFACE_WS_URL
-            # The engine exited since we last spawned it (this engine version
-            # shuts down when its client disconnects). Release the stale job/log
-            # handles before respawning so they don't leak across reconnects.
+            # The engine exited since we last spawned it (it crashed, or shut
+            # down when its client disconnected). Capture WHY into the durable
+            # debug log BEFORE respawning: terminate()/the next spawn reopen the
+            # engine log in truncate mode, which would otherwise erase the
+            # evidence — this record is what explains a session that "randomly
+            # closes after a few minutes".
+            code = self._proc.returncode
+            tail = _read_tail(_engine_log_path())
             self._log(
-                f"Built-in Intiface engine had exited (code {self._proc.returncode}); "
-                "restarting it."
+                f"Built-in Intiface engine had exited (code {code}); restarting it."
             )
+            self._record_engine_exit(code, tail)
+            # Release the stale job/log handles before respawning so they don't
+            # leak across reconnects.
             self.terminate()
 
         engine = _resolve_engine_path()
@@ -347,6 +354,31 @@ class IntegratedIntifaceConnection:
 
     async def shutdown(self) -> None:
         self.terminate()
+
+    @staticmethod
+    def _record_engine_exit(code: Optional[int], tail: str) -> None:
+        """Write a durable, greppable record of an unexpected engine exit to the
+        app debug log (the engine's OWN log is about to be truncated by the
+        respawn, so it can't be relied on). A non-zero / unknown exit code is
+        logged at ERROR and tagged 'CRASH'; a clean code-0 exit at WARNING.
+        Best-effort and lazy-imported, so it never raises and keeps this module
+        import-light for the pure-helper unit tests."""
+        try:
+            import logging
+
+            import debug_log
+
+            crashed = code not in (0, None)
+            debug_log.get_logger("engine").log(
+                logging.ERROR if crashed else logging.WARNING,
+                "intiface-engine unexpected %s (exit code %s) — the likely cause "
+                "of a dropped / 'randomly closed' session. Engine log tail:\n%s",
+                "CRASH" if crashed else "exit",
+                code,
+                tail,
+            )
+        except Exception:
+            pass
 
     def terminate(self) -> None:
         """Stop the engine and release every resource we hold. Idempotent and

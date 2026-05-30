@@ -157,3 +157,67 @@ class TestIntegratedPrepareReuse:
 
         monkeypatch.setattr(intiface_integrated, "_resolve_engine_path", _must_not_respawn)
         assert _run(conn.prepare()) == INTIFACE_WS_URL
+
+
+# ----------------------------------------------------------------- engine-crash logging
+
+class TestIntegratedEngineCrashLogging:
+    def test_dead_engine_records_exit_before_respawn(self, monkeypatch):
+        # When prepare() finds the engine already dead, it must capture the exit
+        # code BEFORE tearing it down / respawning (which truncates the engine's
+        # own log), so a "randomly closed" session leaves durable evidence.
+        conn = IntegratedIntifaceConnection()
+
+        class _DeadProc:
+            returncode = 3
+
+            def poll(self):
+                return 3  # already exited
+
+        conn._proc = _DeadProc()
+
+        recorded = []
+        monkeypatch.setattr(
+            IntegratedIntifaceConnection,
+            "_record_engine_exit",
+            staticmethod(lambda code, tail: recorded.append((code, tail))),
+        )
+        # Force the missing-binary path so prepare() raises right after the
+        # crash capture instead of actually spawning a replacement engine.
+        missing = Path("does-not-exist") / "intiface-engine" / "intiface-engine.exe"
+        monkeypatch.setattr(intiface_integrated, "_resolve_engine_path", lambda: missing)
+
+        with pytest.raises(FileNotFoundError):
+            _run(conn.prepare())
+
+        assert recorded and recorded[0][0] == 3   # the exit code was captured
+        assert conn._proc is None                 # stale handle released
+
+    def test_record_engine_exit_classifies_crash_vs_clean(self):
+        # A non-zero/unknown exit is an ERROR ("CRASH"); a clean code-0 exit is
+        # a WARNING. Capture via a private handler so the test is hermetic and
+        # doesn't depend on setup_logging() having run.
+        import logging
+
+        records = []
+
+        class _Capture(logging.Handler):
+            def emit(self, record):
+                records.append(record)
+
+        logger = logging.getLogger("ogp.engine")
+        handler = _Capture()
+        logger.addHandler(handler)
+        old_level = logger.level
+        logger.setLevel(logging.DEBUG)
+        try:
+            IntegratedIntifaceConnection._record_engine_exit(139, "panic tail")
+            IntegratedIntifaceConnection._record_engine_exit(0, "clean shutdown")
+        finally:
+            logger.removeHandler(handler)
+            logger.setLevel(old_level)
+
+        levels = {r.levelno for r in records}
+        assert logging.ERROR in levels    # non-zero exit -> CRASH
+        assert logging.WARNING in levels  # clean exit -> warning
+        assert any("CRASH" in r.getMessage() for r in records)

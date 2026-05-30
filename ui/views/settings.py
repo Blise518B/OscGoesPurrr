@@ -279,6 +279,17 @@ class SettingsMixin:
             "this never requires re-tuning your channels."
         ))
 
+        # Open the AppData folder that holds the debug / crash / engine logs,
+        # so the user can grab them for troubleshooting in one click.
+        logs_btn = QPushButton("📂 Open logs folder")
+        logs_btn.setProperty("role", "secondary")
+        logs_btn.clicked.connect(lambda _=False: self.controller.open_logs_folder())
+        ql_lay.addWidget(logs_btn)
+        ql_lay.addWidget(self._muted_label(
+            "Holds ogp_debug.log, ogp_crash.log and intiface_engine.log. Zip "
+            "these if you need to report a crash or a toy that won't connect."
+        ))
+
         parent_layout.addWidget(ql_card)
 
         # ---- Features Card ----

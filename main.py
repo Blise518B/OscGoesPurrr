@@ -518,15 +518,12 @@ class OscGoesPurrrApp(
             # started it, so a startup auto-connect never rescanned and newly
             # powered-on toys never appeared without a manual reconnect.
             self._ensure_auto_refresh_running()
-        # If auto-connect is enabled and we just disconnected, restart the retry loop
-        elif self.auto_connect_enabled and self.async_loop:
-            try:
-                self._auto_connect_task = asyncio.run_coroutine_threadsafe(
-                    self._async_auto_connect_loop(),
-                    self.async_loop
-                )
-            except Exception as e:
-                self.log_message(f"Auto-reconnect restart failed: {e}")
+        else:
+            # Disconnected — including an unexpected engine/websocket drop. Make
+            # sure the auto-reconnect retry loop is running. The helper is
+            # idempotent and re-checks auto_connect_enabled itself, so a rapid
+            # disconnect/reconnect flap can't stack duplicate reconnect loops.
+            self._ensure_auto_connect_running()
 
     def _ensure_auto_refresh_running(self) -> None:
         """Start the periodic device-rescan loop if auto-refresh is enabled and
@@ -543,7 +540,30 @@ class OscGoesPurrrApp(
             )
         except Exception as e:
             self.log_message(f"Failed to start auto refresh: {e}")
-    
+
+    def _ensure_auto_connect_running(self) -> None:
+        """Start the auto-reconnect retry loop if it should run and isn't
+        already. Idempotent: safe to call from every disconnect / enable path,
+        so an unexpected drop (or a flap) can never stack duplicate reconnect
+        loops that would race async_connect() — which, in integrated mode, could
+        spawn duplicate engine processes."""
+        if not (self.auto_connect_enabled
+                and self.get_feature_enabled("feature_intiface")
+                and self.async_loop
+                and self.haptic_engine
+                and not self.haptic_engine.is_connected):
+            return
+        task = self._auto_connect_task
+        if task is not None and not task.done():
+            return  # already retrying
+        try:
+            self._auto_connect_task = asyncio.run_coroutine_threadsafe(
+                self._async_auto_connect_loop(),
+                self.async_loop,
+            )
+        except Exception as e:
+            self.log_message(f"Failed to start auto connect: {e}")
+
     def toggle_auto_connect(self):
         """Handle auto-connect checkbox toggle from UI"""
         if not self.ui.get_auto_connect_enabled():
@@ -562,15 +582,8 @@ class OscGoesPurrrApp(
             self.auto_connect_enabled = True
             self.profile_manager.app_settings.set("auto_connect", True)
             self.log_message("Auto connect enabled")
-            # If not connected, start the retry loop
-            if not self.haptic_engine.is_connected and self.async_loop:
-                try:
-                    self._auto_connect_task = asyncio.run_coroutine_threadsafe(
-                        self._async_auto_connect_loop(),
-                        self.async_loop
-                    )
-                except Exception as e:
-                    self.log_message(f"Failed to start auto connect: {e}")
+            # If not connected, start the retry loop (idempotent guard).
+            self._ensure_auto_connect_running()
     
     async def _async_attempt_connection(self):
         """Attempt to connect to Intiface once. Returns True if successful."""
@@ -621,6 +634,30 @@ class OscGoesPurrrApp(
         """Applies the current console visibility setting via OS utilities."""
         show_console = not self.get_app_setting("hide_console", True)
         toggle_windows_console(show_console)
+
+    def open_logs_folder(self):
+        """Facade: open the folder holding the debug / crash / engine logs in
+        the system file explorer, so the user can grab them for troubleshooting
+        without digging through %APPDATA%. Wired to the Settings 'Open logs
+        folder' button. Best-effort; Windows-first with a non-Windows fallback."""
+        try:
+            import debug_log
+            folder = str(debug_log.log_path().parent)
+        except Exception:
+            from settings._paths import APPDATA_DIR
+            folder = str(APPDATA_DIR)
+        try:
+            import os as _os
+            import subprocess as _subp
+            if _os.name == "nt":
+                _os.startfile(folder)  # type: ignore[attr-defined]
+            else:
+                # This app targets Windows; keep the fallback from crashing
+                # if someone runs it elsewhere.
+                _subp.Popen(["xdg-open", folder])
+            self.log_message(f"Opened logs folder: {folder}")
+        except Exception as e:
+            self.log_message(f"Open logs folder failed: {type(e).__name__}: {e}")
 
     def delete_stored_device(self, device_name: str):
         """Forget a toy entirely — removes it from every profile and the
@@ -745,17 +782,7 @@ class OscGoesPurrrApp(
             # active session and the auto-connect loop short-circuits on the
             # flag, so no reconnection happens until the user re-enables it.
             if enabled:
-                if (self.auto_connect_enabled
-                        and self.haptic_engine
-                        and not self.haptic_engine.is_connected
-                        and self.async_loop):
-                    try:
-                        self._auto_connect_task = asyncio.run_coroutine_threadsafe(
-                            self._async_auto_connect_loop(),
-                            self.async_loop,
-                        )
-                    except Exception as e:
-                        self.log_message(f"Intiface auto-connect restart failed: {e}")
+                self._ensure_auto_connect_running()
             else:
                 if (self.haptic_engine
                         and self.haptic_engine.is_connected
@@ -1546,19 +1573,10 @@ class OscGoesPurrrApp(
         if not self._loop_ready.wait(timeout=5.0):
             self.log_message("Async worker did not start within 5s; continuing anyway")
 
-        # Start auto-connect if enabled (single source of truth is haptic_engine.is_connected).
-        # Skip when the Intiface feature has been disabled in Settings → Features.
-        if (self.auto_connect_enabled
-                and self.get_feature_enabled("feature_intiface")
-                and not self.haptic_engine.is_connected
-                and self.async_loop):
-            try:
-                self._auto_connect_task = asyncio.run_coroutine_threadsafe(
-                    self._async_auto_connect_loop(),
-                    self.async_loop
-                )
-            except Exception as e:
-                self.log_message(f"Failed to start auto connect: {e}")
+        # Start auto-connect if enabled. The idempotent guard re-checks the
+        # feature flag and is_connected (single source of truth is haptic_engine),
+        # and prevents stacking duplicate reconnect loops.
+        self._ensure_auto_connect_running()
 
         # Decoupled routing tick. The rate is user-tunable in Settings
         # (router_poll_rate_hz, default 60 Hz); falls back to the
