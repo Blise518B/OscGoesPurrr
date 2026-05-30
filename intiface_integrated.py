@@ -36,7 +36,7 @@ from urllib.parse import urlsplit
 
 from constants import (
     INTIFACE_ENGINE_DIRNAME,
-    INTIFACE_ENGINE_STARTUP_TIMEOUT_S,
+    INTIFACE_ENGINE_STARTUP_GRACE_S,
     INTIFACE_WS_URL,
 )
 
@@ -135,7 +135,7 @@ def _read_tail(path: Path, limit: int = 2000) -> str:
 
 
 async def _await_engine_startup(
-    proc: "subprocess.Popen", log_path: Path, timeout: float
+    proc: "subprocess.Popen", log_path: Path, grace_s: float
 ) -> None:
     """Wait out the engine's startup window WITHOUT opening a socket.
 
@@ -145,8 +145,8 @@ async def _await_engine_startup(
     connection-refused (no half-open handshake), and the caller's reconnect loop
     retries. Raises if the engine exits during the grace window.
     """
-    loop = asyncio.get_event_loop()
-    grace = min(2.0, max(0.5, timeout))
+    loop = asyncio.get_running_loop()
+    grace = max(0.5, grace_s)
     deadline = loop.time() + grace
     while loop.time() < deadline:
         code = proc.poll()
@@ -342,7 +342,7 @@ class IntegratedIntifaceConnection:
 
         try:
             await _await_engine_startup(
-                self._proc, log_path, INTIFACE_ENGINE_STARTUP_TIMEOUT_S
+                self._proc, log_path, INTIFACE_ENGINE_STARTUP_GRACE_S
             )
         except BaseException:
             # Don't leave a half-started engine running if startup failed.

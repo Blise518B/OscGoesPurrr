@@ -590,6 +590,20 @@ class OscGoesPurrrApp(
         try:
             await self.haptic_engine.async_connect()
             return True
+        except FileNotFoundError as e:
+            # Permanent until the user acts (missing built-in engine binary):
+            # retrying every 2s would just spam the log forever. Surface the
+            # actionable message once and pause auto-connect for this session.
+            # The flag is in-memory only (not persisted), so a manual Connect —
+            # or relaunch after dropping the binary / switching to External
+            # mode — resumes normally.
+            self.log_message(f"{e}")
+            self.log_message(
+                "Auto-connect paused — fix the above, then click Connect "
+                "(or toggle Auto Connect off/on)."
+            )
+            self.auto_connect_enabled = False
+            return False
         except Exception as e:
             self.log_message(f"Connection attempt failed: {e}")
             return False

@@ -152,6 +152,12 @@ class HapticEngine:
         self._connection_mode = MODE_INTEGRATED
         self._connection = None
 
+        # Serializes connect attempts so a manual Connect racing the auto-
+        # reconnect loop can't both build a ButtplugClient and orphan one
+        # websocket. Only ever acquired on the async worker loop. (asyncio.Lock
+        # is constructed without a running loop on 3.10+ and binds on first use.)
+        self._connect_lock = asyncio.Lock()
+
         # Connection state
         self.is_connected = False
 
@@ -205,7 +211,14 @@ class HapticEngine:
         (the integrated intiface-engine). No-op in external mode or when
         nothing was started. Called from the app-quit path so a clean exit
         doesn't momentarily leave the engine holding the Bluetooth radio while
-        the OS reclaims the process. Safe to call from the main thread."""
+        the OS reclaims the process.
+
+        Thread note: `self._connection` is otherwise written on the async worker
+        loop (async_connect/disconnect), and this reads it from the main thread.
+        That's safe by construction — the pointer read is GIL-atomic, the
+        provider's terminate() is idempotent and thread-safe, and on the quit
+        path the Windows Job Object kill-on-close is the real backstop, so the
+        worst a race can do is briefly leave an engine the OS then reaps."""
         conn = self._connection
         if conn is not None:
             try:
@@ -592,11 +605,27 @@ class HapticEngine:
         """
         if not self.is_connected:
             return
-        self.push_ui_update("Intiface server disconnected. Will retry...")
+        # Neutral wording: the engine can't promise a retry — whether one
+        # happens is the controller's call (it depends on auto-connect being
+        # on). The auto-reconnect loop logs its own "Auto-connect: …" line.
+        self.push_ui_update("Intiface server disconnected.")
         self.mark_connected(False)
         self.push_connection_status(False, "")
 
     async def async_connect(self):
+        """Connect to the Buttplug server, serialized against itself.
+
+        A manual Connect can race the auto-reconnect loop; without this guard
+        both would build a ButtplugClient and one websocket would be orphaned.
+        The lock makes the second caller wait, then return early if the first
+        already connected (a still-disconnected state means the first failed, so
+        retrying is correct)."""
+        async with self._connect_lock:
+            if self.is_connected:
+                return
+            await self._async_connect_impl()
+
+    async def _async_connect_impl(self):
         """Internal async method to connect to the Buttplug server.
 
         The server is provisioned by the active connection provider — either

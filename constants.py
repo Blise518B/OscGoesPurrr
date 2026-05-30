@@ -73,9 +73,13 @@ VRC_DEFAULT_PORT = 9000
 # folder (next to the source, or under the PyInstaller _MEIPASS at runtime).
 # See intiface_integrated.py.
 INTIFACE_ENGINE_DIRNAME = "intiface-engine"
-# How long to wait for the spawned engine to start serving its websocket
-# before giving up and reporting a connect failure.
-INTIFACE_ENGINE_STARTUP_TIMEOUT_S = 15.0
+# Grace window to confirm the spawned engine survived startup before the real
+# Buttplug client dials it. This is NOT a readiness timeout: the engine binds
+# its websocket within a few hundred ms, and the actual readiness gate is the
+# client connect (a failed dial just makes the auto-reconnect loop retry). We
+# only watch that the process doesn't immediately exit (bad flag, instant
+# crash). Honored directly (with a 0.5 s floor) by _await_engine_startup.
+INTIFACE_ENGINE_STARTUP_GRACE_S = 2.0
 
 # --- Application Data ---
 APP_NAME = "OscGoesPurrr"

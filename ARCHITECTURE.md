@@ -286,7 +286,7 @@ All handled in `ProfileManager`:
 ## Auxiliary modules
 
 * `constants.py` — app-wide constants (`APP_NAME`, `INTIFACE_WS_URL`,
-  `INTIFACE_ENGINE_DIRNAME`, `INTIFACE_ENGINE_STARTUP_TIMEOUT_S`,
+  `INTIFACE_ENGINE_DIRNAME`, `INTIFACE_ENGINE_STARTUP_GRACE_S`,
   default window geometry, OSC defaults).
 * `intiface_connection.py` / `intiface_external.py` /
   `intiface_integrated.py` — the Buttplug-server connection providers and
