@@ -212,6 +212,34 @@ Order within a group is rough priority, not a hard sequence.
   [win11-pac]: https://github.com/microsoft/Windows-classic-samples
     (Win11 process audio capture — fill in real link during build)
 
+- **Rhythm engine: tempo-locked resynthesis.**
+  Stop *filtering* the noisy VRChat motion signal and instead *estimate
+  the stroke rhythm* underneath it, then resynthesize a clean,
+  deliberately nicer output waveform locked to that tempo + phase. The
+  output is generated, not filtered, so it can be smooth and crisp at
+  once — the inverse of the smoothing-vs-crispness wall the current
+  signal chain hits. The SPS-side analog of the audio-reactive item
+  above (motion-rhythm detection vs. audio-onset detection).
+
+  **Scope decisions (locked):**
+  * Vibrator-first; output is a single `[0, 1]` scalar (linears are
+    speed-only here), fanned out by the existing routing unchanged.
+  * Reinterpret, don't reproduce — rhythm is a tempo/phase reference
+    for a designed feel-waveform, with rhythm-locked dynamic-range
+    **expansion** (floor + multiplier) so shallow strokes read clearly.
+  * Overall level scales with tempo (faster = stronger) **and** average
+    depth (deep strokes stronger than shallow).
+  * Opt-in switch, default off; candidate default later. Confidence
+    crossfade falls back to today's filtered chain when the rhythm is
+    absent or unstable.
+
+  **Open:** the detection method itself (adaptive oscillator / PLL vs.
+  Kalman vs. autocorrelation / Lomb–Scargle) — leaning oscillator-family
+  because it handles VRChat's irregular OSC sampling natively. Estimator
+  + feel-model are developable and testable **offline** against
+  session-logger recordings (no hardware). Full design in
+  [`RHYTHM_ENGINE.md`](RHYTHM_ENGINE.md). _Pending._
+
 ## Networking & Multiplayer
 
 - **Remote-control contacts.**
