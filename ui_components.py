@@ -247,7 +247,7 @@ QPushButton[role="nav"] {{
     background-color: transparent;
     color: {COLOR_TEXT};
     text-align: left;
-    padding: 10px 14px;
+    padding: 6px 14px;
     border-radius: 6px;
     border-left: 3px solid transparent;
     font-size: 14px;
@@ -604,6 +604,7 @@ class OscGoesPurrrUI(
         self.osc_status_label: Optional[QLabel] = None
         self.osc_port_label: Optional[QLabel] = None
         self.osc_connection_button: Optional[QPushButton] = None
+        self.osc_refresh_button: Optional[QPushButton] = None
         self.intiface_sidebar_section: Optional[QWidget] = None
 
         # Settings checkboxes (referenced by facade getters)
@@ -674,7 +675,9 @@ class OscGoesPurrrUI(
         root_layout = _hbox(0, 0)
         root.setLayout(root_layout)
 
-        # Sidebar (fixed width)
+        # Sidebar (fixed width). No scroll area by design — the nav spacing and
+        # button padding are kept tight (see _build_sidebar and the nav QSS) so
+        # the whole column fits without ever needing to scroll.
         self.sidebar_frame = self._build_sidebar()
         self.sidebar_frame.setFixedWidth(SIDEBAR_WIDTH)
         root_layout.addWidget(self.sidebar_frame)
@@ -761,15 +764,17 @@ class OscGoesPurrrUI(
     def _build_sidebar(self) -> QFrame:
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        lay = _vbox(10, 6)
+        # Tight spacing (3px) so the nav list + both connection panels fit
+        # without a scroll area.
+        lay = _vbox(10, 3)
         sidebar.setLayout(lay)
 
         title = QLabel("OscGoesPurrr")
         title.setObjectName("sidebarTitle")
         title.setAlignment(Qt.AlignHCenter)
-        lay.addSpacing(10)
+        lay.addSpacing(6)
         lay.addWidget(title)
-        lay.addSpacing(20)
+        lay.addSpacing(12)
 
         nav_buttons = ["Dashboard", "Overview", "Simple Mode",
                        "Device Routing", "SPS Sources", "Tune",
@@ -792,20 +797,34 @@ class OscGoesPurrrUI(
         # --- VRChat OSC Section ---
         lay.addWidget(self._sidebar_section_title("VRChat OSC"))
 
-        self.osc_status_label = QLabel("WAITING FOR VRCHAT")
+        # Matches the Intiface pill exactly: "CONNECTED"/"DISCONNECTED" with the
+        # same rounded pill styling and ok/err tones (set in update_osc_status).
+        self.osc_status_label = QLabel("DISCONNECTED")
         self.osc_status_label.setProperty("role", "pill")
-        self.osc_status_label.setProperty("tone", "warn")
+        self.osc_status_label.setProperty("tone", "err")
         self.osc_status_label.setAlignment(Qt.AlignCenter)
+        # The listening port now rides in the pill's tooltip (set in
+        # update_osc_status) instead of a dedicated label row, to keep the
+        # sidebar compact. osc_port_label stays None.
+        self.osc_status_label.setToolTip("Listening on Port: --")
         lay.addWidget(self.osc_status_label, 0, Qt.AlignHCenter)
-
-        self.osc_port_label = QLabel("Listening on Port: --")
-        self.osc_port_label.setAlignment(Qt.AlignHCenter)
-        lay.addWidget(self.osc_port_label)
 
         self.osc_connection_button = QPushButton("Connect to VRChat")
         self.osc_connection_button.setMinimumHeight(BTN_HEIGHT_LARGE)
         self.osc_connection_button.clicked.connect(self.controller.toggle_osc_connection)
         lay.addWidget(self.osc_connection_button)
+
+        # Full-width refresh for the VRChat/OSC link: re-poll VRChat's OSCQuery
+        # and re-handshake — recovers a "connected but silent" link without a
+        # full disconnect/connect. Mirrors the Intiface refresh, same width as
+        # the connect button.
+        self.osc_refresh_button = QPushButton("🔍 Refresh")
+        self.osc_refresh_button.setMinimumHeight(BTN_HEIGHT_LARGE)
+        self.osc_refresh_button.setProperty("role", "secondary")
+        self.osc_refresh_button.setToolTip("Re-poll VRChat and re-handshake the OSC link")
+        self.osc_refresh_button.setCursor(Qt.PointingHandCursor)
+        self.osc_refresh_button.clicked.connect(self.controller.force_osc_rehandshake)
+        lay.addWidget(self.osc_refresh_button)
         lay.addSpacing(8)
 
         # --- Intiface Central Section ---
@@ -833,14 +852,15 @@ class OscGoesPurrrUI(
         self.connection_button.clicked.connect(self.controller.connect_to_intiface)
         intiface_lay.addWidget(self.connection_button)
 
-        # Manual "scan now" for toys powered on AFTER connecting. The engine
-        # already auto-rescans every AUTO_REFRESH_RATE_S, but this lets the user
-        # pick up a freshly switched-on toy immediately instead of waiting out
-        # the interval. Disabled until connected; the controller facade also
-        # no-ops safely if called while disconnected.
-        self.scan_toys_button = QPushButton("🔍 Scan for new toys")
-        self.scan_toys_button.setMinimumHeight(BTN_HEIGHT_SMALL)
+        # Full-width refresh: rescan for toys powered on AFTER connecting. The
+        # engine auto-rescans every AUTO_REFRESH_RATE_S; this triggers an
+        # immediate scan. Same width as the connect button; disabled until
+        # connected (the controller facade also no-ops while disconnected).
+        self.scan_toys_button = QPushButton("🔍 Refresh")
+        self.scan_toys_button.setMinimumHeight(BTN_HEIGHT_LARGE)
         self.scan_toys_button.setProperty("role", "secondary")
+        self.scan_toys_button.setToolTip("Scan for new toys")
+        self.scan_toys_button.setCursor(Qt.PointingHandCursor)
         self.scan_toys_button.setEnabled(False)
         self.scan_toys_button.clicked.connect(self.controller.scan_for_toys)
         intiface_lay.addWidget(self.scan_toys_button)
@@ -930,19 +950,18 @@ class OscGoesPurrrUI(
             return
         self.osc_status_label.setProperty("role", "pill")
         if is_connected:
-            self.osc_status_label.setText("VRCHAT CONNECTED")
+            self.osc_status_label.setText("CONNECTED")
             self.osc_status_label.setProperty("tone", "ok")
-            if port and self.osc_port_label is not None:
-                self.osc_port_label.setText(f"Listening on Port: {port}")
+            if port:
+                self.osc_status_label.setToolTip(f"Listening on Port: {port}")
             if self.osc_connection_button is not None:
                 self.osc_connection_button.setText("Disconnect VRChat")
                 self.osc_connection_button.setProperty("role", "danger")
                 self._repolish(self.osc_connection_button)
         else:
-            self.osc_status_label.setText("WAITING FOR VRCHAT")
-            self.osc_status_label.setProperty("tone", "warn")
-            if self.osc_port_label is not None:
-                self.osc_port_label.setText("Listening on Port: --")
+            self.osc_status_label.setText("DISCONNECTED")
+            self.osc_status_label.setProperty("tone", "err")
+            self.osc_status_label.setToolTip("Listening on Port: --")
             if self.osc_connection_button is not None:
                 self.osc_connection_button.setText("Connect to VRChat")
                 self.osc_connection_button.setProperty("role", "")
