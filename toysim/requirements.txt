@@ -1,5 +1,0 @@
-# Standalone Intiface toy simulator — dependencies.
-# Deliberately a small subset of the main app's requirements: the simulator
-# only needs a websocket client (to talk to Intiface's WSDM) and the Qt GUI.
-PySide6>=6.5.0
-websocket-client>=1.6

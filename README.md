@@ -146,18 +146,23 @@ it on next launch.
 
 ## 🧪 Developer tools
 
-Two standalone simulators let you exercise OscGoesPurrr without VRChat or
-real hardware. They live in their own folders, never import the main app,
-and need no toys powered on:
+The **Test Bench** (`testbench/`) is a standalone program that exercises
+OscGoesPurrr without VRChat or real hardware — and benchmarks end-to-end
+latency. It drives avatar OSC parameters into the live app (impersonating
+VRChat) and reads the resulting toy output (impersonating a Lovense toy on
+Intiface) on one clock, plotting input vs output and measuring "program
+delay". Three modes:
 
-* **VRChat simulator** (`sim/`) — impersonates VRChat: sends avatar OSC
-  parameters (and answers OSCQuery) so the app routes real params with the
-  game closed. Run `sim/run_sim.bat`; build a standalone exe with
-  `sim/build_sim.bat`.
-* **Toy simulator** (`toysim/`) — impersonates a Lovense toy on Intiface
-  Central's Device Websocket Server, so a fully virtual toy shows up in
-  Intiface and the app drives it through its normal Buttplug path. Run
-  `toysim/run_toysim.bat`; build with `toysim/build_toysim.bat`.
+* **Input** — drive avatar params only (impersonate VRChat).
+* **Output** — watch a virtual toy's level only (impersonate a toy on Intiface).
+* **Benchmark** — both, with edge-paired latency stats, a histogram, and CSV
+  export.
+
+It never imports the main app and needs no hardware powered on. Run
+`testbench/run_testbench.bat` (`python -m testbench`); build with
+`testbench/build_testbench.bat`. See
+[`testbench/README.md`](testbench/README.md) for the one-time Intiface / OGP
+setup.
 
 The optional C++ SteamVR toy driver in `steamvr_toy_driver/` builds via
 `steamvr_toy_driver/build_driver.bat` — see

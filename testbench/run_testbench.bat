@@ -1,7 +1,7 @@
 @echo off
-title Intiface Toy Simulator
-REM Launches the standalone toy simulator. Runs from the repo root (one level
-REM up from this folder) so "python -m toysim" can import the package.
+title OscGoesPurrr Test Bench
+REM Launches the unified test bench. Runs from the repo root (one level up from
+REM this folder) so "python -m testbench" can import the package.
 REM Strictly stand-alone — it never imports the main OscGoesPurrr app.
 
 pushd "%~dp0\.."
@@ -15,14 +15,14 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo Installing/updating toy-simulator dependencies...
-pip install -r "toysim\requirements.txt" >nul 2>&1
+echo Installing/updating test-bench dependencies...
+pip install -r "testbench\requirements.txt" >nul 2>&1
 if errorlevel 1 (
     echo Warning: Could not install dependencies. Trying to continue anyway...
 )
 
-echo Launching Intiface Toy Simulator...
-python -m toysim
+echo Launching OscGoesPurrr Test Bench...
+python -m testbench
 
 popd
 pause

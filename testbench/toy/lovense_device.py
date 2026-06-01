@@ -1,6 +1,6 @@
 """Websocket transport for one virtual Lovense toy.
 
-Wraps a :class:`~toysim.lovense_protocol.LovenseProtocol` in a background
+Wraps a :class:`~testbench.toy.lovense_protocol.LovenseProtocol` in a background
 thread that speaks Intiface Central's Device Websocket Server (WSDM). This is
 the same connection path a DIY ESP32 toy would use:
 
@@ -11,9 +11,9 @@ the same connection path a DIY ESP32 toy would use:
      BINARY frame straight back.
 
 I/O lives here; all wire *meaning* lives in `lovense_protocol`. Mirrors the
-`create_connection` + daemon-thread style of `bhaptics_engine.py` and the
-callback API of `sim/sim_network.py`, so the UI layer can subscribe without
-knowing anything about websockets.
+`create_connection` + daemon-thread style of the app's `bhaptics_engine.py`
+and the callback API of `testbench/vrchat/sim_network.py`, so the UI layer can
+subscribe without knowing anything about websockets.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ class LovenseToy:
         toy.stop()
 
     Callbacks fire from the worker thread; a Qt UI must marshal them onto the
-    GUI thread itself (see toysim_ui's signal bridge).
+    GUI thread itself (see the bench's signal bridge in testbench/app.py).
     """
 
     def __init__(

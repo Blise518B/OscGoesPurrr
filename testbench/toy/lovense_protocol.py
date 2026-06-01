@@ -1,4 +1,4 @@
-"""Pure (I/O-free) Lovense wire-protocol logic for the toy simulator.
+"""Pure (I/O-free) Lovense wire-protocol logic for the bench's toy side.
 
 Intiface Central's Device Websocket Server (WSDM) hands a connecting device
 the *protocol's own bytes* — for Lovense those are ASCII command strings. This
@@ -8,7 +8,7 @@ init, and decode the motor commands OGP ends up sending into per-feature 0..1
 levels for display.
 
 Kept deliberately free of any websocket / Qt import so it can be unit-tested
-without hardware, Intiface, or a GUI (see tests/test_toysim_protocol.py).
+without hardware, Intiface, or a GUI (see testbench/tests/test_lovense_protocol.py).
 
 Wire facts (verified against buttplugio/buttplug source, May 2026):
 

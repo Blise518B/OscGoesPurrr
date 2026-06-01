@@ -2,16 +2,15 @@
 setlocal enabledelayedexpansion
 
 echo ========================================
-echo   Intiface Toy Simulator - Build Script
+echo   OscGoesPurrr Test Bench - Build Script
 echo ========================================
 echo.
 
-REM Build from this folder; the package itself lives here and the repo root
-REM (one level up) is put on PyInstaller's search path so "import toysim"
-REM resolves. The simulator never imports the main OscGoesPurrr app.
+REM Build from this folder; the package lives here and the repo root (one level
+REM up) goes on PyInstaller's search path so "import testbench" resolves. The
+REM bench never imports the main OscGoesPurrr app.
 pushd "%~dp0"
 
-REM Check Python.
 python --version >nul 2>&1
 if %errorlevel% neq 0 (
     echo [ERROR] Python not found. Please install Python and try again.
@@ -36,7 +35,7 @@ if %errorlevel% neq 0 (
 )
 echo.
 
-echo [2/4] Installing simulator dependencies...
+echo [2/4] Installing test-bench dependencies...
 pip install -r requirements.txt
 if %errorlevel% neq 0 (
     echo [WARNING] Some dependencies may have failed to install. Continuing anyway...
@@ -46,13 +45,23 @@ echo.
 echo [3/4] Building standalone executable with PyInstaller...
 echo.
 REM --onefile: single .exe   --windowed: no console (PySide6 GUI)
-REM --paths "..": repo root on the import path so the toysim package is found
-REM __main__.py: the package entry (uses an absolute import, so it freezes fine)
-set EXE_NAME=OGP_ToySim
+REM --paths "..": repo root on the import path so "import testbench" resolves
+REM --collect-all pyqtgraph: pyqtgraph loads parts dynamically; without this
+REM   PyInstaller misses them and the plots blow up at runtime
+REM __main__.py: the package entry (absolute import, freezes fine)
+set EXE_NAME=OGP_TestBench
+
+REM Bundle the sim icon if it's present at the repo root (optional — the bench
+REM falls back to a default icon when it's missing).
+set ICON_OPTS=
+if exist "..\Images\OGP_Sim_Icon.ico" set ICON_OPTS=--icon "..\Images\OGP_Sim_Icon.ico" --add-data "..\Images\OGP_Sim_Icon.ico;Images"
+
 pyinstaller --noconfirm ^
     --onefile ^
     --windowed ^
     --paths ".." ^
+    --collect-all pyqtgraph ^
+    !ICON_OPTS! ^
     --name "!EXE_NAME!" ^
     "__main__.py"
 
@@ -77,7 +86,7 @@ echo ========================================
 echo   Build Complete!
 echo ========================================
 echo.
-echo Executable location: toysim\dist\!EXE_NAME!.exe
+echo Executable location: testbench\dist\!EXE_NAME!.exe
 echo.
 if exist "dist\!EXE_NAME!.exe" (
     echo [SUCCESS] !EXE_NAME!.exe created successfully!

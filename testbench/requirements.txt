@@ -1,0 +1,12 @@
+# OscGoesPurrr Test Bench — standalone dependencies.
+#
+# Superset of the former sim/ + toysim/ deps, plus pyqtgraph + numpy for the
+# live input-vs-output plots and latency histogram. The bench never imports
+# the main app, so this file is self-contained.
+
+PySide6>=6.5.0
+python-osc>=1.8.0
+zeroconf>=0.130
+websocket-client>=1.6
+pyqtgraph>=0.13
+numpy>=1.24

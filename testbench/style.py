@@ -1,15 +1,10 @@
-"""Style sheet + palette for the VRChat simulator.
+"""Style sheet + palette for the test bench.
 
-The sim deliberately does not import from the main app (per the architecture
-rule documented in run_sim.bat) — instead this module mirrors the relevant
-slice of constants.py + ui_components.GLOBAL_QSS so the sim looks like the
-main OGP app without coupling the two codebases.
-
-If the main app's palette is ever rebranded, copy the new values across.
-Keep the QSS pruned to widgets the sim actually uses (cards, sliders,
-buttons, combo, scroll, tabs, plain text edit). No need to mirror every
-selector — the sim has no profile manager, no motor cards, no rainbow
-meter, etc.
+The bench deliberately does not import from the main app (it is a stand-alone
+tool) — instead this module mirrors the relevant slice of the app's
+constants.py + GLOBAL_QSS so the bench looks like OGP without coupling the two
+codebases. If the main app's palette is ever rebranded, copy the new values
+across. (Inherited from the former standalone sim/ tool.)
 """
 
 from __future__ import annotations

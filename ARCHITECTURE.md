@@ -337,21 +337,29 @@ design + on-disk format: `docs/SESSION_LOGGING.md`.
 
 ---
 
-## Developer tools / simulators
+## Developer tools / the test bench
 
-Two standalone simulators live in their own folders and are **never
-imported by the app** — they are separate programs, so the anti-tangling
-rules stop at that boundary:
+`testbench/` is a standalone program — strictly **never imported by the app**
+(it is a separate program, so the anti-tangling rules stop at that boundary).
+It drives a known input signal into the live OGP app and reads the resulting
+toy output on one `time.perf_counter` clock, to plot input vs output on a
+shared timeline and benchmark end-to-end latency ("program delay"). It absorbs
+the two former standalone sims as internal libraries:
 
-* `sim/` — impersonates VRChat: emits avatar OSC parameters (and answers
-  OSCQuery) so OGP routes real params with the game closed. Run with
-  `sim/run_sim.bat` (`python -m sim`); build with `sim/build_sim.bat`.
-* `toysim/` — impersonates a Lovense toy: connects to Intiface Central's
-  Device Websocket Server and speaks the Lovense wire protocol, so a fully
-  virtual toy appears in Intiface and OGP drives it through its normal
-  Buttplug path. Run with `toysim/run_toysim.bat` (`python -m toysim`);
-  build with `toysim/build_toysim.bat`. Ships its own isolated tests under
-  `toysim/tests/`.
+* `testbench/vrchat/` — VRChat impersonation (mDNS + OSCQuery + UDP OSC send;
+  `VRChatSimNetwork` + avatar presets). Was the standalone `sim/`.
+* `testbench/toy/` — Intiface/Lovense virtual toy (`LovenseToy` websocket
+  transport + the pure `LovenseProtocol` decoder). Was the standalone `toysim/`.
+* `testbench/bench.py` — the measurement core (clock, ring buffers, edge
+  detection, latency pairing + stats); pure and thread-safe.
+* `testbench/{generators,plots,csv_export,style,app}.py` — signal generators,
+  pyqtgraph plots, CSV export, theme, and the unified window (Input / Output /
+  Benchmark modes).
+
+Run with `testbench/run_testbench.bat` (`python -m testbench`); build with
+`testbench/build_testbench.bat`. Isolated tests live in `testbench/tests/`
+(run via `pytest testbench`; not part of the root `tests/` suite). See
+`testbench/README.md` for the Intiface / OGP setup.
 
 ---
 
