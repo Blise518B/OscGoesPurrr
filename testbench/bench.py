@@ -31,9 +31,14 @@ from typing import Callable, Deque, Dict, List, Optional, Tuple
 import numpy as np
 
 # How many samples to retain per channel. At ~125 Hz input / ~62 Hz output
-# this is a couple of minutes of history — plenty for the scrolling plot and
-# for a CSV dump of a benchmark run.
-_MAX_SAMPLES = 20000
+# this is ~a minute of history — enough for the scrolling plot, the recent
+# correlation window, and a CSV dump of a benchmark run. Kept bounded so the
+# per-frame snapshot/plot cost does not grow without limit as the bench runs.
+_MAX_SAMPLES = 8000
+
+# Cap on retained edge-paired latencies — live edge mode appends one per cycle
+# forever otherwise; stats/histogram use the most recent ones.
+_MAX_LATENCIES = 5000
 
 
 def latency_stats(latencies_ms: List[float]) -> Dict[str, Optional[float]]:
@@ -64,10 +69,10 @@ def cross_correlation_latencies(
     in_arr: np.ndarray,
     out_arr: np.ndarray,
     period_s: float,
-    max_lag_s: float = 0.5,
-    dt: float = 0.002,
+    max_lag_s: float = 0.3,
+    dt: float = 0.003,
     min_corr: float = 0.3,
-    max_cycles: int = 60,
+    max_cycles: int = 20,
 ) -> List[float]:
     """Per-cycle cross-correlation latency (ms) for a periodic input.
 
@@ -85,6 +90,12 @@ def cross_correlation_latencies(
     t1 = min(float(in_arr[-1, 0]), float(out_arr[-1, 0]))
     if t1 - t0 < period_s:
         return []
+    # Only analyse the most recent window so cost stays CONSTANT as the buffers
+    # grow — otherwise each live refresh re-correlates the whole history and the
+    # UI gets progressively laggier.
+    window = (max_cycles + 1) * period_s
+    if t1 - t0 > window:
+        t0 = t1 - window
     grid = np.arange(t0, t1, dt)
     xi = np.interp(grid, in_arr[:, 0], in_arr[:, 1])
     xo = np.interp(grid, out_arr[:, 0], out_arr[:, 1])
@@ -178,7 +189,7 @@ class BenchEngine:
         self._out_edge = EdgeDetector(output_threshold)
 
         self._pending_in: Deque[float] = deque()  # input rising-edge times
-        self._latencies_ms: List[float] = []
+        self._latencies_ms: Deque[float] = deque(maxlen=_MAX_LATENCIES)
         self._misses = 0
         self._max_window_s = float(max_window_s)
 
@@ -243,7 +254,7 @@ class BenchEngine:
     def stats(self) -> Dict[str, Optional[float]]:
         return latency_stats(self.latencies_ms())
 
-    def correlation_latencies(self, period_s: float, max_lag_s: float = 0.5) -> List[float]:
+    def correlation_latencies(self, period_s: float, max_lag_s: float = 0.3) -> List[float]:
         """Per-cycle cross-correlation latencies (ms) over the current buffers —
         the waveform-agnostic alternative to edge pairing (good for sine etc.)."""
         in_arr, out_arr = self.snapshot()
