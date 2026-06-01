@@ -39,7 +39,7 @@ class LivePlot(QWidget):
         self._pw.setLabel("bottom", "time (s)")
         self._pw.showGrid(x=True, y=True, alpha=0.18)
         self._pw.addLegend(offset=(-10, 10))
-        self._in_curve = self._pw.plot([], [], pen=_INPUT_PEN, name="input → OGP")
+        self._in_curve = self._pw.plot([], [], pen=_INPUT_PEN, name="input → target")
         self._out_curve = self._pw.plot([], [], pen=_OUTPUT_PEN, name="toy output")
         lay.addWidget(self._pw)
 
@@ -92,3 +92,11 @@ class LatencyHistogram(QWidget):
             brush=COLOR_SUCCESS, pen=pg.mkPen(COLOR_BG, width=1),
         )
         self._pw.addItem(bg)
+        # Pin the view to the data — otherwise the bars render off-scale (the
+        # axes keep a stale range from when only a few small samples existed).
+        lo, hi = float(edges[0]), float(edges[-1])
+        if hi <= lo:
+            hi = lo + 1.0
+        self._pw.setXRange(lo, hi, padding=0.05)
+        ymax = float(counts.max()) if counts.size and counts.max() > 0 else 1.0
+        self._pw.setYRange(0.0, ymax, padding=0.08)

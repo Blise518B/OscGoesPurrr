@@ -34,8 +34,8 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
     QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QPlainTextEdit, QProgressBar, QPushButton, QSlider, QSpinBox, QSplitter,
-    QVBoxLayout, QWidget,
+    QPlainTextEdit, QProgressBar, QPushButton, QScrollArea, QSlider, QSpinBox,
+    QSplitter, QVBoxLayout, QWidget,
 )
 
 from . import csv_export
@@ -202,11 +202,18 @@ class TestBenchWindow(QMainWindow):
         root.addLayout(bar)
 
         split = QSplitter(Qt.Orientation.Horizontal)
-        split.addWidget(self._build_controls())
+        # The controls live in a scroll area so a short window scrolls them
+        # instead of squishing the rows (which clipped buttons/spinboxes).
+        controls_scroll = QScrollArea()
+        controls_scroll.setWidgetResizable(True)
+        controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        controls_scroll.setWidget(self._build_controls())
+        controls_scroll.setMinimumWidth(320)
+        split.addWidget(controls_scroll)
         split.addWidget(self._build_plots())
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
-        split.setSizes([420, 820])
+        split.setSizes([440, 800])
         root.addWidget(split, 1)
 
         # Bottom log.
