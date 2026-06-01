@@ -63,6 +63,11 @@ the single-app case needs no clicks.
 5. In the **target app's routing**, route the input you'll drive (e.g. the
    chosen zone's *PenOthers*) onto that toy's motor.
 
+The virtual toy's identity (its Lovense address/serial) is **saved per model**
+under `%APPDATA%\OscGoesPurrr\testbench_state.json`, so it reconnects as the
+**same** device every launch — you only route it once in OGB/OGP. (Picking a
+different model yields its own, also-persistent, identity.)
+
 ## Modes
 
 * **Input** — drive avatar params only (the old VRChat-sim use). No toy needed.

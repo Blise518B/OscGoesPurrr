@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 )
 
 from . import csv_export
+from . import state
 from .bench import BenchEngine
 from .generators import (
     AMP_MAX, AMP_MIN, AMP_STEP, FREQ_MAX, FREQ_MIN, FREQ_STEP, WAVEFORMS,
@@ -49,7 +50,7 @@ from .style import COLOR_LIVE, COLOR_SUCCESS, COLOR_TEXT_MUTED, GLOBAL_QSS
 from . import sim_avatar
 from .lovense_device import DEFAULT_WSDM_URL, LovenseToy
 from .lovense_protocol import (
-    DEFAULT_WS_IDENTIFIER, MODELS, LovenseModel, LovenseProtocol, random_address,
+    DEFAULT_WS_IDENTIFIER, MODELS, LovenseModel, LovenseProtocol,
 )
 from .sim_network import VRChatSimNetwork
 
@@ -320,16 +321,23 @@ class TestBenchWindow(QMainWindow):
         g = QGroupBox("Output  (Intiface virtual toy)")
         self._out_group = g
         form = QFormLayout(g)
+        last = state.last_toy()  # restore the previous toy setup if any
 
         self._model_combo = QComboBox()
         for m in MODELS:
             n = len(m.features)
             self._model_combo.addItem(f"{m.name}  ({n} motor{'s' if n != 1 else ''})", userData=m)
+        if last.get("model"):
+            for i in range(self._model_combo.count()):
+                m = self._model_combo.itemData(i)
+                if m is not None and m.name == last["model"]:
+                    self._model_combo.setCurrentIndex(i)
+                    break
         form.addRow("Model", self._model_combo)
 
-        self._id_edit = QLineEdit(DEFAULT_WS_IDENTIFIER)
+        self._id_edit = QLineEdit(last.get("identifier") or DEFAULT_WS_IDENTIFIER)
         form.addRow("Identifier", self._id_edit)
-        self._url_edit = QLineEdit(DEFAULT_WSDM_URL)
+        self._url_edit = QLineEdit(last.get("url") or DEFAULT_WSDM_URL)
         form.addRow("WSDM URL", self._url_edit)
 
         self._connect_btn = QPushButton("Connect toy")
@@ -460,11 +468,14 @@ class TestBenchWindow(QMainWindow):
             if model is None:
                 self._connect_btn.setChecked(False)
                 return
-            proto = LovenseProtocol(
-                model, random_address(),
-                ws_identifier=self._id_edit.text().strip() or DEFAULT_WS_IDENTIFIER,
-            )
+            ident = self._id_edit.text().strip() or DEFAULT_WS_IDENTIFIER
             url = self._url_edit.text().strip() or DEFAULT_WSDM_URL
+            # Stable per-model address so the virtual toy keeps ONE identity
+            # across restarts — Intiface/OGB/OGP match toys by this serial, so a
+            # random address each launch is what made it re-appear as new.
+            proto = LovenseProtocol(model, state.toy_address(model.name),
+                                    ws_identifier=ident)
+            state.remember_toy(model.name, ident, url)
             self.toy = LovenseToy(
                 proto, url=url,
                 on_levels=self._on_toy_levels_worker,
