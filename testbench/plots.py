@@ -39,6 +39,10 @@ class LivePlot(QWidget):
         self._pw.setLabel("bottom", "time (s)")
         self._pw.showGrid(x=True, y=True, alpha=0.18)
         self._pw.addLegend(offset=(-10, 10))
+        # Render only visible, downsampled points so zooming/panning into a long
+        # trace stays fast — otherwise pyqtgraph redraws every point each frame.
+        self._pw.setClipToView(True)
+        self._pw.setDownsampling(auto=True, mode="peak")
         self._in_curve = self._pw.plot([], [], pen=_INPUT_PEN, name="input → target")
         self._out_curve = self._pw.plot([], [], pen=_OUTPUT_PEN, name="toy output")
         lay.addWidget(self._pw)

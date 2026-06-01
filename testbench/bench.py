@@ -65,68 +65,57 @@ def latency_stats(latencies_ms: List[float]) -> Dict[str, Optional[float]]:
     }
 
 
-def cross_correlation_latencies(
+def _rising_midline_crossings(arr: np.ndarray, min_amp: float) -> List[float]:
+    """Interpolated times at which the signal rises through its own midline
+    (``(min + max) / 2`` over the window). Vectorised; O(n)."""
+    if arr.shape[0] < 2:
+        return []
+    t = arr[:, 0]
+    v = arr[:, 1]
+    vmin = float(v.min())
+    vmax = float(v.max())
+    if vmax - vmin < min_amp:  # essentially flat — no usable transitions
+        return []
+    mid = 0.5 * (vmin + vmax)
+    idx = np.nonzero((v[:-1] < mid) & (v[1:] >= mid))[0]
+    if idx.size == 0:
+        return []
+    v0 = v[idx]
+    v1 = v[idx + 1]
+    denom = np.where(v1 != v0, v1 - v0, 1.0)
+    frac = (mid - v0) / denom
+    cross = t[idx] + frac * (t[idx + 1] - t[idx])
+    return cross.tolist()
+
+
+def crossing_latencies(
     in_arr: np.ndarray,
     out_arr: np.ndarray,
-    period_s: float,
     max_lag_s: float = 0.3,
-    dt: float = 0.003,
-    min_corr: float = 0.3,
-    max_cycles: int = 20,
+    min_amp: float = 0.05,
 ) -> List[float]:
-    """Per-cycle cross-correlation latency (ms) for a periodic input.
+    """Per-transition latency (ms) via midline rising-crossings.
 
-    The waveform-agnostic alternative to edge pairing: resample input + output
-    onto a uniform ``dt`` grid, then for each full period find the lag in
-    ``[0, max_lag]`` that maximises the *normalised* correlation of the output
-    against that cycle's input. Works for sine / triangle / sawtooth / square
-    and is robust to the output being smoothed or amplitude-scaled. Returns one
-    latency per usable cycle; cycles whose best correlation is below
-    ``min_corr`` (the output isn't tracking) are skipped.
+    Each channel's midline is its own ``(min + max) / 2`` over the window, so
+    the measure is amplitude- and offset-independent. A rising midline crossing
+    sits at the signal's *steepest* point — a stable timing reference for any
+    periodic waveform (sine, triangle, sawtooth, square) and for a one-shot
+    step / pulse. This avoids the broad, jittery correlation peak that a
+    narrowband sine produces. Each input rising crossing is paired with the next
+    output rising crossing within ``max_lag_s``. O(n) over the (bounded)
+    buffers, so cost stays constant.
     """
-    if period_s <= 0 or in_arr.shape[0] < 4 or out_arr.shape[0] < 4:
+    in_cr = _rising_midline_crossings(in_arr, min_amp)
+    out_cr = _rising_midline_crossings(out_arr, min_amp)
+    if not in_cr or not out_cr:
         return []
-    t0 = max(float(in_arr[0, 0]), float(out_arr[0, 0]))
-    t1 = min(float(in_arr[-1, 0]), float(out_arr[-1, 0]))
-    if t1 - t0 < period_s:
-        return []
-    # Only analyse the most recent window so cost stays CONSTANT as the buffers
-    # grow — otherwise each live refresh re-correlates the whole history and the
-    # UI gets progressively laggier.
-    window = (max_cycles + 1) * period_s
-    if t1 - t0 > window:
-        t0 = t1 - window
-    grid = np.arange(t0, t1, dt)
-    xi = np.interp(grid, in_arr[:, 0], in_arr[:, 1])
-    xo = np.interp(grid, out_arr[:, 0], out_arr[:, 1])
-    n_cycle = max(2, int(round(period_s / dt)))
-    max_lag = min(max_lag_s, 0.45 * period_s)
-    n_lag = max(1, int(round(max_lag / dt)))
     lats: List[float] = []
-    k = 0
-    while k < max_cycles:
-        i0 = k * n_cycle
-        i1 = i0 + n_cycle
-        if i1 + n_lag > grid.size:
-            break
-        seg = xi[i0:i1] - xi[i0:i1].mean()
-        sn = float(np.linalg.norm(seg))
-        if sn < 1e-9:
-            k += 1
-            continue
-        best_corr, best_lag = -2.0, 0
-        for lag in range(n_lag + 1):
-            ow = xo[i0 + lag:i1 + lag]
-            ow = ow - ow.mean()
-            on = float(np.linalg.norm(ow))
-            if on < 1e-9:
-                continue
-            c = float(np.dot(seg, ow) / (sn * on))
-            if c > best_corr:
-                best_corr, best_lag = c, lag
-        if best_corr >= min_corr:
-            lats.append(best_lag * dt * 1000.0)
-        k += 1
+    j = 0
+    for ti in in_cr:
+        while j < len(out_cr) and out_cr[j] <= ti:
+            j += 1
+        if j < len(out_cr) and (out_cr[j] - ti) <= max_lag_s:
+            lats.append((out_cr[j] - ti) * 1000.0)
     return lats
 
 
@@ -254,11 +243,12 @@ class BenchEngine:
     def stats(self) -> Dict[str, Optional[float]]:
         return latency_stats(self.latencies_ms())
 
-    def correlation_latencies(self, period_s: float, max_lag_s: float = 0.3) -> List[float]:
-        """Per-cycle cross-correlation latencies (ms) over the current buffers —
-        the waveform-agnostic alternative to edge pairing (good for sine etc.)."""
+    def crossing_latencies(self, max_lag_s: float = 0.3) -> List[float]:
+        """Midline-crossing latencies (ms) over the current buffers — the
+        waveform-agnostic measure (stable for sine / triangle / saw, and also
+        works for square / step)."""
         in_arr, out_arr = self.snapshot()
-        return cross_correlation_latencies(in_arr, out_arr, period_s, max_lag_s)
+        return crossing_latencies(in_arr, out_arr, max_lag_s)
 
     def misses(self) -> int:
         with self._lock:

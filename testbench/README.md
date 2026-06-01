@@ -87,10 +87,10 @@ the next launch.
 4. Pick a **Method** (default **Auto**):
    * **Edge** — pairs each input rising edge with the toy's first output
      movement. Crisp for **square / step**; one latency per edge.
-   * **Correlation** — per-cycle cross-correlation phase lag. Works for
-     **sine / triangle / sawtooth** (and square), and tolerates a smoothed or
-     amplitude-scaled output.
-   * **Auto** — Edge for a square wave, Correlation for any other waveform.
+   * **Crossings** — pairs each signal's rising crossing of its own midline
+     ((min+max)/2). Stable for **sine / triangle / sawtooth** (and works for
+     square), and tolerates a smoothed or amplitude-scaled output.
+   * **Auto** — Edge for a square wave, Crossings for any other waveform.
 5. Click **Run benchmark (N cycles)**; the stats fill live:
    count / min / mean / median / p95 / max / jitter (σ) / misses (Edge only).
 6. **Export CSV** writes `<base>_samples.csv`, `<base>_latencies.csv`, and

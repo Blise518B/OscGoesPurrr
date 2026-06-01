@@ -15,7 +15,7 @@ import pytest
 
 from testbench import csv_export
 from testbench.bench import (
-    BenchEngine, EdgeDetector, cross_correlation_latencies, latency_stats,
+    BenchEngine, EdgeDetector, crossing_latencies, latency_stats,
 )
 from testbench.generators import WAVEFORMS, clamp01, sample_pattern
 
@@ -171,9 +171,9 @@ def test_export_handles_empty(tmp_path):
     assert len(files) == 3  # still writes headers, no crash
 
 
-# ------------------------------------------------------ cross-correlation
+# ------------------------------------------------------ midline crossings
 
-def test_cross_correlation_recovers_known_lag():
+def test_crossing_latency_recovers_known_lag():
     fs, dur, freq, lag = 200.0, 6.0, 0.5, 0.05  # 50 ms output delay
     t = np.arange(0.0, dur, 1.0 / fs)
     inp = 0.5 + 0.5 * np.sin(2 * np.pi * freq * t)
@@ -181,15 +181,18 @@ def test_cross_correlation_recovers_known_lag():
     outp = 0.8 * (0.5 + 0.5 * np.sin(2 * np.pi * freq * (t - lag)))
     in_arr = np.column_stack([t, inp])
     out_arr = np.column_stack([t, outp])
-    lats = cross_correlation_latencies(in_arr, out_arr, period_s=1.0 / freq)
-    assert lats, "expected at least one cycle measured"
-    assert abs(float(np.mean(lats)) - 50.0) <= 6.0  # within ~grid resolution
+    lats = crossing_latencies(in_arr, out_arr)
+    assert lats, "expected at least one crossing measured"
+    # interpolated crossings recover the lag precisely and consistently
+    assert abs(float(np.mean(lats)) - 50.0) <= 2.0
+    assert float(np.std(lats)) <= 1.0          # stable, unlike a broad corr peak
 
 
-def test_cross_correlation_empty_for_insufficient_data():
+def test_crossing_empty_for_flat_or_short():
+    # a flat signal has no midline crossings
+    t = np.arange(0.0, 4.0, 0.01)
+    flat = np.column_stack([t, np.full_like(t, 0.5)])
+    assert crossing_latencies(flat, flat) == []
+    # too few samples
     empty = np.empty((0, 2), dtype=float)
-    assert cross_correlation_latencies(empty, empty, 2.0) == []
-    # less than one period of data -> nothing
-    t = np.arange(0.0, 0.5, 0.01)
-    a = np.column_stack([t, np.sin(t)])
-    assert cross_correlation_latencies(a, a, period_s=2.0) == []
+    assert crossing_latencies(empty, empty) == []

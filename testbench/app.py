@@ -416,12 +416,14 @@ class TestBenchWindow(QMainWindow):
         self.bench.set_output_threshold(float(self._out_thr.value()))
 
         self._method_combo = QComboBox()
-        self._method_combo.addItems(["Auto", "Edge", "Correlation"])
+        self._method_combo.addItems(["Auto", "Edge", "Crossings"])
         self._method_combo.setToolTip(
             "How latency is measured.\n"
-            "Auto: edge-pairing for a square wave, cross-correlation otherwise.\n"
-            "Edge: input/output rising-edge pairing — crisp for square / step.\n"
-            "Correlation: per-cycle phase lag — works for sine / triangle / saw.")
+            "Auto: edge-pairing for a square wave, crossings otherwise.\n"
+            "Edge: input-0.5 vs output-onset rising-edge pairing — crisp for "
+            "square / step.\n"
+            "Crossings: midline rising-crossing lag — stable for sine / "
+            "triangle / saw (and works for square).")
         self._method_combo.setCurrentText(state.get("method", "Auto"))
         self._method_combo.currentTextChanged.connect(lambda t: state.set("method", t))
         form.addRow("Method", self._method_combo)
@@ -596,15 +598,14 @@ class TestBenchWindow(QMainWindow):
         """Resolve the measurement method (handles the 'Auto' choice)."""
         m = self._method_combo.currentText()
         if m == "Auto":
-            return "edge" if self._wave_combo.currentText() == "square" else "correlation"
+            return "edge" if self._wave_combo.currentText() == "square" else "crossings"
         return m.lower()
 
     def _current_latencies(self):
         """Return (latencies_ms, misses) for the active method. `misses` is
-        None for correlation (not an edge-pairing concept)."""
-        if self._effective_method() == "correlation":
-            freq = max(0.01, float(self._freq_spin.value()))
-            return self.bench.correlation_latencies(1.0 / freq), None
+        None for crossings (not an edge-pairing concept)."""
+        if self._effective_method() == "crossings":
+            return self.bench.crossing_latencies(), None
         return self.bench.latencies_ms(), self.bench.misses()
 
     def _run_benchmark(self) -> None:
