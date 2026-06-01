@@ -121,8 +121,8 @@ def channels_for_preset(preset: sim_avatar.AvatarPreset) -> List[tuple]:
 
 class _Bridge(QObject):
     """Marshals network + websocket worker-thread callbacks onto the GUI thread."""
-    ogp_discovered = Signal(int)
-    ogp_lost = Signal()
+    targets_changed = Signal(list)    # List[str] discovered target labels
+    target_changed = Signal(object)   # Optional[str] active target label
     status = Signal(str)
     toy_levels = Signal(list)        # List[Tuple[int, float]]
     toy_log = Signal(str)
@@ -149,13 +149,13 @@ class TestBenchWindow(QMainWindow):
         # Network (input side) — callbacks hop to the GUI thread via the bridge.
         self.bridge = _Bridge()
         self.net = VRChatSimNetwork(
-            on_ogp_discovered=lambda port: self.bridge.ogp_discovered.emit(port),
-            on_ogp_lost=lambda: self.bridge.ogp_lost.emit(),
-            on_inbound_osc=lambda a, v: self.bridge.toy_log.emit(f"OGP→ {a} {tuple(v)}"),
+            on_targets_changed=lambda names: self.bridge.targets_changed.emit(list(names)),
+            on_target_changed=lambda label: self.bridge.target_changed.emit(label),
+            on_inbound_osc=lambda a, v: self.bridge.toy_log.emit(f"target→ {a} {tuple(v)}"),
             on_status=lambda m: self.bridge.status.emit(m),
         )
-        self.bridge.ogp_discovered.connect(self._on_ogp_discovered)
-        self.bridge.ogp_lost.connect(self._on_ogp_lost)
+        self.bridge.targets_changed.connect(self._on_targets_changed)
+        self.bridge.target_changed.connect(self._on_target_changed)
         self.bridge.status.connect(lambda m: self._log(f"[net] {m}"))
         self.bridge.toy_levels.connect(self._on_toy_levels_ui)
         self.bridge.toy_log.connect(self._log)
@@ -187,11 +187,11 @@ class TestBenchWindow(QMainWindow):
 
         # Status + mode row.
         bar = QHBoxLayout()
-        self._ogp_label = QLabel("OGP: waiting…")
-        self._ogp_label.setObjectName("statusBar")
+        self._target_status = QLabel("Target: none discovered")
+        self._target_status.setObjectName("statusBar")
         self._toy_label = QLabel("Intiface: not connected")
         self._toy_label.setObjectName("statusBar")
-        bar.addWidget(self._ogp_label, 1)
+        bar.addWidget(self._target_status, 1)
         bar.addWidget(self._toy_label, 1)
         bar.addWidget(QLabel("Mode:"))
         self._mode_combo = QComboBox()
@@ -228,9 +228,31 @@ class TestBenchWindow(QMainWindow):
         return host
 
     def _build_input_group(self) -> QGroupBox:
-        g = QGroupBox("Input  (VRChat → OGP)")
+        g = QGroupBox("Input  (VRChat → target app)")
         self._in_group = g
         form = QFormLayout(g)
+
+        # Where the avatar OSC goes. Any discovered VRChat-OSC consumer shows
+        # up here (OGP, OSC Goes Brrr, …); pick one, or use a manual host:port
+        # for apps that only listen on the fixed VRChat port (9000) without
+        # advertising OSCQuery.
+        self._target_combo = QComboBox()
+        self._target_combo.setToolTip("OSC apps discovered on the network")
+        self._target_combo.activated.connect(self._on_target_combo_activated)
+        form.addRow("Target app", self._target_combo)
+
+        manual = QHBoxLayout()
+        self._host_edit = QLineEdit("127.0.0.1")
+        self._port_spin = QSpinBox()
+        self._port_spin.setRange(1, 65535)
+        self._port_spin.setValue(9000)
+        use_manual = QPushButton("Use")
+        use_manual.setProperty("role", "secondary")
+        use_manual.clicked.connect(self._use_manual_target)
+        manual.addWidget(self._host_edit, 1)
+        manual.addWidget(self._port_spin)
+        manual.addWidget(use_manual)
+        form.addRow("Manual host:port", manual)
 
         self._avatar_combo = QComboBox()
         for p in sim_avatar.AVATAR_PRESETS:
@@ -493,11 +515,17 @@ class TestBenchWindow(QMainWindow):
 
     # ----------------------------------------------------------- benchmark
     def _run_benchmark(self) -> None:
+        if self.net.active_target_label() is None:
+            QMessageBox.information(
+                self, "No target selected",
+                "Pick a target app (or set a manual host:port) so the input "
+                "signal has somewhere to go.")
+            return
         if self.toy is None:
             QMessageBox.information(
                 self, "Connect a toy first",
-                "Connect the virtual toy and make sure OGP is routing the chosen "
-                "input channel to it before running the benchmark.")
+                "Connect the virtual toy and make sure the target app is routing "
+                "the chosen input channel to it before running the benchmark.")
             return
         self.bench.reset()
         freq = max(FREQ_MIN, float(self._freq_spin.value()))
@@ -561,14 +589,39 @@ class TestBenchWindow(QMainWindow):
     def _fmt(ms: Optional[float]) -> str:
         return "—" if ms is None else f"{ms:.1f} ms"
 
-    # ----------------------------------------------------------- discovery
-    def _on_ogp_discovered(self, port: int) -> None:
-        self._ogp_label.setText(f"OGP: ● connected (127.0.0.1:{port})")
-        self._ogp_label.setStyleSheet(f"color: {COLOR_SUCCESS};")
+    # ----------------------------------------------------------- targets
+    def _on_target_combo_activated(self, idx: int) -> None:
+        name = self._target_combo.itemText(idx)
+        if name:
+            self.net.select_target(name, user=True)
 
-    def _on_ogp_lost(self) -> None:
-        self._ogp_label.setText("OGP: ○ advertisement vanished")
-        self._ogp_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+    def _use_manual_target(self) -> None:
+        host = self._host_edit.text().strip() or "127.0.0.1"
+        self.net.set_manual_target(host, int(self._port_spin.value()))
+
+    def _on_targets_changed(self, names: list) -> None:
+        cur = self.net.active_target_label()
+        self._target_combo.blockSignals(True)
+        self._target_combo.clear()
+        self._target_combo.addItems(names)
+        if cur in names:
+            self._target_combo.setCurrentText(cur)
+        self._target_combo.blockSignals(False)
+        if not names:
+            self._target_status.setText("Target: none discovered")
+            self._target_status.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
+
+    def _on_target_changed(self, label) -> None:
+        if label:
+            self._target_status.setText(f"Target: ● {label}")
+            self._target_status.setStyleSheet(f"color: {COLOR_SUCCESS};")
+            if self._target_combo.findText(label) >= 0:
+                self._target_combo.blockSignals(True)
+                self._target_combo.setCurrentText(label)
+                self._target_combo.blockSignals(False)
+        else:
+            self._target_status.setText("Target: none")
+            self._target_status.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
 
     # ----------------------------------------------------------- misc
     def _log(self, msg: str) -> None:

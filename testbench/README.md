@@ -1,22 +1,23 @@
 # OscGoesPurrr Test Bench
 
-A standalone tool that drives a known input signal into the **live**
-OscGoesPurrr app and reads the resulting toy output — on one clock — so you can
-plot input vs output on a shared timeline and **benchmark end-to-end latency**
-("program delay").
+A standalone tool that drives a known input signal into a **live** VRChat-OSC
+haptics app — OscGoesPurrr **or any other on the market** (OSC Goes Brrr, …) —
+and reads the resulting toy output, on one clock, so you can plot input vs
+output on a shared timeline, **benchmark end-to-end latency** ("program delay"),
+and compare apps head to head.
 
 It absorbs the two former standalone tools:
 
 * **Input side** (was `sim/`) — impersonates VRChat: advertises over mDNS,
-  answers OSCQuery, and sends avatar OSC parameters, so OGP routes real params
-  with the game closed.
+  answers OSCQuery, and sends avatar OSC parameters, so the target app routes
+  real params with the game closed.
 * **Output side** (was `toysim/`) — impersonates a Lovense toy on Intiface
   Central's Device Websocket Server, so a fully virtual toy shows up in
-  Intiface and OGP drives it through its normal Buttplug path.
+  Intiface and the target app drives it through its normal Buttplug path.
 
 ```
- [Test Bench] --OSC--> [OGP under test] --Buttplug--> [Intiface] --Lovense--> [Test Bench]
-   (input, t_in)                                                              (output, t_out)
+ [Test Bench] --OSC--> [target app under test] --Buttplug--> [Intiface] --Lovense--> [Test Bench]
+   (input, t_in)                                                                     (output, t_out)
                           latency = t_out - t_in   (one perf_counter clock, no clock skew)
 ```
 
@@ -35,6 +36,16 @@ testbench\build_testbench.bat
 Dependencies (installed by the scripts): PySide6, python-osc, zeroconf,
 websocket-client, pyqtgraph, numpy.
 
+## Targets (universal)
+
+The simulator drives **any** VRChat-OSC consumer, not just OscGoesPurrr. The
+**Target app** dropdown in the Input panel lists every app discovered on the
+network via mDNS/OSCQuery (the bench advertises like real VRChat and connects
+to whatever answers) — pick one to drive it. For apps that don't advertise
+OSCQuery and just listen on the fixed VRChat port, use the **Manual host:port**
+field (default `127.0.0.1:9000`). The first app discovered is auto-selected, so
+the single-app case needs no clicks.
+
 ## One-time setup (for the output side / benchmarking)
 
 1. **Intiface** → Settings → enable **Device Websocket Server** (default port
@@ -44,11 +55,13 @@ websocket-client, pyqtgraph, numpy.
    `user_configs → protocols → lovense → communication` add
    `{"websocket": {"name": "OGPSim"}}` — the name must match the **Identifier**
    field in the Output panel exactly — then restart the Intiface server.
-3. Start **OscGoesPurrr** and connect it to Intiface.
+3. Start your **target app** (OscGoesPurrr, OSC Goes Brrr, …) and connect it to
+   Intiface. It appears in the bench's **Target app** dropdown (or set a manual
+   host:port).
 4. In the bench's **Output** panel pick a model and click **Connect toy** — it
-   appears in Intiface and in OGP's device list.
-5. In **OGP's Device Routing**, route the input you'll drive (e.g. the chosen
-   zone's *PenOthers*) onto that toy's motor.
+   appears in Intiface and in the target app's device list.
+5. In the **target app's routing**, route the input you'll drive (e.g. the
+   chosen zone's *PenOthers*) onto that toy's motor.
 
 ## Modes
 
@@ -70,13 +83,13 @@ websocket-client, pyqtgraph, numpy.
 
 ## Caveats
 
-* The bench measures the **live app**. OGP must be running, connected to
+* The bench measures the **live target app**. It must be running, connected to
   Intiface, the virtual toy connected & routed, and the chosen input mapped to
-  that toy. The status bar shows OGP discovery + Intiface connection.
-* OGP's router **debounces** (emits only on change) and applies **curve /
+  that toy. The status bar shows the selected target + Intiface connection.
+* Most routers **debounce** (emit only on change) and apply **curve /
   smoothing**, so the output waveform is *shaped*, not identical to the input.
   For clean transport latency, use a square/step and minimal smoothing in the
-  active profile. Latency is measured as the time from an input rising edge to
-  the toy's **first** output movement (set by the *Output edge ≥* threshold).
-* Reported latency is the full round trip: UDP → OGP OSCQuery/router tick
-  (~16 ms poll) → Intiface → websocket. That is the "program delay".
+  target app. Latency is measured as the time from an input rising edge to the
+  toy's **first** output movement (set by the *Output edge ≥* threshold).
+* Reported latency is the full round trip: UDP → the app's OSCQuery/router tick
+  → Intiface → websocket. That is the "program delay".

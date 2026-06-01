@@ -146,12 +146,13 @@ it on next launch.
 
 ## 🧪 Developer tools
 
-The **Test Bench** (`testbench/`) is a standalone program that exercises
-OscGoesPurrr without VRChat or real hardware — and benchmarks end-to-end
-latency. It drives avatar OSC parameters into the live app (impersonating
-VRChat) and reads the resulting toy output (impersonating a Lovense toy on
-Intiface) on one clock, plotting input vs output and measuring "program
-delay". Three modes:
+The **Test Bench** (`testbench/`) is a standalone program that exercises a live
+VRChat-OSC haptics app — OscGoesPurrr or any other on the market (OSC Goes
+Brrr, …) — without VRChat or real hardware, and benchmarks end-to-end latency.
+It drives avatar OSC parameters into the target app (impersonating VRChat, with
+a discovered-app picker + manual host:port) and reads the resulting toy output
+(impersonating a Lovense toy on Intiface) on one clock, plotting input vs
+output and measuring "program delay". Three modes:
 
 * **Input** — drive avatar params only (impersonate VRChat).
 * **Output** — watch a virtual toy's level only (impersonate a toy on Intiface).

@@ -106,13 +106,13 @@ class VRChatSimNetwork:
 
     def __init__(
         self,
-        on_ogp_discovered: Optional[Callable[[int], None]] = None,
-        on_ogp_lost: Optional[Callable[[], None]] = None,
+        on_targets_changed: Optional[Callable[[List[str]], None]] = None,
+        on_target_changed: Optional[Callable[[Optional[str]], None]] = None,
         on_inbound_osc: Optional[Callable[[str, Tuple[Any, ...]], None]] = None,
         on_status: Optional[Callable[[str], None]] = None,
     ) -> None:
-        self._on_ogp_discovered = on_ogp_discovered or (lambda _p: None)
-        self._on_ogp_lost = on_ogp_lost or (lambda: None)
+        self._on_targets_changed = on_targets_changed or (lambda _t: None)
+        self._on_target_changed = on_target_changed or (lambda _l: None)
         self._on_inbound_osc = on_inbound_osc or (lambda _a, _v: None)
         self._on_status = on_status or (lambda _m: None)
 
@@ -131,10 +131,16 @@ class VRChatSimNetwork:
         self._http_listen_port: int = 0
         self._service_name: str = ""
 
-        # Discovered OGP endpoint — None until mDNS finds it.
-        self._ogp_port: Optional[int] = None
-        self._ogp_client: Optional[SimpleUDPClient] = None
-        self._ogp_lock = threading.Lock()
+        # Universal targeting: any OSC app that advertises OSCQuery/_osc (not
+        # just OGP) is discovered and listed; the user picks one, or enters a
+        # manual host:port for apps that only listen on the fixed VRChat port.
+        # `_discovered` maps an instance label -> (ip, port); the active target
+        # is the single SimpleUDPClient we send avatar data to.
+        self._discovered: Dict[str, Tuple[str, int]] = {}
+        self._target_client: Optional[SimpleUDPClient] = None
+        self._target_label: Optional[str] = None
+        self._user_selected = False  # True once the user picks explicitly
+        self._target_lock = threading.Lock()
 
         # The current avatar's OSCQuery root + the {short_name: (type, value)} map.
         # Both protected by _tree_lock since the HTTP handler and UI thread
@@ -196,6 +202,11 @@ class VRChatSimNetwork:
                 self._osc_server.server_close()
         except Exception:
             pass
+        # Target client socket
+        with self._target_lock:
+            client = self._target_client
+            self._target_client = None
+        self._close_client(client)
 
     # -------------------------------------------------------------- bindings
     def _bind_udp(self) -> None:
@@ -259,8 +270,8 @@ class VRChatSimNetwork:
 
     def _start_browsers(self) -> None:
         assert self._zeroconf is not None
-        # Browse both service types so we can find OGP regardless of which
-        # one it advertises first.
+        # Browse both service types so we can find any OSC target (OGP or
+        # otherwise) regardless of which one it advertises first.
         self._osc_browser = ServiceBrowser(
             self._zeroconf, "_osc._udp.local.", handlers=[self._on_service_change]
         )
@@ -269,6 +280,27 @@ class VRChatSimNetwork:
         )
 
     # ------------------------------------------------------------- discovery
+    @staticmethod
+    def _instance_label(name: str, service_type: str) -> str:
+        """The advertised instance name without its `.<service_type>` suffix,
+        so the same app seen via `_osc._udp` and `_oscjson._tcp` dedupes to one
+        entry in the target list."""
+        suffix = "." + service_type
+        return name[:-len(suffix)] if name.endswith(suffix) else name
+
+    def _is_self(self, name: str) -> bool:
+        """True if `name` is our own mDNS advertisement (avoids self-targeting)."""
+        return bool(self._service_name) and self._service_name in name
+
+    @staticmethod
+    def _close_client(client: Optional[SimpleUDPClient]) -> None:
+        """Close a UDP client's socket so re-targeting doesn't leak sockets."""
+        if client is not None:
+            try:
+                client._sock.close()
+            except Exception:
+                pass
+
     def _on_service_change(
         self,
         zeroconf: Zeroconf,
@@ -276,59 +308,119 @@ class VRChatSimNetwork:
         name: str,
         state_change: ServiceStateChange,
     ) -> None:
-        # Ignore our own advertisement and anything not from OGP.
-        if "OscGoesPurrr" not in name:
+        # Skip our OWN advertisement; treat every other OSCQuery/_osc service as
+        # a candidate target, so the simulator drives ANY VRChat-OSC consumer
+        # (OGP, OSC Goes Brrr, …), not just OscGoesPurrr.
+        if self._is_self(name):
             return
+        label = self._instance_label(name, service_type)
         if state_change == ServiceStateChange.Added:
             info = zeroconf.get_service_info(service_type, name)
             if info is None:
                 return
+            port: Optional[int] = None
             if service_type == "_osc._udp.local.":
-                # info.port is exactly OGP's UDP listen port — what we send to.
-                self._set_ogp_port(info.port)
+                port = info.port  # the app's OSC receive port — what we send to
             elif service_type == "_oscjson._tcp.local.":
-                # Fall back to fetching HOST_INFO to learn the OSC port if we
-                # only see OGP via its HTTP advertisement.
-                self._fetch_ogp_host_info(info.port)
+                # OSCQuery-only advert: read HOST_INFO to learn the OSC port.
+                port = self._fetch_host_info_port(info.port)
+            if port:
+                self._add_discovered(label, "127.0.0.1", int(port))
         elif state_change == ServiceStateChange.Removed:
-            self._clear_ogp()
+            self._remove_discovered(label)
 
-    def _fetch_ogp_host_info(self, http_port: int) -> None:
-        # Lazy import — keeps `requests` off the hot path and out of import time.
-        import urllib.request
+    def _fetch_host_info_port(self, http_port: int) -> Optional[int]:
+        """Fetch an app's OSCQuery HOST_INFO and return its OSC_PORT (or None)."""
+        import urllib.request  # lazy — keeps it off import time
 
         url = f"http://127.0.0.1:{http_port}/?HOST_INFO"
         try:
             with urllib.request.urlopen(url, timeout=1.5) as resp:
                 if resp.status != 200:
-                    return
+                    return None
                 data = json.loads(resp.read().decode("utf-8"))
             port = data.get("OSC_PORT")
-            if isinstance(port, int) and port > 0:
-                self._set_ogp_port(port)
+            return port if isinstance(port, int) and port > 0 else None
         except Exception as exc:
             self._on_status(f"HOST_INFO fetch failed: {type(exc).__name__}: {exc}")
+            return None
 
-    def _set_ogp_port(self, port: int) -> None:
-        with self._ogp_lock:
-            if self._ogp_port == port and self._ogp_client is not None:
-                return
-            self._ogp_port = port
-            self._ogp_client = SimpleUDPClient("127.0.0.1", port)
-        self._on_status(f"Discovered OscGoesPurrr at 127.0.0.1:{port}")
-        self._on_ogp_discovered(port)
-        # Immediately push the current avatar id + every known parameter so
-        # OGP populates its cache without waiting for an HTTP poll.
+    # --------------------------------------------------------- target tracking
+    def _add_discovered(self, label: str, ip: str, port: int) -> None:
+        with self._target_lock:
+            self._discovered[label] = (ip, port)
+            names = sorted(self._discovered)
+            # Auto-pick the first target found if the user hasn't chosen one,
+            # so the common single-app case connects with no extra click.
+            auto = not self._user_selected and self._target_client is None
+        self._on_status(f"Discovered OSC target: {label} ({ip}:{port})")
+        self._on_targets_changed(names)
+        if auto:
+            self.select_target(label)
+
+    def _remove_discovered(self, label: str) -> None:
+        with self._target_lock:
+            existed = self._discovered.pop(label, None) is not None
+            names = sorted(self._discovered)
+            was_active = self._target_label == label
+        if not existed:
+            return
+        self._on_status(f"OSC target vanished: {label}")
+        self._on_targets_changed(names)
+        if was_active:
+            self.clear_target()
+
+    def discovered_targets(self) -> List[str]:
+        with self._target_lock:
+            return sorted(self._discovered)
+
+    def active_target_label(self) -> Optional[str]:
+        with self._target_lock:
+            return self._target_label
+
+    def select_target(self, label: str, user: bool = False) -> bool:
+        """Send avatar data to a discovered target. False if the label is gone."""
+        with self._target_lock:
+            endpoint = self._discovered.get(label)
+            if endpoint is None:
+                return False
+            ip, port = endpoint
+            old = self._target_client
+            self._target_client = SimpleUDPClient(ip, port)
+            self._target_label = label
+            if user:
+                self._user_selected = True
+        self._close_client(old)
+        self._on_status(f"Targeting {label} ({ip}:{port})")
+        self._on_target_changed(label)
+        # Push the avatar id + every known parameter so the target's cache is
+        # hot without waiting for its debounced HTTP refetch.
+        self._blast_avatar_state()
+        return True
+
+    def set_manual_target(self, host: str, port: int) -> None:
+        """Send to an explicit host:port (e.g. the fixed VRChat port 9000) for
+        apps that don't advertise OSCQuery over mDNS."""
+        label = f"Manual {host}:{int(port)}"
+        with self._target_lock:
+            old = self._target_client
+            self._target_client = SimpleUDPClient(host, int(port))
+            self._target_label = label
+            self._user_selected = True
+        self._close_client(old)
+        self._on_status(f"Targeting {label}")
+        self._on_target_changed(label)
         self._blast_avatar_state()
 
-    def _clear_ogp(self) -> None:
-        with self._ogp_lock:
-            had = self._ogp_client is not None
-            self._ogp_port = None
-            self._ogp_client = None
-        if had:
-            self._on_status("OscGoesPurrr advertisement vanished")
-            self._on_ogp_lost()
+    def clear_target(self) -> None:
+        with self._target_lock:
+            old = self._target_client
+            self._target_client = None
+            self._target_label = None
+        if old is not None:
+            self._close_client(old)
+            self._on_status("Target cleared")
+            self._on_target_changed(None)
 
     # ---------------------------------------------------------------- inbound
     def _on_udp(self, address: str, *args: Any) -> None:
@@ -339,7 +431,7 @@ class VRChatSimNetwork:
 
     # ---------------------------------------------------------- avatar state
     def set_avatar(self, preset: sim_avatar.AvatarPreset) -> None:
-        """Rebuild the OSCQuery tree from a fresh avatar preset and tell OGP."""
+        """Rebuild the OSCQuery tree from a fresh avatar preset and tell the target."""
         params = sim_avatar.build_params(preset)
         with self._tree_lock:
             self._avatar = preset
@@ -352,7 +444,7 @@ class VRChatSimNetwork:
                 params=params,
             )
         self._on_status(f"Avatar set: {preset.display_name} ({preset.avatar_id})")
-        # Tell OGP an avatar swap happened — it debounces this and re-polls.
+        # Tell the target an avatar swap happened — apps debounce + re-poll.
         self._send_osc("/avatar/change", preset.avatar_id)
         # Then send all the initial parameter values so OGP has fresh data
         # right away. The real VRChat does this on avatar load too.
@@ -382,9 +474,9 @@ class VRChatSimNetwork:
         self._send_osc(f"{_AVATAR_PARAM_PREFIX}{short_name}", value)
 
     def _blast_avatar_state(self, skip_change: bool = False) -> None:
-        """Fire every known parameter at OGP via UDP. Used right after a
-        new connection or avatar swap so OGP's cache is hot without needing
-        to wait for its debounced HTTP refetch."""
+        """Fire every known parameter at the active target via UDP. Used right
+        after selecting a target or an avatar swap so the receiver's cache is
+        hot without waiting for its debounced HTTP refetch."""
         with self._tree_lock:
             avatar = self._avatar
             params = dict(self._params)
@@ -402,14 +494,14 @@ class VRChatSimNetwork:
 
     # ---------------------------------------------------------------- sending
     def _send_osc(self, address: str, value: Any) -> None:
-        with self._ogp_lock:
-            client = self._ogp_client
+        with self._target_lock:
+            client = self._target_client
         if client is None:
             return
         try:
-            # python-osc accepts native bool/float/int/str. Booleans encode
-            # as the T/F type tag, which OGP's handler `_get_bool` decodes
-            # the same way as a >0.5 float — matches real VRChat behaviour.
+            # python-osc accepts native bool/float/int/str. Booleans encode as
+            # the T/F type tag, which receivers decode the same way as a >0.5
+            # float — matches real VRChat behaviour.
             client.send_message(address, value)
         except Exception as exc:
             self._on_status(f"send_osc failed: {type(exc).__name__}: {exc}")
@@ -442,11 +534,11 @@ class VRChatSimNetwork:
     # ----------------------------------------------------------------- debug
     def listen_info(self) -> Dict[str, Any]:
         """Status snapshot for the UI footer."""
-        with self._ogp_lock:
-            ogp = self._ogp_port
+        with self._target_lock:
+            target = self._target_label
         return {
             "service_name": self._service_name,
             "osc_listen_port": self._osc_listen_port,
             "http_listen_port": self._http_listen_port,
-            "ogp_port": ogp,
+            "target": target,
         }
