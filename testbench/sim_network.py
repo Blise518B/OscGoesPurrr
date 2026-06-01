@@ -38,6 +38,12 @@ from . import sim_avatar
 _SERVICE_BASE = "VRChat-Client-Sim"
 _AVATAR_PARAM_PREFIX = "/avatar/parameters/"
 
+# Re-send current params to the active target this often (seconds). Real VRChat
+# streams OSC continuously; apps like OSC Goes Brrr only leave their
+# "waiting for first packet" state once a UDP packet actually arrives, so an
+# idle simulator that sent only on change would never connect them.
+_HEARTBEAT_INTERVAL_S = 1.0
+
 
 def _random_suffix(n: int = 6) -> str:
     import random
@@ -142,6 +148,12 @@ class VRChatSimNetwork:
         self._user_selected = False  # True once the user picks explicitly
         self._target_lock = threading.Lock()
 
+        # Heartbeat thread: re-streams current param values to the active
+        # target so receivers reliably get their "first packet" (and stay
+        # alive) even when no signal is being driven. See _heartbeat_loop.
+        self._stop_heartbeat = threading.Event()
+        self._heartbeat_thread: Optional[threading.Thread] = None
+
         # The current avatar's OSCQuery root + the {short_name: (type, value)} map.
         # Both protected by _tree_lock since the HTTP handler and UI thread
         # both read/write them.
@@ -162,12 +174,14 @@ class VRChatSimNetwork:
         self._start_http()
         self._advertise()
         self._start_browsers()
+        self._start_heartbeat()
         self._on_status(
             f"Listening on OSC UDP 127.0.0.1:{self._osc_listen_port}, "
             f"HTTP 127.0.0.1:{self._http_listen_port} as {self._service_name}"
         )
 
     def stop(self) -> None:
+        self._stop_heartbeat.set()
         # Browsers / zeroconf
         try:
             if self._browser is not None:
@@ -278,6 +292,26 @@ class VRChatSimNetwork:
         self._browser = ServiceBrowser(
             self._zeroconf, "_oscjson._tcp.local.", handlers=[self._on_service_change]
         )
+
+    # ------------------------------------------------------------- heartbeat
+    def _start_heartbeat(self) -> None:
+        self._stop_heartbeat.clear()
+        self._heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop, daemon=True, name="VRSim-Heartbeat"
+        )
+        self._heartbeat_thread.start()
+
+    def _heartbeat_loop(self) -> None:
+        """Re-blast current param values (without /avatar/change) to the active
+        target on a low-rate timer. Mirrors VRChat's continuous stream so a
+        receiver reliably leaves "waiting for first packet" once it is up, and
+        stays connected while idle. It does NOT touch the bench's input trace,
+        so latency measurement is unaffected (that keys on the signal driver)."""
+        while not self._stop_heartbeat.wait(_HEARTBEAT_INTERVAL_S):
+            with self._target_lock:
+                active = self._target_client is not None
+            if active:
+                self._blast_avatar_state(skip_change=True)
 
     # ------------------------------------------------------------- discovery
     @staticmethod
