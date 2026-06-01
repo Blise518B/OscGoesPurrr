@@ -1,6 +1,6 @@
 """Tests for the virtual-toy Lovense protocol decoder.
 
-Covers the pure, I/O-free core in `testbench.toy.lovense_protocol`: the WSDM
+Covers the pure, I/O-free core in `testbench.lovense_protocol`: the WSDM
 handshake JSON, the `DeviceType;` / `Battery;` query replies, and decoding
 each motor command into normalised 0..1 levels for every model in the menu.
 No websocket, Intiface, or Qt is touched.
@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from testbench.toy.lovense_protocol import (
+from testbench.lovense_protocol import (
     DEFAULT_WS_IDENTIFIER,
     MODELS,
     MODELS_BY_NAME,

@@ -344,17 +344,18 @@ design + on-disk format: `docs/SESSION_LOGGING.md`.
 It drives a known input signal into the live OGP app and reads the resulting
 toy output on one `time.perf_counter` clock, to plot input vs output on a
 shared timeline and benchmark end-to-end latency ("program delay"). It absorbs
-the two former standalone sims as internal libraries:
+the two former standalone sims as flat modules in the one package:
 
-* `testbench/vrchat/` — VRChat impersonation (mDNS + OSCQuery + UDP OSC send;
-  `VRChatSimNetwork` + avatar presets). Was the standalone `sim/`.
-* `testbench/toy/` — Intiface/Lovense virtual toy (`LovenseToy` websocket
-  transport + the pure `LovenseProtocol` decoder). Was the standalone `toysim/`.
-* `testbench/bench.py` — the measurement core (clock, ring buffers, edge
-  detection, latency pairing + stats); pure and thread-safe.
-* `testbench/{generators,plots,csv_export,style,app}.py` — signal generators,
-  pyqtgraph plots, CSV export, theme, and the unified window (Input / Output /
-  Benchmark modes).
+* `sim_network.py` + `sim_avatar.py` — VRChat impersonation (mDNS + OSCQuery +
+  UDP OSC send; `VRChatSimNetwork` + avatar presets). Was the standalone `sim/`.
+* `lovense_device.py` + `lovense_protocol.py` — Intiface/Lovense virtual toy
+  (`LovenseToy` websocket transport + the pure `LovenseProtocol` decoder). Was
+  the standalone `toysim/`.
+* `bench.py` — the measurement core (clock, ring buffers, edge detection,
+  latency pairing + stats); pure and thread-safe.
+* `generators.py` / `plots.py` / `csv_export.py` / `style.py` / `app.py` —
+  signal generators, pyqtgraph plots, CSV export, theme, and the unified window
+  (Input / Output / Benchmark modes).
 
 Run with `testbench/run_testbench.bat` (`python -m testbench`); build with
 `testbench/build_testbench.bat`. Isolated tests live in `testbench/tests/`

@@ -5,6 +5,6 @@
 # toy on Intiface), on a single clock, so input vs output can be plotted on a
 # shared timeline and end-to-end "program delay" benchmarked.
 #
-# Absorbs the former standalone `sim/` and `toysim/` tools:
-#   * testbench/vrchat/  — VRChat OSC + OSCQuery impersonation (was sim/)
-#   * testbench/toy/     — Intiface/Lovense virtual toy        (was toysim/)
+# Absorbs the former standalone `sim/` and `toysim/` tools as flat modules:
+#   * sim_network.py / sim_avatar.py     — VRChat OSC + OSCQuery (was sim/)
+#   * lovense_device.py / lovense_protocol.py — Lovense virtual toy (was toysim/)

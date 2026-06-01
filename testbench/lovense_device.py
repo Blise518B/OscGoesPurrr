@@ -1,6 +1,6 @@
 """Websocket transport for one virtual Lovense toy.
 
-Wraps a :class:`~testbench.toy.lovense_protocol.LovenseProtocol` in a background
+Wraps a :class:`~testbench.lovense_protocol.LovenseProtocol` in a background
 thread that speaks Intiface Central's Device Websocket Server (WSDM). This is
 the same connection path a DIY ESP32 toy would use:
 
@@ -12,7 +12,7 @@ the same connection path a DIY ESP32 toy would use:
 
 I/O lives here; all wire *meaning* lives in `lovense_protocol`. Mirrors the
 `create_connection` + daemon-thread style of the app's `bhaptics_engine.py`
-and the callback API of `testbench/vrchat/sim_network.py`, so the UI layer can
+and the callback API of `testbench/sim_network.py`, so the UI layer can
 subscribe without knowing anything about websockets.
 """
 

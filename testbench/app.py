@@ -46,12 +46,12 @@ from .generators import (
 )
 from .plots import LatencyHistogram, LivePlot
 from .style import COLOR_LIVE, COLOR_SUCCESS, COLOR_TEXT_MUTED, GLOBAL_QSS
-from .toy.lovense_device import DEFAULT_WSDM_URL, LovenseToy
-from .toy.lovense_protocol import (
+from . import sim_avatar
+from .lovense_device import DEFAULT_WSDM_URL, LovenseToy
+from .lovense_protocol import (
     DEFAULT_WS_IDENTIFIER, MODELS, LovenseModel, LovenseProtocol, random_address,
 )
-from .vrchat import sim_avatar
-from .vrchat.sim_network import VRChatSimNetwork
+from .sim_network import VRChatSimNetwork
 
 _APP_USER_MODEL_ID = "OscGoesPurrr.TestBench"
 _CLOCK = time.perf_counter
