@@ -83,11 +83,17 @@ the next launch.
 
 1. Pick an **avatar preset** and a **drive channel** (which OSC param to move).
 2. Connect the toy and pick the **watched motor**.
-3. Set a low **frequency** (0.5–1 Hz) — a **square** wave gives clean edges.
-4. Click **Run benchmark (N cycles)**. The bench injects N rising edges, pairs
-   each with the toy's first output movement, and fills the stats:
-   count / min / mean / median / p95 / max / jitter (σ) / misses.
-5. **Export CSV** writes `<base>_samples.csv`, `<base>_latencies.csv`, and
+3. Choose a **waveform** and a low **frequency** (0.5–1 Hz).
+4. Pick a **Method** (default **Auto**):
+   * **Edge** — pairs each input rising edge with the toy's first output
+     movement. Crisp for **square / step**; one latency per edge.
+   * **Correlation** — per-cycle cross-correlation phase lag. Works for
+     **sine / triangle / sawtooth** (and square), and tolerates a smoothed or
+     amplitude-scaled output.
+   * **Auto** — Edge for a square wave, Correlation for any other waveform.
+5. Click **Run benchmark (N cycles)**; the stats fill live:
+   count / min / mean / median / p95 / max / jitter (σ) / misses (Edge only).
+6. **Export CSV** writes `<base>_samples.csv`, `<base>_latencies.csv`, and
    `<base>_summary.csv`.
 
 ## Caveats

@@ -14,7 +14,9 @@ import numpy as np
 import pytest
 
 from testbench import csv_export
-from testbench.bench import BenchEngine, EdgeDetector, latency_stats
+from testbench.bench import (
+    BenchEngine, EdgeDetector, cross_correlation_latencies, latency_stats,
+)
 from testbench.generators import WAVEFORMS, clamp01, sample_pattern
 
 
@@ -167,3 +169,27 @@ def test_export_handles_empty(tmp_path):
     empty = np.empty((0, 2), dtype=float)
     files = csv_export.export_all(str(tmp_path / "e"), empty, empty, [], latency_stats([]))
     assert len(files) == 3  # still writes headers, no crash
+
+
+# ------------------------------------------------------ cross-correlation
+
+def test_cross_correlation_recovers_known_lag():
+    fs, dur, freq, lag = 200.0, 6.0, 0.5, 0.05  # 50 ms output delay
+    t = np.arange(0.0, dur, 1.0 / fs)
+    inp = 0.5 + 0.5 * np.sin(2 * np.pi * freq * t)
+    # output = input delayed by `lag`, amplitude-scaled (robustness check)
+    outp = 0.8 * (0.5 + 0.5 * np.sin(2 * np.pi * freq * (t - lag)))
+    in_arr = np.column_stack([t, inp])
+    out_arr = np.column_stack([t, outp])
+    lats = cross_correlation_latencies(in_arr, out_arr, period_s=1.0 / freq)
+    assert lats, "expected at least one cycle measured"
+    assert abs(float(np.mean(lats)) - 50.0) <= 6.0  # within ~grid resolution
+
+
+def test_cross_correlation_empty_for_insufficient_data():
+    empty = np.empty((0, 2), dtype=float)
+    assert cross_correlation_latencies(empty, empty, 2.0) == []
+    # less than one period of data -> nothing
+    t = np.arange(0.0, 0.5, 0.01)
+    a = np.column_stack([t, np.sin(t)])
+    assert cross_correlation_latencies(a, a, period_s=2.0) == []

@@ -40,7 +40,7 @@ from PySide6.QtWidgets import (
 
 from . import csv_export
 from . import state
-from .bench import BenchEngine
+from .bench import BenchEngine, latency_stats
 from .generators import (
     AMP_MAX, AMP_MIN, AMP_STEP, FREQ_MAX, FREQ_MIN, FREQ_STEP, WAVEFORMS,
     SignalDriver,
@@ -415,6 +415,17 @@ class TestBenchWindow(QMainWindow):
         self.bench.set_input_threshold(float(self._in_thr.value()))
         self.bench.set_output_threshold(float(self._out_thr.value()))
 
+        self._method_combo = QComboBox()
+        self._method_combo.addItems(["Auto", "Edge", "Correlation"])
+        self._method_combo.setToolTip(
+            "How latency is measured.\n"
+            "Auto: edge-pairing for a square wave, cross-correlation otherwise.\n"
+            "Edge: input/output rising-edge pairing — crisp for square / step.\n"
+            "Correlation: per-cycle phase lag — works for sine / triangle / saw.")
+        self._method_combo.setCurrentText(state.get("method", "Auto"))
+        self._method_combo.currentTextChanged.connect(lambda t: state.set("method", t))
+        form.addRow("Method", self._method_combo)
+
         runrow = QHBoxLayout()
         self._bench_btn = QPushButton("Run benchmark")
         self._bench_btn.clicked.connect(self._run_benchmark)
@@ -581,6 +592,21 @@ class TestBenchWindow(QMainWindow):
             self._level_bar.setValue(0)
 
     # ----------------------------------------------------------- benchmark
+    def _effective_method(self) -> str:
+        """Resolve the measurement method (handles the 'Auto' choice)."""
+        m = self._method_combo.currentText()
+        if m == "Auto":
+            return "edge" if self._wave_combo.currentText() == "square" else "correlation"
+        return m.lower()
+
+    def _current_latencies(self):
+        """Return (latencies_ms, misses) for the active method. `misses` is
+        None for correlation (not an edge-pairing concept)."""
+        if self._effective_method() == "correlation":
+            freq = max(0.01, float(self._freq_spin.value()))
+            return self.bench.correlation_latencies(1.0 / freq), None
+        return self.bench.latencies_ms(), self.bench.misses()
+
     def _run_benchmark(self) -> None:
         if self.net.active_target_label() is None:
             QMessageBox.information(
@@ -597,30 +623,30 @@ class TestBenchWindow(QMainWindow):
         self.bench.reset()
         freq = max(FREQ_MIN, float(self._freq_spin.value()))
         cycles = int(self._cycles.value())
-        self.driver.waveform = "square"
-        self._wave_combo.setCurrentText("square")
         if not self._run_btn.isChecked():
             self._run_btn.setChecked(True)  # starts the wave via _toggle_wave
         # Auto-stop after N cycles (+ half a cycle of slack for the last edge).
         duration_ms = int(((cycles + 0.5) / freq) * 1000)
-        self._log(f"[bench] running {cycles} cycles @ {freq:.2f} Hz (~{duration_ms} ms)")
+        self._log(f"[bench] running {cycles}× {self.driver.waveform} @ {freq:.2f} Hz "
+                  f"({self._effective_method()}, ~{duration_ms} ms)")
         QTimer.singleShot(duration_ms, self._finish_benchmark)
 
     def _finish_benchmark(self) -> None:
         if self._run_btn.isChecked():
             self._run_btn.setChecked(False)  # stops the wave
-        s = self.bench.stats()
+        lat, misses = self._current_latencies()
+        s = latency_stats(lat)
+        misstr = "" if misses is None else f", misses {misses}"
         self._log(
-            f"[bench] done — {s['count']} samples, "
-            f"mean {self._fmt(s['mean_ms'])}, p95 {self._fmt(s['p95_ms'])}, "
-            f"misses {self.bench.misses()}")
+            f"[bench] done ({self._effective_method()}) — {s['count']} samples, "
+            f"mean {self._fmt(s['mean_ms'])}, p95 {self._fmt(s['p95_ms'])}{misstr}")
 
     def _reset_bench(self) -> None:
         self.bench.reset()
         self._log("[bench] reset")
 
     def _export_csv(self) -> None:
-        lat = self.bench.latencies_ms()
+        lat, misses = self._current_latencies()
         if not lat:
             QMessageBox.information(self, "Nothing to export",
                                     "Run a benchmark first — no latencies recorded yet.")
@@ -630,7 +656,7 @@ class TestBenchWindow(QMainWindow):
             return
         in_arr, out_arr = self.bench.snapshot()
         files = csv_export.export_all(
-            base, in_arr, out_arr, lat, self.bench.stats(), self.bench.misses())
+            base, in_arr, out_arr, lat, latency_stats(lat), misses or 0)
         self._log("[bench] wrote:\n  " + "\n  ".join(files))
 
     # ----------------------------------------------------------- refresh
@@ -642,15 +668,16 @@ class TestBenchWindow(QMainWindow):
             self._update_stats()
 
     def _update_stats(self) -> None:
-        s = self.bench.stats()
+        lat, misses = self._current_latencies()
+        s = latency_stats(lat)
         for key, lab in self._stat_labels.items():
             if key == "misses":
-                lab.setText(str(self.bench.misses()))
+                lab.setText("—" if misses is None else str(misses))
             elif key == "count":
                 lab.setText(str(s["count"]))
             else:
                 lab.setText(self._fmt(s.get(key)))
-        self.hist.update_from(self.bench.latencies_ms())
+        self.hist.update_from(lat)
 
     @staticmethod
     def _fmt(ms: Optional[float]) -> str:

@@ -60,6 +60,65 @@ def latency_stats(latencies_ms: List[float]) -> Dict[str, Optional[float]]:
     }
 
 
+def cross_correlation_latencies(
+    in_arr: np.ndarray,
+    out_arr: np.ndarray,
+    period_s: float,
+    max_lag_s: float = 0.5,
+    dt: float = 0.002,
+    min_corr: float = 0.3,
+    max_cycles: int = 60,
+) -> List[float]:
+    """Per-cycle cross-correlation latency (ms) for a periodic input.
+
+    The waveform-agnostic alternative to edge pairing: resample input + output
+    onto a uniform ``dt`` grid, then for each full period find the lag in
+    ``[0, max_lag]`` that maximises the *normalised* correlation of the output
+    against that cycle's input. Works for sine / triangle / sawtooth / square
+    and is robust to the output being smoothed or amplitude-scaled. Returns one
+    latency per usable cycle; cycles whose best correlation is below
+    ``min_corr`` (the output isn't tracking) are skipped.
+    """
+    if period_s <= 0 or in_arr.shape[0] < 4 or out_arr.shape[0] < 4:
+        return []
+    t0 = max(float(in_arr[0, 0]), float(out_arr[0, 0]))
+    t1 = min(float(in_arr[-1, 0]), float(out_arr[-1, 0]))
+    if t1 - t0 < period_s:
+        return []
+    grid = np.arange(t0, t1, dt)
+    xi = np.interp(grid, in_arr[:, 0], in_arr[:, 1])
+    xo = np.interp(grid, out_arr[:, 0], out_arr[:, 1])
+    n_cycle = max(2, int(round(period_s / dt)))
+    max_lag = min(max_lag_s, 0.45 * period_s)
+    n_lag = max(1, int(round(max_lag / dt)))
+    lats: List[float] = []
+    k = 0
+    while k < max_cycles:
+        i0 = k * n_cycle
+        i1 = i0 + n_cycle
+        if i1 + n_lag > grid.size:
+            break
+        seg = xi[i0:i1] - xi[i0:i1].mean()
+        sn = float(np.linalg.norm(seg))
+        if sn < 1e-9:
+            k += 1
+            continue
+        best_corr, best_lag = -2.0, 0
+        for lag in range(n_lag + 1):
+            ow = xo[i0 + lag:i1 + lag]
+            ow = ow - ow.mean()
+            on = float(np.linalg.norm(ow))
+            if on < 1e-9:
+                continue
+            c = float(np.dot(seg, ow) / (sn * on))
+            if c > best_corr:
+                best_corr, best_lag = c, lag
+        if best_corr >= min_corr:
+            lats.append(best_lag * dt * 1000.0)
+        k += 1
+    return lats
+
+
 class EdgeDetector:
     """Incremental rising/falling threshold-crossing detector with hysteresis.
 
@@ -183,6 +242,12 @@ class BenchEngine:
 
     def stats(self) -> Dict[str, Optional[float]]:
         return latency_stats(self.latencies_ms())
+
+    def correlation_latencies(self, period_s: float, max_lag_s: float = 0.5) -> List[float]:
+        """Per-cycle cross-correlation latencies (ms) over the current buffers —
+        the waveform-agnostic alternative to edge pairing (good for sine etc.)."""
+        in_arr, out_arr = self.snapshot()
+        return cross_correlation_latencies(in_arr, out_arr, period_s, max_lag_s)
 
     def misses(self) -> int:
         with self._lock:
