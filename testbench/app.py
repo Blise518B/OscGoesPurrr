@@ -29,7 +29,7 @@ import sys
 import time
 from typing import Callable, List, Optional
 
-from PySide6.QtCore import Qt, QObject, QTimer, Signal
+from PySide6.QtCore import Qt, QByteArray, QObject, QTimer, Signal
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout,
@@ -167,8 +167,14 @@ class TestBenchWindow(QMainWindow):
 
         self._build_ui()
         self.net.start()
-        self._apply_avatar_index(0)
-        self._apply_mode("Benchmark")
+        self._apply_avatar_index(self._avatar_combo.currentIndex())
+        self._apply_mode(self._mode_combo.currentText())
+        geo = state.get("geometry")
+        if geo:
+            try:
+                self.restoreGeometry(QByteArray.fromBase64(geo.encode("ascii")))
+            except Exception:
+                pass
 
         # Plot/stats refresh on a GUI timer, decoupled from data arrival.
         self._refresh = QTimer(self)
@@ -197,8 +203,9 @@ class TestBenchWindow(QMainWindow):
         bar.addWidget(QLabel("Mode:"))
         self._mode_combo = QComboBox()
         self._mode_combo.addItems(["Input", "Output", "Benchmark"])
-        self._mode_combo.setCurrentText("Benchmark")
+        self._mode_combo.setCurrentText(state.get("mode", "Benchmark"))
         self._mode_combo.currentTextChanged.connect(self._apply_mode)
+        self._mode_combo.currentTextChanged.connect(lambda t: state.set("mode", t))
         bar.addWidget(self._mode_combo)
         root.addLayout(bar)
 
@@ -214,7 +221,8 @@ class TestBenchWindow(QMainWindow):
         split.addWidget(self._build_plots())
         split.setStretchFactor(0, 0)
         split.setStretchFactor(1, 1)
-        split.setSizes([440, 800])
+        split.setSizes(state.get("splitter") or [440, 800])
+        self._split = split
         root.addWidget(split, 1)
 
         # Bottom log.
@@ -250,10 +258,13 @@ class TestBenchWindow(QMainWindow):
         form.addRow("Target app", self._target_combo)
 
         manual = QHBoxLayout()
-        self._host_edit = QLineEdit("127.0.0.1")
+        self._host_edit = QLineEdit(state.get("manual_host") or "127.0.0.1")
+        self._host_edit.editingFinished.connect(
+            lambda: state.set("manual_host", self._host_edit.text().strip()))
         self._port_spin = QSpinBox()
         self._port_spin.setRange(1, 65535)
-        self._port_spin.setValue(9000)
+        self._port_spin.setValue(int(state.get("manual_port", 9000)))
+        self._port_spin.valueChanged.connect(lambda v: state.set("manual_port", int(v)))
         use_manual = QPushButton("Use")
         use_manual.setProperty("role", "secondary")
         use_manual.clicked.connect(self._use_manual_target)
@@ -265,6 +276,11 @@ class TestBenchWindow(QMainWindow):
         self._avatar_combo = QComboBox()
         for p in sim_avatar.AVATAR_PRESETS:
             self._avatar_combo.addItem(p.display_name, userData=p.avatar_id)
+        saved_av = state.get("avatar_id")
+        if saved_av:
+            i = self._avatar_combo.findData(saved_av)
+            if i >= 0:
+                self._avatar_combo.setCurrentIndex(i)
         self._avatar_combo.currentIndexChanged.connect(self._apply_avatar_index)
         form.addRow("Avatar", self._avatar_combo)
 
@@ -274,8 +290,11 @@ class TestBenchWindow(QMainWindow):
 
         self._wave_combo = QComboBox()
         self._wave_combo.addItems(list(WAVEFORMS))
+        self._wave_combo.setCurrentText(state.get("waveform", self.driver.waveform))
+        self.driver.waveform = self._wave_combo.currentText()
         self._wave_combo.currentTextChanged.connect(
             lambda s: setattr(self.driver, "waveform", s))
+        self._wave_combo.currentTextChanged.connect(lambda s: state.set("waveform", s))
         form.addRow("Waveform", self._wave_combo)
 
         self._freq_spin = QDoubleSpinBox()
@@ -283,16 +302,20 @@ class TestBenchWindow(QMainWindow):
         self._freq_spin.setSingleStep(FREQ_STEP)
         self._freq_spin.setDecimals(2)
         self._freq_spin.setSuffix(" Hz")
-        self._freq_spin.setValue(self.driver.freq)
+        self._freq_spin.setValue(float(state.get("frequency", self.driver.freq)))
+        self.driver.freq = float(self._freq_spin.value())
         self._freq_spin.valueChanged.connect(lambda v: setattr(self.driver, "freq", float(v)))
+        self._freq_spin.valueChanged.connect(lambda v: state.set("frequency", float(v)))
         form.addRow("Frequency", self._freq_spin)
 
         self._amp_spin = QDoubleSpinBox()
         self._amp_spin.setRange(AMP_MIN, AMP_MAX)
         self._amp_spin.setSingleStep(AMP_STEP)
         self._amp_spin.setDecimals(2)
-        self._amp_spin.setValue(self.driver.amp)
+        self._amp_spin.setValue(float(state.get("amplitude", self.driver.amp)))
+        self.driver.amp = float(self._amp_spin.value())
         self._amp_spin.valueChanged.connect(lambda v: setattr(self.driver, "amp", float(v)))
+        self._amp_spin.valueChanged.connect(lambda v: state.set("amplitude", float(v)))
         form.addRow("Amplitude", self._amp_spin)
 
         btns = QHBoxLayout()
@@ -321,23 +344,28 @@ class TestBenchWindow(QMainWindow):
         g = QGroupBox("Output  (Intiface virtual toy)")
         self._out_group = g
         form = QFormLayout(g)
-        last = state.last_toy()  # restore the previous toy setup if any
 
         self._model_combo = QComboBox()
         for m in MODELS:
             n = len(m.features)
             self._model_combo.addItem(f"{m.name}  ({n} motor{'s' if n != 1 else ''})", userData=m)
-        if last.get("model"):
+        saved_model = state.get("model")
+        if saved_model:
             for i in range(self._model_combo.count()):
                 m = self._model_combo.itemData(i)
-                if m is not None and m.name == last["model"]:
+                if m is not None and m.name == saved_model:
                     self._model_combo.setCurrentIndex(i)
                     break
+        self._model_combo.currentIndexChanged.connect(self._save_model)
         form.addRow("Model", self._model_combo)
 
-        self._id_edit = QLineEdit(last.get("identifier") or DEFAULT_WS_IDENTIFIER)
+        self._id_edit = QLineEdit(state.get("identifier") or DEFAULT_WS_IDENTIFIER)
+        self._id_edit.editingFinished.connect(
+            lambda: state.set("identifier", self._id_edit.text().strip()))
         form.addRow("Identifier", self._id_edit)
-        self._url_edit = QLineEdit(last.get("url") or DEFAULT_WSDM_URL)
+        self._url_edit = QLineEdit(state.get("url") or DEFAULT_WSDM_URL)
+        self._url_edit.editingFinished.connect(
+            lambda: state.set("url", self._url_edit.text().strip()))
         form.addRow("WSDM URL", self._url_edit)
 
         self._connect_btn = QPushButton("Connect toy")
@@ -363,21 +391,29 @@ class TestBenchWindow(QMainWindow):
         self._in_thr = QDoubleSpinBox()
         self._in_thr.setRange(0.01, 1.0)
         self._in_thr.setSingleStep(0.05)
-        self._in_thr.setValue(0.5)
+        self._in_thr.setValue(float(state.get("input_edge", 0.5)))
         self._in_thr.valueChanged.connect(lambda v: self.bench.set_input_threshold(float(v)))
+        self._in_thr.valueChanged.connect(lambda v: state.set("input_edge", float(v)))
         form.addRow("Input edge ≥", self._in_thr)
 
         self._out_thr = QDoubleSpinBox()
         self._out_thr.setRange(0.01, 1.0)
         self._out_thr.setSingleStep(0.01)
-        self._out_thr.setValue(0.05)
+        self._out_thr.setValue(float(state.get("output_edge", 0.05)))
         self._out_thr.valueChanged.connect(lambda v: self.bench.set_output_threshold(float(v)))
+        self._out_thr.valueChanged.connect(lambda v: state.set("output_edge", float(v)))
         form.addRow("Output edge ≥", self._out_thr)
 
         self._cycles = QSpinBox()
         self._cycles.setRange(1, 1000)
-        self._cycles.setValue(20)
+        self._cycles.setValue(int(state.get("cycles", 20)))
+        self._cycles.valueChanged.connect(lambda v: state.set("cycles", int(v)))
         form.addRow("Cycles", self._cycles)
+
+        # Apply restored thresholds to the engine (setValue above only fires
+        # valueChanged when it differs from the spinbox's initial value).
+        self.bench.set_input_threshold(float(self._in_thr.value()))
+        self.bench.set_output_threshold(float(self._out_thr.value()))
 
         runrow = QHBoxLayout()
         self._bench_btn = QPushButton("Run benchmark")
@@ -426,6 +462,7 @@ class TestBenchWindow(QMainWindow):
         if idx < 0 or idx >= len(sim_avatar.AVATAR_PRESETS):
             return
         preset = sim_avatar.AVATAR_PRESETS[idx]
+        state.set("avatar_id", preset.avatar_id)
         self.net.set_avatar(preset)
         self._channels = channels_for_preset(preset)
         self._channel_combo.blockSignals(True)
@@ -434,8 +471,12 @@ class TestBenchWindow(QMainWindow):
             self._channel_combo.addItem(label)
         self._channel_combo.blockSignals(False)
         if self._channels:
-            self._channel_combo.setCurrentIndex(0)
-            self._apply_channel_index(0)
+            saved = state.get("channel")
+            sel = self._channel_combo.findText(saved) if saved else -1
+            if sel < 0:
+                sel = 0
+            self._channel_combo.setCurrentIndex(sel)
+            self._apply_channel_index(sel)
         else:
             self._channel = None
             self._log("[input] avatar has no SPS zones to drive — pick another preset")
@@ -443,6 +484,7 @@ class TestBenchWindow(QMainWindow):
     def _apply_channel_index(self, idx: int) -> None:
         if 0 <= idx < len(getattr(self, "_channels", [])):
             self._channel = self._channels[idx][1]
+            state.set("channel", self._channels[idx][0])
 
     def _emit_input(self, value: float) -> None:
         """Sink for SignalDriver: send OSC then stamp the input sample."""
@@ -475,7 +517,6 @@ class TestBenchWindow(QMainWindow):
             # random address each launch is what made it re-appear as new.
             proto = LovenseProtocol(model, state.toy_address(model.name),
                                     ws_identifier=ident)
-            state.remember_toy(model.name, ident, url)
             self.toy = LovenseToy(
                 proto, url=url,
                 on_levels=self._on_toy_levels_worker,
@@ -500,13 +541,21 @@ class TestBenchWindow(QMainWindow):
         self._feature_combo.clear()
         for i, feat in enumerate(model.features):
             self._feature_combo.addItem(f"{i}: {feat.label} ({feat.kind})", userData=i)
+        saved = state.get("watched_motor", 0)
+        sel = saved if isinstance(saved, int) and 0 <= saved < len(model.features) else 0
+        self._feature_combo.setCurrentIndex(sel)
         self._feature_combo.blockSignals(False)
-        self._watch_idx = 0
-        self._feature_combo.setCurrentIndex(0)
+        self._watch_idx = sel
 
     def _apply_feature_index(self, combo_idx: int) -> None:
         data = self._feature_combo.currentData()
         self._watch_idx = int(data) if data is not None else 0
+        state.set("watched_motor", self._watch_idx)
+
+    def _save_model(self, *_) -> None:
+        m = self._model_combo.currentData()
+        if m is not None:
+            state.set("model", m.name)
 
     def _on_toy_levels_worker(self, updates) -> None:
         """Worker-thread callback: stamp + record the watched motor NOW."""
@@ -646,6 +695,11 @@ class TestBenchWindow(QMainWindow):
         self._log_view.appendPlainText(msg)
 
     def closeEvent(self, event) -> None:  # noqa: N802 — Qt API
+        try:
+            state.set("geometry", self.saveGeometry().toBase64().data().decode("ascii"))
+            state.set("splitter", self._split.sizes())
+        except Exception:
+            pass
         try:
             if self.toy is not None:
                 self.toy.stop()

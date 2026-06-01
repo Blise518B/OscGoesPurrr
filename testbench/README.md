@@ -66,7 +66,11 @@ the single-app case needs no clicks.
 The virtual toy's identity (its Lovense address/serial) is **saved per model**
 under `%APPDATA%\OscGoesPurrr\testbench_state.json`, so it reconnects as the
 **same** device every launch — you only route it once in OGB/OGP. (Picking a
-different model yields its own, also-persistent, identity.)
+different model yields its own, also-persistent, identity.) **All other
+settings** — target/manual host:port, avatar, drive channel,
+waveform/frequency/amplitude, watched motor, benchmark thresholds + cycles,
+mode, and the window size/layout — are saved to that same file and restored on
+the next launch.
 
 ## Modes
 

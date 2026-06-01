@@ -1,4 +1,4 @@
-"""Tests for the bench's persistent toy-identity state.
+"""Tests for the bench's persistent settings store.
 
 The state file path is redirected via the OGP_TESTBENCH_STATE env var so the
 tests never touch the real %APPDATA% file.
@@ -21,23 +21,27 @@ def test_toy_address_is_stable_per_model(tmp_path, monkeypatch):
     assert state.toy_address("Lovense Hush") == a1
 
 
-def test_remember_and_last_toy_roundtrip(tmp_path, monkeypatch):
+def test_get_set_roundtrip(tmp_path, monkeypatch):
     monkeypatch.setenv("OGP_TESTBENCH_STATE", str(tmp_path / "s.json"))
-    assert state.last_toy() == {}
-    state.remember_toy("Lovense Hush", "OGPSim", "ws://127.0.0.1:54817")
-    lt = state.last_toy()
-    assert lt == {
-        "model": "Lovense Hush",
-        "identifier": "OGPSim",
-        "url": "ws://127.0.0.1:54817",
-    }
-    # remembering the toy must not disturb saved addresses
+    assert state.get("waveform") is None              # unset -> None
+    assert state.get("waveform", "square") == "square"  # default honoured
+    state.set("waveform", "sine")
+    state.set("frequency", 1.4)
+    state.set("cycles", 30)
+    assert state.get("waveform") == "sine"            # persisted across loads
+    assert state.get("frequency") == 1.4
+    assert state.get("cycles") == 30
+
+
+def test_set_does_not_clobber_toy_addresses(tmp_path, monkeypatch):
+    monkeypatch.setenv("OGP_TESTBENCH_STATE", str(tmp_path / "s.json"))
     addr = state.toy_address("Lovense Hush")
-    state.remember_toy("Lovense Lush", "OGPSim", "ws://127.0.0.1:54817")
+    state.set("waveform", "square")       # writing a setting must not drop addrs
     assert state.toy_address("Lovense Hush") == addr
 
 
 def test_missing_file_degrades_gracefully(tmp_path, monkeypatch):
-    monkeypatch.setenv("OGP_TESTBENCH_STATE", str(tmp_path / "does_not_exist.json"))
-    assert state.last_toy() == {}          # no file -> empty, no crash
+    monkeypatch.setenv("OGP_TESTBENCH_STATE", str(tmp_path / "nope.json"))
+    assert state.get("anything") is None          # no file -> default, no crash
+    assert state.get("anything", 5) == 5
     assert len(state.toy_address("X")) == 12

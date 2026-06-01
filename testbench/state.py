@@ -58,14 +58,13 @@ def toy_address(model_name: str) -> str:
     return addr
 
 
-def remember_toy(model_name: str, identifier: str, url: str) -> None:
-    """Persist the last-used toy setup so the UI can restore it next launch."""
-    state = _load()
-    state["last_toy"] = {"model": model_name, "identifier": identifier, "url": url}
-    _save(state)
+def get(key: str, default=None):
+    """Read a persisted setting (or `default` if it has never been set)."""
+    return _load().get(key, default)
 
 
-def last_toy() -> Dict:
-    """The last-used {model, identifier, url}, or {} if none saved."""
-    lt = _load().get("last_toy")
-    return lt if isinstance(lt, dict) else {}
+def set(key: str, value) -> None:  # noqa: A003 — intentional settings-store API
+    """Persist one setting immediately (read-modify-write of the JSON file)."""
+    s = _load()
+    s[key] = value
+    _save(s)
