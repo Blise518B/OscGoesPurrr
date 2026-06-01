@@ -8,12 +8,12 @@ sees exactly what it would see talking to a live VRChat client.
 The schemas mirror what `motor_router.py` and `bhaptics_router.py`
 look for:
 
-OGB / SuperPenisShader / SPS-Plus parameters (per orifice / penetrator):
+OGB / SPS (OscGoesBrrr-compat) parameters — matches a current SPS avatar
+exported via VRCFury Haptics (verified against a real avatar's OSC config):
     OGB/Orf/<name>/TouchSelf            (f)
     OGB/Orf/<name>/TouchSelfClose       (T/F)
     OGB/Orf/<name>/TouchOthers          (f)
     OGB/Orf/<name>/TouchOthersClose     (T/F)
-    OGB/Orf/<name>/PenSelf              (f)
     OGB/Orf/<name>/PenSelfNewRoot       (f)
     OGB/Orf/<name>/PenSelfNewTip        (f)
     OGB/Orf/<name>/PenOthers            (f)
@@ -21,12 +21,17 @@ OGB / SuperPenisShader / SPS-Plus parameters (per orifice / penetrator):
     OGB/Orf/<name>/PenOthersNewRoot     (f)
     OGB/Orf/<name>/PenOthersNewTip      (f)
     OGB/Orf/<name>/FrotOthers           (f)
+        (current full orifices carry no plain PenSelf / PenSelfClose — depth
+         is reported via the New Root/Tip pair instead)
     OGB/Pen/<name>/TouchSelf            (f)
+    OGB/Pen/<name>/TouchSelfClose       (T/F)
     OGB/Pen/<name>/TouchOthers          (f)
+    OGB/Pen/<name>/TouchOthersClose     (T/F)
     OGB/Pen/<name>/PenSelf              (f)
     OGB/Pen/<name>/PenOthers            (f)
     OGB/Pen/<name>/FrotOthers           (f)
     OGB/Pen/<name>/FrotOthersClose      (T/F)
+    VFH/Version/10                      (T/F)   # SPS/VRCFury haptics version
 
 bHaptics OSC v1 (HerpDerpinstine schema, per dot):
     bHaptics_<Slot>_<N>_bool            (T/F)   # N is 1-based
@@ -47,6 +52,14 @@ TYPE_FLOAT = "f"
 TYPE_BOOL = "T"      # OSCQuery uses T/F as the type code for booleans
 TYPE_STRING = "s"
 TYPE_INT = "i"
+
+
+# VRCFury Haptics version marker advertised by current SPS avatars: a bool
+# parameter named VFH/Version/<N> (always true) where N is the haptics schema
+# version. OSC Goes Brrr and similar apps read N to tell a current avatar from
+# an outdated one — an avatar with no VFH/Version reads as "outdated SPS". 10
+# is the current version (verified against a real avatar's OSC config, 2026-06).
+SPS_VERSION_PARAM = "VFH/Version/10"
 
 
 # (position, v1_slot, node_count) — mirrors bhaptics_router._DEVICE_TABLE so
@@ -141,12 +154,13 @@ _BASE_VRCHAT_PARAMS: Dict[str, Tuple[str, Any]] = {
 
 def _orifice_params(name: str) -> Dict[str, Tuple[str, Any]]:
     p = f"OGB/Orf/{name}"
+    # Mirrors a current full SPS orifice: depth via the New Root/Tip pair (no
+    # plain PenSelf/PenSelfClose), plus touch/frot and their Close gates.
     return {
         f"{p}/TouchSelf":         (TYPE_FLOAT, 0.0),
         f"{p}/TouchSelfClose":    (TYPE_BOOL,  False),
         f"{p}/TouchOthers":       (TYPE_FLOAT, 0.0),
         f"{p}/TouchOthersClose":  (TYPE_BOOL,  False),
-        f"{p}/PenSelf":           (TYPE_FLOAT, 0.0),
         f"{p}/PenSelfNewRoot":    (TYPE_FLOAT, 0.0),
         f"{p}/PenSelfNewTip":     (TYPE_FLOAT, 0.0),
         f"{p}/PenOthers":         (TYPE_FLOAT, 0.0),
@@ -159,9 +173,13 @@ def _orifice_params(name: str) -> Dict[str, Tuple[str, Any]]:
 
 def _penetrator_params(name: str) -> Dict[str, Tuple[str, Any]]:
     p = f"OGB/Pen/{name}"
+    # Mirrors a current SPS penetrator: touch/frot with their Close gates,
+    # plus self/others depth floats.
     return {
         f"{p}/TouchSelf":         (TYPE_FLOAT, 0.0),
+        f"{p}/TouchSelfClose":    (TYPE_BOOL,  False),
         f"{p}/TouchOthers":       (TYPE_FLOAT, 0.0),
+        f"{p}/TouchOthersClose":  (TYPE_BOOL,  False),
         f"{p}/PenSelf":           (TYPE_FLOAT, 0.0),
         f"{p}/PenOthers":         (TYPE_FLOAT, 0.0),
         f"{p}/FrotOthers":        (TYPE_FLOAT, 0.0),
@@ -196,6 +214,11 @@ def build_params(preset: AvatarPreset) -> Dict[str, Tuple[str, Any]]:
             params.update(_orifice_params(zone.name))
         elif zone.kind == "Pen":
             params.update(_penetrator_params(zone.name))
+    # Stamp the SPS version marker iff the avatar actually has SPS zones, so
+    # apps (e.g. OSC Goes Brrr) recognise it as a current avatar rather than
+    # flagging it as an outdated-SPS export.
+    if preset.sps_zones:
+        params[SPS_VERSION_PARAM] = (TYPE_BOOL, True)
     params.update(_bhaptics_params(preset.bhaptics_positions))
     return params
 
