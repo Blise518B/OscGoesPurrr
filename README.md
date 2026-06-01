@@ -144,6 +144,25 @@ All user state is stored under `%APPDATA%\OscGoesPurrr\`:
 Delete a file to reset that subsystem to defaults; the app re-creates
 it on next launch.
 
+## 🧪 Developer tools
+
+Two standalone simulators let you exercise OscGoesPurrr without VRChat or
+real hardware. They live in their own folders, never import the main app,
+and need no toys powered on:
+
+* **VRChat simulator** (`sim/`) — impersonates VRChat: sends avatar OSC
+  parameters (and answers OSCQuery) so the app routes real params with the
+  game closed. Run `sim/run_sim.bat`; build a standalone exe with
+  `sim/build_sim.bat`.
+* **Toy simulator** (`toysim/`) — impersonates a Lovense toy on Intiface
+  Central's Device Websocket Server, so a fully virtual toy shows up in
+  Intiface and the app drives it through its normal Buttplug path. Run
+  `toysim/run_toysim.bat`; build with `toysim/build_toysim.bat`.
+
+The optional C++ SteamVR toy driver in `steamvr_toy_driver/` builds via
+`steamvr_toy_driver/build_driver.bat` — see
+[`steamvr_toy_driver/README.md`](steamvr_toy_driver/README.md).
+
 ## 🛠️ Contributing
 
 Read [`ARCHITECTURE.md`](ARCHITECTURE.md) before adding a new haptic

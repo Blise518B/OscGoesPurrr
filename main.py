@@ -154,7 +154,7 @@ class OscGoesPurrrApp(
         # Cut 8 of the chain-inlined-tuning redesign; the parametric
         # simulator now lives on MotorChainListWidget itself and uses
         # the router's per-(motor, chain) value-provider API and
-        # toy-output suppression set (see CHAIN_INLINED_TUNING.md
+        # toy-output suppression set (see docs/CHAIN_INLINED_TUNING.md
         # § "Phased delivery"). The router exposes these via
         # `set_chain_value_provider` / `should_send_to_toy`.
 
@@ -162,7 +162,7 @@ class OscGoesPurrrApp(
         # only opens once start_session_logging() is called (manually
         # from the UI, or automatically via _session_auto_start_if_configured
         # when the user has enabled both `enabled` and `auto_start`).
-        # See SESSION_LOGGING.md for the architecture and on-disk format.
+        # See docs/SESSION_LOGGING.md for the architecture and on-disk format.
         self._session_init_components()
 
         # SteamVR Haptics — independent pipeline that shares the parameter_store

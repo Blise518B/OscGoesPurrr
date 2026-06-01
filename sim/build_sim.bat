@@ -11,7 +11,7 @@ echo   OscGoesPurrr Simulator - Build Script
 echo ========================================
 echo.
 
-REM Reuse the same version-from-Git logic as build.bat so the simulator exe
+REM Reuse the same version-from-Git logic as build_OGP.bat so the simulator exe
 REM is tagged with the same version as the main app build.
 echo Resolving version from Git...
 for /f "usebackq tokens=*" %%i in (`python -c "from version import __version__; print(__version__)"`) do set BUILD_VERSION=%%i
@@ -45,7 +45,7 @@ echo.
 echo [2/4] Installing project dependencies...
 REM Simulator only needs a subset of requirements.txt (PySide6, python-osc,
 REM zeroconf) but installing the full file is harmless and keeps this script
-REM standalone — works even if build.bat was never run.
+REM standalone — works even if build_OGP.bat was never run.
 pip install -r requirements.txt
 if %errorlevel% neq 0 (
     echo [WARNING] Some dependencies may have failed to install. Continuing anyway...

@@ -1,7 +1,7 @@
 """VR session logger — records router intermediates, OGB SPS inputs,
 and bHaptics dot outputs to per-session JSONL files for later analysis.
 
-Design lock: see SESSION_LOGGING.md. The short version:
+Design lock: see docs/SESSION_LOGGING.md. The short version:
 
 * Sealed engine — `SessionLogger` takes/returns primitives only. The
   controller facade ferries data in and out; nothing Qt or routing-

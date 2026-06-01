@@ -561,7 +561,7 @@ class DeviceFrameMixin:
 
     # Mix-column and linear-output-row builders removed in Cut 3 —
     # MotorSignalChainWidget now owns both surfaces. See
-    # MOTOR_SIGNAL_CHAIN.md § "Per-stage details" for the new layout.
+    # docs/MOTOR_SIGNAL_CHAIN.md § "Per-stage details" for the new layout.
 
     # ----------------------------------------------------------
     # Lovense product icon (auto-detect + manual override)

@@ -23,7 +23,7 @@ parameter store — they take primitive numbers and return primitive
 numbers. The router reads the per-motor chain config, extracts the
 fields, and calls these in order.
 
-Schema and defaults are documented in MOTOR_SIGNAL_CHAIN.md."""
+Schema and defaults are documented in docs/MOTOR_SIGNAL_CHAIN.md."""
 
 import math
 from typing import Optional, Tuple
@@ -270,7 +270,7 @@ def smooth(prev: float, mixed: float, dt_ms: float,
 # ----------------------------------------------------------
 # sample_pattern — parametric simulator generator (Cut 7).
 # Replaces the preset-zoo pattern generator with a frequency + amp
-# + waveform sampler. See CHAIN_INLINED_TUNING.md § "Simulator panel"
+# + waveform sampler. See docs/CHAIN_INLINED_TUNING.md § "Simulator panel"
 # for the locked design.
 # ----------------------------------------------------------
 

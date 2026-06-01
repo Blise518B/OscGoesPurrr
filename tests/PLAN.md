@@ -2,7 +2,7 @@
 
 Source: planned in conversation; see [`../ROADMAP.md`](../ROADMAP.md)
 "Stateless router test suite" entry and
-[`../ROUTING_REDESIGN.md`](../ROUTING_REDESIGN.md) for why this exists
+[`../docs/ROUTING_REDESIGN.md`](../docs/ROUTING_REDESIGN.md) for why this exists
 (precondition for the routing redesign Phase 2 mixer math rework).
 
 Tick a box as each test lands. Tests live in

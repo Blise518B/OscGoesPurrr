@@ -204,7 +204,7 @@ def test_reset_chain_does_not_touch_other_chain():
 
 def test_stage_trace_mapping_matches_doc():
     """Every stage has at least one trace and references only known
-    trace ids. Locks the mapping from CHAIN_INLINED_TUNING.md so a
+    trace ids. Locks the mapping from docs/CHAIN_INLINED_TUNING.md so a
     typo in the stage table breaks tests."""
     from ui.motor_signal_chain import (
         _STAGE_ORDER, _STAGE_TRACES, _TRACE_STYLE,

@@ -10,8 +10,9 @@ badge for redundancy at small sizes where colour alone may not be enough.
 Run from the project root:
     venv\\Scripts\\python.exe tools\\generate_sim_icon.py
 
-The output is committed to the repo so build.bat does not depend on Pillow /
-numpy at build time. Re-run only when the source icon or styling changes.
+The output is committed to the repo so the build scripts do not depend on
+Pillow / numpy at build time. Re-run only when the source icon or styling
+changes.
 """
 
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """Per-motor signal-chain widget — the user-facing surface for the
 Input → Depth/Speed → Combine → Gate → Smoothing → Output pipeline.
 
-Embedded in two contexts (intentionally — see MOTOR_SIGNAL_CHAIN.md
+Embedded in two contexts (intentionally — see docs/MOTOR_SIGNAL_CHAIN.md
 § "Tune view, 1:1 with Device Routing"):
   * Device Routing motor card (Cut 3) — primary editing surface.
   * Tune view (Cut 4) — same editing surface plus the multi-trace
@@ -283,7 +283,7 @@ _COMBINE_OPS = ("add", "max", "multiply")
 
 
 # Per-stage trace specifications for the inlined per-stage mini-graphs
-# (Cut 6). Mapping is documented in CHAIN_INLINED_TUNING.md §
+# (Cut 6). Mapping is documented in docs/CHAIN_INLINED_TUNING.md §
 # "Per-stage graph trace mapping". Each entry is (trace_id, color,
 # style_dict) — same shape as TraceGraph's traces argument.
 #
@@ -1106,7 +1106,7 @@ class MotorSignalChainWidget(QFrame):
     def _build_channel_editor(self, channel_key: str, label: str) -> QWidget:
         """Depth / Speed editor — gain spinbox + curve combo + param
         spinbox. The `enabled`, `mode`, and channel-specific "More"
-        knobs from the old schema are gone (see MOTOR_SIGNAL_CHAIN.md
+        knobs from the old schema are gone (see docs/MOTOR_SIGNAL_CHAIN.md
         § "Per-stage details")."""
         host = QFrame()
         host.setObjectName("stageEditor")
@@ -1591,7 +1591,7 @@ class MotorChainListWidget(QFrame):
     """Container that holds one or two `MotorSignalChainWidget`s for
     a single motor, plus the +Add / Remove controls and the merge
     picker between chains. Per the design lock in
-    MOTOR_SIGNAL_CHAIN.md § "Future: optional secondary chain",
+    docs/MOTOR_SIGNAL_CHAIN.md § "Future: optional secondary chain",
     chains are capped at 2.
 
     Single-chain motors render exactly like today (one chain widget

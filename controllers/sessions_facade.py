@@ -4,7 +4,7 @@ Mixin: owns the `SessionLogger` engine + `SessionSettingsManager`,
 exposes start/stop/list/delete to the UI, and adapts the routing-
 thread broadcast callbacks into the engine's primitive log_* calls.
 
-Wiring contract (see SESSION_LOGGING.md):
+Wiring contract (see docs/SESSION_LOGGING.md):
 
 * `__init__` of OscGoesPurrrApp calls `_session_init_components()`
   once, before the routing tick starts.
@@ -90,7 +90,7 @@ class SessionsFacade:
         if self._session_logger.is_running:
             return self._session_logger.current_session and self._session_logger.current_session.get("id")
         # Retention pruning runs on every start (not on stop, not on a
-        # timer) — see SESSION_LOGGING.md.
+        # timer) — see docs/SESSION_LOGGING.md.
         try:
             keep = self._session_settings.get_retention()
             SessionLogger.prune(SESSIONS_DIR, keep_n=keep)

@@ -2,7 +2,7 @@
 
 These functions are stateless; the router maintains per-motor
 prev-state outside of them. Each function is tested in isolation
-against the math documented in MOTOR_SIGNAL_CHAIN.md."""
+against the math documented in docs/MOTOR_SIGNAL_CHAIN.md."""
 
 import math
 
@@ -167,7 +167,7 @@ class TestCombineMultiply:
         assert combine(0.8, 0.5, "multiply") == pytest.approx(0.4)
 
     def test_zero_channel_zeroes_output(self):
-        # Locked behavior per MOTOR_SIGNAL_CHAIN.md "Multiply + zero
+        # Locked behavior per docs/MOTOR_SIGNAL_CHAIN.md "Multiply + zero
         # channel": no hidden bypass. The diagram makes this visible.
         assert combine(0.0, 0.9, "multiply") == 0.0
         assert combine(0.9, 0.0, "multiply") == 0.0

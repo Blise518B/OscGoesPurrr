@@ -131,13 +131,13 @@ class MotorRouter:
     # facing "ignore micro-movement" problem these used to address.
     # If a future need to retune surfaces, they move to a single
     # hidden Advanced panel in Settings, not back into the per-motor
-    # card. See MOTOR_SIGNAL_CHAIN.md § "Speed-detector constants".
+    # card. See docs/MOTOR_SIGNAL_CHAIN.md § "Speed-detector constants".
     _SPEED_INPUT_DEADBAND = 0.005
     _SPEED_OUTPUT_CUTOFF = 0.02
     _SPEED_DECAY_TAU_S = 0.30
 
     # Cap on chains per motor (per the design lock in
-    # MOTOR_SIGNAL_CHAIN.md § "Future: optional secondary chain").
+    # docs/MOTOR_SIGNAL_CHAIN.md § "Future: optional secondary chain").
     # Profiles with more than this are silently truncated by the
     # router — UI also enforces the cap. Raising this is a design
     # decision, not a constant tweak.
@@ -149,7 +149,7 @@ class MotorRouter:
     #
     # Ships from Cut 1 as a list of chains, always length 1 in cuts
     # 1–4, so Cut 5 (optional secondary chain) is purely additive
-    # with no schema migration. See MOTOR_SIGNAL_CHAIN.md § Storage
+    # with no schema migration. See docs/MOTOR_SIGNAL_CHAIN.md § Storage
     # and § "Future: optional secondary chain".
     DEFAULT_MIX_CONFIG: Dict[str, Any] = {
         "chains": [
@@ -509,7 +509,7 @@ class MotorRouter:
         because the simulator can drive different chains with
         different `d_raw` streams on the same tick — sharing speed
         state would couple them spuriously. See
-        CHAIN_INLINED_TUNING.md § "Per-chain speed state"."""
+        docs/CHAIN_INLINED_TUNING.md § "Per-chain speed state"."""
         return {
             "last_position":   0.0,
             "smoothed_speed":  0.0,
@@ -590,7 +590,7 @@ class MotorRouter:
         Per-chain — each chain in a multi-chain motor maintains its
         own speed history because the simulator's Drive mask can feed
         different `d_raw` streams to different chains on the same
-        tick (CHAIN_INLINED_TUNING.md § "Per-chain speed state")."""
+        tick (docs/CHAIN_INLINED_TUNING.md § "Per-chain speed state")."""
         last_pos = chain_state["last_position"]
         prev_smoothed = chain_state["smoothed_speed"]
 

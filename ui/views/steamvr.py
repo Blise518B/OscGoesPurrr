@@ -260,8 +260,9 @@ class SteamVRMixin:
         elif kind == "bundle_missing":
             self.log_message(
                 "Reinstall failed: the bundled DLL is missing from this build "
-                "of OscGoesPurrr. Rebuild the C++ driver (build_driver.bat) "
-                "and then rebuild the OscGoesPurrr EXE (build_OGP.bat)."
+                "of OscGoesPurrr. Rebuild the C++ driver "
+                "(steamvr_toy_driver\\build_driver.bat) and then rebuild the "
+                "OscGoesPurrr EXE (build_OGP.bat)."
             )
         elif kind == "register_failed":
             self.log_message(
@@ -285,7 +286,7 @@ class SteamVRMixin:
         if checked and status.get("install_failed"):
             # Most likely cause: this build of the app doesn't include a
             # compiled driver_oscgoespurrr.dll yet. The C++ driver has to be
-            # built once via steamvr_toy_driver/build.bat and committed.
+            # built once via steamvr_toy_driver/build_driver.bat and committed.
             self.log_message(
                 "SteamVR toys: install FAILED — the bundled driver DLL is missing. "
                 "This build of OscGoesPurrr was packaged without "

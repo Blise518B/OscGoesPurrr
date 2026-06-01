@@ -65,7 +65,7 @@ class TestOgbDiff:
 
     def test_disappeared_keys_silently_ignored(self):
         # We have no "deleted" event in the schema; gone-from-curr keys
-        # just don't appear in the diff. (See SESSION_LOGGING.md.)
+        # just don't appear in the diff. (See docs/SESSION_LOGGING.md.)
         prev = {"a": 0.5, "b": True}
         curr = {"a": 0.5}
         assert ogb_diff(prev, curr) == {}

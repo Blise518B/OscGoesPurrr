@@ -1,7 +1,7 @@
 """Tune view — single-motor focused workspace.
 
 After Cut 8 of the chain-inlined-tuning redesign (see
-CHAIN_INLINED_TUNING.md § "Phased delivery"), Tune's role is just:
+docs/CHAIN_INLINED_TUNING.md § "Phased delivery"), Tune's role is just:
 
 * A sidebar destination that lets the user focus on one motor at a
   time, without toy-bar chrome cluttering the view.

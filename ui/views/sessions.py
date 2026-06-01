@@ -46,7 +46,7 @@ class SessionsMixin:
             "Record VR sessions to disk as line-delimited JSON for later "
             "analysis. Each file captures every router intermediate per "
             "motor, OGB SPS inputs (change-diffed), and bHaptics dot "
-            "outputs — see SESSION_LOGGING.md for the on-disk schema."
+            "outputs — see docs/SESSION_LOGGING.md for the on-disk schema."
         ))
 
         # ---- Status card ----

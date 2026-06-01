@@ -11,7 +11,7 @@ Order within a group is rough priority, not a hard sequence.
   modulate-other modes, Help Mode for in-context parameter
   explanations, and a new Tune tab with a live multi-curve graph and
   simulated input patterns for offline tuning. Phased: UI shell →
-  mixer math → Tune tab. See [`ROUTING_REDESIGN.md`](ROUTING_REDESIGN.md).
+  mixer math → Tune tab. See [`ROUTING_REDESIGN.md`](docs/ROUTING_REDESIGN.md).
 
 - **SPS → bHaptics zone mirror.**
   When an OGB SPS contact fires (Boob, Tummy, etc.), also pulse a
@@ -238,7 +238,7 @@ Order within a group is rough priority, not a hard sequence.
   because it handles VRChat's irregular OSC sampling natively. Estimator
   + feel-model are developable and testable **offline** against
   session-logger recordings (no hardware). Full design in
-  [`RHYTHM_ENGINE.md`](RHYTHM_ENGINE.md). _Pending._
+  [`RHYTHM_ENGINE.md`](docs/RHYTHM_ENGINE.md). _Pending._
 
 ## Networking & Multiplayer
 
@@ -276,7 +276,7 @@ Order within a group is rough priority, not a hard sequence.
   customized. Test cases also become living documentation of router
   semantics for future maintainers. **Worth doing before the
   routing redesign Phase 2 lands** — see
-  [`ROUTING_REDESIGN.md`](ROUTING_REDESIGN.md).
+  [`ROUTING_REDESIGN.md`](docs/ROUTING_REDESIGN.md).
 
 - **Stuck-value safety cutoff.**
   If an OSC float input stays exactly static for ~2 s (configurable),
@@ -316,7 +316,7 @@ Order within a group is rough priority, not a hard sequence.
   positions. That's too much to navigate
   as a master-detail workflow but ideal for a glanceable grid. The
   vertical-list editing workflow in
-  [`ROUTING_REDESIGN.md`](ROUTING_REDESIGN.md) stays as the home for
+  [`ROUTING_REDESIGN.md`](docs/ROUTING_REDESIGN.md) stays as the home for
   configuration; this gives the live-state view its own visual
   treatment. Both ship.
 

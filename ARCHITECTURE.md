@@ -170,6 +170,22 @@ hardware state.
     * `ui/geometry.py` — Tk-style geometry string parsing (kept for
       compat with on-disk settings written by older versions).
     * `ui/layout_helpers.py`, `ui/text_helpers.py` — small helpers.
+    * `ui/views/` — one module per sidebar view (`overview`, `dashboard`,
+      `device_frame`, `steamvr`, `bhaptics`, `sps_sources`, `sessions`,
+      `diagnostics`, `settings`, `tune`). Each builds its view and calls
+      *only* controller facade methods.
+    * `ui/motor_signal_chain.py` — the per-motor signal-chain widget
+      (Input → Depth/Speed → Combine → Gate → Smoothing → Output),
+      embedded in both Device Routing and Tune (see
+      `docs/MOTOR_SIGNAL_CHAIN.md`).
+    * `ui/trace_graph.py` — custom-painted scrolling time-series plot used
+      by the chain mini-graphs and the Tune overview.
+    * `ui/osc_variable_picker.py` — modal picker listing live avatar
+      parameters from `parameter_store`, with search + manual entry.
+    * `ui/help_mode.py` — toggle-driven `?` badges + popovers anchored to
+      the controls they explain.
+    * `ui/flow_layout.py` — a `FlowLayout` port (PySide6 ships none) for
+      the Overview tile grid.
 * **Rule:** It only knows how to draw widgets. If the user clicks a
   button it fires an event to the Controller (`main.py`). It never
   executes hardware or file-saving logic itself. Swapping toolkits
@@ -187,11 +203,19 @@ hardware state.
   * `main.py` itself holds the core API — boot, queue draining,
     Buttplug profile / device config, simple-mode, OSC diagnostics,
     profile copy/paste plumbing, etc.
-  * Per-engine facade mixins live under `controllers/` and are
-    composed into `OscGoesPurrrApp` via multiple inheritance:
+  * Per-engine and per-subsystem facade mixins live under `controllers/`
+    and are composed into `OscGoesPurrrApp` via multiple inheritance:
     * `controllers/steamvr_facade.py` — `SteamVRFacade`
     * `controllers/steamvr_toys_facade.py` — `SteamVRToysFacade`
     * `controllers/bhaptics_facade.py` — `BHapticsFacade`
+    * `controllers/osc_facade.py` — `OscFacade` (VRChat OSC connection
+      lifecycle + diagnostics)
+    * `controllers/profiles_facade.py` — `ProfilesFacade` (global +
+      avatar profile CRUD and clipboard copy/paste)
+    * `controllers/sps_sources_facade.py` — `SpsSourcesFacade`
+      (synthetic SPS source CRUD; the routers read the live source map)
+    * `controllers/sessions_facade.py` — `SessionsFacade` (session-logger
+      lifecycle — see "Session logging" below)
   * Adding a new engine means: write the engine + router, write a new
     `controllers/<name>_facade.py` mixin, add it to `OscGoesPurrrApp`'s
     base list, expose UI methods on the mixin. **No changes to the UI's
@@ -225,8 +249,14 @@ feature is disabled.
 
 ## Profile model (`config_manager.py`)
 
-The on-disk config file is `profiles.json` (v2 schema). `ProfileManager`
-owns several sibling stores:
+The on-disk config file is `profiles.json` (v2 schema). The individual
+settings managers and their file-path constants live in the `settings/`
+package (one module per concern: `app.py`, `bhaptics.py`, `steamvr.py`,
+`known_devices.py`, `sps_sources.py`, `sessions.py`; paths in `_paths.py`)
+and are re-exported from `config_manager.py` so existing `from
+config_manager import X` callers keep working. `ProfileManager` (in
+`config_manager.py`) composes the profile-related stores below (the
+session-settings manager is owned by `SessionsFacade` instead):
 
 * **`profiles`** — global profiles, always available.
 * **`avatar_profiles`** — profiles bound to a specific VRChat avatar id
@@ -287,8 +317,41 @@ All handled in `ProfileManager`:
 * `utilities.py` — small helpers (`value_to_hex_color`,
   `toggle_windows_console`, `create_default_icon`).
 * `version.py` — single source of truth for `__version__`.
+* `settings/` — per-user settings managers, one JSON file per concern
+  (see the Profile model section above).
 * `tools/` — developer scripts, not loaded at runtime
-  (`flatten_lovense_icons.py`, `generate_bhaptics_icons.py`).
+  (`flatten_lovense_icons.py`, `generate_bhaptics_icons.py`,
+  `generate_sim_icon.py`).
+
+---
+
+## Session logging
+
+VR sessions can be recorded to disk for offline analysis and profile
+tuning. `session_logger.py` is the sealed-box `SessionLogger` engine;
+`controllers/sessions_facade.py` (`SessionsFacade`) owns its lifecycle
+plus its `SessionSettingsManager` (`settings/sessions.py`) and adapts the
+routing thread's broadcast callbacks into the engine's primitive `log_*`
+calls. The Sessions sidebar view (`ui/views/sessions.py`) drives it. Full
+design + on-disk format: `docs/SESSION_LOGGING.md`.
+
+---
+
+## Developer tools / simulators
+
+Two standalone simulators live in their own folders and are **never
+imported by the app** — they are separate programs, so the anti-tangling
+rules stop at that boundary:
+
+* `sim/` — impersonates VRChat: emits avatar OSC parameters (and answers
+  OSCQuery) so OGP routes real params with the game closed. Run with
+  `sim/run_sim.bat` (`python -m sim`); build with `sim/build_sim.bat`.
+* `toysim/` — impersonates a Lovense toy: connects to Intiface Central's
+  Device Websocket Server and speaks the Lovense wire protocol, so a fully
+  virtual toy appears in Intiface and OGP drives it through its normal
+  Buttplug path. Run with `toysim/run_toysim.bat` (`python -m toysim`);
+  build with `toysim/build_toysim.bat`. Ships its own isolated tests under
+  `toysim/tests/`.
 
 ---
 
