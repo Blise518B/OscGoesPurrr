@@ -819,7 +819,7 @@ class DashboardMixin:
     # bHaptics, the OSC inspector, etc. before they've connected a toy.
     _SIMPLE_MODE_HIDDEN_VIEWS = (
         "Dashboard", "Device Routing", "SPS Sources", "SteamVR Device Comms",
-        "bHaptics", "Hardware Monitor", "OSC Inspector", "System Log",
+        "bHaptics", "OSC Inspector", "System Log",
     )
 
     # Sidebar entries gated by Settings → Features. A view is hidden if any
@@ -828,7 +828,6 @@ class DashboardMixin:
     # one view.
     _FEATURE_VIEW_REQUIREMENTS = {
         "bHaptics":              ("feature_bhaptics",),
-        "Hardware Monitor":      ("feature_hardware_monitor",),
         "OSC Inspector":         ("feature_osc_inspector",),
         "SteamVR Device Comms":  ("feature_steamvr_haptics", "feature_steamvr_battery"),
         # Device Routing is entirely about Intiface toy motor mapping, so hide

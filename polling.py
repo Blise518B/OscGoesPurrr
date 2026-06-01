@@ -1,5 +1,5 @@
 """PollingThread — daemon-thread skeleton shared by the routers and the
-hardware monitor.
+SteamVR battery broadcaster.
 
 Each subclass implements `_run()` (the loop body). The base class owns the
 threading lifecycle (start/stop, alive guard, stop event) and provides

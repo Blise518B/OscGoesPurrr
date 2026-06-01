@@ -15,7 +15,6 @@ from settings import (
     APPDATA_DIR,
     APP_SETTINGS_FILE,
     BHAPTICS_SETTINGS_FILE,
-    HARDWARE_MONITOR_SETTINGS_FILE,
     KNOWN_DEVICES_FILE,
     PROFILE_FILE,
     SPS_SOURCES_FILE,
@@ -23,7 +22,6 @@ from settings import (
     AppSettingsManager,
     BHapticsSettingsManager,
     DEFAULT_APP_SETTINGS,
-    HardwareMonitorSettingsManager,
     KnownDevicesRegistry,
     SpsSourceManager,
     SteamVRSettingsManager,
@@ -72,7 +70,6 @@ class ProfileManager:
         self.app_settings = AppSettingsManager()
         self.steamvr_settings = SteamVRSettingsManager()
         self.bhaptics_settings = BHapticsSettingsManager()
-        self.hardware_monitor_settings = HardwareMonitorSettingsManager()
         self.known_devices = KnownDevicesRegistry()
         self.sps_sources = SpsSourceManager()
         self._load_or_create_default()

@@ -10,7 +10,6 @@ from ._paths import (
     APPDATA_DIR,
     APP_SETTINGS_FILE,
     BHAPTICS_SETTINGS_FILE,
-    HARDWARE_MONITOR_SETTINGS_FILE,
     KNOWN_DEVICES_FILE,
     PROFILE_FILE,
     SESSIONS_DIR,
@@ -20,7 +19,6 @@ from ._paths import (
 )
 from .app import AppSettingsManager, DEFAULT_APP_SETTINGS
 from .bhaptics import BHapticsSettingsManager
-from .hardware_monitor import HardwareMonitorSettingsManager
 from .known_devices import KnownDevicesRegistry
 from .sessions import SessionSettingsManager
 from .sps_sources import SpsSourceManager
@@ -30,7 +28,6 @@ __all__ = [
     "APPDATA_DIR",
     "APP_SETTINGS_FILE",
     "BHAPTICS_SETTINGS_FILE",
-    "HARDWARE_MONITOR_SETTINGS_FILE",
     "KNOWN_DEVICES_FILE",
     "PROFILE_FILE",
     "SESSIONS_DIR",
@@ -40,7 +37,6 @@ __all__ = [
     "AppSettingsManager",
     "BHapticsSettingsManager",
     "DEFAULT_APP_SETTINGS",
-    "HardwareMonitorSettingsManager",
     "KnownDevicesRegistry",
     "SessionSettingsManager",
     "SpsSourceManager",

@@ -14,13 +14,13 @@ following anti-tangling rules:
    package) MUST NOT access backend services directly (e.g.
    `controller.profile_manager`, `controller.haptic_engine`,
    `controller.bhaptics_engine`, `controller.steamvr_engine`,
-   `controller.hardware_monitor`, `controller.osc_manager`, or any
-   `*_router`). It MUST go through facade methods on the Controller
+   `controller.osc_manager`, or any `*_router`). It MUST go through
+   facade methods on the Controller
    (e.g. `controller.get_app_setting()`, `controller.update_device_target()`,
    `controller.copy_profile()`, `controller.paste_profile_into()`,
    `controller.get_global_profile_names()`, `controller.get_active_profile_dict()`,
    `controller.set_haptic_connected()`, `controller.get_steamvr_status()`,
-   `controller.get_bhaptics_status()`, `controller.get_hardware_monitor_status()`,
+   `controller.get_bhaptics_status()`,
    `controller.get_steamvr_toys_status()`).
    This rule is fully enforced today — there are zero
    `controller.<service>.*` reads in `ui_components.py` or in the
@@ -36,9 +36,8 @@ following anti-tangling rules:
    primitive data to UI facade methods (`ui.update_device_visuals()`,
    `ui.update_osc_status()`, etc.) and let the UI handle the drawing.
 3. **No Shared Hardware State (sealed engines).** Every hardware backend
-   — `HapticEngine`, `BHapticsEngine`, `SteamVREngine`,
-   `HardwareMonitorEngine`, plus the `SteamVRToyBridge` — is a sealed
-   black box. Do not pass dictionaries between threads. The outside
+   — `HapticEngine`, `BHapticsEngine`, `SteamVREngine`, plus the
+   `SteamVRToyBridge` — is a sealed black box. Do not pass dictionaries between threads. The outside
    world communicates with each engine exclusively via its
    primitive-only facade and (where applicable) via the shared
    `thread_queue`.
@@ -51,9 +50,9 @@ following anti-tangling rules:
      `buttplug_client` or `device.*` — those are private to the engine.
      The engine owns its `device_targets` memory and its `is_connected`
      flag (writers go through `mark_connected()`).
-   * `BHapticsEngine`, `SteamVREngine`, `HardwareMonitorEngine` each
-     follow the same pattern: primitive-only public methods, internal
-     state stays internal. Their UI-facing call surface lives on the
+   * `BHapticsEngine` and `SteamVREngine` each follow the same pattern:
+     primitive-only public methods, internal state stays internal.
+     Their UI-facing call surface lives on the
      mixin classes in `controllers/` (see "The Traffic Cop" below).
    * `SteamVRToyBridge` exposes `set_devices()`, `update_battery()`,
      `start()`, `stop()`. Nothing else touches the TCP socket.
@@ -87,14 +86,14 @@ replicated per haptic backend.
 * **Mechanism:** Handles mDNS discovery, runs the UDP server, and acts
   as an OSCQuery client *and* service (dynamic port, advertised via
   `_osc._udp.local`). Exposes an outbound `send_parameter()` for the
-  facades that need to push values back to VRChat (battery levels,
-  hardware-monitor stats, `bHaptics_Connected` bool).
+  facades that need to push values back to VRChat (tracker battery
+  levels and the `bHaptics_Connected` bool).
 * **Rule:** It is entirely memoryless. It parses incoming OSCQuery JSON
   and UDP packets and immediately dumps them into the Brain.
 
 ### 3. The Muscles — a family of sealed engines
 
-The original "Muscle" was one engine. Today four hardware backends live
+The original "Muscle" was one engine. Today three hardware backends live
 side-by-side, all following the same sealed-box contract. The
 controller fans incoming OSC state out to whichever engines have config.
 
@@ -125,9 +124,6 @@ controller fans incoming OSC state out to whichever engines have config.
 * **`bhaptics_engine.py` — bHaptics suits / vests.** WebSocket client
   that talks to the bHaptics Player. Paired with `bhaptics_router.py`
   which translates v1 bHapticsOSC bool params into dot-mode frames.
-* **`hardware_monitor.py` — CPU / RAM / GPU broadcaster.** A pure
-  outbound engine: no router pair. Polls hardware on its own thread
-  and pushes stats out as OSC parameters when enabled.
 
 **Rule:** every engine owns its internal state. The outside world
 communicates with each one *exclusively* through its primitive-only
@@ -196,7 +192,6 @@ hardware state.
     * `controllers/steamvr_facade.py` — `SteamVRFacade`
     * `controllers/steamvr_toys_facade.py` — `SteamVRToysFacade`
     * `controllers/bhaptics_facade.py` — `BHapticsFacade`
-    * `controllers/hardware_monitor_facade.py` — `HardwareMonitorFacade`
   * Adding a new engine means: write the engine + router, write a new
     `controllers/<name>_facade.py` mixin, add it to `OscGoesPurrrApp`'s
     base list, expose UI methods on the mixin. **No changes to the UI's
@@ -245,8 +240,6 @@ owns several sibling stores:
 * **`bhaptics_settings`** (`BHapticsSettingsManager`) — endpoint,
   auto-connect, per-position device configs, antistuck timings, the
   `bHaptics_Connected` OSC bool config.
-* **`hardware_monitor_settings`** (`HardwareMonitorSettingsManager`) —
-  enabled flag, OSC send toggles, poll rate, per-stat addresses.
 * **`known_devices`** (`KnownDevicesRegistry`) — global registry of
   every toy ever seen; profiles inherit from it on first creation.
 * **`sps_sources`** (`SpsSourceManager`) — global registry of

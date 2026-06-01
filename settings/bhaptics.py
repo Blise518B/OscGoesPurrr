@@ -51,7 +51,7 @@ class BHapticsSettingsManager:
         # When the bHaptics Player connection state changes, push the bool
         # to this VRChat avatar parameter so an animation can react. Bare
         # parameter name — the /avatar/parameters/ prefix is added at send
-        # time, matching the Hardware Monitor convention.
+        # time, matching the SteamVR battery-broadcast convention.
         "osc_connected_enabled": True,
         "osc_connected_param": "bHaptics_Connected",
         "devices": _DEFAULT_DEVICES,

@@ -17,9 +17,6 @@ toys, SteamVR trackers, bHaptics suits, and the SteamVR overlay.
   (HerpDerpinstine schema) into dot-mode frames for the bHaptics
   Player. Antistuck timer, per-position enable, optional
   `bHaptics_Connected` bool back to VRChat.
-* **Hardware monitor.** Optional CPU / RAM / GPU / VRAM broadcaster —
-  publishes live stats to VRChat avatar parameters so an HUD avatar can
-  display them.
 * **SteamVR Toy Driver.** Optional virtual-device bridge that makes
   your connected toys and configured bHaptics positions show up as
   trackers in SteamVR's device strip, complete with battery icons.
@@ -104,8 +101,6 @@ Sidebar views (toggle from the left rail):
 * **bHaptics** — bHaptics Player connection, per-position device
   enables + intensity, antistuck timers, the connected-state OSC bool
   feature, plus a live click-to-test dot grid.
-* **Hardware Monitor** — opt-in CPU / RAM / GPU broadcaster with live
-  stats and per-stat OSC address config.
 * **OSC Inspector** — live tree of every parameter currently in the
   cache (the "shadow state").
 * **OSC Diagnostics** — packets-handled counter, phonebook GET log,
@@ -143,7 +138,6 @@ All user state is stored under `%APPDATA%\OscGoesPurrr\`:
 * `steamvr_settings.json` — per-tracker config + patterns.
 * `bhaptics_settings.json` — bHaptics Player endpoint + per-position
   device configs + antistuck.
-* `hardware_monitor_settings.json` — CPU/RAM/GPU broadcaster config.
 * `known_devices.json` — global registry of every toy ever seen.
 * `sps_sources.json` — user-defined synthetic SPS sources.
 

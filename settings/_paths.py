@@ -26,9 +26,6 @@ STEAMVR_SETTINGS_FILE = APPDATA_DIR / "steamvr_settings.json"
 # bHaptics settings file path (Player connection, per-device enable + intensity)
 BHAPTICS_SETTINGS_FILE = APPDATA_DIR / "bhaptics_settings.json"
 
-# Hardware monitor settings file path (CPU/RAM/GPU OSC broadcaster)
-HARDWARE_MONITOR_SETTINGS_FILE = APPDATA_DIR / "hardware_monitor_settings.json"
-
 # Known devices file path — global registry of every toy that's ever been
 # connected, independent of any profile. Lets new/empty profiles still show
 # previously-seen toys with default settings.

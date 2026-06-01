@@ -33,7 +33,6 @@ from steamvr_engine import SteamVREngine
 from steamvr_router import SteamVRRouter, SteamVRBatteryBroadcaster
 from bhaptics_engine import BHapticsEngine
 from bhaptics_router import BHapticsRouter
-from hardware_monitor import HardwareMonitorEngine
 from constants import *
 from utilities import value_to_hex_color, toggle_windows_console, create_default_icon
 from version import __version__
@@ -45,7 +44,6 @@ from controllers import (
     SteamVRFacade,
     SteamVRToysFacade,
     BHapticsFacade,
-    HardwareMonitorFacade,
     OscFacade,
     ProfilesFacade,
     SessionsFacade,
@@ -57,7 +55,6 @@ class OscGoesPurrrApp(
     SteamVRFacade,
     SteamVRToysFacade,
     BHapticsFacade,
-    HardwareMonitorFacade,
     OscFacade,
     ProfilesFacade,
     SessionsFacade,
@@ -206,14 +203,6 @@ class OscGoesPurrrApp(
             get_antistuck=self._bhaptics_get_antistuck,
             get_sps_mirror_config=self.get_bhaptics_sps_mirror,
             get_sps_sources=self._get_sps_source_map,
-        )
-
-        # Hardware Monitor — broadcasts system stats (CPU/RAM/GPU/VRAM) to
-        # VRChat over OSC. Off by default; opt-in via the Hardware Monitor
-        # panel. Runs its own poll thread and never touches the UI directly.
-        self.hardware_monitor = HardwareMonitorEngine(
-            get_config=self._hardware_monitor_get_config,
-            send_osc=self._hardware_monitor_send_osc,
         )
 
         # Instantiate VRChat OSC Manager
@@ -706,15 +695,14 @@ class OscGoesPurrrApp(
 
     # ==================================================================
     # Feature toggles — Settings → Features panel uses these to gate the
-    # expensive background subsystems (bHaptics, Hardware Monitor, SteamVR
-    # haptics/battery, OSC Inspector). Each toggle starts/stops the matching
+    # expensive background subsystems (bHaptics, SteamVR haptics/battery,
+    # OSC Inspector). Each toggle starts/stops the matching
     # engine so disabled features actually free their threads.
     # ==================================================================
 
     FEATURE_KEYS = (
         "feature_osc_inspector",
         "feature_bhaptics",
-        "feature_hardware_monitor",
         "feature_steamvr_haptics",
         "feature_steamvr_battery",
         "feature_intiface",
@@ -753,17 +741,6 @@ class OscGoesPurrrApp(
                 try:
                     self.bhaptics_router.stop()
                     self.bhaptics_engine.stop()
-                except Exception:
-                    pass
-        elif key == "feature_hardware_monitor":
-            if enabled:
-                try:
-                    self.hardware_monitor.start()
-                except Exception as e:
-                    self.log_message(f"Hardware monitor start failed: {e}")
-            else:
-                try:
-                    self.hardware_monitor.stop()
                 except Exception:
                     pass
         elif key == "feature_steamvr_haptics":
@@ -1546,11 +1523,6 @@ class OscGoesPurrrApp(
             pass
 
         try:
-            self.hardware_monitor.stop()
-        except Exception:
-            pass
-
-        try:
             bridge = getattr(self, "_steamvr_toy_bridge", None)
             if bridge is not None:
                 bridge.clear_devices()
@@ -1573,7 +1545,6 @@ class OscGoesPurrrApp(
     # Engine-specific facade methods live in `controllers/` mixin modules:
     #   - SteamVRFacade            (SteamVR haptics + battery)
     #   - BHapticsFacade           (bHaptics player dot grid)
-    #   - HardwareMonitorFacade    (CPU/RAM/GPU OSC broadcaster)
     # The mixins assume `self.profile_manager`, the engine attributes, and
     # `self.osc_manager` exist on the host controller.
 
@@ -1701,14 +1672,6 @@ class OscGoesPurrrApp(
                 self.bhaptics_router.start()
             except Exception as e:
                 self.log_message(f"bHaptics startup failed: {e}")
-
-        # Hardware monitor thread is gated by its feature toggle so the OSC
-        # broadcast + polling thread don't run when the user has no use for it.
-        if self.get_feature_enabled("feature_hardware_monitor"):
-            try:
-                self.hardware_monitor.start()
-            except Exception as e:
-                self.log_message(f"Hardware monitor startup failed: {e}")
 
         # Apply saved SteamVR autostart on boot (no-op if SteamVR is offline).
         if self.profile_manager.steamvr_settings.get_autostart():

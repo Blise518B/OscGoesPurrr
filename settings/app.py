@@ -36,7 +36,6 @@ DEFAULT_APP_SETTINGS = {
     # pre-toggle behaviour.
     "feature_osc_inspector": True,
     "feature_bhaptics": True,
-    "feature_hardware_monitor": True,
     "feature_steamvr_haptics": True,
     "feature_steamvr_battery": True,
     "feature_intiface": True,

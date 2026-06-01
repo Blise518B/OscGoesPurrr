@@ -67,7 +67,6 @@ from ui.views.settings import SettingsMixin
 from ui.views.sessions import SessionsMixin
 from ui.views.steamvr import SteamVRMixin
 from ui.views.bhaptics import BHapticsMixin
-from ui.views.hardware_monitor import HardwareMonitorMixin
 from ui.views.device_frame import DeviceFrameMixin
 from ui.views.tune import TuneMixin
 from ui.views.overview import OverviewMixin
@@ -541,7 +540,6 @@ class OscGoesPurrrUI(
     SessionsMixin,
     SteamVRMixin,
     BHapticsMixin,
-    HardwareMonitorMixin,
     DeviceFrameMixin,
     TuneMixin,
     OverviewMixin,
@@ -693,7 +691,7 @@ class OscGoesPurrrUI(
 
         view_names = ["Dashboard", "Overview", "Simple Mode",
                       "Device Routing", "SPS Sources", "Tune",
-                      "SteamVR Device Comms", "bHaptics", "Hardware Monitor",
+                      "SteamVR Device Comms", "bHaptics",
                       "OSC Inspector", "OSC Diagnostics", "System Log",
                       "Settings", "Help"]
         builders = {
@@ -705,7 +703,6 @@ class OscGoesPurrrUI(
             "Tune": self._build_tune_view,
             "SteamVR Device Comms": self._build_steamvr_view,
             "bHaptics": self._build_bhaptics_view,
-            "Hardware Monitor": self._build_hardware_monitor_view,
             "OSC Inspector": self._build_network_debug_view,
             "OSC Diagnostics": self._build_osc_diagnostics_view,
             "System Log": self._build_system_log_view,
@@ -778,7 +775,7 @@ class OscGoesPurrrUI(
 
         nav_buttons = ["Dashboard", "Overview", "Simple Mode",
                        "Device Routing", "SPS Sources", "Tune",
-                       "SteamVR Device Comms", "bHaptics", "Hardware Monitor",
+                       "SteamVR Device Comms", "bHaptics",
                        "OSC Inspector", "OSC Diagnostics", "System Log",
                        "Settings", "Help"]
         for name in nav_buttons:

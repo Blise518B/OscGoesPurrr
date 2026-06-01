@@ -5,15 +5,14 @@ Sections (Cut 1 + Cut 2):
 - Toys      — per Buttplug device tile (Cut 1)
 - Trackers  — per SteamVR tracker tile (Cut 2)
 - Suit      — per bHaptics position tile (Cut 2)
-- Stats     — per Hardware Monitor stat tile (Cut 2)
 - System    — OSC link + active profile + backend health (Cut 2)
 
 A chip-filter row at the top toggles section visibility; the chosen
 set persists in app_settings['overview_visible_sections'].
 
 Strictly read-only. Clicking a tile jumps to the appropriate editor
-view (Device Routing / SteamVR Device Comms / bHaptics / Hardware
-Monitor / OSC Inspector / Dashboard / Settings). The tile itself
+view (Device Routing / SteamVR Device Comms / bHaptics / OSC
+Inspector / Dashboard / Settings). The tile itself
 never mutates profile or engine state — read-only is load-bearing
 for the Demeter rule.
 
@@ -21,7 +20,7 @@ Live updates:
 - Toys: piggyback on DeviceFrameMixin's existing update paths via
   three hook methods (_overview_set_motor_value / _overview_set_battery
   / _overview_refresh_connection_states).
-- Trackers / Suit / Stats / System: refreshed by a 2 Hz QTimer that
+- Trackers / Suit / System: refreshed by a 2 Hz QTimer that
   re-queries the controller facade snapshots. Cheap (~ms per tick).
 
 Cut 3 will add snap-grid resize (1x1 / 2x1 / 2x2) + per-tile size
@@ -74,7 +73,6 @@ _SECTIONS: List[Tuple[str, str, str]] = [
     ("toys",     "Toys",     "Device Routing"),
     ("trackers", "Trackers", "SteamVR Device Comms"),
     ("suit",     "Suit",     "bHaptics"),
-    ("stats",    "Stats",    "Hardware Monitor"),
     ("system",   "System",   "Dashboard"),
 ]
 
@@ -195,7 +193,6 @@ class OverviewMixin:
         self._build_toys_section()
         self._build_trackers_section()
         self._build_suit_section()
-        self._build_stats_section()
         self._build_system_section()
 
     def _refresh_overview_dynamic(self) -> None:
@@ -210,10 +207,6 @@ class OverviewMixin:
             pass
         try:
             self._refresh_suit_values()
-        except Exception:
-            pass
-        try:
-            self._refresh_stats_values()
         except Exception:
             pass
         try:
@@ -644,132 +637,6 @@ class OverviewMixin:
                 self._apply_connect_dot(dot, live)
 
     # ----------------------------------------------------------
-    # Stats section (Hardware Monitor)
-    # ----------------------------------------------------------
-
-    _STAT_ROWS: Tuple[Tuple[str, str], ...] = (
-        ("cpu",  "CPU"),
-        ("ram",  "RAM"),
-        ("gpu",  "GPU"),
-        ("vram", "VRAM"),
-    )
-
-    def _build_stats_section(self) -> None:
-        refs = self._overview_sections.get("stats")
-        if refs is None:
-            return
-        self._overview_clear_section(refs)
-        if not hasattr(self.controller, "get_hardware_monitor_status"):
-            self._overview_set_empty(refs, "Hardware Monitor not loaded.")
-            return
-        status = self.controller.get_hardware_monitor_status() or {}
-        stats = status.get("stats") or {}
-        settings = status.get("settings") or {}
-        if not stats.get("has_psutil", False):
-            self._overview_set_empty(
-                refs, "Hardware Monitor needs `psutil` installed."
-            )
-            return
-        if not settings.get("enabled", True):
-            self._overview_set_empty(
-                refs,
-                "Hardware Monitor is disabled. Enable it in the "
-                "Hardware Monitor view to see live stats."
-            )
-            return
-        # Only show stats that the monitor actually has a value for —
-        # GPU/VRAM are absent on non-NVIDIA machines, for example.
-        idx = 0
-        for key, label in self._STAT_ROWS:
-            if self._stat_value_text(key, stats) == "—":
-                continue
-            tile = self._build_overview_stat_tile(key, label, stats)
-            self._overview_grid_add(refs, tile["frame"], idx)
-            refs["tiles"][key] = tile
-            idx += 1
-        if idx == 0:
-            self._overview_set_empty(refs, "No live stats available.")
-
-    def _build_overview_stat_tile(self, stat_key: str, label: str,
-                                  stats: Dict[str, Any]) -> Dict[str, Any]:
-        frame = self._overview_make_tile(
-            self._navigate_to("Hardware Monitor"),
-            section="stats", tile_id=stat_key,
-        )
-        lay = frame.layout()
-
-        title = QLabel(label)
-        tf = title.font(); tf.setBold(True)
-        title.setFont(tf)
-        lay.addWidget(title)
-
-        value = QLabel(self._stat_value_text(stat_key, stats))
-        vf = value.font(); vf.setPointSize(max(vf.pointSize() + 4, 14))
-        value.setFont(vf)
-        lay.addWidget(value)
-
-        meter = _RainbowMeter(maximum=1000)
-        meter.setFixedHeight(10)
-        meter.setValue(int(self._stat_normalised(stat_key, stats) * 1000))
-        lay.addWidget(meter)
-        return {
-            "frame": frame,
-            "title": title,
-            "value": value,
-            "meter": meter,
-        }
-
-    def _refresh_stats_values(self) -> None:
-        refs = self._overview_sections.get("stats")
-        if refs is None or not refs["tiles"]:
-            return
-        if not hasattr(self.controller, "get_hardware_monitor_status"):
-            return
-        status = self.controller.get_hardware_monitor_status() or {}
-        stats = status.get("stats") or {}
-        for key, _label in self._STAT_ROWS:
-            tile = refs["tiles"].get(key)
-            if tile is None:
-                continue
-            tile["value"].setText(self._stat_value_text(key, stats))
-            tile["meter"].setValue(int(self._stat_normalised(key, stats) * 1000))
-
-    @staticmethod
-    def _stat_value_text(key: str, stats: Dict[str, Any]) -> str:
-        if key == "cpu":
-            v = stats.get("cpu_percent")
-            return f"{v:.0f}%" if v is not None else "—"
-        if key == "ram":
-            u, t = stats.get("ram_used_gb"), stats.get("ram_total_gb")
-            if u is None or t is None or t <= 0:
-                return "—"
-            return f"{u:.1f} / {t:.1f} GB"
-        if key == "gpu":
-            v = stats.get("gpu_percent")
-            return f"{v:.0f}%" if v is not None else "—"
-        if key == "vram":
-            u, t = stats.get("vram_used_gb"), stats.get("vram_total_gb")
-            if u is None or t is None or t <= 0:
-                return "—"
-            return f"{u:.1f} / {t:.1f} GB"
-        return "—"
-
-    @staticmethod
-    def _stat_normalised(key: str, stats: Dict[str, Any]) -> float:
-        """Best-effort 0..1 mapping for the per-stat meter."""
-        if key in ("cpu", "gpu"):
-            v = stats.get(f"{key}_percent")
-            return max(0.0, min(1.0, (v or 0.0) / 100.0))
-        if key in ("ram", "vram"):
-            prefix = "ram" if key == "ram" else "vram"
-            u = stats.get(f"{prefix}_used_gb") or 0.0
-            t = stats.get(f"{prefix}_total_gb") or 0.0
-            if t <= 0:
-                return 0.0
-            return max(0.0, min(1.0, u / t))
-        return 0.0
-
-    # ----------------------------------------------------------
     # System section (OSC + profile + backend health)
     # ----------------------------------------------------------
 
@@ -791,8 +658,8 @@ class OverviewMixin:
             refs["tiles"]["profile"] = tile
             idx += 1
         # Backend-health tile aggregates Intiface / bHaptics / SteamVR
-        # / HW Monitor into one tile so the user gets a single "is
-        # anything broken right now?" glance card.
+        # into one tile so the user gets a single "is anything broken
+        # right now?" glance card.
         tile = self._build_overview_backends_tile()
         self._overview_grid_add(refs, tile["frame"], idx)
         refs["tiles"]["backends"] = tile

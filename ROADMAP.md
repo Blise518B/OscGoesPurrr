@@ -312,8 +312,8 @@ Order within a group is rough priority, not a hard sequence.
 
   **Why a separate view, not a replacement.** Heavy users have 8–10
   stored toys (disconnected ones stay visible so they can still be
-  edited) plus potentially 5–10 SteamVR trackers, multiple bHaptics
-  positions, and hardware monitor stats. That's too much to navigate
+  edited) plus potentially 5–10 SteamVR trackers and multiple bHaptics
+  positions. That's too much to navigate
   as a master-detail workflow but ideal for a glanceable grid. The
   vertical-list editing workflow in
   [`ROUTING_REDESIGN.md`](ROUTING_REDESIGN.md) stays as the home for
@@ -338,10 +338,6 @@ Order within a group is rough priority, not a hard sequence.
     (VestFront, VestBack, ForearmL, etc.) if the user wants finer
     granularity. Aggregated by default to avoid swamping the grid
     with 9 vest-piece tiles.
-  * **Hardware Monitor** (when enabled) — CPU / RAM / GPU / VRAM as
-    individual stat tiles with a small history sparkline each.
-    Visually distinct from the input/output device tiles (these are
-    outbound-only broadcasters, not haptic devices).
   * **System** — OSC connection (mDNS-discovered VRChat, port,
     packets/sec), active profile + avatar binding, per-backend
     health pills for Intiface / bHaptics Player / SteamVR runtime.
@@ -383,8 +379,7 @@ Order within a group is rough priority, not a hard sequence.
     editor view. This keeps the dashboard glanceable and free of
     Demeter-violation pressure (no UI reaches into engines for
     writes — only for reads, via the existing controller facade
-    methods like `get_steamvr_status()`, `get_bhaptics_status()`,
-    `get_hardware_monitor_status()`).
+    methods like `get_steamvr_status()` and `get_bhaptics_status()`).
 
 ---
 

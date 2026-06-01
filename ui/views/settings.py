@@ -311,7 +311,6 @@ class SettingsMixin:
         feature_rows = (
             ("feature_intiface",         "Intiface toy communication (Buttplug.io)"),
             ("feature_bhaptics",         "bHaptics integration"),
-            ("feature_hardware_monitor", "Hardware Monitor (CPU / RAM / GPU stats)"),
             ("feature_steamvr_haptics",  "SteamVR tracker haptics"),
             ("feature_steamvr_battery",  "SteamVR battery → OSC broadcast"),
             ("feature_osc_inspector",    "OSC Inspector (debug view)"),
