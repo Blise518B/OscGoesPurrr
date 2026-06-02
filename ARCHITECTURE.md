@@ -59,6 +59,13 @@ following anti-tangling rules:
 4. **Stateless Networking.** `vrchat_osc.py` does not own data. It only
    writes to `parameter_store.py`.
 
+**Latency is the other load-bearing constraint.** This app turns VRChat
+OSC into physical sensation in real time, so minimizing OSC-in →
+device-out latency ranks alongside the boundaries above — not a
+nice-to-have. Never add queue hops, fixed delays, smoothing *delay*, or
+ack-blocking to a routing / engine / dispatch path. Read **§ "Latency
+budget"** below before touching any hot path.
+
 ---
 
 ## The Ecosystem
@@ -247,6 +254,80 @@ feature is disabled.
 
 ---
 
+## Latency budget (load-bearing)
+
+This app exists to make physical hardware react to VRChat **in real time**.
+Perceived quality lives and dies on end-to-end latency — the time from an
+OSC packet arriving to the device actually moving — so minimizing it is a
+first-class design constraint, on par with the anti-tangling rules. The
+standalone `testbench/` measures it (input edge → toy output on one clock);
+use it to confirm a change didn't regress the Buttplug path.
+
+**The shared hot path:** UDP OSC → `parameter_store` (event-driven write) →
+a *router* (computes the target) → an *engine* (talks to hardware) →
+device. Every stage that re-samples on its own timer, buffers, or blocks on
+an ack adds latency. Keep each stage tight.
+
+**Per-backend pipeline (current):**
+
+* **Buttplug toys** (`motor_router` → `haptic_engine`). The routing tick
+  (`ROUTER_POLL_RATE_MS`, ~60 Hz, gated by `_needs_recalculation`)
+  dispatches **directly** to the engine via
+  `force_recalculate(dispatch_direct=True)` — it does **not** route hot
+  updates through `thread_queue` (that queue is the UI pump, drained only
+  every `QUEUE_POLL_RATE_MS` = 50 ms, and carries status / device events
+  *only*). The engine loop (`HAPTIC_POLL_RATE`, ~100 Hz) sends
+  **fire-and-forget** (never awaits Intiface's ack), bounded by a
+  per-feature cap (`HAPTIC_MAX_SEND_HZ`, ~60 Hz) so a real BLE toy isn't
+  flooded. ≈27 ms end-to-end on the bench (was ≈60 ms).
+* **Linear / strokers** — same engine loop; fire-and-forget, but the
+  physics tick is gated *together with* the send so the commanded
+  `duration` stays equal to the real send interval, and an in-flight guard
+  keeps position commands strictly in order.
+* **bHaptics** (`bhaptics_router` → `bhaptics_engine`). Router polls
+  `parameter_store` at ~60 Hz (debounced — held contacts don't resubmit);
+  the engine submit is a fire-and-forget `ws.send`.
+* **SteamVR trackers** (`steamvr_router` → `steamvr_engine`). Router polls
+  at ~60 Hz; each tracker's `_FeedbackThread` **wakes immediately** on a
+  strength change (a `threading.Event`) instead of sleeping out its pulse
+  interval. The sustain cadence / intensity model is unchanged — only a
+  *changed* value pulses early. Floor is OpenVR's one-pulse-per-frame limit
+  (~90 Hz).
+
+**The patterns (reach for these):**
+
+1. **Direct dispatch** — hand a freshly computed value to the engine on the
+   thread that produced it; don't bounce it through a slowly-drained queue.
+2. **Fire-and-forget sends** — never `await` a device / server ack on the
+   hot loop; dispatch it as a task (hold a strong ref; handle errors inside
+   the task). One in-flight send per feature preserves order and prevents
+   pile-up.
+3. **Per-feature send cap** — keep the loop fast for latency, but throttle
+   the *hardware* command rate so real BLE devices aren't flooded. The cap
+   must only delay *consecutive* rapid changes, never the first change after
+   idle (so step/edge latency is untouched).
+4. **Fast, debounced polling** (~60 Hz) for router threads that can't be
+   event-driven; debounce so a held value adds no traffic.
+5. **Event-driven wake** for any sustain loop (e.g. the SteamVR pulse
+   train): wake on change rather than waiting out the interval.
+
+**Anti-patterns (do NOT):**
+
+* Route hot haptic updates through `thread_queue` or any UI-polled queue
+  (that hop cost ~25 ms average — it was the single biggest latency tax).
+* `await` a per-command ack inside an engine loop (serializes every device
+  and stalls the loop).
+* Poll a router slower than ~60 Hz without a hardware reason.
+* Put smoothing / debounce *delay* on the transport path — value *shaping*
+  belongs in the mixer (`mixer.py` / `motor_router`), never in dispatch.
+
+**Tuning constants** (`constants.py`): `ROUTER_POLL_RATE_MS` + the
+`router_poll_rate_hz` setting (Buttplug tick), `HAPTIC_POLL_RATE` (engine
+loop), `HAPTIC_MAX_SEND_HZ` (per-feature send cap). The bHaptics / SteamVR
+router poll rates are constructor defaults (~16 ms).
+
+---
+
 ## Profile model (`config_manager.py`)
 
 The on-disk config file is `profiles.json` (v2 schema). The individual
@@ -386,6 +467,12 @@ Run with `testbench/run_testbench.bat` (`python -m testbench`); build with
 6. **UI** — add a card / tab in `ui_components.py` that calls *only*
    the new facade methods. **Do not** import the engine or router from
    the UI.
+7. **Latency** — hold the line (§ "Latency budget"): dispatch on the
+   producing thread without queue hops, never `await` a device ack on the
+   loop, poll / loop at ~60 Hz (or wake event-driven), and cap the
+   *hardware* send rate only if the device needs it. A new backend that
+   buffers or blocks on the hot path is a regression even if it "works".
 
 Following this recipe means the four anti-tangling rules at the top of
-this document keep holding without anyone having to re-audit them.
+this document and the latency budget all keep holding without anyone
+having to re-audit them.

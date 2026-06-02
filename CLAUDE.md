@@ -10,6 +10,15 @@ Read [`README.md`](README.md) for the feature overview and
 anti-tangling rules in ARCHITECTURE.md are load-bearing — don't break
 them.
 
+**Low latency is load-bearing too.** This is a real-time haptics router:
+minimizing OSC-in → device-out latency is a first-class priority for
+*every* backend (Buttplug toys, strokers, bHaptics, SteamVR), not a
+nice-to-have. Don't add queue hops, fixed delays, or ack-blocking waits to
+any routing / engine / dispatch path; prefer direct dispatch,
+fire-and-forget sends, fast (~60 Hz) polling, and per-feature send caps for
+hardware safety. See ARCHITECTURE.md § "Latency budget" before touching a
+hot path.
+
 ## Cloud sandbox caveat
 
 If you are running in a Linux cloud sandbox (e.g. the mobile Claude
