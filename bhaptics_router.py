@@ -14,6 +14,7 @@
 #   Foot_Left/Right  → FootL/R     (3)
 
 import threading
+import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from parameter_store import store
@@ -176,7 +177,7 @@ class BHapticsRouter(PollingThread):
     def __init__(self,
                  engine: BHapticsEngine,
                  get_device_configs: Callable[[], Dict[str, DeviceConfig]],
-                 poll_rate_s: float = 0.05,
+                 poll_rate_s: float = 0.016,  # ~60 Hz: low-latency change detection (debounced, so holds don't spam the Player)
                  get_antistuck: Callable[[], Dict[str, float]] | None = None,
                  get_sps_mirror_config: Callable[[], Dict[str, Any]] | None = None,
                  get_sps_sources: Callable[[], Dict[str, Any]] | None = None):
