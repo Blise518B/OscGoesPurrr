@@ -17,7 +17,7 @@ class SteamVRRouter(PollingThread):
     def __init__(self,
                  engine: SteamVREngine,
                  get_all_configs: Callable[[], Dict[str, TrackerConfig]],
-                 poll_rate_s: float = 0.033):
+                 poll_rate_s: float = 0.016):  # ~60 Hz: low-latency change detection (debounced)
         super().__init__("SteamVRRouter")
         self.engine = engine
         self.get_all_configs = get_all_configs

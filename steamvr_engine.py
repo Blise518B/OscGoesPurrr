@@ -169,6 +169,12 @@ class _FeedbackThread(threading.Thread):
         self.tracker = tracker
         self.engine = engine
         self._stop = threading.Event()
+        # Set by set_strength() so the loop wakes the instant a new value
+        # arrives instead of sleeping out the rest of its pulse interval.
+        # This is the SteamVR low-latency path: the pulse cadence / intensity
+        # model (interval_ms) is unchanged for held values — we only fire the
+        # next pulse early when the routed strength actually changes.
+        self._wake = threading.Event()
 
         self.strength = 0.0
         self.strength_delta = 0.0
@@ -189,6 +195,7 @@ class _FeedbackThread(threading.Thread):
 
     def stop(self):
         self._stop.set()
+        self._wake.set()  # break the loop out of its interval wait immediately
 
     def set_strength(self, value: float):
         try:
@@ -199,6 +206,8 @@ class _FeedbackThread(threading.Thread):
         self.strength_delta += abs(value - self.strength)
         self.strength = value
         self.last_set_time = time.time()
+        # Wake the pulse loop so the change is felt now, not up to interval_ms later.
+        self._wake.set()
 
     def force_pulse(self, length_ms: float):
         if self.hack_pulse_limit_ms > 0:
@@ -278,8 +287,11 @@ class _FeedbackThread(threading.Thread):
             if pulse_length > 0:
                 self.engine._raw_pulse(self.tracker.index, pulse_length)
 
-            sleep = max(self.interval_s - (time.time() - start), 0.0)
-            time.sleep(sleep)
+            # Sustain cadence = interval_s, but wake early when set_strength
+            # signals a change so a new value pulses with minimal latency.
+            remaining = max(self.interval_s - (time.time() - start), 0.0)
+            self._wake.wait(remaining)
+            self._wake.clear()
 
 
 # --- Engine facade ------------------------------------------------------
