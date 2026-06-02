@@ -55,7 +55,20 @@ BTN_HEIGHT_LARGE = 35
 BTN_HEIGHT_SMALL = 30
 
 # --- Timing & System (ms/seconds) ---
-HAPTIC_POLL_RATE = 0.02
+# Haptic engine loop period. 10 ms (100 Hz) keeps the time between a target
+# changing and the command going out small. The loop only emits on change and
+# dispatches fire-and-forget, so a faster tick costs almost nothing. The loop
+# rate sets end-to-end *latency*; the per-feature command rate to real hardware
+# is capped separately by HAPTIC_MAX_SEND_HZ below, so a fast loop is safe.
+HAPTIC_POLL_RATE = 0.01
+# Per-feature send-rate cap (Hz). The engine loop runs fast for low latency, but
+# actual commands to any single motor are throttled to this rate so a real
+# Bluetooth toy is never flooded on a continuously-changing signal. The cap only
+# delays *consecutive* rapid changes (by up to one interval); the first change
+# after a quiet gap is sent immediately, so step/edge latency is unaffected.
+# ~60 Hz sits above OGB's 15 Hz and around OGP's old 50 Hz loop; lower it if a
+# physical toy ever backlogs.
+HAPTIC_MAX_SEND_HZ = 60
 ROUTER_POLL_RATE_MS = 16
 QUEUE_POLL_RATE_MS = 50
 UI_REFRESH_RATE_MS = 250

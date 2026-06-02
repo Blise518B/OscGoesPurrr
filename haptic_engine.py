@@ -16,7 +16,7 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 from buttplug import ButtplugClient, DeviceOutputCommand, OutputType
-from constants import APP_NAME, HAPTIC_POLL_RATE
+from constants import APP_NAME, HAPTIC_MAX_SEND_HZ, HAPTIC_POLL_RATE
 from haptic_actuators import (
     LINEAR_DEFAULTS,
     STROKE_SPEED_DEFAULTS,
@@ -139,6 +139,32 @@ class HapticEngine:
         self.device_targets: dict = {}
         self.device_last_sent: dict = {}
 
+        # Per-(device_name, motor_idx) "a continuous-output send is in flight"
+        # flags. Continuous outputs (vibrate/rotate/led/…) are dispatched
+        # fire-and-forget so the worker loop never blocks on Intiface's
+        # per-command ack round-trip (mirrors OGB's `sendAndForget`). At most
+        # one send is in flight per feature; while one is pending the loop holds
+        # the newest value and sends it on the next free tick (latest-wins,
+        # naturally coalesced, bounded to one task per feature).
+        self._send_inflight: Dict[Tuple[str, int], bool] = {}
+
+        # Strong references to in-flight fire-and-forget send tasks. asyncio only
+        # holds weak refs to tasks, so without this a send could be garbage-
+        # collected mid-flight. Each task removes itself on completion.
+        self._pending_tasks: set = set()
+
+        # Per-(device_name, motor_idx) last continuous-output send time (ms,
+        # time.monotonic). Fire-and-forget removed the natural backpressure of
+        # awaiting each ack, so this enforces an explicit per-feature send-rate
+        # cap (HAPTIC_MAX_SEND_HZ): the loop may tick at 100 Hz for low latency,
+        # but no single motor is commanded faster than the cap — protecting real
+        # BLE toys from a flood on fast-changing input. The first send after a
+        # quiet gap is never delayed, so step/edge latency is unaffected. (Linear
+        # actuators keep awaiting, so they retain their own backpressure and are
+        # not capped here.)
+        self._last_send_ms: Dict[Tuple[str, int], float] = {}
+        self._min_send_interval_ms = 1000.0 / max(1.0, float(HAPTIC_MAX_SEND_HZ))
+
         # Hardware clients - these will be set when async_worker runs
         self.buttplug_client: Optional[ButtplugClient] = None
 
@@ -186,6 +212,52 @@ class HapticEngine:
     def update_target(self, device_name: str, motor_idx: int, target_val: float):
         """Thread-safe entry point for the Main Thread to command hardware."""
         self.device_targets[(device_name, motor_idx)] = target_val
+
+    def _dispatch_output(self, device_name: str, motor_idx: int, coro) -> None:
+        """Fire-and-forget a continuous-output command on the engine loop.
+
+        `coro` is an un-awaited ``run_output(...)`` coroutine. We schedule it as
+        a task instead of awaiting it inline so the worker loop doesn't stall on
+        Intiface's ack round-trip (and so one slow toy can't hold up the others).
+        The feature is marked in-flight until the task settles; send errors are
+        routed through ``_handle_feature_error`` exactly as the inline await did.
+        Must be called from the engine's own event loop (async_worker)."""
+        key = (device_name, motor_idx)
+        self._send_inflight[key] = True
+
+        async def _runner():
+            try:
+                await coro
+            except Exception as e:
+                self._handle_feature_error(device_name, motor_idx, e)
+            finally:
+                self._send_inflight[key] = False
+
+        try:
+            task = asyncio.create_task(_runner())
+        except RuntimeError:
+            # No running loop (shouldn't happen inside async_worker). Clear the
+            # flag so the feature isn't wedged and close the orphaned coroutine.
+            self._send_inflight[key] = False
+            try:
+                coro.close()
+            except Exception:
+                pass
+            return
+        # Hold a strong ref until the task settles (asyncio keeps only weak refs).
+        self._pending_tasks.add(task)
+        task.add_done_callback(self._pending_tasks.discard)
+
+    def _can_send_now(self, key: Tuple[str, int], now_ms: float) -> bool:
+        """Gate a continuous-output send. True only when no send is already in
+        flight for this feature AND the per-feature rate cap (HAPTIC_MAX_SEND_HZ)
+        has elapsed since its last send. Otherwise the caller holds the newest
+        value for a later tick (latest-wins). This is what keeps the fast engine
+        loop from flooding a real BLE toy on a continuously-changing signal."""
+        if self._send_inflight.get(key):
+            return False
+        last = self._last_send_ms.get(key, -1e18)
+        return (now_ms - last) >= self._min_send_interval_ms
 
     def mark_connected(self, connected: bool) -> None:
         """Thread-safe facade: external observers (the VRChat OSC link, the
@@ -586,6 +658,12 @@ class HapticEngine:
             for k in list(self.device_last_sent.keys()):
                 if k[0] == device_name:
                     self.device_last_sent.pop(k, None)
+            for k in list(self._send_inflight.keys()):
+                if k[0] == device_name:
+                    self._send_inflight.pop(k, None)
+            for k in list(self._last_send_ms.keys()):
+                if k[0] == device_name:
+                    self._last_send_ms.pop(k, None)
             for k in list(self.linear_configs.keys()):
                 if k[0] == device_name:
                     self.linear_configs.pop(k, None)
@@ -673,6 +751,8 @@ class HapticEngine:
         self._motor_features.clear()
         self.linear_actuators.clear()
         self.stroke_speed_actuators.clear()
+        self._send_inflight.clear()
+        self._last_send_ms.clear()
         for device in self.buttplug_client.devices.values():
             features = get_motor_features_for_device(device)
             self._motor_features[device.name] = features
@@ -755,6 +835,8 @@ class HapticEngine:
         self._motor_features.clear()
         self.linear_actuators.clear()
         self.stroke_speed_actuators.clear()
+        self._send_inflight.clear()
+        self._last_send_ms.clear()
 
     async def async_worker(self, app_instance=None):
         """
@@ -777,7 +859,7 @@ class HapticEngine:
         # surface in real time. Buttplug protocol uses DeviceAdded / DeviceRemoved
         # messages, but the Python client v1.0.0 doesn't process them -- only the
         # bulk DeviceList. Polling every ~2s drives _handle_device_list ourselves.
-        # 100 ticks * 0.02s = 2.0s.
+        # Expressed in ticks so it tracks HAPTIC_POLL_RATE automatically.
         device_poll_tick_count = int(2.0 / max(HAPTIC_POLL_RATE, 0.001))
         ticks_since_device_poll = 0
 
@@ -830,20 +912,35 @@ class HapticEngine:
                     legacy_target = self.device_targets.get((device_name, -1))
                     if legacy_target is not None:
                         last = self.device_last_sent.get((device_name, -1), 0.0)
-                        if legacy_target != last:
-                            try:
-                                await device.run_output(DeviceOutputCommand(OutputType.VIBRATE, legacy_target))
-                                self.device_last_sent[(device_name, -1)] = legacy_target
-                            except Exception as e:
-                                connection_dropped = self._handle_feature_error(device_name, -1, e)
-                                if connection_dropped:
-                                    break
+                        if (legacy_target != last
+                                and self._can_send_now((device_name, -1), now_ms)):
+                            # Fire-and-forget (see _dispatch_output), rate-capped
+                            # per feature; the loop never blocks on the ack.
+                            self.device_last_sent[(device_name, -1)] = legacy_target
+                            self._last_send_ms[(device_name, -1)] = now_ms
+                            self._dispatch_output(
+                                device_name, -1,
+                                device.run_output(
+                                    DeviceOutputCommand(OutputType.VIBRATE, legacy_target)
+                                ),
+                            )
 
                     # --- Per-feature dispatch ---------------------------------------
                     for motor_idx, (kind, output_type, feature) in enumerate(features):
                         target = self.device_targets.get((device_name, motor_idx), 0.0)
 
                         if kind in LINEAR_KINDS:
+                            # Gate the physics tick AND the send together on the
+                            # per-feature cap: ticking only when we actually send
+                            # keeps the actuator's dt equal to the real interval
+                            # the toy interpolates over, so a capped/skipped tick
+                            # can't desync the commanded duration. The in-flight
+                            # guard preserves command order — stroke positions
+                            # must never arrive out of sequence. When idle (no
+                            # send), the cap doesn't latch, so resting-return
+                            # physics still advances every loop.
+                            if not self._can_send_now((device_name, motor_idx), now_ms):
+                                continue
                             # Linear actuator: pick mode ("position" depth-aware physics
                             # vs "speed" continuous-oscillator) from per-motor config.
                             cfg = self.linear_configs.get((device_name, motor_idx), {})
@@ -860,34 +957,38 @@ class HapticEngine:
                             if result is None:
                                 continue
                             new_position, duration_ms = result
-                            try:
-                                if kind == "linear-d":
-                                    await feature.run_output(
-                                        DeviceOutputCommand(output_type, new_position, duration=duration_ms)
-                                    )
-                                else:
-                                    await feature.run_output(
-                                        DeviceOutputCommand(output_type, new_position)
-                                    )
-                            except Exception as e:
-                                connection_dropped = self._handle_feature_error(device_name, motor_idx, e)
-                                if connection_dropped:
-                                    break
+                            # Fire-and-forget like the continuous path so a linear
+                            # toy's ack never stalls the loop (or other devices).
+                            self._last_send_ms[(device_name, motor_idx)] = now_ms
+                            if kind == "linear-d":
+                                coro = feature.run_output(
+                                    DeviceOutputCommand(output_type, new_position, duration=duration_ms)
+                                )
+                            else:
+                                coro = feature.run_output(
+                                    DeviceOutputCommand(output_type, new_position)
+                                )
+                            self._dispatch_output(device_name, motor_idx, coro)
                         else:
                             # Continuous output (vibrate, rotate, led, temperature, spray):
-                            # send the routed 0-1 level directly, only on change.
+                            # send the routed 0-1 level on change, fire-and-forget
+                            # so the loop never blocks on Intiface's ack round-trip.
                             last = self.device_last_sent.get((device_name, motor_idx), 0.0)
                             if target == last:
                                 continue
-                            try:
-                                await feature.run_output(DeviceOutputCommand(output_type, target))
-                                self.device_last_sent[(device_name, motor_idx)] = target
-                            except Exception as e:
-                                connection_dropped = self._handle_feature_error(device_name, motor_idx, e)
-                                if connection_dropped:
-                                    break
+                            if not self._can_send_now((device_name, motor_idx), now_ms):
+                                # In flight or rate-capped: hold the newest value
+                                # and dispatch it on a later tick (latest-wins —
+                                # see _can_send_now / _dispatch_output).
+                                continue
+                            self.device_last_sent[(device_name, motor_idx)] = target
+                            self._last_send_ms[(device_name, motor_idx)] = now_ms
+                            self._dispatch_output(
+                                device_name, motor_idx,
+                                feature.run_output(DeviceOutputCommand(output_type, target)),
+                            )
 
-            await asyncio.sleep(HAPTIC_POLL_RATE)  # 50Hz tick
+            await asyncio.sleep(HAPTIC_POLL_RATE)  # engine tick (HAPTIC_POLL_RATE)
 
     def _handle_feature_error(self, device_name: str, motor_idx: int, e: Exception) -> bool:
         """Log a feature command error. Return True if the connection appears to have

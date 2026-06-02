@@ -794,13 +794,22 @@ class OscGoesPurrrApp(
         """Update a config value for a device in current profile using profile_manager"""
         self.profile_manager.update_device_config(device_name, key, value)
 
-    def force_recalculate(self):
+    def force_recalculate(self, dispatch_direct: bool = False):
         """Forces the router to recalculate output based on current state and new UI configs.
 
         Reads from whichever profile the manager considers *active* — an avatar
         profile when the current VRChat avatar has one bound, otherwise the
         selected global profile. In Simple Mode, profile config is bypassed
         and every connected motor gets the same global SPS max value.
+
+        `dispatch_direct` controls how the resulting per-motor targets reach the
+        engine. The live routing tick passes ``True`` to hand them straight to
+        ``update_device_target`` on the GUI thread, skipping the ~50 ms UI-queue
+        hop (``QUEUE_POLL_RATE_MS``) that otherwise sits between the router and
+        the engine — that hop was the single biggest avoidable chunk of
+        end-to-end latency. UI-triggered recalcs (config edits, profile
+        switches) keep the default ``False`` so they still flow through the
+        queue and inherit its ordering/echo-suppression semantics.
         """
         if not (hasattr(self, 'motor_router') and hasattr(self, 'osc_manager')):
             return
@@ -819,7 +828,15 @@ class OscGoesPurrrApp(
                 sps_sources=self._get_sps_source_map(),
             )
         for device_name, target_val, motor_idx in updates:
-            self.thread_queue.put(("osc_haptic_update", (device_name, target_val, motor_idx)))
+            if dispatch_direct:
+                # Hot path: we're already on the GUI thread (routing tick), so
+                # call straight through instead of round-tripping the value
+                # through thread_queue only to drain it on the same thread up to
+                # QUEUE_POLL_RATE_MS later. update_device_target is a thread-safe
+                # engine dict write plus a GUI-thread vibe-meter update.
+                self.update_device_target(device_name, target_val, motor_idx)
+            else:
+                self.thread_queue.put(("osc_haptic_update", (device_name, target_val, motor_idx)))
 
     def toggle_osc_debugger(self, *args):
         """Toggle the OSC debugger on/off (accepts *args for safe UI toggle compatibility)"""
@@ -1591,7 +1608,9 @@ class OscGoesPurrrApp(
                     pass
             if needs_tick:
                 self._needs_recalculation = False
-                self.force_recalculate()
+                # Direct dispatch: skip the UI queue so the freshly computed
+                # target reaches the engine this tick, not up to 50 ms later.
+                self.force_recalculate(dispatch_direct=True)
             # After recompute, hand the OGB + bHaptics snapshots to the
             # session logger if it's recording. The logger's internal
             # change-diff drops the OGB event when nothing changed, so
