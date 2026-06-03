@@ -195,32 +195,16 @@ section{position:relative}
 .feature h3{font-size:17px;font-weight:600;margin-bottom:7px}
 .feature p{margin:0;color:var(--muted);font-size:14.5px}
 
-/* ---- gallery ---- */
-.gallery{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
-@media(max-width:760px){.gallery{grid-template-columns:1fr}}
-.shot{position:relative;border-radius:var(--r);overflow:hidden;border:1px solid var(--brd);background:linear-gradient(135deg,rgba(168,85,247,.1),rgba(34,211,238,.06));aspect-ratio:16/10;display:grid;place-items:center;transition:transform .3s var(--ease),border-color .3s}
-.shot:hover{transform:translateY(-4px);border-color:var(--brd-2)}
-.shot.wide{grid-column:1/-1;aspect-ratio:16/7}
-.shot__ph{text-align:center;padding:20px;color:var(--muted-2)}
-.shot__ph .rec{display:inline-flex;align-items:center;gap:8px;font-weight:600;color:var(--muted);margin-bottom:8px}
-.shot__ph .rec .dot{width:11px;height:11px;border-radius:50%;background:var(--pink);box-shadow:0 0 12px var(--pink);animation:blink 1.6s infinite}
-.shot__ph .name{font-size:18px;font-weight:600;color:var(--text);font-family:"Space Grotesk"}
-.shot__ph code{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;color:var(--cyan);background:rgba(34,211,238,.1);padding:3px 9px;border-radius:6px;margin-top:10px;display:inline-block}
-.shot__img,.demo__vid{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
-.shot.has-shot .shot__ph{display:none}
-
-/* ---- install ---- */
-.install{display:grid;grid-template-columns:1fr 1fr;gap:18px}
-@media(max-width:760px){.install{grid-template-columns:1fr}}
-.install h3{font-size:19px;font-weight:600;margin-bottom:6px;display:flex;align-items:center;gap:10px}
-.install p.note{color:var(--muted);font-size:14.5px;margin:0 0 16px}
-.code{background:#07060c;border:1px solid var(--brd);border-radius:12px;padding:14px 16px;font-family:ui-monospace,Consolas,monospace;font-size:13.5px;color:#d7d2ea;overflow-x:auto;line-height:1.9}
-.code .c{color:var(--muted-2)}
-.code .p{color:var(--cyan)}
-.prereqs{display:flex;flex-wrap:wrap;gap:9px;margin-top:18px;justify-content:center}
-.prereqs .req{font-size:13px;font-weight:500;color:var(--muted);background:var(--panel);border:1px solid var(--brd);padding:7px 13px;border-radius:999px}
-.prereqs .req b{color:var(--text);font-weight:600}
-.prereqs .req.opt{opacity:.8}
+/* ---- e-stim safety pill + bonus strip ---- */
+.backend.estim{border-color:rgba(255,61,154,.22)}
+.backend .safe{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;color:#ffb3d6;background:rgba(255,61,154,.12);border:1px solid rgba(255,61,154,.25);padding:4px 10px;border-radius:999px;align-self:flex-start}
+.bonus{margin-top:18px;display:flex;align-items:center;gap:16px;padding:18px 22px;border-radius:var(--r);background:var(--grad-soft);border:1px solid var(--brd)}
+.bonus .bico{width:44px;height:44px;flex:0 0 44px;border-radius:12px;display:grid;place-items:center;background:rgba(8,7,13,.45);border:1px solid var(--brd)}
+.bonus .bico svg{width:24px;height:24px}
+.bonus h3{font-size:16px;font-weight:600;margin:0 0 3px}
+.bonus p{margin:0;color:var(--muted);font-size:14px}
+.bonus .tag{margin-left:auto;font-size:11px;font-weight:700;letter-spacing:.05em;color:var(--cyan);background:rgba(34,211,238,.1);padding:5px 11px;border-radius:999px;white-space:nowrap}
+@media(max-width:620px){.bonus{flex-wrap:wrap}.bonus .tag{margin-left:0}}
 
 /* ---- footer ---- */
 footer{border-top:1px solid var(--brd);padding:50px 0 40px;margin-top:40px}
@@ -275,8 +259,8 @@ body.reduced .marquee__row{animation:none!important}
   <span class="eyebrow"><span class="dot"></span> VRChat OSC → real-world haptics</span>
   <h1>Feel VRChat,<br><span class="grad-text">everywhere.</span></h1>
   <p class="lede">OscGoesPurrr listens to your avatar's OSC parameters and turns them into
-    <b>smooth, real-time haptics</b> — across Bluetooth toys, SteamVR trackers and
-    bHaptics suits. <b>One router, every backend.</b></p>
+    <b>smooth, real-time haptics</b> — across Bluetooth toys, e-stim units, SteamVR
+    trackers and full-body suits. <b>One router, every backend.</b></p>
   <div class="hero-cta">
     <a class="btn btn-primary" href="https://github.com/Blise518B/OscGoesPurrr" target="_blank" rel="noopener">
       <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.21-3.37-1.21-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.36-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05A9.3 9.3 0 0 1 12 6.84c.85 0 1.71.12 2.51.34 1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg>
@@ -285,7 +269,7 @@ body.reduced .marquee__row{animation:none!important}
     <a class="btn btn-ghost" href="#flow">See how it works</a>
   </div>
   <div class="badges">
-    <span class="badge"><b>4</b> haptic backends</span>
+    <span class="badge"><b>6</b> haptic backends</span>
     <span class="badge"><b>0</b> IP addresses to type</span>
     <span class="badge"><b>100%</b> local</span>
     <span class="badge">Python · PySide6</span>
@@ -296,8 +280,8 @@ body.reduced .marquee__row{animation:none!important}
 <!-- MARQUEE -->
 <div class="marquee" aria-hidden="true">
   <div class="marquee__row">
-    <span>Lush</span><span>Hush</span><span>Edge</span><span>Domi</span><span>Max</span><span>Nora</span><span>Gravity</span><span>Solace&nbsp;Pro</span><span>Osci</span><span>Ferri</span><span>Diamo</span><span>Gush</span><span>Calor</span><span>Tenera</span><span>Vulse</span><span>Ridge</span><span>Tundra&nbsp;tracker</span><span>Vive&nbsp;tracker</span><span>bHaptics&nbsp;vest</span><span>OSR2</span>
-    <span>Lush</span><span>Hush</span><span>Edge</span><span>Domi</span><span>Max</span><span>Nora</span><span>Gravity</span><span>Solace&nbsp;Pro</span><span>Osci</span><span>Ferri</span><span>Diamo</span><span>Gush</span><span>Calor</span><span>Tenera</span><span>Vulse</span><span>Ridge</span><span>Tundra&nbsp;tracker</span><span>Vive&nbsp;tracker</span><span>bHaptics&nbsp;vest</span><span>OSR2</span>
+    <span>Lush</span><span>Hush</span><span>Edge</span><span>Domi</span><span>Max</span><span>Nora</span><span>Gravity</span><span>Solace&nbsp;Pro</span><span>Osci</span><span>Ferri</span><span>Diamo</span><span>Gush</span><span>Calor</span><span>Tenera</span><span>Vulse</span><span>Ridge</span><span>Tundra&nbsp;tracker</span><span>Vive&nbsp;tracker</span><span>bHaptics&nbsp;vest</span><span>PiShock</span><span>DG-Lab&nbsp;Coyote</span><span>OWO&nbsp;suit</span><span>OSR2</span>
+    <span>Lush</span><span>Hush</span><span>Edge</span><span>Domi</span><span>Max</span><span>Nora</span><span>Gravity</span><span>Solace&nbsp;Pro</span><span>Osci</span><span>Ferri</span><span>Diamo</span><span>Gush</span><span>Calor</span><span>Tenera</span><span>Vulse</span><span>Ridge</span><span>Tundra&nbsp;tracker</span><span>Vive&nbsp;tracker</span><span>bHaptics&nbsp;vest</span><span>PiShock</span><span>DG-Lab&nbsp;Coyote</span><span>OWO&nbsp;suit</span><span>OSR2</span>
   </div>
 </div>
 
@@ -387,7 +371,7 @@ body.reduced .marquee__row{animation:none!important}
         <h4>Your hardware responds</h4>
         <p>Milliseconds later, the real world reacts.</p>
         <div class="fanout">
-          <span>🧸 Toys buzz</span><span>🎯 Trackers pulse</span><span>🦺 Suits tap</span>
+          <span>🧸 Toys buzz</span><span>⚡ E-stim zaps</span><span>🎯 Trackers pulse</span><span>🦺 Suits tap</span>
         </div>
       </div>
     </div>
@@ -398,9 +382,9 @@ body.reduced .marquee__row{animation:none!important}
 <section class="section" id="backends">
   <div class="wrap">
     <div class="section-head reveal">
-      <div class="kicker">One app, four outputs</div>
-      <h2>Route to anything that buzzes</h2>
-      <p>Mix and match. Bind a single avatar zone to many devices, or many zones to one motor.</p>
+      <div class="kicker">One app, six outputs</div>
+      <h2>Route to anything that buzzes, zaps or taps</h2>
+      <p>Mix and match. Bind one avatar zone to many devices, or many zones to one motor — toys, e-stim and suits side by side.</p>
     </div>
     <div class="backends">
       <div class="card backend reveal">
@@ -427,14 +411,40 @@ body.reduced .marquee__row{animation:none!important}
         <p>Translates v1 bHapticsOSC parameters into dot-mode frames for the bHaptics Player, with an antistuck timer, per-position enables and a live click-to-test dot grid.</p>
         <div class="meter-row"><div class="meter" data-meter><div class="meter__fill"></div></div><span class="meter__val">0%</span></div>
       </div>
-      <div class="card backend reveal d1">
+      <div class="card backend estim reveal d1">
         <div class="backend__top">
-          <span class="backend__ico"><svg viewBox="0 0 24 24" fill="none" stroke="url(#g1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg></span>
-          <div><h3>SteamVR Toy Driver</h3><div class="sub">Optional virtual devices</div></div>
+          <span class="backend__ico"><svg viewBox="0 0 24 24" fill="none" stroke="url(#g1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg></span>
+          <div><h3>PiShock</h3><div class="sub">Shock · vibrate · beep</div></div>
         </div>
-        <p>An optional OpenVR driver that makes your toys and bHaptics positions show up as trackers in SteamVR's device strip — complete with icons and battery indicators.</p>
+        <p>Fire PiShock shock, vibrate or beep events straight from avatar contacts — over USB serial or the PiShock cloud. Every pulse is hard-capped in the engine, so settings can only ever lower the limits, never raise them.</p>
+        <span class="safe">🛡 Two-layer safety caps</span>
         <div class="meter-row"><div class="meter" data-meter><div class="meter__fill"></div></div><span class="meter__val">0%</span></div>
       </div>
+      <div class="card backend estim reveal">
+        <div class="backend__top">
+          <span class="backend__ico"><svg viewBox="0 0 24 24" fill="none" stroke="url(#g1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h3l2-6 3 12 2-9 2 6h5"/></svg></span>
+          <div><h3>DG-Lab Coyote</h3><div class="sub">Coyote 3.0 · e-stim · BLE</div></div>
+        </div>
+        <p>Drives a Coyote 3.0 e-stim unit directly over Bluetooth — no phone app, just a BLE adapter. Independent A/B channel routing, with strength ceilings enforced on the device itself.</p>
+        <span class="safe">🛡 Device-enforced limits</span>
+        <div class="meter-row"><div class="meter" data-meter><div class="meter__fill"></div></div><span class="meter__val">0%</span></div>
+      </div>
+      <div class="card backend reveal d1">
+        <div class="backend__top">
+          <span class="backend__ico"><svg viewBox="0 0 24 24" fill="none" stroke="url(#g1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="5" width="11" height="16" rx="3"/><path d="M9.5 5a2.5 2.5 0 0 0 5 0"/><circle cx="10.5" cy="12" r="1.1"/><circle cx="13.5" cy="12" r="1.1"/></svg></span>
+          <div><h3>OWO suit</h3><div class="sub">10 muscle groups · EMS</div></div>
+        </div>
+        <p>Maps avatar contacts onto OWO's ten muscle-group sensations for full-torso feedback. Pairs with the My OWO phone app over Wi-Fi through the OWO SDK.</p>
+        <div class="meter-row"><div class="meter" data-meter><div class="meter__fill"></div></div><span class="meter__val">0%</span></div>
+      </div>
+    </div>
+    <div class="bonus reveal">
+      <span class="bico"><svg viewBox="0 0 24 24" fill="none" stroke="url(#g1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg></span>
+      <div>
+        <h3>Bonus: SteamVR Toy Driver</h3>
+        <p>An optional OpenVR driver that makes your toys &amp; bHaptics positions appear as virtual trackers in SteamVR's device strip — icons and battery included.</p>
+      </div>
+      <span class="tag">OPTIONAL</span>
     </div>
   </div>
 </section>
@@ -458,106 +468,33 @@ body.reduced .marquee__row{animation:none!important}
   </div>
 </section>
 
-<!-- GALLERY -->
-<section class="section" id="gallery">
-  <div class="wrap">
-    <div class="section-head reveal">
-      <div class="kicker">See it in action</div>
-      <h2>The interface</h2>
-      <p>Screens &amp; clips below auto-appear once you drop the recordings into <code>docs/assets/shots/</code>.</p>
-    </div>
-    <!--
-      ┌─ FOR THE MAINTAINER ─────────────────────────────────────────────┐
-      │ Record from the app, then save files with these exact names into  │
-      │ docs/assets/shots/ — the placeholders below swap in automatically: │
-      │   demo.mp4         (looping highlight clip; demo-poster.png poster)│
-      │   dashboard.png    routing.png    signal-chain.png    bhaptics.png │
-      │ Recommended: PNG screenshots ~1600px wide, MP4 (h264) for the clip.│
-      └───────────────────────────────────────────────────────────────────┘
-    -->
-    <div class="gallery">
-      <div class="shot wide reveal" data-video="assets/shots/demo.mp4" data-poster="assets/shots/demo-poster.png">
-        <div class="shot__ph">
-          <div class="rec"><span class="dot"></span> DEMO CLIP</div>
-          <div class="name">Your highlight reel</div>
-          <code>docs/assets/shots/demo.mp4</code>
-        </div>
-      </div>
-      <div class="shot reveal" data-shot="assets/shots/dashboard.png" data-label="Dashboard">
-        <div class="shot__ph"><div class="name">Dashboard</div><code>shots/dashboard.png</code></div>
-      </div>
-      <div class="shot reveal d1" data-shot="assets/shots/routing.png" data-label="Device Routing">
-        <div class="shot__ph"><div class="name">Device Routing</div><code>shots/routing.png</code></div>
-      </div>
-      <div class="shot reveal" data-shot="assets/shots/signal-chain.png" data-label="Signal-chain tuning">
-        <div class="shot__ph"><div class="name">Signal-chain tuning</div><code>shots/signal-chain.png</code></div>
-      </div>
-      <div class="shot reveal d1" data-shot="assets/shots/bhaptics.png" data-label="bHaptics dot grid">
-        <div class="shot__ph"><div class="name">bHaptics dot grid</div><code>shots/bhaptics.png</code></div>
-      </div>
-    </div>
-  </div>
-</section>
-
-<!-- INSTALL -->
-<section class="section" id="get-started">
-  <div class="wrap">
-    <div class="section-head reveal">
-      <div class="kicker">Get started</div>
-      <h2>Up and purring in minutes</h2>
-      <p>Windows-first. Grab the prebuilt exe, or run it from source.</p>
-    </div>
-    <div class="install">
-      <div class="card reveal">
-        <h3>⚡ Prebuilt Windows exe</h3>
-        <p class="note">A standalone one-file build — no Python install required.</p>
-        <div class="code"><span class="c"># grab the latest build, then</span><br>double-click <span class="p">OscGoesPurrr.exe</span></div>
-      </div>
-      <div class="card reveal d1">
-        <h3>🐍 Run from source</h3>
-        <p class="note">Python 3.10+. <code>run.bat</code> installs dependencies for you.</p>
-        <div class="code"><span class="p">pip</span> install -r requirements.txt<br><span class="p">python</span> main.py <span class="c"># or: run.bat</span></div>
-      </div>
-    </div>
-    <div class="prereqs reveal">
-      <span class="req"><b>Windows</b></span>
-      <span class="req"><b>Python</b> 3.10+</span>
-      <span class="req opt">Intiface Central <i>(optional)</i></span>
-      <span class="req opt">SteamVR <i>(optional)</i></span>
-      <span class="req opt">bHaptics Player <i>(optional)</i></span>
-    </div>
-  </div>
-</section>
-
 <!-- FOOTER -->
 <footer>
   <div class="wrap">
     <div class="foot-grid">
       <div class="foot-brand">
         <a class="brand" href="#top"><img src="assets/ogp-mark.png" alt=""> OscGoesPurrr</a>
-        <p>A multi-backend OSC → haptic router for VRChat. Bluetooth toys, SteamVR trackers, bHaptics suits — one smooth pipeline.</p>
+        <p>A multi-backend OSC → haptic router for VRChat. Bluetooth toys, e-stim, SteamVR trackers, bHaptics &amp; OWO suits — one smooth pipeline.</p>
       </div>
       <div class="foot-links">
         <div class="foot-col">
           <h5>Project</h5>
           <a href="https://github.com/Blise518B/OscGoesPurrr" target="_blank" rel="noopener">GitHub repo ↗</a>
-          <a href="https://github.com/Blise518B/OscGoesPurrr/blob/main/README.md" target="_blank" rel="noopener">README</a>
-          <a href="https://github.com/Blise518B/OscGoesPurrr/blob/main/ARCHITECTURE.md" target="_blank" rel="noopener">Architecture</a>
-          <a href="https://github.com/Blise518B/OscGoesPurrr/blob/main/ROADMAP.md" target="_blank" rel="noopener">Roadmap</a>
+          <a href="https://github.com/Blise518B/OscGoesPurrr/issues" target="_blank" rel="noopener">Report an issue ↗</a>
         </div>
         <div class="foot-col">
           <h5>On this page</h5>
           <a href="#signal">Signal chain</a>
           <a href="#flow">How it works</a>
           <a href="#backends">Backends</a>
-          <a href="#get-started">Get started</a>
+          <a href="#features">Features</a>
         </div>
       </div>
     </div>
   </div>
   <div class="foot-bottom">
     <span>© <span id="yr">2026</span> OscGoesPurrr · GPL-3.0-or-later</span>
-    <span class="age">Adult haptic hardware · intended for adults (18+)</span>
+    <span class="age">Adult &amp; e-stim hardware · for adults (18+) · always start at safe limits</span>
   </div>
 </footer>
 
@@ -584,31 +521,6 @@ body.reduced .marquee__row{animation:none!important}
       entries.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target); } });
     }, {threshold:.12, rootMargin:"0px 0px -8% 0px"});
     reveals.forEach(function(el){ io.observe(el); });
-  }
-
-  // gallery: swap placeholders for real recordings when present
-  [].slice.call(document.querySelectorAll("[data-shot]")).forEach(function(fig){
-    var src = fig.getAttribute("data-shot");
-    var probe = new Image();
-    probe.onload = function(){
-      var img = new Image();
-      img.src = src; img.alt = fig.getAttribute("data-label") || "";
-      img.className = "shot__img"; img.loading = "lazy";
-      fig.appendChild(img); fig.classList.add("has-shot");
-    };
-    probe.src = src;
-  });
-  var demo = document.querySelector("[data-video]");
-  if(demo && window.fetch){
-    var v = demo.getAttribute("data-video");
-    fetch(v, {method:"HEAD"}).then(function(r){
-      if(!r.ok) return;
-      var vid = document.createElement("video");
-      vid.src = v; vid.autoplay = true; vid.muted = true; vid.loop = true;
-      vid.playsInline = true; vid.setAttribute("playsinline",""); vid.className = "demo__vid";
-      var poster = demo.getAttribute("data-poster"); if(poster) vid.poster = poster;
-      demo.appendChild(vid); demo.classList.add("has-shot");
-    }).catch(function(){});
   }
 
   // ---- animated rainbow meters ----
