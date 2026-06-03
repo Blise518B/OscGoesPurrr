@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>OscGoesPurrr — Feel VRChat, everywhere</title>
+<meta name="description" content="OscGoesPurrr is a multi-backend haptic router for VRChat. It turns your avatar's OSC parameters into smooth, real-time haptics across Bluetooth toys, SteamVR trackers and bHaptics suits.">
+<meta name="theme-color" content="#08070d">
+<link rel="icon" type="image/png" href="assets/favicon.png">
+<link rel="apple-touch-icon" href="assets/favicon.png">
+
+<!-- Social share (Open Graph / Twitter). Absolute URLs required.
+     If your GitHub Pages URL differs, update the four absolute links below. -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="OscGoesPurrr — Feel VRChat, everywhere">
+<meta property="og:description" content="A multi-backend haptic router for VRChat: OSC in, smooth haptics out — Bluetooth toys, SteamVR trackers, bHaptics suits.">
+<meta property="og:url" content="https://blise518b.github.io/OscGoesPurrr/">
+<meta property="og:image" content="https://blise518b.github.io/OscGoesPurrr/assets/og-cover.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="OscGoesPurrr — Feel VRChat, everywhere">
+<meta name="twitter:description" content="A multi-backend haptic router for VRChat: OSC in, smooth haptics out.">
+<meta name="twitter:image" content="https://blise518b.github.io/OscGoesPurrr/assets/og-cover.png">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+
+<style>
+:root{
+  --bg:#08070d; --bg2:#0c0a15; --bg3:#100c1c;
+  --panel:rgba(255,255,255,.035);
+  --panel-2:rgba(255,255,255,.055);
+  --brd:rgba(255,255,255,.09);
+  --brd-2:rgba(255,255,255,.14);
+  --text:#eee9f7; --muted:#a39dba; --muted-2:#76708f;
+  --pink:#ff3d9a; --violet:#a855f7; --cyan:#22d3ee;
+  --grad:linear-gradient(135deg,#ff3d9a 0%,#a855f7 50%,#22d3ee 100%);
+  --grad-soft:linear-gradient(135deg,rgba(255,61,154,.16),rgba(168,85,247,.14) 50%,rgba(34,211,238,.16));
+  --r:18px; --r-lg:24px;
+  --maxw:1120px;
+  --ease:cubic-bezier(.22,.61,.36,1);
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{
+  margin:0; background:var(--bg); color:var(--text);
+  font-family:"Inter",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  font-size:17px; line-height:1.65; -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+h1,h2,h3,.display{font-family:"Space Grotesk","Inter",system-ui,sans-serif;letter-spacing:-.01em;line-height:1.08;margin:0}
+a{color:inherit;text-decoration:none}
+img{max-width:100%;display:block}
+section{position:relative}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 22px}
+.grad-text{background:var(--grad);-webkit-background-clip:text;background-clip:text;color:transparent}
+
+/* ---- background ambience ---- */
+.bg-fx{position:fixed;inset:0;z-index:-2;overflow:hidden;pointer-events:none}
+.bg-fx::before{content:"";position:absolute;inset:0;
+  background:
+    radial-gradient(60% 50% at 50% -8%, rgba(168,85,247,.16), transparent 60%),
+    radial-gradient(40% 40% at 100% 0%, rgba(34,211,238,.10), transparent 60%),
+    radial-gradient(50% 40% at 0% 30%, rgba(255,61,154,.10), transparent 60%);}
+.bg-grid{position:fixed;inset:0;z-index:-2;pointer-events:none;
+  background-image:linear-gradient(rgba(255,255,255,.04) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.04) 1px,transparent 1px);
+  background-size:46px 46px;
+  -webkit-mask-image:radial-gradient(120% 80% at 50% 0%,#000,transparent 75%);
+  mask-image:radial-gradient(120% 80% at 50% 0%,#000,transparent 75%);opacity:.5}
+.orb{position:fixed;z-index:-2;border-radius:50%;filter:blur(70px);opacity:.5;pointer-events:none;animation:drift 22s var(--ease) infinite alternate}
+.orb.a{width:420px;height:420px;background:rgba(255,61,154,.30);top:-80px;left:-60px}
+.orb.b{width:480px;height:480px;background:rgba(34,211,238,.22);top:30vh;right:-120px;animation-duration:28s}
+.orb.c{width:380px;height:380px;background:rgba(168,85,247,.22);top:120vh;left:10vw;animation-duration:25s}
+@keyframes drift{to{transform:translate3d(40px,60px,0) scale(1.12)}}
+
+/* ---- nav ---- */
+.nav{position:sticky;top:0;z-index:50;transition:background .3s,border-color .3s,backdrop-filter .3s;border-bottom:1px solid transparent}
+.nav.scrolled{background:rgba(10,8,16,.72);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border-bottom-color:var(--brd)}
+.nav__in{display:flex;align-items:center;gap:16px;height:64px;max-width:var(--maxw);margin:0 auto;padding:0 22px}
+.brand{display:flex;align-items:center;gap:11px;font-family:"Space Grotesk";font-weight:600;font-size:18px}
+.brand img{width:30px;height:30px;filter:drop-shadow(0 2px 10px rgba(168,85,247,.5))}
+.nav__links{display:flex;gap:6px;margin-left:auto;align-items:center}
+.nav__links a{color:var(--muted);padding:8px 12px;border-radius:10px;font-size:15px;font-weight:500;transition:color .2s,background .2s}
+.nav__links a:hover{color:var(--text);background:var(--panel)}
+.nav__links a.ghub{color:var(--text);border:1px solid var(--brd-2);background:var(--panel)}
+.nav__links a.ghub:hover{border-color:var(--violet);box-shadow:0 0 0 3px rgba(168,85,247,.15)}
+@media(max-width:720px){.nav__links a.hide-sm{display:none}}
+
+/* ---- buttons ---- */
+.btn{display:inline-flex;align-items:center;gap:9px;font-weight:600;font-size:16px;padding:13px 22px;border-radius:14px;border:1px solid transparent;cursor:pointer;transition:transform .2s var(--ease),box-shadow .25s,border-color .2s;will-change:transform}
+.btn svg{width:18px;height:18px}
+.btn-primary{background:var(--grad);color:#0b0712;box-shadow:0 10px 30px -8px rgba(168,85,247,.6)}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 16px 40px -8px rgba(168,85,247,.75)}
+.btn-ghost{background:var(--panel);border-color:var(--brd-2);color:var(--text)}
+.btn-ghost:hover{transform:translateY(-2px);border-color:var(--brd-2);background:var(--panel-2)}
+
+/* ---- hero ---- */
+.hero{padding:64px 0 40px;text-align:center}
+.logo-wrap{position:relative;width:140px;height:140px;margin:0 auto 26px;display:grid;place-items:center}
+.logo-wrap img{width:118px;height:118px;position:relative;z-index:2;filter:drop-shadow(0 8px 30px rgba(168,85,247,.55))}
+.logo-wrap .ring{position:absolute;inset:0;border-radius:50%;border:2px solid rgba(168,85,247,.4);animation:pulseRing 3.2s var(--ease) infinite}
+.logo-wrap .ring.r2{animation-delay:1.6s}
+@keyframes pulseRing{0%{transform:scale(.7);opacity:.7}100%{transform:scale(1.5);opacity:0}}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:13.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--muted);background:var(--panel);border:1px solid var(--brd);padding:7px 14px;border-radius:999px;margin-bottom:22px}
+.eyebrow .dot{width:8px;height:8px;border-radius:50%;background:var(--cyan);box-shadow:0 0 10px var(--cyan);animation:blink 2s infinite}
+@keyframes blink{50%{opacity:.3}}
+.hero h1{font-size:clamp(40px,8.5vw,76px);font-weight:700;margin-bottom:18px}
+.hero p.lede{max-width:660px;margin:0 auto 30px;color:var(--muted);font-size:clamp(16px,2.4vw,20px)}
+.hero p.lede b{color:var(--text);font-weight:600}
+.hero-cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+.badges{display:flex;gap:10px;justify-content:center;flex-wrap:wrap;margin-top:30px}
+.badge{font-size:13px;color:var(--muted);background:var(--panel);border:1px solid var(--brd);padding:6px 13px;border-radius:999px;font-weight:500}
+.badge b{color:var(--text);font-weight:600}
+
+/* ---- marquee ---- */
+.marquee{margin-top:46px;border-top:1px solid var(--brd);border-bottom:1px solid var(--brd);padding:16px 0;overflow:hidden;-webkit-mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent);mask-image:linear-gradient(90deg,transparent,#000 12%,#000 88%,transparent)}
+.marquee__row{display:flex;gap:30px;width:max-content;animation:scrollX 40s linear infinite}
+.marquee:hover .marquee__row{animation-play-state:paused}
+.marquee__row span{color:var(--muted-2);font-weight:600;font-size:15px;white-space:nowrap;display:inline-flex;align-items:center;gap:30px}
+.marquee__row span::after{content:"·";color:var(--violet)}
+@keyframes scrollX{to{transform:translateX(-50%)}}
+
+/* ---- section heads ---- */
+.section{padding:64px 0}
+.section-head{max-width:640px;margin:0 auto 44px;text-align:center}
+.section-head .kicker{color:var(--violet);font-weight:600;font-size:14px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:12px}
+.section-head h2{font-size:clamp(28px,4.6vw,42px);font-weight:700;margin-bottom:14px}
+.section-head p{color:var(--muted);margin:0;font-size:17px}
+
+/* ---- generic card ---- */
+.card{background:var(--panel);border:1px solid var(--brd);border-radius:var(--r);padding:24px;transition:transform .3s var(--ease),border-color .3s,background .3s}
+.card:hover{transform:translateY(-4px);border-color:var(--brd-2);background:var(--panel-2)}
+
+/* ---- scope viz ---- */
+.scope-grid{display:grid;grid-template-columns:1.25fr 1fr;gap:30px;align-items:center}
+@media(max-width:860px){.scope-grid{grid-template-columns:1fr;gap:24px}}
+.scope-panel{position:relative;background:linear-gradient(180deg,rgba(20,16,32,.9),rgba(12,10,22,.9));border:1px solid var(--brd);border-radius:var(--r-lg);padding:14px 16px 10px;box-shadow:0 30px 80px -30px rgba(0,0,0,.8),inset 0 1px 0 rgba(255,255,255,.05);overflow:hidden}
+.scope-panel .scope-head{display:flex;align-items:center;gap:14px;padding:4px 4px 10px}
+.scope-tag{font-size:12px;font-weight:600;letter-spacing:.05em;padding:4px 10px;border-radius:8px;display:inline-flex;align-items:center;gap:7px}
+.scope-tag .swatch{width:9px;height:9px;border-radius:2px}
+.scope-tag.in{color:#ffb3d6;background:rgba(255,61,154,.12)}
+.scope-tag.in .swatch{background:var(--pink)}
+.scope-tag.out{color:#9aeefb;background:rgba(34,211,238,.12)}
+.scope-tag.out .swatch{background:linear-gradient(90deg,var(--violet),var(--cyan))}
+.scope-canvas{display:block;width:100%;height:230px}
+.scope-foot{display:flex;justify-content:space-between;color:var(--muted-2);font-size:12px;font-variant-numeric:tabular-nums;padding:8px 6px 2px;font-weight:500}
+.chain-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:22px}
+.chain-row .node{font-size:13px;font-weight:600;color:var(--muted);background:var(--panel);border:1px solid var(--brd);padding:7px 13px;border-radius:10px;position:relative}
+.chain-row .arrow{color:var(--violet);align-self:center;font-weight:700}
+.scope-copy h3{font-size:clamp(22px,3.4vw,30px);font-weight:700;margin-bottom:14px}
+.scope-copy p{color:var(--muted);margin:0 0 14px}
+.scope-copy ul{margin:0;padding:0;list-style:none}
+.scope-copy li{display:flex;gap:11px;align-items:flex-start;color:var(--muted);margin-bottom:10px;font-size:15.5px}
+.scope-copy li svg{width:20px;height:20px;flex:0 0 20px;margin-top:2px}
+
+/* ---- flow timeline ---- */
+.flow{position:relative;max-width:760px;margin:0 auto}
+.flow__rail{position:absolute;left:19px;top:14px;bottom:14px;width:2px;border-radius:2px;background:linear-gradient(180deg,var(--pink),var(--violet) 50%,var(--cyan));opacity:.5}
+.flow__dot{position:absolute;left:20px;width:10px;height:10px;margin-left:-5px;border-radius:50%;background:#fff;box-shadow:0 0 12px 2px var(--cyan);animation:flowDown 3.4s linear infinite}
+.flow__dot.d2{animation-delay:1.13s}
+.flow__dot.d3{animation-delay:2.26s}
+@keyframes flowDown{0%{top:0;opacity:0}7%{opacity:1}93%{opacity:1}100%{top:100%;opacity:0}}
+.flow__stage{position:relative;padding:10px 0 10px 56px;min-height:64px}
+.flow__node{position:absolute;left:11px;top:18px;width:18px;height:18px;border-radius:50%;background:var(--bg2);border:2px solid var(--violet);box-shadow:0 0 0 4px rgba(168,85,247,.12)}
+.flow__stage:nth-child(odd) .flow__node{border-color:var(--cyan);box-shadow:0 0 0 4px rgba(34,211,238,.12)}
+.flow__stage h4{font-family:"Space Grotesk";font-size:18px;font-weight:600;margin:0 0 4px;display:flex;flex-wrap:wrap;gap:8px;align-items:baseline}
+.flow__stage h4 code{font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px;color:var(--cyan);background:rgba(34,211,238,.1);padding:2px 8px;border-radius:6px;font-weight:500}
+.flow__stage p{margin:0;color:var(--muted);font-size:15px}
+.fanout{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.fanout span{font-size:13px;font-weight:600;padding:6px 12px;border-radius:999px;background:var(--grad-soft);border:1px solid var(--brd);color:var(--text)}
+
+/* ---- backends ---- */
+.backends{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
+@media(max-width:760px){.backends{grid-template-columns:1fr}}
+.backend{display:flex;flex-direction:column;gap:14px}
+.backend__top{display:flex;gap:14px;align-items:center}
+.backend__ico{width:48px;height:48px;flex:0 0 48px;border-radius:13px;display:grid;place-items:center;background:var(--grad-soft);border:1px solid var(--brd)}
+.backend__ico svg{width:26px;height:26px}
+.backend__top h3{font-size:19px;font-weight:600}
+.backend__top .sub{color:var(--muted-2);font-size:13px;font-weight:500}
+.backend p{margin:0;color:var(--muted);font-size:15px;flex:1}
+.meter{height:12px;border-radius:999px;background:rgba(255,255,255,.06);overflow:hidden;position:relative;border:1px solid var(--brd)}
+.meter__fill{height:100%;width:30%;border-radius:999px;background:var(--grad);box-shadow:0 0 14px rgba(168,85,247,.6);transition:width .08s linear}
+.meter-row{display:flex;align-items:center;gap:12px}
+.meter-row .meter{flex:1}
+.meter__val{font-variant-numeric:tabular-nums;font-weight:600;font-size:13px;color:var(--muted);min-width:42px;text-align:right}
+
+/* ---- features ---- */
+.features{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+@media(max-width:880px){.features{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:560px){.features{grid-template-columns:1fr}}
+.feature{padding:22px}
+.feature .ico{width:42px;height:42px;border-radius:11px;display:grid;place-items:center;background:var(--grad-soft);border:1px solid var(--brd);margin-bottom:14px;font-size:21px}
+.feature h3{font-size:17px;font-weight:600;margin-bottom:7px}
+.feature p{margin:0;color:var(--muted);font-size:14.5px}
+
+/* ---- e-stim safety pill + bonus strip ---- */
+.backend.estim{border-color:rgba(255,61,154,.22)}
+.backend .safe{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;color:#ffb3d6;background:rgba(255,61,154,.12);border:1px solid rgba(255,61,154,.25);padding:4px 10px;border-radius:999px;align-self:flex-start}
+.bonus{margin-top:18px;display:flex;align-items:center;gap:16px;padding:18px 22px;border-radius:var(--r);background:var(--grad-soft);border:1px solid var(--brd)}
+.bonus .bico{width:44px;height:44px;flex:0 0 44px;border-radius:12px;display:grid;place-items:center;background:rgba(8,7,13,.45);border:1px solid var(--brd)}
+.bonus .bico svg{width:24px;height:24px}
+.bonus h3{font-size:16px;font-weight:600;margin:0 0 3px}
+.bonus p{margin:0;color:var(--muted);font-size:14px}
+.bonus .tag{margin-left:auto;font-size:11px;font-weight:700;letter-spacing:.05em;color:var(--cyan);background:rgba(34,211,238,.1);padding:5px 11px;border-radius:999px;white-space:nowrap}
+@media(max-width:620px){.bonus{flex-wrap:wrap}.bonus .tag{margin-left:0}}
+
+/* ---- footer ---- */
+footer{border-top:1px solid var(--brd);padding:50px 0 40px;margin-top:40px}
+.foot-grid{display:flex;justify-content:space-between;gap:30px;flex-wrap:wrap;align-items:flex-start}
+.foot-brand{max-width:320px}
+.foot-brand .brand{margin-bottom:12px}
+.foot-brand p{color:var(--muted);font-size:14px;margin:0}
+.foot-links{display:flex;gap:50px;flex-wrap:wrap}
+.foot-col h5{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted-2);margin:0 0 12px;font-weight:600}
+.foot-col a{display:block;color:var(--muted);font-size:14.5px;padding:4px 0;transition:color .2s}
+.foot-col a:hover{color:var(--text)}
+.foot-bottom{max-width:var(--maxw);margin:34px auto 0;padding:22px 22px 0;border-top:1px solid var(--brd);display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;color:var(--muted-2);font-size:13px}
+.foot-bottom .age{border:1px solid var(--brd);padding:3px 10px;border-radius:999px}
+
+/* ---- reveal ---- */
+.reveal{opacity:0;transform:translateY(22px);transition:opacity .8s var(--ease),transform .8s var(--ease)}
+.reveal.in{opacity:1;transform:none}
+.reveal.d1{transition-delay:.08s}.reveal.d2{transition-delay:.16s}.reveal.d3{transition-delay:.24s}
+
+body.reduced .reveal{opacity:1;transform:none}
+body.reduced *{animation:none!important}
+body.reduced .marquee__row{animation:none!important}
+</style>
+</head>
+<body>
+<div class="bg-fx" aria-hidden="true"></div>
+<div class="bg-grid" aria-hidden="true"></div>
+<div class="orb a" aria-hidden="true"></div>
+<div class="orb b" aria-hidden="true"></div>
+<div class="orb c" aria-hidden="true"></div>
+
+<!-- NAV -->
+<nav class="nav" id="nav">
+  <div class="nav__in">
+    <a class="brand" href="#top"><img src="assets/ogp-mark.png" alt=""> OscGoesPurrr</a>
+    <div class="nav__links">
+      <a class="hide-sm" href="#flow">How it works</a>
+      <a class="hide-sm" href="#backends">Backends</a>
+      <a class="hide-sm" href="#features">Features</a>
+      <a class="ghub" href="https://github.com/Blise518B/OscGoesPurrr" target="_blank" rel="noopener">GitHub ↗</a>
+    </div>
+  </div>
+</nav>
+
+<!-- HERO -->
+<header class="hero wrap" id="top">
+  <div class="logo-wrap">
+    <span class="ring" aria-hidden="true"></span>
+    <span class="ring r2" aria-hidden="true"></span>
+    <img src="assets/ogp-mark.png" alt="OscGoesPurrr logo">
+  </div>
+  <span class="eyebrow"><span class="dot"></span> VRChat OSC → real-world haptics</span>
+  <h1>Feel VRChat,<br><span class="grad-text">everywhere.</span></h1>
+  <p class="lede">OscGoesPurrr listens to your avatar's OSC parameters and turns them into
+    <b>smooth, real-time haptics</b> — across Bluetooth toys, e-stim units, SteamVR
+    trackers and full-body suits. <b>One router, every backend.</b></p>
+  <div class="hero-cta">
+    <a class="btn btn-primary" href="https://github.com/Blise518B/OscGoesPurrr" target="_blank" rel="noopener">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.58 2 12.25c0 4.53 2.87 8.37 6.84 9.73.5.1.68-.22.68-.49 0-.24-.01-.88-.01-1.73-2.78.62-3.37-1.21-3.37-1.21-.45-1.18-1.11-1.49-1.11-1.49-.91-.64.07-.62.07-.62 1 .07 1.53 1.06 1.53 1.06.89 1.56 2.34 1.11 2.91.85.09-.66.35-1.11.63-1.36-2.22-.26-4.56-1.14-4.56-5.07 0-1.12.39-2.03 1.03-2.75-.1-.26-.45-1.3.1-2.71 0 0 .84-.27 2.75 1.05A9.3 9.3 0 0 1 12 6.84c.85 0 1.71.12 2.51.34 1.91-1.32 2.75-1.05 2.75-1.05.55 1.41.2 2.45.1 2.71.64.72 1.03 1.63 1.03 2.75 0 3.94-2.34 4.81-4.57 5.06.36.32.68.94.68 1.9 0 1.37-.01 2.47-.01 2.81 0 .27.18.6.69.49A10.02 10.02 0 0 0 22 12.25C22 6.58 17.52 2 12 2Z"/></svg>
+      View on GitHub
+    </a>
+    <a class="btn btn-ghost" href="#flow">See how it works</a>
+  </div>
+  <div class="badges">
+    <span class="badge"><b>6</b> haptic backends</span>
+    <span class="badge"><b>0</b> IP addresses to type</span>
+    <span class="badge"><b>100%</b> local</span>
+    <span class="badge">Python · PySide6</span>
+    <span class="badge">GPL-3.0</span>
+  </div>
+</header>
+
+<!-- MARQUEE -->
+<div class="marquee" aria-hidden="true">
+  <div class="marquee__row">
+    <span>Lush</span><span>Hush</span><span>Edge</span><span>Domi</span><span>Max</span><span>Nora</span><span>Gravity</span><span>Solace&nbsp;Pro</span><span>Osci</span><span>Ferri</span><span>Diamo</span><span>Gush</span><span>Calor</span><span>Tenera</span><span>Vulse</span><span>Ridge</span><span>Tundra&nbsp;tracker</span><span>Vive&nbsp;tracker</span><span>bHaptics&nbsp;vest</span><span>PiShock</span><span>DG-Lab&nbsp;Coyote</span><span>OWO&nbsp;suit</span><span>OSR2</span>
+    <span>Lush</span><span>Hush</span><span>Edge</span><span>Domi</span><span>Max</span><span>Nora</span><span>Gravity</span><span>Solace&nbsp;Pro</span><span>Osci</span><span>Ferri</span><span>Diamo</span><span>Gush</span><span>Calor</span><span>Tenera</span><span>Vulse</span><span>Ridge</span><span>Tundra&nbsp;tracker</span><span>Vive&nbsp;tracker</span><span>bHaptics&nbsp;vest</span><span>PiShock</span><span>DG-Lab&nbsp;Coyote</span><span>OWO&nbsp;suit</span><span>OSR2</span>
+  </div>
+</div>
+
+<!-- SIGNAL / SCOPE -->
+<section class="section" id="signal">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div class="kicker">Smooth by design</div>
+      <h2>Twitchy OSC in. Silky haptics out.</h2>
+      <p>Raw avatar parameters are jittery and bursty. A stateless per-motor signal chain
+        shapes every tick into clean motion your hardware can actually feel.</p>
+    </div>
+    <div class="scope-grid">
+      <div class="scope-panel reveal">
+        <div class="scope-head">
+          <span class="scope-tag in"><span class="swatch"></span> OSC IN</span>
+          <span class="scope-tag out"><span class="swatch"></span> HAPTIC OUT</span>
+        </div>
+        <canvas class="scope-canvas" id="scope" aria-hidden="true"></canvas>
+        <div class="scope-foot"><span>live signal preview</span><span id="scope-lat">program delay ≈ 12 ms</span></div>
+      </div>
+      <div class="scope-copy reveal d1">
+        <h3>A real signal chain, per motor</h3>
+        <p>Every motor runs the same pure, debounced pipeline. Nothing fires unless the
+          target value actually changes — so the math stays cheap and the output stays smooth.</p>
+        <ul>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="url(#g1)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Depth &amp; speed blending with per-motor tuning</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="url(#g1)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Touch / pen / self / other contact filtering</li>
+          <li><svg viewBox="0 0 24 24" fill="none" stroke="url(#g1)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg> Gating, smoothing &amp; change-only debouncing</li>
+        </ul>
+        <div class="chain-row">
+          <span class="node">Input</span><span class="arrow">→</span>
+          <span class="node">Depth / Speed</span><span class="arrow">→</span>
+          <span class="node">Combine</span><span class="arrow">→</span>
+          <span class="node">Gate</span><span class="arrow">→</span>
+          <span class="node">Smoothing</span><span class="arrow">→</span>
+          <span class="node">Output</span>
+        </div>
+      </div>
+    </div>
+  </div>
+  <svg width="0" height="0"><defs><linearGradient id="g1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff3d9a"/><stop offset="1" stop-color="#22d3ee"/></linearGradient></defs></svg>
+</section>
+
+<!-- FLOW / ARCHITECTURE -->
+<section class="section" id="flow">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div class="kicker">How it works</div>
+      <h2>From a touch in VR to a buzz in the room</h2>
+      <p>A small constellation of threads passes one signal down a clean, layered pipeline —
+        discovered automatically, routed in real time.</p>
+    </div>
+    <div class="flow reveal">
+      <div class="flow__rail" aria-hidden="true"></div>
+      <span class="flow__dot" aria-hidden="true"></span>
+      <span class="flow__dot d2" aria-hidden="true"></span>
+      <span class="flow__dot d3" aria-hidden="true"></span>
+
+      <div class="flow__stage">
+        <span class="flow__node"></span>
+        <h4>Your avatar moves</h4>
+        <p>VRChat emits OSC parameters — contacts, proximity, SPS — as you're touched, petted or poked.</p>
+      </div>
+      <div class="flow__stage">
+        <span class="flow__node"></span>
+        <h4>The Eardrum <code>vrchat_osc.py</code></h4>
+        <p>Finds VRChat over mDNS and pulls the full parameter list via OSCQuery. No IP or port typing, ever.</p>
+      </div>
+      <div class="flow__stage">
+        <span class="flow__node"></span>
+        <h4>The Brain <code>parameter_store.py</code></h4>
+        <p>One thread-safe source of truth. A version counter lets routers skip unchanged ticks instantly.</p>
+      </div>
+      <div class="flow__stage">
+        <span class="flow__node"></span>
+        <h4>Stateless routers</h4>
+        <p>Pure per-tick math reads the Brain and decides what each device should do — zones, filters, blending, smoothing.</p>
+      </div>
+      <div class="flow__stage">
+        <span class="flow__node"></span>
+        <h4>Sealed engines</h4>
+        <p>Each backend is a black box with a primitive-only facade. Add hardware by adding files, never rewiring the old ones.</p>
+      </div>
+      <div class="flow__stage">
+        <span class="flow__node"></span>
+        <h4>Your hardware responds</h4>
+        <p>Milliseconds later, the real world reacts.</p>
+        <div class="fanout">
+          <span>🧸 Toys buzz</span><span>⚡ E-stim zaps</span><span>🎯 Trackers pulse</span><span>🦺 Suits tap</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- BACKENDS -->
+<section class="section" id="backends">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div class="kicker">One app, six outputs</div>
+      <h2>Route to anything that buzzes, zaps or taps</h2>
+      <p>Mix and match. Bind one avatar zone to many devices, or many zones to one motor — toys, e-stim and suits side by side.</p>
+    </div>
+    <div class="backends">
+      <div class="card backend reveal">
+        <div class="backend__top">
+          <span class="backend__ico"><svg viewBox="0 0 24 24" fill="none" stroke="url(#g1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="9" width="18" height="6" rx="3"/><path d="M7 9V7a5 5 0 0 1 10 0v2"/></svg></span>
+          <div><h3>Bluetooth toys</h3><div class="sub">Buttplug.io · Intiface</div></div>
+        </div>
+        <p>Auto-discovery, multi-zone routing, per-motor speed-blend tuning and linear-actuator support (Solace Pro, Gravity, OSR2…). Runs a bundled engine — no separate launch needed.</p>
+        <div class="meter-row"><div class="meter" data-meter><div class="meter__fill"></div></div><span class="meter__val">0%</span></div>
+      </div>
+      <div class="card backend reveal d1">
+        <div class="backend__top">
+          <span class="backend__ico"><svg viewBox="0 0 24 24" fill="none" stroke="url(#g1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="9"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/></svg></span>
+          <div><h3>SteamVR trackers</h3><div class="sub">Tundra · Vive · TriggerHapticPulse</div></div>
+        </div>
+        <p>Dispatches OSC values to any SteamVR device with per-tracker patterns, plus a battery broadcaster that publishes tracker battery back into VRChat.</p>
+        <div class="meter-row"><div class="meter" data-meter><div class="meter__fill"></div></div><span class="meter__val">0%</span></div>
+      </div>
+      <div class="card backend reveal">
+        <div class="backend__top">
+          <span class="backend__ico"><svg viewBox="0 0 24 24" fill="none" stroke="url(#g1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12l-1 7a5 5 0 0 1-10 0L6 3Z"/><path d="M9 21v-4M15 21v-4M9 21h6"/></svg></span>
+          <div><h3>bHaptics suits</h3><div class="sub">Vests · arms · feet</div></div>
+        </div>
+        <p>Translates v1 bHapticsOSC parameters into dot-mode frames for the bHaptics Player, with an antistuck timer, per-position enables and a live click-to-test dot grid.</p>
+        <div class="meter-row"><div class="meter" data-meter><div class="meter__fill"></div></div><span class="meter__val">0%</span></div>
+      </div>
+      <div class="card backend estim reveal d1">
+        <div class="backend__top">
+          <span class="backend__ico"><svg viewBox="0 0 24 24" fill="none" stroke="url(#g1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 4 14h6l-1 8 9-12h-6l1-8z"/></svg></span>
+          <div><h3>PiShock</h3><div class="sub">Shock · vibrate · beep</div></div>
+        </div>
+        <p>Fire PiShock shock, vibrate or beep events straight from avatar contacts — over USB serial or the PiShock cloud. Every pulse is hard-capped in the engine, so settings can only ever lower the limits, never raise them.</p>
+        <span class="safe">🛡 Two-layer safety caps</span>
+        <div class="meter-row"><div class="meter" data-meter><div class="meter__fill"></div></div><span class="meter__val">0%</span></div>
+      </div>
+      <div class="card backend estim reveal">
+        <div class="backend__top">
+          <span class="backend__ico"><svg viewBox="0 0 24 24" fill="none" stroke="url(#g1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h3l2-6 3 12 2-9 2 6h5"/></svg></span>
+          <div><h3>DG-Lab Coyote</h3><div class="sub">Coyote 3.0 · e-stim · BLE</div></div>
+        </div>
+        <p>Drives a Coyote 3.0 e-stim unit directly over Bluetooth — no phone app, just a BLE adapter. Independent A/B channel routing, with strength ceilings enforced on the device itself.</p>
+        <span class="safe">🛡 Device-enforced limits</span>
+        <div class="meter-row"><div class="meter" data-meter><div class="meter__fill"></div></div><span class="meter__val">0%</span></div>
+      </div>
+      <div class="card backend reveal d1">
+        <div class="backend__top">
+          <span class="backend__ico"><svg viewBox="0 0 24 24" fill="none" stroke="url(#g1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6.5" y="5" width="11" height="16" rx="3"/><path d="M9.5 5a2.5 2.5 0 0 0 5 0"/><circle cx="10.5" cy="12" r="1.1"/><circle cx="13.5" cy="12" r="1.1"/></svg></span>
+          <div><h3>OWO suit</h3><div class="sub">10 muscle groups · EMS</div></div>
+        </div>
+        <p>Maps avatar contacts onto OWO's ten muscle-group sensations for full-torso feedback. Pairs with the My OWO phone app over Wi-Fi through the OWO SDK.</p>
+        <div class="meter-row"><div class="meter" data-meter><div class="meter__fill"></div></div><span class="meter__val">0%</span></div>
+      </div>
+    </div>
+    <div class="bonus reveal">
+      <span class="bico"><svg viewBox="0 0 24 24" fill="none" stroke="url(#g1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="3"/><path d="M9 9h6v6H9z"/><path d="M9 2v2M15 2v2M9 20v2M15 20v2M2 9h2M2 15h2M20 9h2M20 15h2"/></svg></span>
+      <div>
+        <h3>Bonus: SteamVR Toy Driver</h3>
+        <p>An optional OpenVR driver that makes your toys &amp; bHaptics positions appear as virtual trackers in SteamVR's device strip — icons and battery included.</p>
+      </div>
+      <span class="tag">OPTIONAL</span>
+    </div>
+  </div>
+</section>
+
+<!-- FEATURES -->
+<section class="section" id="features">
+  <div class="wrap">
+    <div class="section-head reveal">
+      <div class="kicker">Built for tinkerers</div>
+      <h2>Everything you'd want to tune</h2>
+      <p>Deep control where you want it, sensible defaults where you don't.</p>
+    </div>
+    <div class="features">
+      <div class="card feature reveal"><div class="ico">🛰️</div><h3>Zero-config discovery</h3><p>VRChat is found over mDNS and parameters arrive via OSCQuery. Nothing to type, nothing to forward.</p></div>
+      <div class="card feature reveal d1"><div class="ico">🧩</div><h3>Multi-zone routing</h3><p>Bind one motor to many OGB zones — Head, Tail, anywhere — with simple checkbox menus.</p></div>
+      <div class="card feature reveal d2"><div class="ico">🎚️</div><h3>Per-motor signal chain</h3><p>Input → Depth/Speed → Combine → Gate → Smoothing → Output, with live mini-graphs for each motor.</p></div>
+      <div class="card feature reveal"><div class="ico">✨</div><h3>Synthetic SPS sources</h3><p>Build virtual contact zones from raw receivers: proximity, an activation gate, a velocity boost and a max clamp.</p></div>
+      <div class="card feature reveal d1"><div class="ico">👤</div><h3>Avatar-bound profiles</h3><p>Pin a profile to an <code>avtr_*</code> id and the right config loads automatically — with a global fallback.</p></div>
+      <div class="card feature reveal d2"><div class="ico">🔎</div><h3>Real-time OSC debugger</h3><p>A live parameter inspector plus diagnostics: packets handled, phonebook GETs, handler exceptions and more.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- FOOTER -->
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div class="foot-brand">
+        <a class="brand" href="#top"><img src="assets/ogp-mark.png" alt=""> OscGoesPurrr</a>
+        <p>A multi-backend OSC → haptic router for VRChat. Bluetooth toys, e-stim, SteamVR trackers, bHaptics &amp; OWO suits — one smooth pipeline.</p>
+      </div>
+      <div class="foot-links">
+        <div class="foot-col">
+          <h5>Project</h5>
+          <a href="https://github.com/Blise518B/OscGoesPurrr" target="_blank" rel="noopener">GitHub repo ↗</a>
+          <a href="https://github.com/Blise518B/OscGoesPurrr/issues" target="_blank" rel="noopener">Report an issue ↗</a>
+        </div>
+        <div class="foot-col">
+          <h5>On this page</h5>
+          <a href="#signal">Signal chain</a>
+          <a href="#flow">How it works</a>
+          <a href="#backends">Backends</a>
+          <a href="#features">Features</a>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="foot-bottom">
+    <span>© <span id="yr">2026</span> OscGoesPurrr · GPL-3.0-or-later</span>
+    <span class="age">Adult &amp; e-stim hardware · for adults (18+) · always start at safe limits</span>
+  </div>
+</footer>
+
+<script>
+(function(){
+  "use strict";
+  var reduce = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if(reduce) document.body.classList.add("reduced");
+
+  // year
+  var yr = document.getElementById("yr"); if(yr) yr.textContent = (new Date()).getFullYear();
+
+  // nav background on scroll
+  var nav = document.getElementById("nav");
+  function onScroll(){ if(nav) nav.classList.toggle("scrolled", window.scrollY > 12); }
+  window.addEventListener("scroll", onScroll, {passive:true}); onScroll();
+
+  // reveal on scroll
+  var reveals = [].slice.call(document.querySelectorAll(".reveal"));
+  if(reduce || !("IntersectionObserver" in window)){
+    reveals.forEach(function(el){ el.classList.add("in"); });
+  } else {
+    var io = new IntersectionObserver(function(entries){
+      entries.forEach(function(e){ if(e.isIntersecting){ e.target.classList.add("in"); io.unobserve(e.target); } });
+    }, {threshold:.12, rootMargin:"0px 0px -8% 0px"});
+    reveals.forEach(function(el){ io.observe(el); });
+  }
+
+  // ---- animated rainbow meters ----
+  var meters = [].slice.call(document.querySelectorAll("[data-meter]")).map(function(el, i){
+    return { fill: el.querySelector(".meter__fill"), val: el.parentNode.querySelector(".meter__val"), ph: i*1.9, acc: 1 };
+  });
+  var mt = 0;
+  function updateMeters(dt){
+    mt += dt;
+    for(var i=0;i<meters.length;i++){
+      var m = meters[i];
+      var v = 0.52 + 0.40*Math.sin(mt*(0.9+m.ph*0.11)+m.ph) + 0.08*Math.sin(mt*4.3+m.ph*2);
+      v = Math.max(0, Math.min(1, v));
+      if(m.fill) m.fill.style.width = (v*100).toFixed(1) + "%";
+      m.acc += dt;
+      if(m.val && m.acc > 0.12){ m.acc = 0; m.val.textContent = Math.round(v*100) + "%"; }
+    }
+  }
+
+  // ---- signal scope ----
+  var scope = (function(){
+    var canvas = document.getElementById("scope");
+    if(!canvas) return null;
+    var ctx = canvas.getContext("2d");
+    var w=0, h=0, dpr=1, inBuf=[], outBuf=[], phase=0, acc=0, out=0.5;
+    var SPEED = 78; // px/sec
+    function noise(x){ var s = Math.sin(x*12.9898)*43758.5453; return s - Math.floor(s); }
+    function sample(p){
+      var t = p*0.018;
+      var v = 0.5 + 0.30*Math.sin(t*0.9) + 0.10*Math.sin(t*2.7+1.3);
+      v += (noise(p)*2-1)*0.055;
+      var s = Math.sin(t*0.37);
+      if(s > 0.95) v += 0.16;
+      if(noise(p*1.7) > 0.985) v += 0.22;
+      return Math.max(0.03, Math.min(0.97, v));
+    }
+    function pushOne(){ phase++; var v = sample(phase); inBuf.push(v); out += (v-out)*0.06; outBuf.push(out); }
+    function resize(){
+      dpr = Math.min(window.devicePixelRatio||1, 2);
+      var r = canvas.getBoundingClientRect();
+      w = Math.max(2, Math.floor(r.width)); h = Math.max(2, Math.floor(r.height));
+      canvas.width = Math.floor(w*dpr); canvas.height = Math.floor(h*dpr);
+      ctx.setTransform(dpr,0,0,dpr,0,0);
+      if(inBuf.length > w){ inBuf = inBuf.slice(-w); outBuf = outBuf.slice(-w); }
+      while(inBuf.length < w){ pushOne(); }
+    }
+    function yOf(v){ var pad=14; return pad + (1-v)*(h-2*pad); }
+    function trace(buf){ ctx.beginPath(); for(var x=0;x<buf.length;x++){ var y=yOf(buf[x]); if(x) ctx.lineTo(x,y); else ctx.moveTo(x,y);} }
+    function draw(){
+      ctx.clearRect(0,0,w,h);
+      ctx.lineWidth = 1; ctx.strokeStyle = "rgba(255,255,255,0.05)";
+      for(var gy=0; gy<=4; gy++){ var y = 14 + gy*(h-28)/4; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.stroke(); }
+      ctx.lineWidth = 1.4; ctx.strokeStyle = "rgba(255,61,154,0.42)"; trace(inBuf); ctx.stroke();
+      var g = ctx.createLinearGradient(0,0,w,0);
+      g.addColorStop(0,"#ff3d9a"); g.addColorStop(.5,"#a855f7"); g.addColorStop(1,"#22d3ee");
+      ctx.lineJoin = "round"; ctx.lineWidth = 3; ctx.strokeStyle = g;
+      ctx.shadowColor = "rgba(34,211,238,.45)"; ctx.shadowBlur = 12; trace(outBuf); ctx.stroke(); ctx.shadowBlur = 0;
+      var lx = outBuf.length-1, ly = yOf(outBuf[outBuf.length-1]);
+      ctx.fillStyle = "#9af2ff"; ctx.beginPath(); ctx.arc(lx, ly, 3.5, 0, 6.2832); ctx.fill();
+    }
+    function step(dt){
+      acc += SPEED*dt; var n = Math.floor(acc); acc -= n; if(n > w) n = w;
+      for(var i=0;i<n;i++){ pushOne(); }
+      var extra = inBuf.length - w; if(extra > 0){ inBuf.splice(0,extra); outBuf.splice(0,extra); }
+      draw();
+    }
+    resize();
+    window.addEventListener("resize", function(){ clearTimeout(resize._t); resize._t = setTimeout(resize, 150); });
+    return { step: step, drawStatic: function(){ resize(); draw(); } };
+  })();
+
+  // ---- master loop ----
+  if(reduce){
+    if(scope) scope.drawStatic();
+    updateMeters(2.0);
+  } else {
+    var prev;
+    var running = true;
+    document.addEventListener("visibilitychange", function(){ running = !document.hidden; if(running){ prev = undefined; requestAnimationFrame(frame); } });
+    function frame(ts){
+      if(!running) return;
+      if(prev === undefined) prev = ts;
+      var dt = Math.min(0.05, (ts - prev)/1000); prev = ts;
+      if(scope) scope.step(dt);
+      updateMeters(dt);
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+  }
+})();
+</script>
+</body>
+</html>
