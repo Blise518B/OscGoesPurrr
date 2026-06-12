@@ -180,8 +180,20 @@ class SessionsMixin:
         self._refresh_sessions_view(force_list_rebuild=True)
         self._sessions_refresh_timer = QTimer(self.window)
         self._sessions_refresh_timer.setInterval(1000)
-        self._sessions_refresh_timer.timeout.connect(self._refresh_sessions_view)
+        self._sessions_refresh_timer.timeout.connect(self._sessions_tick)
         self._sessions_refresh_timer.start()
+
+    def _sessions_tick(self) -> None:
+        """Timer slot — only does work while the Sessions panel is on
+        screen (Settings page + Sessions tab). The widget-level check
+        covers both; direct _refresh_sessions_view calls (initial seed,
+        post-action refreshes) stay ungated."""
+        try:
+            if not self.sessions_state_label.isVisible():
+                return
+        except (AttributeError, RuntimeError):
+            return
+        self._refresh_sessions_view()
 
     # ----------------------------------------------------------
     # Refresh

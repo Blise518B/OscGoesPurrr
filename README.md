@@ -2,13 +2,20 @@
 
 A multi-backend haptic feedback router for VRChat. Reads your avatar's
 OSC parameters and translates them into smooth output for Bluetooth
-toys, SteamVR trackers, bHaptics suits, and the SteamVR overlay.
+toys, SteamVR trackers, bHaptics suits, OWO suits, e-stim units
+(PiShock, DG-Lab Coyote), and the SteamVR overlay.
 
 ## ✨ Features
 
 * **Buttplug.io toys via Intiface Central.** Auto-discovery, multi-zone
   routing, per-motor speed-blend tuning, linear-actuator support
   (Lovense Solace Pro, Gravity, OSR2…).
+* **Drive a VRChat parameter as output.** Any motor in Device Routing can
+  *also* mirror its computed value (0.0–1.0) back to VRChat as an avatar
+  parameter, so the same contact that drives a toy can drive an avatar
+  visual — a glow, a blendshape, a fill meter. Works even with no toy
+  connected (it rides the same routing tick); enter the bare parameter
+  name and the `/avatar/parameters/` prefix is added for you.
 * **SteamVR tracker haptics.** Dispatches OSC values to any SteamVR
   device that supports `TriggerHapticPulse` (Tundra trackers, Vive
   trackers, etc.) with per-tracker patterns and a battery broadcaster
@@ -17,6 +24,18 @@ toys, SteamVR trackers, bHaptics suits, and the SteamVR overlay.
   (HerpDerpinstine schema) into dot-mode frames for the bHaptics
   Player. Antistuck timer, per-position enable, optional
   `bHaptics_Connected` bool back to VRChat.
+* **PiShock.** Fire shock / vibrate / beep events from avatar contacts,
+  over USB serial or the pishock.com cloud API. Rising-edge triggering
+  with per-zone cooldowns and a global rate backstop, and **hard safety
+  caps enforced in the engine** — settings can only ever lower the
+  intensity / duration / interval limits, never raise them.
+* **DG-Lab Coyote 3.0.** Drives a Coyote e-stim unit directly over
+  Bluetooth (no phone app — just a BLE adapter), with independent A/B
+  channel routing and strength ceilings enforced on the device itself.
+* **OWO suits.** Maps avatar contacts onto OWO's ten muscle-group
+  sensations for full-torso EMS feedback, via the OWO app over Wi-Fi.
+  (Optional: needs `pythonnet` plus a vendored `OWO.dll` — see
+  [`owo-sdk/`](owo-sdk/).)
 * **SteamVR Toy Driver.** Optional virtual-device bridge that makes
   your connected toys and configured bHaptics positions show up as
   trackers in SteamVR's device strip, complete with battery icons.
@@ -49,6 +68,20 @@ toys, SteamVR trackers, bHaptics suits, and the SteamVR overlay.
    battery-broadcaster features.
 4. *(Optional)* [bHaptics Player](https://www.bhaptics.com/) — required
    for the bHaptics backend.
+5. *(Optional)* A [PiShock](https://pishock.com/) — a USB cable for the
+   serial transport, or a pishock.com account + share code for the cloud
+   transport.
+6. *(Optional)* A [DG-Lab Coyote 3.0](https://www.dungeon-lab.com/) plus a
+   Bluetooth LE adapter — connects directly, no phone app needed.
+7. *(Optional)* An [OWO suit](https://owogame.com/) with the *My OWO* phone
+   app. The OWO backend also needs `pip install pythonnet` and a vendored
+   `OWO.dll` dropped into [`owo-sdk/`](owo-sdk/); it is deliberately left out
+   of the default install (see that folder's note).
+
+> Bluetooth (`bleak`), serial (`pyserial`), and cloud (`requests`) support
+> install automatically with `requirements.txt`; their imports are guarded,
+> so a missing library only disables its own backend. `pythonnet` is the lone
+> exception — it is opt-in for OWO.
 
 **Setup:**
 
@@ -82,12 +115,17 @@ Sidebar views (toggle from the left rail):
 
 * **Dashboard** — connection status, OSC stats, current avatar,
   per-toy vibration meters.
+* **Overview** — read-only unified card-grid of every connected or
+  stored thing across all backends (toys, trackers, suit, system
+  health), with chip filters per section. Click a tile to jump to its
+  editor view.
 * **Simple Mode** — stripped-down panel showing only "is OSC connected
   / which toys are live". On by default; toggle in Settings to reveal
   the full UI.
 * **Device Routing** — the full per-toy / per-motor matrix: zone
   bindings, touch/pen/self/other filters, speed-blend tuning, linear
-  actuator config.
+  actuator config, plus a per-motor "Mirror to VRChat parameter" toggle
+  that sends the motor's output back to VRChat as an avatar parameter.
 * **SPS Sources** — build *synthetic* SPS sources from raw VRChat
   contact receivers: a proximity receiver gated by "activation" binary
   contacts (so it only fires in a very specific spot), boosted by
@@ -101,6 +139,14 @@ Sidebar views (toggle from the left rail):
 * **bHaptics** — bHaptics Player connection, per-position device
   enables + intensity, antistuck timers, the connected-state OSC bool
   feature, plus a live click-to-test dot grid.
+* **PiShock** — transport (serial / cloud) + connection setup,
+  per-zone rising-edge configs (op, threshold, intensity range,
+  duration, cooldown), the safety caps and global rate backstop, and a
+  gently-capped test-fire button.
+* **Coyote** — BLE device scan / pick, per-channel A/B strength limits
+  and waveform, zone routing, plus live battery and strength readouts.
+* **OWO** — OWO app connection (game id / IP), frequency, and
+  per-muscle zone routing for the suit's ten muscle groups.
 * **OSC Inspector** — live tree of every parameter currently in the
   cache (the "shadow state").
 * **OSC Diagnostics** — packets-handled counter, phonebook GET log,
@@ -138,6 +184,12 @@ All user state is stored under `%APPDATA%\OscGoesPurrr\`:
 * `steamvr_settings.json` — per-tracker config + patterns.
 * `bhaptics_settings.json` — bHaptics Player endpoint + per-position
   device configs + antistuck.
+* `pishock_settings.json` — PiShock transport + connection, safety
+  caps, global rate backstop, per-zone configs.
+* `coyote_settings.json` — Coyote BLE device + per-channel limits,
+  waveform, and zone routing.
+* `owo_settings.json` — OWO app connection + frequency + per-muscle
+  routing.
 * `known_devices.json` — global registry of every toy ever seen.
 * `sps_sources.json` — user-defined synthetic SPS sources.
 

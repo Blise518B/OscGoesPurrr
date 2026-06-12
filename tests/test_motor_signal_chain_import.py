@@ -322,3 +322,380 @@ def test_valve_indicator_idempotent_set_open():
     # Re-asserting the same target shouldn't restart it.
     v.set_open(True)
     assert not v._anim_timer.isActive()
+
+
+# ============================================================ Cut 9: accordion strip
+
+
+def _qt_app():
+    """Shared QApplication for the widget tests (Qt needs one)."""
+    from PySide6.QtWidgets import QApplication
+    import sys
+    return QApplication.instance() or QApplication(sys.argv)
+
+
+def test_gain_slider_float_int_mapping():
+    """The quick gain slider maps gain 0.0..2.0 onto the int track
+    0..200 (1 step == 0.01) and clamps out-of-range gains."""
+    _qt_app()
+    from ui.motor_signal_chain import _GainSlider, _GAIN_SLIDER_MAX
+    s = _GainSlider(1.0)
+    assert s.maximum() == _GAIN_SLIDER_MAX
+    assert s.value() == 100
+    assert s.gain() == 1.0
+    s.set_gain(0.5)
+    assert s.value() == 50
+    s.set_gain(1.5)
+    assert s.value() == 150
+    # Clamp above/below the 0..2 range.
+    s.set_gain(5.0)
+    assert s.value() == _GAIN_SLIDER_MAX
+    s.set_gain(-1.0)
+    assert s.value() == 0
+
+
+def test_gain_slider_ticks_and_not_snapped_unless_dragging():
+    """Tick marks render at 0.5/1.0/1.5. When the handle is NOT being
+    dragged (programmatic / keyboard-style changes), values pass through
+    un-snapped — even one sitting right next to a detent."""
+    from PySide6.QtWidgets import QSlider
+    _qt_app()
+    from ui.motor_signal_chain import _GainSlider, _GAIN_TICK_INTERVAL
+    s = _GainSlider(1.0)
+    assert s.tickPosition() == QSlider.TicksBelow
+    assert s.tickInterval() == _GAIN_TICK_INTERVAL
+    # Not dragging → exact value kept, even an odd one or one near a detent.
+    s.setValue(137)
+    assert s.value() == 137
+    assert abs(s.gain() - 1.37) < 1e-9
+    s.setValue(103)            # 3 away from the 1.0 detent, but no drag
+    assert s.value() == 103
+
+
+def test_gain_slider_snaps_while_dragging():
+    """While the handle is held (isSliderDown), a value within the snap
+    radius of a detent sticks to it; values outside the radius are kept,
+    so in-between gains are still reachable by drag."""
+    _qt_app()
+    from ui.motor_signal_chain import _GainSlider, _GAIN_SNAP_RADIUS
+    s = _GainSlider(1.0)
+    s.setSliderDown(True)
+    s.setValue(100 + _GAIN_SNAP_RADIUS)      # just inside → snaps to 1.0
+    assert s.value() == 100
+    s.setValue(50 - _GAIN_SNAP_RADIUS)       # just inside → snaps to 0.5
+    assert s.value() == 50
+    s.setValue(80)                           # between detents → no snap
+    assert s.value() == 80
+    s.setValue(2)                            # near the bottom → snaps to 0
+    assert s.value() == 0
+    s.setSliderDown(False)
+
+
+def test_gain_slider_emits_on_user_change_not_on_set_gain():
+    """`set_gain` is silent (blockSignals); a value change emits the
+    float gain so the parent can persist + mirror the spinbox."""
+    _qt_app()
+    from ui.motor_signal_chain import _GainSlider
+    s = _GainSlider(1.0)
+    seen = []
+    s.gainChanged.connect(seen.append)
+    s.set_gain(0.25)          # programmatic → no echo
+    assert seen == []
+    s.setValue(80)            # user-style change → emits
+    assert seen and abs(seen[-1] - 0.8) < 1e-9
+
+
+def test_strip_host_fanout_spreads_branches():
+    """The fork/join fanout offsets the top channel up and the bottom down by
+    _BRANCH_FANOUT (so the two arrows don't stack), and is zero for one."""
+    from ui.motor_signal_chain import _StripHost, _BRANCH_FANOUT
+    assert _StripHost._fanout(0, 1) == 0.0
+    assert _StripHost._fanout(0, 2) == -_BRANCH_FANOUT   # top channel: up
+    assert _StripHost._fanout(1, 2) == _BRANCH_FANOUT    # bottom channel: down
+
+
+def test_gain_control_readout_tracks_value():
+    """The inline readout shows ×<gain> and updates on both user drags
+    and programmatic set_gain; set_gain stays silent (no echo)."""
+    _qt_app()
+    from ui.motor_signal_chain import _GainControl
+    c = _GainControl(1.0)
+    assert c._value.text() == "×1.00"
+    assert c.gain() == 1.0
+    seen = []
+    c.gainChanged.connect(seen.append)
+    # Programmatic set (spinbox mirror / reset): readout updates, silent.
+    c.set_gain(0.5)
+    assert c._value.text() == "×0.50"
+    assert c.gain() == 0.5
+    assert seen == []
+    # User-style slider change: readout updates AND the signal fires.
+    c._slider.setValue(150)
+    assert c._value.text() == "×1.50"
+    assert seen and abs(seen[-1] - 1.5) < 1e-9
+
+
+def test_ms_slider_mapping_and_snap():
+    """The smoothing delay slider's track is milliseconds directly; it
+    clamps to the range and drag-snaps to the 100-ms detents."""
+    _qt_app()
+    from ui.motor_signal_chain import _MsSlider, _MS_SLIDER_MAX, _MS_SNAP_RADIUS
+    s = _MsSlider(120)
+    assert s.value() == 120
+    assert s.ms() == 120
+    s.set_ms(250)
+    assert s.value() == 250
+    s.set_ms(99999)                          # clamps to the max
+    assert s.value() == _MS_SLIDER_MAX
+    s.setSliderDown(True)
+    s.setValue(200 + _MS_SNAP_RADIUS)        # inside radius → snaps to 200
+    assert s.value() == 200
+    s.setValue(160)                          # between detents → kept
+    assert s.value() == 160
+    s.setSliderDown(False)
+
+
+def test_delay_control_readout():
+    """The delay control shows "<ms>ms", updates on set_ms (silently), and
+    emits msChanged on a user slider change."""
+    _qt_app()
+    from ui.motor_signal_chain import _DelayControl
+    c = _DelayControl(50)
+    assert c._value.text() == "50ms"
+    assert c.ms() == 50
+    seen = []
+    c.msChanged.connect(seen.append)
+    c.set_ms(120)                            # programmatic → silent
+    assert c._value.text() == "120ms"
+    assert seen == []
+    c._slider.setValue(300)                  # user-style → emits
+    assert c._value.text() == "300ms"
+    assert seen and seen[-1] == 300
+
+
+def test_stage_card_defaults_collapsed():
+    """A fresh card is collapsed: editor not built, quick region shown,
+    editor region hidden + zero-height, output number is the em-dash
+    placeholder."""
+    _qt_app()
+    from ui.motor_signal_chain import _StageCard
+    card = _StageCard("speed", "Speed", "Spd")
+    assert card.editor_built() is False
+    assert card.editor_region().isVisibleTo(card) is False
+    assert card.quick_region().isVisibleTo(card) is True
+    assert card.editor_region().maximumHeight() == 0
+    assert card._out_label.text() == "—"
+
+
+def test_stage_card_apply_state_transitions():
+    """rail → short title, quick + number hidden; expanded → editor
+    shown, full title; quick → quick + number shown, editor hidden."""
+    _qt_app()
+    from ui.motor_signal_chain import (
+        _StageCard, _CARD_RAIL, _CARD_QUICK, _CARD_EXPANDED,
+    )
+    card = _StageCard("combine", "Combine", "Cmb")
+
+    card.apply_state(_CARD_RAIL)
+    assert card._title.text() == "Cmb"
+    assert card._out_label.isVisibleTo(card) is False
+    assert card.quick_region().isVisibleTo(card) is False
+    assert card.editor_region().isVisibleTo(card) is False
+
+    card.apply_state(_CARD_EXPANDED)
+    assert card._title.text() == "Combine"
+    assert card.editor_region().isVisibleTo(card) is True
+    assert card.quick_region().isVisibleTo(card) is False
+
+    card.apply_state(_CARD_QUICK)
+    assert card._title.text() == "Combine"
+    assert card.quick_region().isVisibleTo(card) is True
+    assert card.editor_region().isVisibleTo(card) is False
+
+
+def test_stage_card_output_number_format_and_gate():
+    """Output number formats to 2dp, clamps to [0,1], and is gated so a
+    sub-epsilon change doesn't rewrite the label."""
+    _qt_app()
+    from ui.motor_signal_chain import _StageCard
+    card = _StageCard("output", "Output", "Out")
+    card.set_output_number(0.42)
+    assert card._out_label.text() == "0.42"
+    # Sub-epsilon change is ignored (label unchanged).
+    card.set_output_number(0.421)
+    assert card._out_label.text() == "0.42"
+    # A real change updates.
+    card.set_output_number(0.5)
+    assert card._out_label.text() == "0.50"
+    # Clamp above 1.0.
+    card.set_output_number(1.7)
+    assert card._out_label.text() == "1.00"
+
+
+# --- Full-widget smoke test (headless) --------------------------------
+# The app can't be launched in CI/sandbox, so this drives the whole
+# MotorSignalChainWidget through build → expand → live-data → collapse
+# against a stub controller/UI. The QVariantAnimation never ticks
+# without an event loop, so we settle it by hand via _on_anim_done.
+
+class _SmokeRouter:
+    def subscribe_intermediates(self, *a, **k):
+        pass
+
+    def unsubscribe_intermediates(self, *a, **k):
+        pass
+
+
+class _SmokeController:
+    def __init__(self):
+        self.profiles = {"DevX": {}}
+        self.motor_router = _SmokeRouter()
+
+    def get_profile_config(self, device, key, default=None):
+        return self.profiles.get(device, {}).get(key, default)
+
+    def update_device_config(self, device, key, value):
+        self.profiles.setdefault(device, {})[key] = value
+
+    def save_profiles(self):
+        pass
+
+    def force_recalculate(self):
+        pass
+
+    def get_active_profile_dict(self):
+        return self.profiles
+
+
+class _SmokeUI:
+    def __init__(self, controller):
+        self.controller = controller
+
+    def _repolish(self, _w):
+        pass
+
+    def _build_listening_to_column(self, *_a, **_k):
+        from PySide6.QtWidgets import QLabel
+        return QLabel("listening")
+
+    def _make_help_badge(self, title, text):
+        # Real badge widget, minus the registration/visibility plumbing
+        # the full UI mixin provides — the editors just need a QWidget.
+        from ui.help_mode import HelpBadge
+        return HelpBadge(title, text)
+
+
+def test_widget_build_expand_intermediates_collapse():
+    _qt_app()
+    from ui.motor_signal_chain import MotorSignalChainWidget, STAGE_COMBINE
+
+    ui = _SmokeUI(_SmokeController())
+    w = MotorSignalChainWidget(ui, "DevX", 0, "vibrate")
+
+    # Built collapsed: 6 horizontal slots, 7 stage cards, nothing expanded.
+    assert len(w._slots) == 6
+    assert len(w._stage_cards) == 7
+    assert w._active_stage is None
+    # Small mode by default → cards/arrows centred.
+    assert w._strip_host._centered is True
+    # 6 slots interleaved with 5 flexible connector cells (no trailing
+    # stretch) — the cells are what the stretching arrows are drawn across.
+    assert w._strip_lay.count() == 11
+    # Input forks into Depth+Speed and they join into Combine: the parallel
+    # ds slot (index 1) is registered with its two inner cards.
+    assert w._strip_host._branch_index == 1
+    assert len(w._strip_host._branch_cards) == 2
+    # Smoothing has a quick delay slider (like Depth/Speed's gain slider).
+    assert w._delay_control is not None
+
+    # Exercise the connector paint path (incl. the fork/join branch arrows)
+    # headlessly — a geometry/paint crash (bad mapTo, polygon, etc.) raises.
+    from PySide6.QtGui import QPixmap
+    w._strip_host.resize(900, 160)
+    w._strip_host.layout().activate()
+    w._strip_host.render(QPixmap(w._strip_host.size()))
+
+    # Expand Combine: editor builds lazily and the card flips to expanded.
+    w._on_stage_clicked(STAGE_COMBINE)
+    assert w._active_stage == STAGE_COMBINE
+    assert w._strip_host._centered is False     # expanded → top-aligned arrows
+    combine = w._stage_cards[STAGE_COMBINE]
+    assert combine.editor_built() is True
+    assert combine.editor_region().isVisibleTo(combine) is True
+    w._on_anim_done()  # settle the (un-ticked) animation
+
+    # A live payload drives the per-stage output number (combine ← "mixed").
+    w._handle_intermediates({"t_ms": 1000.0, "mixed": 0.5})
+    assert combine._out_label.text() == "0.50"
+
+    # Clicking the expanded card again collapses the strip.
+    w._on_stage_clicked(STAGE_COMBINE)
+    w._on_anim_done()
+    assert w._active_stage is None
+    assert w._strip_host._centered is True      # back to small/centred mode
+
+    w.teardown()
+
+
+def test_smoothing_quick_slider_sets_both_rise_and_fall():
+    """The Smoothing quick slider is one 'how smooth' knob — it writes the
+    same delay to BOTH rise_ms and fall_ms."""
+    _qt_app()
+    from ui.motor_signal_chain import MotorSignalChainWidget, _read_chain
+    ui = _SmokeUI(_SmokeController())
+    w = MotorSignalChainWidget(ui, "DevX", 0, "vibrate")
+    assert w._delay_control is not None
+    w._on_delay_from_slider(200)
+    chain = _read_chain(ui.controller, "DevX", 0, 0)
+    assert chain["smoothing"]["rise_ms"] == 200.0
+    assert chain["smoothing"]["fall_ms"] == 200.0
+    w.teardown()
+
+
+def test_chain_subscription_follows_visibility():
+    """The live-trace subscription is visibility-driven: a chain built
+    hidden (collapsed toy card, non-current sidebar page) must not
+    subscribe, showing subscribes, hiding unsubscribes - so off-screen
+    chains cost the router zero dispatch work. Teardown stays
+    idempotent on top of the hide-driven unsubscribe."""
+    _qt_app()
+    from ui.motor_signal_chain import MotorSignalChainWidget
+
+    class _RecordingRouter:
+        def __init__(self):
+            self.subscribed = 0
+            self.unsubscribed = 0
+
+        def subscribe_intermediates(self, *a, **k):
+            self.subscribed += 1
+
+        def unsubscribe_intermediates(self, *a, **k):
+            self.unsubscribed += 1
+
+    ctrl = _SmokeController()
+    router = _RecordingRouter()
+    ctrl.motor_router = router
+    w = MotorSignalChainWidget(_SmokeUI(ctrl), "DevX", 0, "vibrate")
+
+    # Built hidden -> no subscription yet.
+    assert router.subscribed == 0
+    assert w._intermediates_subscribed is False
+
+    w.show()
+    assert router.subscribed == 1
+    assert w._intermediates_subscribed is True
+
+    w.hide()
+    assert router.unsubscribed == 1
+    assert w._intermediates_subscribed is False
+
+    # Re-show resubscribes; teardown unsubscribes exactly once more.
+    w.show()
+    assert router.subscribed == 2
+    w.teardown()
+    assert router.unsubscribed == 2
+    # Idempotent: neither a second teardown nor the eventual hide
+    # double-unsubscribes.
+    w.teardown()
+    w.hide()
+    assert router.unsubscribed == 2

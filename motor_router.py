@@ -129,12 +129,47 @@ class MotorRouter:
     # Speed-detector constants. Previously per-motor knobs; baked here
     # because the activity gate (a per-motor knob) covers the user-
     # facing "ignore micro-movement" problem these used to address.
-    # If a future need to retune surfaces, they move to a single
-    # hidden Advanced panel in Settings, not back into the per-motor
-    # card. See docs/MOTOR_SIGNAL_CHAIN.md § "Speed-detector constants".
+    # See docs/MOTOR_SIGNAL_CHAIN.md § "Speed-detector constants".
+    # The decay tau is the exception: it sets how long the speed
+    # channel keeps ringing after movement stops, which users *do*
+    # need to tune per chain (a long tail reads as "the toy keeps
+    # going after I stopped"). `speed.decay_ms` in the chain config
+    # overrides it; this constant is only the fallback default.
     _SPEED_INPUT_DEADBAND = 0.005
     _SPEED_OUTPUT_CUTOFF = 0.02
     _SPEED_DECAY_TAU_S = 0.30
+    # Clamp bounds for the per-chain `speed.decay_ms` knob. The floor
+    # keeps the detector usable: OSC position updates arrive in bursts,
+    # so a near-zero decay would zero the channel between packets and
+    # turn steady stroking into flicker.
+    _SPEED_DECAY_MS_MIN = 10.0
+    _SPEED_DECAY_MS_MAX = 2000.0
+
+    # --- Anti-stuck safety cutoff (per resolved input) -----------------
+    # VRChat OSC only fires on parameter change, so a frozen SPS proximity
+    # (avatar swap, partner leaves, OSC routing loss) would otherwise drive
+    # a motor at its last value forever. Two-timer model, parity with the
+    # SteamVR backend (steamvr_engine._clear_stuck): a mid-range value stuck
+    # for the active timeout is almost always a dropped stream and is cut
+    # hard; a saturated (~100%) value gets a longer fuse then a gentle ramp,
+    # since "all the way in and held" is a legitimate state we don't want to
+    # kill abruptly. Detection is on the motor's combined d_raw; the cut is
+    # applied as a multiplier on the FINAL output so the speed detector and
+    # smoothing envelope are never perturbed — forcing d_raw->0 would spoof
+    # a |Δ|/dt motion spike straight through the speed channel and could
+    # make a stuck motor pulse *harder*. Timeouts come from app settings
+    # (Device Routing → Anti-stuck card); these are only the hardcoded
+    # detection thresholds.
+    _ANTISTUCK_EPSILON = 0.001     # |Δd_raw| at or below this == "unchanged"
+    _ANTISTUCK_SATURATED = 0.95    # d_raw at/above this is treated as peaked
+    _ANTISTUCK_RAMP_S = 3.0        # saturated ramp-down duration after the fuse
+
+    # Simple Mode anti-stuck: the stripped-down mode has no per-motor tuning,
+    # so its cutoff is a single, non-adjustable flat timeout applied to the
+    # one global SPS-max value — a value frozen this long is treated as a
+    # dropped stream and forced to 0. No saturated-ramp distinction; Simple
+    # Mode trades the full path's nuance for zero knobs.
+    _SIMPLE_ANTISTUCK_S = 2.0
 
     # Cap on chains per motor (per the design lock in
     # docs/MOTOR_SIGNAL_CHAIN.md § "Future: optional secondary chain").
@@ -155,12 +190,15 @@ class MotorRouter:
         "chains": [
             {
                 "depth": {"gain": 1.0, "curve": "linear", "curve_param": 1.0},
-                "speed": {"gain": 1.0, "curve": "linear", "curve_param": 1.0},
+                "speed": {"gain": 1.0, "curve": "linear", "curve_param": 1.0,
+                          "decay_ms": 300.0},
                 "combine": "max",
                 "gate": {
                     "enabled": False,
                     "wake_threshold": 0.05,
                     "sleep_delay_s": 0.5,
+                    "attack_s": 0.05,
+                    "release_s": 0.5,
                 },
                 "smoothing": {"rise_ms": 50.0, "fall_ms": 20.0},
             },
@@ -227,6 +265,11 @@ class MotorRouter:
         # `profile_token` is an opaque marker (currently a snapshot of the keys
         # we actually read) so a profile mutation safely invalidates the cache.
         self._compiled_cfg: Dict[Tuple[int, str, int, tuple], Dict[str, Any]] = {}
+        # Simple Mode anti-stuck state — Simple Mode pushes one global SPS-max
+        # to every motor, so it needs only a single last-value / since-changed
+        # pair, not the per-motor bookkeeping the full path keeps.
+        self._simple_as_last_val: Optional[float] = None
+        self._simple_as_since: float = -1.0
 
     # ------------------------------------------------------------------ helpers
     def _get_param(self, all_params: Dict[str, Any], path: str) -> Optional[float]:
@@ -538,6 +581,13 @@ class MotorRouter:
             state = {
                 "last_time": -1.0,
                 "chains": [self._make_chain_state()],
+                # Anti-stuck bookkeeping (motor-level — the cutoff acts on the
+                # combined d_raw, not per chain). `as_last_draw` is the last
+                # input value seen; `as_static_since` is the monotonic time it
+                # last changed. The ramp is a pure function of elapsed time so
+                # it needs no stored accumulator.
+                "as_last_draw": None,
+                "as_static_since": -1.0,
             }
             self._motor_state[key] = state
         return state
@@ -572,12 +622,15 @@ class MotorRouter:
 
     def _derive_speed_signal(self, chain_state: Dict[str, Any],
                              position: float,
-                             dt: float) -> float:
+                             dt: float,
+                             decay_tau_s: Optional[float] = None) -> float:
         """Compute the per-chain S_raw from |Δposition|/dt with the
-        baked-in input deadband, output cutoff, and decay tau (see
-        _SPEED_INPUT_DEADBAND / _SPEED_OUTPUT_CUTOFF /
-        _SPEED_DECAY_TAU_S). Updates `chain_state["smoothed_speed"]`
-        and `chain_state["last_position"]` in place. Returns the
+        baked-in input deadband and output cutoff (see
+        _SPEED_INPUT_DEADBAND / _SPEED_OUTPUT_CUTOFF). `decay_tau_s`
+        is the per-chain fall-off time constant (from
+        `speed.decay_ms`); None falls back to _SPEED_DECAY_TAU_S.
+        Updates `chain_state["smoothed_speed"]` and
+        `chain_state["last_position"]` in place. Returns the
         post-cutoff value in [0, 1] suitable for feeding into
         apply_curve.
 
@@ -595,7 +648,9 @@ class MotorRouter:
         prev_smoothed = chain_state["smoothed_speed"]
 
         deadband = self._SPEED_INPUT_DEADBAND
-        decay_tau = self._SPEED_DECAY_TAU_S
+        decay_tau = (self._SPEED_DECAY_TAU_S if decay_tau_s is None
+                     else max(self._SPEED_DECAY_MS_MIN / 1000.0,
+                              float(decay_tau_s)))
         cutoff = self._SPEED_OUTPUT_CUTOFF
 
         if dt <= 0.0:
@@ -619,6 +674,81 @@ class MotorRouter:
         denom = max(1.0 - cutoff, 1e-6)
         return min(1.0, (smoothed - cutoff) / denom)
 
+    def _antistuck_factor(self, state: Dict[str, Any], d_raw: float,
+                          now: float,
+                          cfg: Optional[Dict[str, Any]]) -> float:
+        """Return an output multiplier in [0, 1] for the per-motor anti-stuck
+        cutoff, updating the motor's staleness bookkeeping in `state` in place.
+
+        `1.0` means pass-through; a smaller value fades a frozen input toward
+        0. `cfg` is the `{enabled, active_s, peaked_s}` dict threaded from app
+        settings (None / disabled → always 1.0). See the `_ANTISTUCK_*`
+        constants for the model rationale.
+
+        Detection compares the raw input against the last-seen input, NOT the
+        post-cutoff output — so once a stuck value is cut, it stays cut until
+        VRChat actually sends a different value. The returned factor is meant
+        to scale the motor's *final* output; callers must not feed a reduced
+        d_raw back into the speed detector."""
+        last = state.get("as_last_draw")
+        if last is None or abs(d_raw - last) > self._ANTISTUCK_EPSILON:
+            # Input moved (or first sample) — reset the fuse.
+            state["as_last_draw"] = d_raw
+            state["as_static_since"] = now
+
+        if not cfg or not cfg.get("enabled"):
+            # Hold the fuse reset while disabled so enabling the feature later
+            # doesn't instantly fire on a value that was already static.
+            state["as_static_since"] = now
+            return 1.0
+
+        # A value at/below the change epsilon is effectively off — nothing to
+        # clear, and holding "0" forever is harmless.
+        if d_raw <= self._ANTISTUCK_EPSILON:
+            return 1.0
+
+        since = state.get("as_static_since", now)
+        elapsed = now - since
+        if elapsed < 0.0:
+            elapsed = 0.0
+
+        if d_raw >= self._ANTISTUCK_SATURATED:
+            # Saturated hold — longer fuse, then a gentle ramp rather than a
+            # hard cut (it may legitimately mean "all the way in").
+            peaked_s = self._coerce_float(cfg.get("peaked_s", 15.0), 15.0, 0.0, 600.0)
+            if elapsed < peaked_s:
+                return 1.0
+            ramp = 1.0 - (elapsed - peaked_s) / self._ANTISTUCK_RAMP_S
+            return max(0.0, min(1.0, ramp))
+
+        # Mid-range hold — almost always a dropped stream; cut hard.
+        active_s = self._coerce_float(cfg.get("active_s", 7.0), 7.0, 0.0, 600.0)
+        return 0.0 if elapsed >= active_s else 1.0
+
+    def _simple_antistuck(self, value: float, now: float) -> float:
+        """Flat, non-adjustable anti-stuck for Simple Mode. Simple Mode emits
+        one global SPS-max to every motor and exposes no tuning, so a single
+        `_SIMPLE_ANTISTUCK_S`-second cutoff on that value is the whole feature:
+        once the value sits unchanged that long it's treated as a frozen sender
+        and forced to 0 until it moves again. Unlike the full Device Routing
+        path there is no saturated-ramp distinction — a held value of any level
+        dies at the flat timeout. Updates the global staleness bookkeeping in
+        place; always on (Simple Mode has no enable toggle)."""
+        last = self._simple_as_last_val
+        if last is None or abs(value - last) > self._ANTISTUCK_EPSILON:
+            # Moved (or first sample) — reset the fuse, pass through. Store the
+            # true value so subsequent ticks compare against the real input,
+            # not a post-cutoff 0.
+            self._simple_as_last_val = value
+            self._simple_as_since = now
+            return value
+        # Frozen. A value already at rest has nothing to clear.
+        if value <= self._ANTISTUCK_EPSILON:
+            return value
+        if (now - self._simple_as_since) >= self._SIMPLE_ANTISTUCK_S:
+            return 0.0
+        return value
+
     def has_tune_subscription(self) -> bool:
         """True when any UI surface needs the routing tick to keep
         firing even with VRChat silent — covers per-(motor, chain)
@@ -630,6 +760,21 @@ class MotorRouter:
         need a rename — the broader semantics are correct."""
         return (bool(self._intermediates_subscribers)
                 or bool(self._chain_value_providers))
+
+    def needs_settling(self) -> bool:
+        """True while any motor's last computed output is above zero —
+        smoothing tails, gate closes, and the anti-stuck cutoff all
+        need further ticks to finish settling after VRChat goes
+        silent (OSC only fires on change, so there is no wake-up
+        coming for a frozen input).
+
+        This is a HARDWARE-SAFETY condition, deliberately independent
+        of any UI subscription: the UI taps pause while their pages
+        are hidden, but a driven motor must keep being recomputed
+        until it has genuinely come to rest, no matter what page is
+        on screen. Once every output sits at zero, idle ticks stop
+        costing CPU again."""
+        return any(v > 0.0 for v in self.last_outputs.values())
 
     # ----------------------------------------------------------
     # Per-(motor, chain) intermediates subscribers (Cut 6).
@@ -853,6 +998,7 @@ class MotorRouter:
         zones: Set[Tuple[str, str]],
         profile_dict: Optional[Dict[str, Any]] = None,
         sps_sources: Optional[Dict[str, Any]] = None,
+        antistuck: Optional[Dict[str, Any]] = None,
     ) -> float:
         compiled = self._compile_motor_config(
             profile_dict if profile_dict is not None else config,
@@ -918,10 +1064,21 @@ class MotorRouter:
                 except Exception:
                     pass
 
-            s_raw = self._derive_speed_signal(chain_state, chain_d_raw, dt)
-
             depth = chain.get("depth", {}) if isinstance(chain, dict) else {}
             speed = chain.get("speed", {}) if isinstance(chain, dict) else {}
+
+            # Per-chain speed fall-off: how long the speed channel keeps
+            # ringing after movement stops. Stored in ms (UI units),
+            # consumed as a tau in seconds.
+            speed_decay_s = self._coerce_float(
+                speed.get("decay_ms", self._SPEED_DECAY_TAU_S * 1000.0),
+                self._SPEED_DECAY_TAU_S * 1000.0,
+                self._SPEED_DECAY_MS_MIN, self._SPEED_DECAY_MS_MAX,
+            ) / 1000.0
+            s_raw = self._derive_speed_signal(
+                chain_state, chain_d_raw, dt, speed_decay_s
+            )
+
             d_shaped = apply_curve(
                 chain_d_raw,
                 str(depth.get("curve", "linear")),
@@ -948,8 +1105,19 @@ class MotorRouter:
                 sleep_delay_s = self._coerce_float(
                     gate_cfg.get("sleep_delay_s", 0.5), 0.5, 0.0, 60.0
                 )
+                # Meter build-up / decay taus. Long attack = the gate
+                # wants sustained movement before waking; long release
+                # = the activity "budget" drains over seconds instead
+                # of collapsing between strokes.
+                attack_s = self._coerce_float(
+                    gate_cfg.get("attack_s", 0.05), 0.05, 0.01, 10.0
+                )
+                release_s = self._coerce_float(
+                    gate_cfg.get("release_s", 0.5), 0.5, 0.01, 10.0
+                )
                 new_meter = activity_meter(
-                    chain_state["activity_meter"], s_raw, dt
+                    chain_state["activity_meter"], s_raw, dt,
+                    attack_s, release_s,
                 )
                 chain_state["activity_meter"] = new_meter
                 new_open, new_below_since = activity_gate(
@@ -1003,6 +1171,15 @@ class MotorRouter:
         # single-chain motor this is a no-op pass-through; for two
         # chains it's the user's chosen op (add/max/multiply).
         final_out = merge_chains(chain_outputs, merge_op)
+
+        # Anti-stuck safety cutoff — fade out a motor whose combined input
+        # has been frozen too long (VRChat stops sending OSC on avatar swap /
+        # partner leave / routing loss). Applied to the merged output so the
+        # speed detector + smoothing state above stay honest; the factor is
+        # 1.0 in the common case (input still moving, or feature disabled).
+        as_factor = self._antistuck_factor(state, live_d_raw, now, antistuck)
+        if as_factor < 1.0:
+            final_out *= as_factor
 
         # Persist motor-level state. Per-chain `last_position` and
         # `smoothed_speed` were updated inside `_derive_speed_signal`;
@@ -1122,9 +1299,15 @@ class MotorRouter:
     ) -> List[Tuple[str, float, int]]:
         """Simple-mode routing: push the same global SPS max value to every
         connected device's every motor. Returns only entries whose target
-        value changed (same debounce semantics as `reevaluate_state`)."""
+        value changed (same debounce semantics as `reevaluate_state`).
+
+        A fixed, non-adjustable 2 s stuck-value cutoff guards the single global
+        value (see `_simple_antistuck`) — Simple Mode has no per-motor state or
+        tuning, so it gets the flat-timeout version of the full path's
+        anti-stuck safety net rather than the configurable two-timer model."""
         zones = self._get_zone_tuples(all_params, zones)
         value = self.compute_simple_mode_value(all_params, zones=zones)
+        value = self._simple_antistuck(value, self._clock())
         updates: List[Tuple[str, float, int]] = []
         for device_name, motor_count in device_motor_counts.items():
             for motor_idx in range(motor_count):
@@ -1144,6 +1327,10 @@ class MotorRouter:
         # can leave the last-seen position arbitrarily far from the new
         # computation).
         self._motor_state.clear()
+        # Reset the Simple Mode stuck-value fuse so a mode switch starts the
+        # 2 s timer fresh rather than inheriting the previous value's age.
+        self._simple_as_last_val = None
+        self._simple_as_since = -1.0
 
     def reevaluate_state(
         self,
@@ -1151,13 +1338,18 @@ class MotorRouter:
         all_params: Dict[str, Any],
         zones: Optional[Set[Tuple[str, str]]] = None,
         sps_sources: Optional[Dict[str, Any]] = None,
+        antistuck: Optional[Dict[str, Any]] = None,
     ) -> List[Tuple[str, float, int]]:
         """Recalculate motor outputs for every configured device/motor based on the
         live Shadow State, returning only entries whose target value changed.
 
         `sps_sources` is the `name -> definition` map of enabled synthetic
         SPS sources (from the controller). A motor that selected a source by
-        name picks up its evaluated value; None disables the feature."""
+        name picks up its evaluated value; None disables the feature.
+
+        `antistuck` is the `{enabled, active_s, peaked_s}` config (from app
+        settings) for the per-motor stuck-input safety cutoff; None disables
+        it."""
         zones = self._get_zone_tuples(all_params, zones)
         # Refresh length calibrations first so all motor calculations see fresh state.
         self._update_length_detectors(all_params, zones)
@@ -1170,6 +1362,7 @@ class MotorRouter:
                     device_name, motor_idx, config, all_params,
                     zones=zones, profile_dict=active_profile,
                     sps_sources=sps_sources,
+                    antistuck=antistuck,
                 )
 
                 state_key = (device_name, motor_idx)

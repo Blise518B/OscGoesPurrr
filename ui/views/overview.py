@@ -137,6 +137,14 @@ class OverviewMixin:
             self._overview_apply_chip_style(btn)
             chip_lay.addWidget(btn)
             self._overview_chip_buttons[sid] = btn
+        chip_lay.addWidget(self._make_help_badge(
+            "Overview",
+            "Read-only at-a-glance wall: one tile per toy, tracker, "
+            "bHaptics device, etc., with live meters and battery. The "
+            "chips toggle whole sections on/off (persisted). Click a "
+            "tile to jump to its editor view; drag the ⤢ corner to "
+            "resize a tile."
+        ))
         chip_lay.addStretch(1)
         parent_layout.addWidget(chip_row)
 
@@ -198,8 +206,13 @@ class OverviewMixin:
     def _refresh_overview_dynamic(self) -> None:
         """Re-query the controller facades and push fresh values into
         the dynamic sections (trackers / suit / stats / system). Toys
-        get live updates via push hooks so we don't re-query them."""
+        get live updates via push hooks so we don't re-query them.
+        Skipped while the page is hidden (2 Hz of facade polling is
+        pure cost elsewhere); select_view refreshes on arrival."""
         if not getattr(self, "_overview_sections", None):
+            return
+        view = self.views.get("Overview")
+        if view is not None and not view.isVisible():
             return
         try:
             self._refresh_trackers_values()

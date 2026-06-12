@@ -11,19 +11,45 @@ REM up) goes on PyInstaller's search path so "import testbench" resolves. The
 REM bench never imports the main OscGoesPurrr app.
 pushd "%~dp0"
 
-python --version >nul 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] Python not found. Please install Python and try again.
+REM Resolve a Python launcher (prefer the 'py' launcher over the Microsoft
+REM Store 'python' stub) and build / validate the test-bench venv (.venv in
+REM testbench\). pip / PyInstaller all run through the venv.
+set "PY="
+where py >nul 2>nul && set "PY=py -3"
+if not defined PY (
+    where python >nul 2>nul && set "PY=python"
+)
+if not defined PY (
+    echo [ERROR] Python not found. Install Python 3.10+ from https://www.python.org/
     popd
     pause
     exit /b 1
 )
 
+set "VENV_PY=.venv\Scripts\python.exe"
+if exist "%VENV_PY%" (
+    "%VENV_PY%" -c "import sys" >nul 2>&1 || (
+        echo Existing virtual environment is broken; recreating...
+        rmdir /s /q ".venv"
+    )
+)
+if not exist "%VENV_PY%" (
+    if exist ".venv" rmdir /s /q ".venv"
+    echo Creating test-bench virtual environment...
+    %PY% -m venv .venv
+    if errorlevel 1 (
+        echo [ERROR] Could not create virtual environment.
+        popd
+        pause
+        exit /b 1
+    )
+)
+
 echo [1/4] Checking for PyInstaller...
-pip show pyinstaller >nul 2>&1
+"%VENV_PY%" -m pip show pyinstaller >nul 2>&1
 if %errorlevel% neq 0 (
     echo PyInstaller not found. Installing...
-    pip install pyinstaller
+    "%VENV_PY%" -m pip install pyinstaller
     if %errorlevel% neq 0 (
         echo [ERROR] Failed to install PyInstaller.
         popd
@@ -36,7 +62,7 @@ if %errorlevel% neq 0 (
 echo.
 
 echo [2/4] Installing test-bench dependencies...
-pip install -r requirements.txt
+"%VENV_PY%" -m pip install -r requirements.txt
 if %errorlevel% neq 0 (
     echo [WARNING] Some dependencies may have failed to install. Continuing anyway...
 )
@@ -56,7 +82,7 @@ REM falls back to a default icon when it's missing).
 set ICON_OPTS=
 if exist "..\Images\OGP_Sim_Icon.ico" set ICON_OPTS=--icon "..\Images\OGP_Sim_Icon.ico" --add-data "..\Images\OGP_Sim_Icon.ico;Images"
 
-pyinstaller --noconfirm ^
+"%VENV_PY%" -m PyInstaller --noconfirm ^
     --onefile ^
     --windowed ^
     --paths ".." ^

@@ -7,11 +7,13 @@ Embedded in two contexts (intentionally — see docs/MOTOR_SIGNAL_CHAIN.md
   * Tune view (Cut 4) — same editing surface plus the multi-trace
     graph and pattern player overlay.
 
-There is exactly one editor per stage; clicking a stage in the strip
-swaps the inline editor below. Storage round-trips through the
-controller facade calls the rest of the UI already uses
-(`get_profile_config`, `update_device_config`, `save_profiles`,
-`force_recalculate`).
+The strip is a horizontal accordion (Cut 9): each stage is a card that
+shows a quick control + live output number when collapsed, and expands
+in place — pushing its siblings into thin rails — to reveal its full
+editor when clicked. Connectors between cards stretch with the motion.
+Storage round-trips through the controller facade calls the rest of the
+UI already uses (`get_profile_config`, `update_device_config`,
+`save_profiles`, `force_recalculate`).
 
 The widget reads the per-motor `mix` block in the chains-list shape
 locked in Cut 1 (`mix.<motor>.chains[0].…`). Cuts 1–4 always have
@@ -24,16 +26,20 @@ import copy
 import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QBrush, QFont
+from PySide6.QtCore import (
+    Qt, QTimer, Signal, QVariantAnimation, QEasingCurve, QPoint, QPointF,
+)
+from PySide6.QtGui import (
+    QColor, QFont, QFontMetrics, QPainter, QPen, QBrush, QPolygonF,
+)
 from PySide6.QtWidgets import (
     QFrame, QWidget, QLabel, QPushButton, QComboBox, QDoubleSpinBox,
-    QButtonGroup, QStackedWidget, QSizePolicy,
+    QButtonGroup, QSlider, QSizePolicy,
 )
 
 from constants import (
     BTN_HEIGHT_SMALL, COLOR_SUCCESS, COLOR_ALERT, COLOR_TEXT,
-    COLOR_SURFACE, COLOR_SURFACE_HOVER,
+    COLOR_SURFACE, COLOR_SURFACE_HOVER, COLOR_TEXT_MUTED, COLOR_LIVE,
 )
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
 from ui.widgets import ToggleSwitch, RainbowMeter as _RainbowMeter, ProgressProxy as _ProgressProxy
@@ -253,8 +259,8 @@ def _set_merge_op(controller, device_name: str, motor_idx: int,
     _write_per_motor(controller, device_name, motor_idx, per_motor)
 
 
-# Stage IDs — kept short and stable; used as both the QStackedWidget
-# page key and the active-stage marker on the stages strip.
+# Stage IDs — kept short and stable; used as the per-stage card key
+# and the active-stage marker on the accordion stages strip.
 STAGE_INPUT = "input"
 STAGE_DEPTH = "depth"
 STAGE_SPEED = "speed"
@@ -276,6 +282,19 @@ _STAGE_LABELS = {
     STAGE_GATE:      "Gate",
     STAGE_SMOOTHING: "Smoothing",
     STAGE_OUTPUT:    "Output",
+}
+
+# Abbreviated titles shown when a card is squished to a thin rail
+# (some other stage is expanded). Full labels would clip; these read
+# cleanly at ~48px.
+_STAGE_SHORT = {
+    STAGE_INPUT:     "In",
+    STAGE_DEPTH:     "Dep",
+    STAGE_SPEED:     "Spd",
+    STAGE_COMBINE:   "Cmb",
+    STAGE_GATE:      "Gate",
+    STAGE_SMOOTHING: "Smth",
+    STAGE_OUTPUT:    "Out",
 }
 
 _CURVE_KINDS = ("linear", "power", "s_curve")
@@ -341,6 +360,73 @@ _STAGE_BORDER_HIGH = "#FF40A0"  # vivid pink
 # least this much, to keep the stylesheet churn well below the
 # router's 90Hz tick.
 _STAGE_BORDER_EPSILON = 0.02
+
+
+# ---- Accordion layout (Cut 9: inline-expand stages strip) ----------
+# The stages strip is a horizontal accordion: clicking a card expands
+# it in place to reveal its editor while the siblings squish to thin
+# rails. Widths are animated; the connectors between cards stretch to
+# stay attached.
+_RAIL_WIDTH = 54              # squished sibling slot width (thin rail);
+                              # sized so the 3-4 char short titles fit with
+                              # the rail's zeroed side margins (apply_state)
+_CARD_COLLAPSED_MIN = 68      # floor width for a card in the all-collapsed strip
+                              # (low so the compact non-slider cards stay narrow)
+_EXPANDED_MIN = 280           # floor width for the expanded card body
+_CARD_EXPANDED_TARGET = 340   # preferred width for the expanded card body
+_ACCORDION_ANIM_MS = 160      # expand/collapse duration (≈ overview.py's 150)
+# The connectors live in flexible spacer cells between cards (min width
+# _CONNECTOR_GAP, no max). Because the cards are pinned and the spacers
+# absorb the row's slack, a connector lengthens as its neighbour expands
+# and the far siblings squish — i.e. the arrows genuinely stretch.
+_CONNECTOR_GAP = 18           # minimum connector-cell width
+_HEADER_CENTER_Y = 17         # connector attach y when a stage is expanded
+                              # (cards top-align, arrows ride the header row)
+_BRANCH_FANOUT = 12           # vertical spread of the fork/join arrows at the
+                              # shared (Input / Combine) end, so the two arrows
+                              # don't start/arrive stacked on top of each other
+_QWIDGETSIZE_MAX = 16_777_215  # Qt's QWIDGETSIZE_MAX; "unbounded" max width/height
+
+# Gain quick-slider: integer track 0..200 maps to gain 0.0..2.0 (1 step
+# == 0.01); tick marks render at 0.5/1.0/1.5.
+_GAIN_SLIDER_MAX = 200
+_GAIN_SLIDER_SCALE = 100.0
+_GAIN_TICK_INTERVAL = 50      # ticks at track positions 50/100/150
+_GAIN_SLIDER_MIN_W = 130      # min slider length so Depth/Speed get a long slider
+
+# Magnetic snap: while the user DRAGS the handle, it sticks to these track
+# positions (gain 0 / 0.5 / 1.0 / 1.5 / 2.0) when it lands within
+# _GAIN_SNAP_RADIUS of one. Keyboard steps and programmatic sets (the
+# precise spinbox / reset) pass through un-snapped, so any in-between value
+# stays reachable.
+_GAIN_DETENTS = (0, 50, 100, 150, 200)
+_GAIN_SNAP_RADIUS = 8         # int track units (== 0.08 gain)
+
+# Smoothing quick-slider: the track is milliseconds directly. One slider
+# sets both rise and fall (a single "how smooth" delay); ticks + drag-snap
+# every 100 ms. Values beyond the range are still settable in the editor.
+_MS_SLIDER_MAX = 500
+_MS_TICK_INTERVAL = 100
+_MS_DETENTS = (0, 100, 200, 300, 400, 500)
+_MS_SNAP_RADIUS = 15          # ms
+
+# Output-number label churn gate — half the displayed precision (.2f).
+_OUTPUT_NUM_EPSILON = 0.005
+
+# Connector colours: idle grey (like the old "→" arrow) charging toward
+# vivid pink with live signal. Reuses the border-lerp endpoints' feel.
+_CONNECTOR_IDLE = QColor(COLOR_TEXT_MUTED)
+_CONNECTOR_LIVE = QColor(_STAGE_BORDER_HIGH)
+
+
+def _lerp_color(lo: QColor, hi: QColor, t: float) -> QColor:
+    """Channel-wise lerp between two QColors by t in [0, 1] (clamped)."""
+    t = max(0.0, min(1.0, float(t)))
+    return QColor(
+        int(lo.red()   + (hi.red()   - lo.red())   * t),
+        int(lo.green() + (hi.green() - lo.green()) * t),
+        int(lo.blue()  + (hi.blue()  - lo.blue())  * t),
+    )
 
 # Subtitle refresh cadence — picks up external profile edits
 # without a notification path. 1.5 s is fine because the only edits
@@ -547,12 +633,545 @@ class ValveIndicator(QFrame):
 
 
 # ----------------------------------------------------------
+# Quick collapsed-card sliders — a shared snap base + a gain slider
+# (Depth/Speed) and a smoothing-delay slider (Smoothing).
+# ----------------------------------------------------------
+
+class _SnapSlider(QSlider):
+    """Horizontal integer-track slider with tick marks and drag-magnetic
+    snap to a set of detents. While the user DRAGS the handle it sticks to
+    a detent when it lands within the snap radius — easier to hit round
+    values — but keyboard nudges and programmatic `set_raw` (blockSignals)
+    pass through un-snapped, so any in-between value stays reachable. Domain
+    subclasses add their own float/labelled API on top of `rawChanged`. The
+    blockSignals echo-guard mirrors ui/widgets.py SliderProxy."""
+
+    rawChanged = Signal(int)
+
+    def __init__(self, vmax: int, tick_interval: int, detents, snap_radius: int,
+                 single_step: int, page_step: int,
+                 parent: Optional[QWidget] = None) -> None:
+        super().__init__(Qt.Horizontal, parent)
+        self._detents = tuple(int(d) for d in detents)
+        self._snap_radius = int(snap_radius)
+        self.setRange(0, int(vmax))
+        self.setSingleStep(int(single_step))
+        self.setPageStep(int(page_step))
+        self.setTickPosition(QSlider.TicksBelow)
+        self.setTickInterval(int(tick_interval))
+        self.valueChanged.connect(self._on_value_changed)
+
+    def _on_value_changed(self, v: int) -> None:
+        # Magnetic snap only while dragging the handle (isSliderDown). The
+        # snapped setValue re-enters this slot with the detent value, which
+        # then emits. Keyboard steps and programmatic set_raw (blockSignals)
+        # never reach here mid-snap, so fine values stay reachable.
+        if self.isSliderDown():
+            snapped = self._snap(v)
+            if snapped != v:
+                self.setValue(snapped)
+                return
+        self.rawChanged.emit(self.value())
+
+    def _snap(self, v: int) -> int:
+        for d in self._detents:
+            if abs(v - d) <= self._snap_radius:
+                return d
+        return v
+
+    def set_raw(self, raw: float) -> None:
+        """Set the track value without echoing a change."""
+        try:
+            v = max(0, min(self.maximum(), int(round(float(raw)))))
+        except (TypeError, ValueError):
+            v = 0
+        self.blockSignals(True)
+        self.setValue(v)
+        self.blockSignals(False)
+
+
+class _GainSlider(_SnapSlider):
+    """Quick gain control (Depth/Speed). Track 0..200 maps to gain
+    0.0..2.0; tick marks + drag-snap at 0.5/1.0/1.5 (and 0/2)."""
+
+    gainChanged = Signal(float)
+
+    def __init__(self, gain: float, parent: Optional[QWidget] = None) -> None:
+        super().__init__(_GAIN_SLIDER_MAX, _GAIN_TICK_INTERVAL, _GAIN_DETENTS,
+                         _GAIN_SNAP_RADIUS, 5, 25, parent)
+        self.set_gain(gain)
+        self.rawChanged.connect(
+            lambda v: self.gainChanged.emit(v / _GAIN_SLIDER_SCALE))
+
+    def set_gain(self, gain: float) -> None:
+        try:
+            self.set_raw(float(gain) * _GAIN_SLIDER_SCALE)
+        except (TypeError, ValueError):
+            self.set_raw(_GAIN_SLIDER_MAX // 2)
+
+    def gain(self) -> float:
+        return self.value() / _GAIN_SLIDER_SCALE
+
+
+class _MsSlider(_SnapSlider):
+    """Quick smoothing-delay control (Smoothing). The track is milliseconds
+    directly (0.._MS_SLIDER_MAX); tick marks + drag-snap every 100 ms."""
+
+    msChanged = Signal(int)
+
+    def __init__(self, ms: float, parent: Optional[QWidget] = None) -> None:
+        super().__init__(_MS_SLIDER_MAX, _MS_TICK_INTERVAL, _MS_DETENTS,
+                         _MS_SNAP_RADIUS, 10, 50, parent)
+        self.set_ms(ms)
+        self.rawChanged.connect(self.msChanged.emit)
+
+    def set_ms(self, ms: float) -> None:
+        self.set_raw(ms)
+
+    def ms(self) -> int:
+        return self.value()
+
+
+class _GainControl(QWidget):
+    """A `_GainSlider` plus an inline numeric readout (e.g. "×1.00") so
+    the collapsed Depth/Speed card shows the current gain *setting* at a
+    glance, distinct from the live output number in the card header. The
+    readout always reflects the value — whether the user drags the slider
+    or it's set programmatically (mirrored from the precise spinbox /
+    reset). Exposes the same `set_gain` / `gain` / `gainChanged` surface
+    as `_GainSlider`, so it drops into the gain-sync wiring unchanged."""
+
+    gainChanged = Signal(float)
+
+    def __init__(self, gain: float, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        lay = _hbox(0, 6)
+        self.setLayout(lay)
+        self._slider = _GainSlider(gain)
+        self._slider.setMinimumWidth(_GAIN_SLIDER_MIN_W)
+        self._value = QLabel()
+        self._value.setObjectName("gainValue")
+        self._value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._value.setMinimumWidth(42)   # steady width as digits change
+        lay.addWidget(self._slider, 1)
+        lay.addWidget(self._value, 0)
+        self._slider.gainChanged.connect(self._on_slider)
+        self._sync_label(self._slider.gain())
+
+    def _on_slider(self, g: float) -> None:
+        self._sync_label(g)
+        self.gainChanged.emit(g)
+
+    def set_gain(self, gain: float) -> None:
+        """Set the slider (silently) and refresh the readout."""
+        self._slider.set_gain(gain)
+        self._sync_label(self._slider.gain())
+
+    def gain(self) -> float:
+        return self._slider.gain()
+
+    def _sync_label(self, g: float) -> None:
+        self._value.setText(f"×{g:.2f}")
+
+
+class _DelayControl(QWidget):
+    """A smoothing-delay slider (ms) + inline readout for the collapsed
+    Smoothing card. One slider sets BOTH rise and fall to the same delay —
+    a single 'how smooth' knob; the expanded editor keeps them independent.
+    Mirrors _GainControl's shape (`set_ms` / `ms` / `msChanged`)."""
+
+    msChanged = Signal(int)
+
+    def __init__(self, ms: float, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        lay = _hbox(0, 6)
+        self.setLayout(lay)
+        self._slider = _MsSlider(ms)
+        self._slider.setMinimumWidth(_GAIN_SLIDER_MIN_W)
+        self._value = QLabel()
+        self._value.setObjectName("gainValue")
+        self._value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self._value.setMinimumWidth(48)   # steady width ("500ms")
+        lay.addWidget(self._slider, 1)
+        lay.addWidget(self._value, 0)
+        self._slider.msChanged.connect(self._on_slider)
+        self._sync_label(self._slider.ms())
+
+    def _on_slider(self, m: int) -> None:
+        self._sync_label(m)
+        self.msChanged.emit(int(m))
+
+    def set_ms(self, ms: float) -> None:
+        """Set the slider (silently) and refresh the readout."""
+        self._slider.set_ms(ms)
+        self._sync_label(self._slider.ms())
+
+    def ms(self) -> int:
+        return self._slider.ms()
+
+    def _sync_label(self, m: int) -> None:
+        self._value.setText(f"{int(m)}ms")
+
+
+# ----------------------------------------------------------
+# _StageCard — one accordion cell (header + quick region + editor).
+# ----------------------------------------------------------
+
+# Card display states, driven by the parent's active-stage choice.
+_CARD_RAIL = "rail"          # thin sliver: short title only
+_CARD_QUICK = "quick"        # collapsed: header + quick control + number
+_CARD_EXPANDED = "expanded"  # full editor revealed
+
+
+class _StageCard(QFrame):
+    """A single clickable stage cell in the accordion strip. Owns three
+    stacked regions in a vertical layout:
+
+      * Header (always visible): bold stage title + a live output number.
+      * Quick region (visible when collapsed): the at-a-glance control —
+        a gain slider for Depth/Speed, the subtitle summary otherwise.
+      * Editor region (built lazily, hidden until first expand): receives
+        the full per-stage editor; its maximumHeight is animated on
+        expand/collapse.
+
+    Keeps objectName "tuneStageCard" so the existing QSS and the live
+    `_apply_stage_card_color` per-widget border lerp keep working. Emits
+    `clicked(stage_id)` on left-press; child sliders/spinboxes consume
+    their own mouse events (Qt child-first dispatch), so dragging a
+    control never toggles the card."""
+
+    clicked = Signal(str)
+
+    def __init__(self, stage_id: str, full_title: str, short_title: str,
+                 compact: bool = False,
+                 parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._stage_id = stage_id
+        self._full = full_title
+        self._short = short_title
+        self._compact = compact
+        self._last_out = -1.0
+
+        self.setObjectName("tuneStageCard")
+        self.setCursor(Qt.PointingHandCursor)
+        self.setProperty("active", "false")
+        self.setMinimumWidth(_CARD_COLLAPSED_MIN)
+
+        root = _vbox(8, 4)
+        self._root_lay = root
+        self.setLayout(root)
+
+        self._title = QLabel(full_title)
+        tf = self._title.font(); tf.setBold(True)
+        self._title.setFont(tf)
+        # Rail mode renders inside ~_RAIL_WIDTH px: the layout's side
+        # margins go to zero and the title drops a point so the short
+        # label fits the sliver without clipping.
+        self._font_full = QFont(tf)
+        self._font_rail = QFont(tf)
+        self._font_rail.setPointSize(max(7, tf.pointSize() - 1))
+        self._out_label = QLabel("—")
+        self._out_label.setObjectName("stageOutNum")
+        if compact:
+            # Compact (non-slider) cards stack the title over the number, so
+            # the card is narrow (width = title) and a little taller — frees
+            # horizontal room. Both centred.
+            self._title.setAlignment(Qt.AlignHCenter)
+            self._out_label.setAlignment(Qt.AlignHCenter)
+            header = _vbox(0, 0)
+            header.addWidget(self._title)
+            header.addWidget(self._out_label)
+        else:
+            # Slider cards are wide anyway, so title + number sit side by side.
+            self._out_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            header = _hbox(0, 6)
+            header.addWidget(self._title)
+            header.addStretch(1)
+            header.addWidget(self._out_label)
+        root.addLayout(header)
+
+        # Quick region — collapsed content (populated by the parent).
+        self._quick = QFrame()
+        self._quick.setObjectName("stageQuick")
+        self._quick_lay = _vbox(0, 2)
+        self._quick.setLayout(self._quick_lay)
+        root.addWidget(self._quick)
+
+        # Editor region — built lazily, hidden + zero-height until expand.
+        self._editor_region = QFrame()
+        self._editor_region.setObjectName("stageEditorRegion")
+        self._editor_lay = _vbox(0, 0)
+        self._editor_region.setLayout(self._editor_lay)
+        self._editor_region.setVisible(False)
+        self._editor_region.setMaximumHeight(0)
+        root.addWidget(self._editor_region)
+
+        self._editor_built = False
+
+    # ------------------------------------------------------------ basics
+    @property
+    def stage_id(self) -> str:
+        return self._stage_id
+
+    @property
+    def quick_layout(self):
+        return self._quick_lay
+
+    def mousePressEvent(self, ev) -> None:
+        if ev.button() == Qt.LeftButton:
+            self.clicked.emit(self._stage_id)
+            ev.accept()
+        else:
+            super().mousePressEvent(ev)
+
+    # ------------------------------------------------------------ editor
+    def editor_built(self) -> bool:
+        return self._editor_built
+
+    def editor_region(self) -> QFrame:
+        return self._editor_region
+
+    def quick_region(self) -> QFrame:
+        return self._quick
+
+    def mount_editor(self, widget: QWidget) -> None:
+        self._editor_lay.addWidget(widget)
+        self._editor_built = True
+
+    def reset_editor(self) -> None:
+        """Tear down the built editor so it rebuilds on next expand.
+        Hide before reparent to avoid the brief top-level-window flash."""
+        while self._editor_lay.count():
+            item = self._editor_lay.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.hide()
+                w.setParent(None)
+                w.deleteLater()
+        self._editor_built = False
+        self._editor_region.setVisible(False)
+        self._editor_region.setMaximumHeight(0)
+
+    def set_editor_max_height(self, h: int) -> None:
+        self._editor_region.setMaximumHeight(max(0, int(h)))
+
+    # ------------------------------------------------------------ width
+    def set_width_px(self, w: int) -> None:
+        """Pin the card to an exact width (min == max) during animation."""
+        w = max(0, int(w))
+        self.setMinimumWidth(w)
+        self.setMaximumWidth(w)
+
+    def clear_width(self, floor: int) -> None:
+        """Release the width pin so the card flows naturally again."""
+        self.setMinimumWidth(floor)
+        self.setMaximumWidth(_QWIDGETSIZE_MAX)
+
+    # ------------------------------------------------------------ state
+    def apply_state(self, state: str) -> None:
+        """Set the card's collapsed/expanded/rail content visibility.
+        Editor-height visibility during animation is managed separately
+        by the parent; this sets the steady-state look. Rail mode also
+        reclaims the layout's side margins and shrinks the title font —
+        a _RAIL_WIDTH sliver minus border + QSS padding + 8px margins
+        leaves ~22px of content, which clipped every 3-4 letter short
+        title; with the margins folded away the titles fit."""
+        if state == _CARD_RAIL:
+            self._title.setText(self._short)
+            self._title.setFont(self._font_rail)
+            self._title.setAlignment(Qt.AlignHCenter)
+            self._root_lay.setContentsMargins(0, 8, 0, 8)
+            self._out_label.setVisible(False)
+            self._quick.setVisible(False)
+            self._editor_region.setVisible(False)
+            return
+        self._title.setFont(self._font_full)
+        self._root_lay.setContentsMargins(8, 8, 8, 8)
+        if self._compact:
+            self._title.setAlignment(Qt.AlignHCenter)
+        else:
+            self._title.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        if state == _CARD_EXPANDED:
+            self._title.setText(self._full)
+            self._out_label.setVisible(True)
+            self._quick.setVisible(False)
+            self._editor_region.setVisible(True)
+        else:  # _CARD_QUICK
+            self._title.setText(self._full)
+            self._out_label.setVisible(True)
+            self._quick.setVisible(True)
+            self._editor_region.setVisible(False)
+
+    def set_output_number(self, value: float) -> None:
+        """Update the live output number, gated to avoid per-tick churn."""
+        try:
+            v = max(0.0, min(1.0, float(value)))
+        except (TypeError, ValueError):
+            return
+        if abs(v - self._last_out) < _OUTPUT_NUM_EPSILON:
+            return
+        self._last_out = v
+        self._out_label.setText(f"{v:.2f}")
+
+
+# ----------------------------------------------------------
+# _StripHost — strip container that paints the stretching connectors.
+# ----------------------------------------------------------
+
+class _StripHost(QWidget):
+    """Hosts the stage cards in a QHBoxLayout and paints the elastic
+    connector arrows between adjacent slots in its own paintEvent.
+    Because the connectors are computed from live child geometry every
+    paint, and the parent triggers `update()` on each animation frame,
+    they stretch/shrink with the gaps automatically as cards expand and
+    siblings squish. Drawing in the parent (behind the child cards)
+    means card backgrounds cleanly occlude any overrun."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._slots: List[QWidget] = []
+        self._levels: List[float] = []
+        # Fork/join around the parallel Depth/Speed slot: Input forks into
+        # both channels, and both join into Combine. `_branch_index` is that
+        # slot's position in `_slots`; `_branch_cards` is [depth, speed].
+        self._branch_index: int = -1
+        self._branch_cards: List[QWidget] = []
+        self._branch_levels: List[float] = []
+        # Small (all-collapsed) mode centres the arrows on each card's middle;
+        # when a stage is expanded the cards top-align and arrows ride the
+        # header row instead (so a tall editor doesn't drag the arrow down).
+        self._centered: bool = True
+
+    def set_centered(self, centered: bool) -> None:
+        self._centered = bool(centered)
+
+    def set_slots(self, slots: List[QWidget]) -> None:
+        self._slots = list(slots)
+        self._levels = [0.0] * max(0, len(self._slots) - 1)
+
+    def set_branch(self, slot_index: int, branch_cards: List[QWidget]) -> None:
+        """Mark the parallel slot (its index in `_slots`) whose incoming and
+        outgoing connectors fork/join across its inner cards."""
+        self._branch_index = int(slot_index)
+        self._branch_cards = list(branch_cards)
+        self._branch_levels = [0.0] * len(self._branch_cards)
+
+    def set_connector_levels(self, levels: List[float]) -> None:
+        self._levels = list(levels)
+
+    def set_branch_levels(self, levels: List[float]) -> None:
+        self._branch_levels = list(levels)
+
+    def resizeEvent(self, ev) -> None:
+        super().resizeEvent(ev)
+        self.update()
+
+    def paintEvent(self, _ev) -> None:
+        if len(self._slots) < 2:
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        has_branch = (0 <= self._branch_index < len(self._slots)
+                      and len(self._branch_cards) == 2)
+        for i in range(len(self._slots) - 1):
+            try:
+                a = self._slots[i]
+                b = self._slots[i + 1]
+                if not a.isVisible() or not b.isVisible():
+                    continue
+                if a.geometry().isEmpty() or b.geometry().isEmpty():
+                    continue
+                level = self._levels[i] if i < len(self._levels) else 0.0
+                color = _lerp_color(_CONNECTOR_IDLE, _CONNECTOR_LIVE, level)
+                n = len(self._branch_cards)
+                if has_branch and i + 1 == self._branch_index:
+                    # Fork: Input splits into Depth and Speed. Spread the two
+                    # arrows' start points on Input's edge so they don't stack.
+                    sx, scy = self._card_anchor(a, right=True)
+                    for idx, card in enumerate(self._branch_cards):
+                        start = (sx, scy + self._fanout(idx, n))
+                        self._draw_arrow(
+                            p, start, self._card_anchor(card, right=False),
+                            color)
+                elif has_branch and i == self._branch_index:
+                    # Join: Depth and Speed merge into Combine. Spread the two
+                    # arrows' arrival points on Combine's edge, and tint each
+                    # by its own channel level.
+                    dx, dcy = self._card_anchor(b, right=False)
+                    for idx, card in enumerate(self._branch_cards):
+                        lv = (self._branch_levels[idx]
+                              if idx < len(self._branch_levels) else 0.0)
+                        end = (dx, dcy + self._fanout(idx, n))
+                        self._draw_arrow(
+                            p, self._card_anchor(card, right=True), end,
+                            _lerp_color(_CONNECTOR_IDLE, _CONNECTOR_LIVE, lv))
+                else:
+                    self._draw_arrow(p, self._card_anchor(a, right=True),
+                                     self._card_anchor(b, right=False), color)
+            except RuntimeError:
+                continue
+        p.end()
+
+    def _card_anchor(self, w: QWidget, right: bool):
+        """(x, y) in this host's coordinates for a card's connector anchor on
+        its right or left edge. In small (centered) mode the anchor is the
+        card's vertical middle; with a stage expanded it's the header row.
+        mapTo handles nested cards — Depth/Speed live inside the ds container,
+        not directly under the host."""
+        tl = w.mapTo(self, QPoint(0, 0))
+        x = tl.x() + (w.width() if right else 0)
+        h = max(2, w.height())
+        y = tl.y() + (h // 2 if self._centered
+                      else min(_HEADER_CENTER_Y, h - 2))
+        return (x, y)
+
+    @staticmethod
+    def _fanout(idx: int, n: int) -> float:
+        """Vertical offset for branch `idx` of `n` at the shared fork/join
+        endpoint: -_BRANCH_FANOUT for the top channel, +_BRANCH_FANOUT for the
+        bottom, spread evenly between — so the arrows don't stack."""
+        if n <= 1:
+            return 0.0
+        return ((idx / (n - 1)) - 0.5) * 2.0 * _BRANCH_FANOUT
+
+    @staticmethod
+    def _draw_arrow(p: QPainter, start, end, color: QColor) -> None:
+        """Draw a directional arrow from start=(x,y) to end=(x,y) with the
+        head pointing along the line, so angled fork/join arrows look right.
+        Skips degenerate / too-short spans."""
+        x1, y1 = float(start[0]), float(start[1])
+        x2, y2 = float(end[0]), float(end[1])
+        dx, dy = x2 - x1, y2 - y1
+        length = (dx * dx + dy * dy) ** 0.5
+        if length < 6.0:
+            return
+        ux, uy = dx / length, dy / length
+        ah = 5.0
+        base_x, base_y = x2 - ux * 2.0 * ah, y2 - uy * 2.0 * ah
+        pen = QPen(color)
+        pen.setWidth(2)
+        pen.setCapStyle(Qt.RoundCap)
+        p.setPen(pen)
+        p.drawLine(QPointF(x1, y1), QPointF(base_x, base_y))
+        # Arrowhead: tip at end, base corners perpendicular to direction.
+        px, py = -uy, ux
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(color))
+        head = QPolygonF([
+            QPointF(x2, y2),
+            QPointF(base_x + px * ah, base_y + py * ah),
+            QPointF(base_x - px * ah, base_y - py * ah),
+        ])
+        p.drawPolygon(head)
+
+
+# ----------------------------------------------------------
 # MotorSignalChainWidget — the main per-motor surface.
 # ----------------------------------------------------------
 
 class MotorSignalChainWidget(QFrame):
-    """Stages strip + inline stage editor + per-stage mini-graphs +
-    vibe meter for one motor (or one chain of a two-chain motor).
+    """Accordion stages strip with inline editors + per-stage mini-graphs
+    + vibe meter for one motor (or one chain of a two-chain motor).
 
     Embeds via:
         widget = MotorSignalChainWidget(ui, device_name, motor_idx, motor_kind)
@@ -577,7 +1196,7 @@ class MotorSignalChainWidget(QFrame):
     payload onto the UI thread where `_handle_intermediates` pushes
     samples into whichever stage's mini-graph has been built so far.
     Stage editors and their graphs are constructed lazily on first
-    activation."""
+    expand."""
 
     # Class-level Qt signal so the router's hot-path callback can
     # emit cross-thread to the UI thread safely (Qt.QueuedConnection
@@ -636,29 +1255,64 @@ class MotorSignalChainWidget(QFrame):
         header_row.addWidget(reset_btn)
         root.addLayout(header_row)
 
-        # ---- Stages strip --------------------------------------------
-        self._stage_cards: Dict[str, QFrame] = {}
-        # Subtitle labels under each card title; refreshed on a timer.
+        # ---- Stages strip (inline-expand accordion, Cut 9) -----------
+        self._stage_cards: Dict[str, _StageCard] = {}
+        # Subtitle labels under non-Depth/Speed card titles; refreshed
+        # on a timer. Depth/Speed show a gain slider instead, so they're
+        # absent here (and thus skipped by _refresh_stage_subtitles).
         self._stage_subtitles: Dict[str, QLabel] = {}
-        # Last-applied border level per stage; gates stylesheet churn.
+        # Last-applied border level per stage; gates stylesheet churn and
+        # feeds the connector colours.
         self._stage_last_level: Dict[str, float] = {}
         # Optional valve indicator on the gate stage card only.
         self._stage_valve: Optional[ValveIndicator] = None
-        self._active_stage: str = STAGE_INPUT
-        root.addWidget(self._build_stages_strip())
+        # Per-stage mini-graphs (Cut 6); built lazily in _build_editor_for.
+        self._stage_graphs: Dict[str, _TraceGraph] = {}
 
-        # ---- Editor stack --------------------------------------------
-        # One QStackedWidget page per stage. Pages are built lazily on
-        # first activation; until then the page is an empty placeholder
-        # so the stack always has all seven indices populated.
-        self._editor_stack = QStackedWidget()
-        self._editor_pages: Dict[str, QWidget] = {}
-        self._editor_built: Dict[str, bool] = {sid: False for sid in _STAGE_ORDER}
-        for sid in _STAGE_ORDER:
-            placeholder = QWidget()
-            self._editor_pages[sid] = placeholder
-            self._editor_stack.addWidget(placeholder)
-        root.addWidget(self._editor_stack)
+        # Quick gain controls (slider + readout on the Depth/Speed cards)
+        # and the precise gain spinboxes in their expanded editors — kept
+        # in sync two-way.
+        self._gain_sliders: Dict[str, _GainControl] = {}
+        self._gain_spins: Dict[str, QDoubleSpinBox] = {}
+        # Quick smoothing-delay control (Smoothing card) + the precise rise/
+        # fall spinboxes in its expanded editor — kept in sync two-way.
+        self._delay_control: Optional[_DelayControl] = None
+        self._smoothing_spins: Dict[str, QDoubleSpinBox] = {}
+
+        # Accordion geometry state. `_slots` is the ordered list of
+        # horizontal cells (each a card, except Depth/Speed share one
+        # container `_ds_slot`); `_slot_for_stage` maps a stage to its
+        # cell. _active_stage = None means nothing is expanded (the
+        # all-collapsed default).
+        self._slots: List[QWidget] = []
+        self._slot_for_stage: Dict[str, QWidget] = {}
+        self._ds_slot: Optional[QWidget] = None
+        self._strip_host: Optional[_StripHost] = None
+        self._strip_lay = None
+        self._last_connector_levels: List[float] = []
+        self._last_branch_levels: List[float] = []
+        self._active_stage: Optional[str] = None
+
+        # One reusable animation drives every expand/collapse: a 0→1
+        # progress the tick lerps into slot widths + the active editor's
+        # height, then repaints the connectors. Mirrors the OutCubic
+        # size-animation in ui/views/overview.py.
+        self._accordion_anim = QVariantAnimation(self)
+        self._accordion_anim.setStartValue(0.0)
+        self._accordion_anim.setEndValue(1.0)
+        self._accordion_anim.setDuration(_ACCORDION_ANIM_MS)
+        self._accordion_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._accordion_anim.valueChanged.connect(self._on_anim_tick)
+        self._accordion_anim.finished.connect(self._on_anim_done)
+        self._anim_from: Dict[QWidget, int] = {}
+        self._anim_to: Dict[QWidget, int] = {}
+        self._anim_editor_card: Optional[_StageCard] = None
+        self._anim_editor_from = 0
+        self._anim_editor_to = 0
+
+        root.addWidget(self._build_stages_strip())
+        # Start in small mode (nothing expanded): centre the cards + arrows.
+        self._apply_strip_mode(True)
 
         # ---- Vibe meter ----------------------------------------------
         self._vibe_meter = _RainbowMeter(maximum=1000)
@@ -670,12 +1324,9 @@ class MotorSignalChainWidget(QFrame):
         # below — set_activity(...) is a no-op shim for backward compat).
         self._activity_meter: Optional[ActivityMeter] = None
 
-        # Per-stage mini-graphs (Cut 6). Built lazily alongside their
-        # editor pages in `_build_editor_for`. Keyed by stage id.
-        self._stage_graphs: Dict[str, _TraceGraph] = {}
-
-        # Activate Input by default — it's where users start a new motor.
-        self._activate_stage(STAGE_INPUT)
+        # No stage is expanded by default — the collapsed strip shows
+        # each stage's title, quick control (gain slider on Depth/Speed),
+        # and live output number. Clicking a card expands it in place.
 
         # Stage card subtitle refresh — picks up external profile
         # edits without a notification path. Parented to self so the
@@ -686,27 +1337,22 @@ class MotorSignalChainWidget(QFrame):
         self._subtitle_timer.timeout.connect(self._refresh_stage_subtitles)
         self._subtitle_timer.start()
 
-        # Subscribe to per-(motor, chain) intermediates so the
-        # mini-graphs and activity meter receive live data. The signal
-        # bridge ensures cross-thread safety: router's callback runs
-        # on the routing thread, `emit` queues onto the UI thread
+        # Per-(motor, chain) intermediates feed the mini-graphs, the
+        # activity meter, and the live border/connector colours. The
+        # signal bridge ensures cross-thread safety: router's callback
+        # runs on the routing thread, `emit` queues onto the UI thread
         # where `_handle_intermediates` is invoked.
+        #
+        # The subscription is VISIBILITY-DRIVEN (showEvent/hideEvent):
+        # a chain hidden inside a collapsed toy card, or parked on a
+        # non-current sidebar page, costs nothing — the router skips
+        # the dispatch entirely and no cross-thread events queue. The
+        # router fires per-tick (~90 Hz) per subscribed chain, so this
+        # is the difference between "every chain in every profile
+        # burns CPU forever" and "only what's on screen does".
         self.intermediates.connect(self._handle_intermediates)
         self._intermediates_callback = self.intermediates.emit
         self._intermediates_subscribed = False
-        router = getattr(self._controller, "motor_router", None)
-        if router is not None and hasattr(router, "subscribe_intermediates"):
-            try:
-                router.subscribe_intermediates(
-                    self._device_name, self._motor_idx, self._chain_idx,
-                    self._intermediates_callback,
-                )
-                self._intermediates_subscribed = True
-            except Exception:
-                # Defensive — never let a hookup glitch crash widget
-                # construction. The chain still works without live
-                # graphs; the user just sees empty traces.
-                pass
 
     # ------------------------------------------------------------ public
 
@@ -723,100 +1369,129 @@ class MotorSignalChainWidget(QFrame):
     # ------------------------------------------------------------ stages
 
     def _build_stages_strip(self) -> QWidget:
-        """The clickable stage row. Depth and Speed are stacked
-        vertically in a single column to convey their parallelism;
-        every other stage is a single card. Arrow labels separate
-        adjacent stages so the chain reads left-to-right."""
-        host = QWidget()
-        lay = _hbox(0, 6)
+        """The clickable accordion strip. Each stage is a `_StageCard`;
+        Depth and Speed share one vertical slot to convey their
+        parallelism. The host (`_StripHost`) paints the stretching
+        connectors between slots — there are no arrow widgets. Slots are
+        top-aligned so every card header lines up, keeping the connectors
+        horizontal regardless of how tall the expanded card grows. A
+        trailing stretch absorbs slack so the per-frame width pins never
+        fight the layout."""
+        host = _StripHost()
+        lay = _hbox(0, 0)
         host.setLayout(lay)
+        self._strip_host = host
+        self._strip_lay = lay
+        self._slots = []
+        self._slot_for_stage = {}
 
-        def add(stage_id: str) -> None:
+        def make_connector() -> QWidget:
+            # Flexible spacer the connector arrow is painted across.
+            # Expanding with only a minimum width, so it soaks up the row's
+            # slack and lengthens as a neighbour expands while far siblings
+            # squish — i.e. the arrows stretch. Transparent (no autofill)
+            # so the parent-painted connector shows through.
+            sp = QWidget()
+            sp.setMinimumWidth(_CONNECTOR_GAP)
+            sp.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+            return sp
+
+        def add_slot(slot: QWidget) -> None:
+            if self._slots:                       # connector before every
+                lay.addWidget(make_connector())   # slot except the first
+            lay.addWidget(slot, 0, Qt.AlignTop)
+            self._slots.append(slot)
+
+        def add_card(stage_id: str) -> _StageCard:
             card = self._make_stage_card(stage_id)
             self._stage_cards[stage_id] = card
-            lay.addWidget(card)
+            return card
 
-        def add_arrow() -> None:
-            arrow = QLabel("→")
-            af = arrow.font(); af.setPointSize(14); af.setBold(True)
-            arrow.setFont(af)
-            arrow.setAlignment(Qt.AlignCenter)
-            arrow.setFixedWidth(20)
-            arrow.setProperty("muted", "true")
-            self._ui._repolish(arrow)
-            lay.addWidget(arrow)
+        # Input.
+        in_card = add_card(STAGE_INPUT)
+        add_slot(in_card)
+        self._slot_for_stage[STAGE_INPUT] = in_card
 
-        add(STAGE_INPUT)
-        add_arrow()
-
-        # Depth + Speed in a parallel column.
+        # Depth + Speed share one vertical slot.
         ds = QWidget()
         ds_lay = _vbox(0, 4)
         ds.setLayout(ds_lay)
-        depth_card = self._make_stage_card(STAGE_DEPTH)
-        speed_card = self._make_stage_card(STAGE_SPEED)
-        self._stage_cards[STAGE_DEPTH] = depth_card
-        self._stage_cards[STAGE_SPEED] = speed_card
+        depth_card = add_card(STAGE_DEPTH)
+        speed_card = add_card(STAGE_SPEED)
+        # Inner cards follow the slot width (the slot is what animates),
+        # so let them shrink to the rail width when the slot is squished.
+        depth_card.setMinimumWidth(0)
+        speed_card.setMinimumWidth(0)
         ds_lay.addWidget(depth_card)
         ds_lay.addWidget(speed_card)
-        lay.addWidget(ds)
+        add_slot(ds)
+        self._slot_for_stage[STAGE_DEPTH] = ds
+        self._slot_for_stage[STAGE_SPEED] = ds
+        self._ds_slot = ds
 
-        add_arrow()
-        add(STAGE_COMBINE)
-        add_arrow()
-        add(STAGE_GATE)
-        add_arrow()
-        add(STAGE_SMOOTHING)
-        add_arrow()
-        add(STAGE_OUTPUT)
-        lay.addStretch(1)
+        for sid in (STAGE_COMBINE, STAGE_GATE, STAGE_SMOOTHING, STAGE_OUTPUT):
+            card = add_card(sid)
+            add_slot(card)
+            self._slot_for_stage[sid] = card
+
+        host.set_slots(self._slots)
+        # Input forks into Depth+Speed, and they join into Combine — tell the
+        # host which slot is the parallel pair so it draws branch arrows.
+        host.set_branch(self._slots.index(self._ds_slot), [depth_card, speed_card])
         return host
 
-    def _make_stage_card(self, stage_id: str) -> QFrame:
-        card = QFrame()
-        card.setObjectName("tuneStageCard")
-        card.setCursor(Qt.PointingHandCursor)
-        card.setProperty("active", "false")
-        card.setMinimumWidth(86)
-        lay = _vbox(8, 2)
-        card.setLayout(lay)
+    def _make_stage_card(self, stage_id: str) -> _StageCard:
+        """Build one accordion cell. Depth/Speed get a quick gain slider and
+        Smoothing a quick delay (ms) slider; the other (compact) stages stack
+        their title over the output number and show the subtitle summary. The
+        gate also gets its valve indicator. Clicking the card toggles its
+        expansion via `_on_stage_clicked`."""
+        is_slider = stage_id in (STAGE_DEPTH, STAGE_SPEED, STAGE_SMOOTHING)
+        card = _StageCard(
+            stage_id, _STAGE_LABELS[stage_id],
+            _STAGE_SHORT.get(stage_id, _STAGE_LABELS[stage_id][:4]),
+            compact=not is_slider,
+        )
+        card.clicked.connect(self._on_stage_clicked)
 
-        title = QLabel(_STAGE_LABELS[stage_id])
-        title.setAlignment(Qt.AlignHCenter)
-        tf = title.font(); tf.setBold(True)
-        title.setFont(tf)
-        lay.addWidget(title)
+        if stage_id in (STAGE_DEPTH, STAGE_SPEED):
+            chain = _read_chain(self._controller, self._device_name,
+                                self._motor_idx, self._chain_idx)
+            cfg = chain.get(stage_id, {}) if isinstance(chain, dict) else {}
+            gain_ctrl = _GainControl(float(cfg.get("gain", 1.0)))
+            gain_ctrl.gainChanged.connect(
+                lambda g, ck=stage_id: self._on_gain_from_slider(ck, g)
+            )
+            self._gain_sliders[stage_id] = gain_ctrl
+            card.quick_layout.addWidget(gain_ctrl)
+        elif stage_id == STAGE_SMOOTHING:
+            chain = _read_chain(self._controller, self._device_name,
+                                self._motor_idx, self._chain_idx)
+            sm = chain.get("smoothing", {}) if isinstance(chain, dict) else {}
+            seed = max(float(sm.get("rise_ms", 50.0)),
+                       float(sm.get("fall_ms", 20.0)))
+            delay_ctrl = _DelayControl(seed)
+            delay_ctrl.msChanged.connect(self._on_delay_from_slider)
+            self._delay_control = delay_ctrl
+            card.quick_layout.addWidget(delay_ctrl)
+        else:
+            subtitle = QLabel(self._summary_for_stage(stage_id))
+            subtitle.setAlignment(Qt.AlignHCenter)
+            sf = subtitle.font()
+            sf.setPointSize(max(7, sf.pointSize() - 1))
+            subtitle.setFont(sf)
+            subtitle.setProperty("muted", "true")
+            self._ui._repolish(subtitle)
+            card.quick_layout.addWidget(subtitle)
+            self._stage_subtitles[stage_id] = subtitle
 
-        # Subtitle — one short line summarising the most diagnostic
-        # setting for this stage so the user can read the chain
-        # at-a-glance without expanding each editor. Refreshed by
-        # `_refresh_stage_subtitles` on a timer.
-        subtitle = QLabel(self._summary_for_stage(stage_id))
-        subtitle.setAlignment(Qt.AlignHCenter)
-        sf = subtitle.font()
-        sf.setPointSize(max(7, sf.pointSize() - 1))
-        subtitle.setFont(sf)
-        subtitle.setProperty("muted", "true")
-        self._ui._repolish(subtitle)
-        lay.addWidget(subtitle)
-        self._stage_subtitles[stage_id] = subtitle
-
-        # Valve indicator — only on the Gate stage card. Animates
-        # forward when the gate opens, backward when it closes;
-        # complements the full ActivityMeter that lives in the gate
-        # editor (visible when the stage is expanded).
+        # Valve indicator — only on the Gate card. Animates open/closed;
+        # complements the full ActivityMeter inside the expanded editor.
         if stage_id == STAGE_GATE:
             valve = ValveIndicator()
-            lay.addWidget(valve)
+            card.quick_layout.addWidget(valve)
             self._stage_valve = valve
 
-        def on_press(ev, sid=stage_id) -> None:
-            if ev.button() == Qt.LeftButton:
-                self._activate_stage(sid)
-                ev.accept()
-            else:
-                QFrame.mousePressEvent(card, ev)
-        card.mousePressEvent = on_press
         return card
 
     # ----- Stage card subtitle + colour helpers (Cut 7f / 7g) ------
@@ -876,7 +1551,10 @@ class MotorSignalChainWidget(QFrame):
     def _refresh_stage_subtitles(self) -> None:
         """Timer slot — re-reads each stage's summary and writes it
         back to the subtitle label. Guards against destroyed labels
-        from rebuilds."""
+        from rebuilds. Skips entirely while the chain is off-screen
+        (collapsed toy card / another sidebar page)."""
+        if not self.isVisible():
+            return
         for stage_id, label in list(self._stage_subtitles.items()):
             try:
                 label.setText(self._summary_for_stage(stage_id))
@@ -931,28 +1609,361 @@ class MotorSignalChainWidget(QFrame):
         except RuntimeError:
             self._stage_cards.pop(stage_id, None)
 
-    def _activate_stage(self, stage_id: str) -> None:
-        """Highlight the clicked stage and swap the editor to its
-        page. Builds the page on first activation so a card the user
-        never opens never pays the construction cost."""
+    # ------------------------------------------------ accordion expand
+
+    def _on_stage_clicked(self, stage_id: str) -> None:
+        """Toggle a stage: clicking the expanded card collapses the strip;
+        clicking any other card expands it (and rails the rest)."""
         if stage_id not in _STAGE_ORDER:
             return
-        self._active_stage = stage_id
-        # Repolish the strip — only the newly-active card flips on.
+        if self._active_stage == stage_id:
+            self._animate_to(None)
+        else:
+            self._animate_to(stage_id)
+
+    def _animate_to(self, target: Optional[str]) -> None:
+        """Drive the strip toward `target` expanded (or all-collapsed when
+        None). Builds the target editor, sets each card's content state,
+        captures width + editor-height from/to values, and (re)starts the
+        shared animation. Safe to call mid-animation — it recaptures from
+        the current widths so the motion redirects smoothly."""
+        if self._strip_host is None:
+            return
+        prev = self._active_stage
+
+        # Build the target editor up front so its height is measurable.
+        if target is not None:
+            self._ensure_editor(target)
+
+        # Steady-state content (titles, quick vs editor visibility).
+        self._apply_card_states(target)
+
+        # Editor-height animation: expand the target's region from 0, or
+        # collapse the previous one back to 0. Keep the animating editor
+        # visible (and its quick region hidden) until the motion lands.
+        self._anim_editor_card = None
+        self._anim_editor_from = 0
+        self._anim_editor_to = 0
+        if target is not None:
+            card = self._stage_cards.get(target)
+            if card is not None:
+                region = card.editor_region()
+                region.setVisible(True)
+                region.setMaximumHeight(_QWIDGETSIZE_MAX)
+                target_h = max(0, region.sizeHint().height())
+                region.setMaximumHeight(0)
+                card.quick_region().setVisible(False)
+                self._anim_editor_card = card
+                self._anim_editor_to = target_h
+        elif prev is not None:
+            card = self._stage_cards.get(prev)
+            if card is not None:
+                region = card.editor_region()
+                region.setVisible(True)
+                card.quick_region().setVisible(False)
+                self._anim_editor_card = card
+                self._anim_editor_from = max(0, region.height())
+                self._anim_editor_to = 0
+
+        # Width from/to. Pin current widths first so the first frame starts
+        # exactly where the cards are now (avoids a jump when leaving the
+        # flexible all-collapsed state).
+        self._anim_from = {slot: max(0, slot.width()) for slot in self._slots}
+        self._anim_to = self._compute_target_widths(target)
+        for slot in self._slots:
+            self._set_slot_width(slot, self._anim_from[slot])
+
+        # Active-card highlight (green border via the `active` property).
+        self._active_stage = target
         for sid, card in self._stage_cards.items():
-            card.setProperty("active", "true" if sid == stage_id else "false")
+            card.setProperty("active", "true" if sid == target else "false")
             self._ui._repolish(card)
-        if not self._editor_built[stage_id]:
-            page = self._build_editor_for(stage_id)
-            # Swap the placeholder for the real page at the same index.
-            idx = _STAGE_ORDER.index(stage_id)
-            old = self._editor_stack.widget(idx)
-            self._editor_stack.removeWidget(old)
-            old.setParent(None)
-            self._editor_stack.insertWidget(idx, page)
-            self._editor_pages[stage_id] = page
-            self._editor_built[stage_id] = True
-        self._editor_stack.setCurrentIndex(_STAGE_ORDER.index(stage_id))
+
+        # Small mode (nothing expanded) centres the cards; expanded top-aligns.
+        self._apply_strip_mode(target is None)
+
+        self._accordion_anim.stop()
+        self._accordion_anim.start()
+
+    def _apply_strip_mode(self, collapsed: bool) -> None:
+        """Small (all-collapsed) mode vertically centres the cards, so the
+        plain arrows run down the middle and the Input/Combine fork/join sit
+        at the Depth↔Speed midpoint (symmetric). With a stage expanded the
+        cards top-align so a tall editor doesn't drag the arrows down."""
+        align = Qt.AlignVCenter if collapsed else Qt.AlignTop
+        if self._strip_lay is not None:
+            for slot in self._slots:
+                try:
+                    self._strip_lay.setAlignment(slot, align)
+                except (RuntimeError, TypeError):
+                    pass
+        if self._strip_host is not None:
+            try:
+                self._strip_host.set_centered(collapsed)
+                self._strip_host.update()
+            except RuntimeError:
+                pass
+
+    def _apply_card_states(self, target: Optional[str]) -> None:
+        """Set every card's collapsed/expanded/rail content. The expanded
+        card shows its editor; the Depth/Speed sibling of an expanded
+        channel stays a normal quick card; everything else in a non-active
+        slot becomes a thin rail."""
+        target_slot = self._slot_for_stage.get(target) if target else None
+        for stage in _STAGE_ORDER:
+            card = self._stage_cards.get(stage)
+            if card is None:
+                continue
+            if target is None:
+                state = _CARD_QUICK
+            elif stage == target:
+                state = _CARD_EXPANDED
+            elif self._slot_for_stage.get(stage) is target_slot:
+                state = _CARD_QUICK          # Depth/Speed sibling
+            else:
+                state = _CARD_RAIL
+            card.apply_state(state)
+
+    def _ensure_editor(self, stage_id: str) -> None:
+        """Lazily build and mount a stage's editor into its card."""
+        card = self._stage_cards.get(stage_id)
+        if card is None or card.editor_built():
+            return
+        page = self._build_editor_for(stage_id)
+        card.mount_editor(page)
+
+    # ------------------------------------------------ accordion widths
+
+    def _set_slot_width(self, slot: QWidget, w: int) -> None:
+        try:
+            slot.setMinimumWidth(max(0, int(w)))
+            slot.setMaximumWidth(max(0, int(w)))
+        except RuntimeError:
+            pass
+
+    def _clear_slot_width(self, slot: QWidget) -> None:
+        """Release a slot's width pin so the all-collapsed strip flows
+        naturally again. Card slots keep a sensible floor; the Depth/Speed
+        container defers to its inner cards' own minimums."""
+        try:
+            slot.setMinimumWidth(
+                0 if slot is self._ds_slot else _CARD_COLLAPSED_MIN
+            )
+            slot.setMaximumWidth(_QWIDGETSIZE_MAX)
+        except RuntimeError:
+            pass
+
+    def _slot_collapsed_width(self, slot: QWidget) -> int:
+        """Natural collapsed width for a slot (clamped to a tidy range)."""
+        try:
+            hint = slot.sizeHint().width()
+        except RuntimeError:
+            hint = _CARD_COLLAPSED_MIN
+        return max(_CARD_COLLAPSED_MIN, min(hint, 180))
+
+    def _rail_width_px(self) -> int:
+        """Rail width adapted to the live font, so the short titles never
+        clip regardless of DPI scaling or font substitution. _RAIL_WIDTH
+        is the floor; the widest short title (plus the card's border +
+        QSS padding + breathing room) can push it up a few px."""
+        w = _RAIL_WIDTH
+        for card in self._stage_cards.values():
+            try:
+                fm = QFontMetrics(card._font_rail)
+                w = max(w, fm.horizontalAdvance(card._short) + 14)
+            except RuntimeError:
+                continue
+        return w
+
+    def _compute_target_widths(self, target: Optional[str]) -> Dict[QWidget, int]:
+        """Target width per slot. All-collapsed → each slot's natural
+        width; one expanded → that slot takes the row minus thin rails for
+        the others (clamped so it never underflows the editor)."""
+        out: Dict[QWidget, int] = {}
+        if target is None:
+            for slot in self._slots:
+                out[slot] = self._slot_collapsed_width(slot)
+            return out
+        target_slot = self._slot_for_stage.get(target)
+        rail_w = self._rail_width_px()
+        n_rails = max(0, len(self._slots) - 1)
+        n_conn = max(0, len(self._slots) - 1)
+        host_w = self._strip_host.contentsRect().width()
+        # Cards are pinned; the connector cells (min _CONNECTOR_GAP each)
+        # take the remaining width, so the expanded card is a *bounded*
+        # target rather than absorbing all the slack — that's what leaves
+        # room for the connectors to stretch. Shrink the target only when
+        # the row genuinely can't fit it.
+        room = host_w - n_rails * rail_w - n_conn * _CONNECTOR_GAP - 4
+        expanded = max(_EXPANDED_MIN, min(_CARD_EXPANDED_TARGET, room))
+        for slot in self._slots:
+            out[slot] = expanded if slot is target_slot else rail_w
+        return out
+
+    # ------------------------------------------------ accordion ticks
+
+    def _on_anim_tick(self, value) -> None:
+        """Lerp every slot width and the active editor's height by the
+        eased progress `value` (0→1), then repaint the connectors against
+        the new geometry."""
+        try:
+            t = float(value)
+        except (TypeError, ValueError):
+            return
+        for slot in self._slots:
+            a = self._anim_from.get(slot)
+            b = self._anim_to.get(slot)
+            if a is None or b is None:
+                continue
+            self._set_slot_width(slot, int(round(a + (b - a) * t)))
+        if self._anim_editor_card is not None:
+            h = (self._anim_editor_from
+                 + (self._anim_editor_to - self._anim_editor_from) * t)
+            try:
+                self._anim_editor_card.set_editor_max_height(int(round(h)))
+            except RuntimeError:
+                self._anim_editor_card = None
+        if self._strip_host is not None:
+            try:
+                self._strip_host.update()
+            except RuntimeError:
+                pass
+
+    def _on_anim_done(self) -> None:
+        """Snap to the final widths/heights and settle content state. Uses
+        `_active_stage` (always the latest target) so a stale finish from a
+        superseded run still lands on the current layout."""
+        target = self._active_stage
+        for slot in self._slots:
+            b = self._anim_to.get(slot)
+            if b is not None:
+                self._set_slot_width(slot, b)
+        # Editor height: release the expanded card to unbounded so later
+        # natural growth works (e.g. Input's zone panel); hide a collapsed
+        # editor and zero its height.
+        if self._anim_editor_card is not None:
+            try:
+                if self._anim_editor_to <= 0:
+                    self._anim_editor_card.set_editor_max_height(0)
+                    self._anim_editor_card.editor_region().setVisible(False)
+                else:
+                    self._anim_editor_card.set_editor_max_height(_QWIDGETSIZE_MAX)
+            except RuntimeError:
+                pass
+            self._anim_editor_card = None
+        self._apply_card_states(target)
+        # All-collapsed: drop the width pins so the strip is flexible.
+        if target is None:
+            for slot in self._slots:
+                self._clear_slot_width(slot)
+        if self._strip_host is not None:
+            try:
+                self._strip_host.update()
+            except RuntimeError:
+                pass
+
+    # ------------------------------------------------ gain sync
+
+    def _on_gain_from_slider(self, channel_key: str, gain: float) -> None:
+        """Quick-slider edit: persist + mirror onto the precise spinbox."""
+        _update_chain_field(
+            self._controller, self._device_name, self._motor_idx,
+            self._chain_idx, (channel_key, "gain"), float(gain),
+        )
+        spin = self._gain_spins.get(channel_key)
+        if spin is not None:
+            try:
+                spin.blockSignals(True)
+                spin.setValue(float(gain))
+                spin.blockSignals(False)
+            except RuntimeError:
+                self._gain_spins.pop(channel_key, None)
+
+    def _on_gain_from_spin(self, channel_key: str, gain: float) -> None:
+        """Precise-spinbox edit: persist + mirror onto the quick slider."""
+        _update_chain_field(
+            self._controller, self._device_name, self._motor_idx,
+            self._chain_idx, (channel_key, "gain"), float(gain),
+        )
+        slider = self._gain_sliders.get(channel_key)
+        if slider is not None:
+            try:
+                slider.set_gain(float(gain))
+            except RuntimeError:
+                self._gain_sliders.pop(channel_key, None)
+
+    def _on_delay_from_slider(self, ms: int) -> None:
+        """Quick smoothing-delay slider edit: set BOTH rise and fall to the
+        same delay, and mirror the precise rise/fall spinboxes."""
+        m = float(int(ms))
+        _update_chain_field(
+            self._controller, self._device_name, self._motor_idx,
+            self._chain_idx, ("smoothing", "rise_ms"), m,
+        )
+        _update_chain_field(
+            self._controller, self._device_name, self._motor_idx,
+            self._chain_idx, ("smoothing", "fall_ms"), m,
+        )
+        for key in ("rise_ms", "fall_ms"):
+            spin = self._smoothing_spins.get(key)
+            if spin is not None:
+                try:
+                    spin.blockSignals(True)
+                    spin.setValue(m)
+                    spin.blockSignals(False)
+                except RuntimeError:
+                    self._smoothing_spins.pop(key, None)
+
+    def _on_smoothing_spin_changed(self, key: str, value: float) -> None:
+        """Precise rise/fall spinbox edit: persist that field, then reflect
+        the slower of the two on the quick delay slider."""
+        _update_chain_field(
+            self._controller, self._device_name, self._motor_idx,
+            self._chain_idx, ("smoothing", key), float(value),
+        )
+        if self._delay_control is not None:
+            chain = _read_chain(self._controller, self._device_name,
+                                self._motor_idx, self._chain_idx)
+            sm = chain.get("smoothing", {}) if isinstance(chain, dict) else {}
+            mx = max(float(sm.get("rise_ms", 50.0)),
+                     float(sm.get("fall_ms", 20.0)))
+            try:
+                self._delay_control.set_ms(mx)
+            except RuntimeError:
+                self._delay_control = None
+
+    # ------------------------------------------------ connectors
+
+    def _update_connector_levels(self) -> None:
+        """Recompute the per-connector signal levels from the last-applied
+        per-stage levels and repaint the strip only when they change."""
+        if self._strip_host is None:
+            return
+        ll = self._stage_last_level
+
+        def g(s: str) -> float:
+            return max(0.0, min(1.0, ll.get(s, 0.0)))
+
+        levels = [
+            g(STAGE_INPUT),
+            max(g(STAGE_DEPTH), g(STAGE_SPEED)),
+            g(STAGE_COMBINE),
+            g(STAGE_GATE),
+            g(STAGE_SMOOTHING),
+        ]
+        # Per-channel levels tint the two join arrows (Depth→Combine,
+        # Speed→Combine) independently.
+        branch_levels = [g(STAGE_DEPTH), g(STAGE_SPEED)]
+        if (levels != self._last_connector_levels
+                or branch_levels != self._last_branch_levels):
+            self._last_connector_levels = levels
+            self._last_branch_levels = branch_levels
+            try:
+                self._strip_host.set_connector_levels(levels)
+                self._strip_host.set_branch_levels(branch_levels)
+                self._strip_host.update()
+            except RuntimeError:
+                pass
 
     def _build_editor_for(self, stage_id: str) -> QWidget:
         """Build the editor page for `stage_id` and attach the
@@ -1040,9 +2051,10 @@ class MotorSignalChainWidget(QFrame):
                 )
             except (TypeError, ValueError, RuntimeError):
                 pass
-        # Per-stage border colour lerp — picks the level trace per
-        # stage from the mapping table. Cheap because the apply
-        # method short-circuits when the change is below epsilon.
+        # Per-stage border colour lerp + the live output number on each
+        # card — both read the same per-stage level from the mapping
+        # table. Cheap: the colour apply short-circuits below epsilon and
+        # the number is epsilon-gated inside the card.
         for stage_id, trace_id in _STAGE_LEVEL_TRACE.items():
             v = payload.get(trace_id)
             if v is None:
@@ -1052,6 +2064,14 @@ class MotorSignalChainWidget(QFrame):
             except (TypeError, ValueError):
                 continue
             self._apply_stage_card_color(stage_id, level)
+            card = self._stage_cards.get(stage_id)
+            if card is not None:
+                try:
+                    card.set_output_number(level)
+                except RuntimeError:
+                    self._stage_cards.pop(stage_id, None)
+        # Connector colours track the (epsilon-gated) per-stage levels.
+        self._update_connector_levels()
         # Valve indicator on the gate stage card — slides the bar
         # forward on open, back on close. Animation handles the
         # interpolation; we just set the target.
@@ -1063,13 +2083,28 @@ class MotorSignalChainWidget(QFrame):
             except RuntimeError:
                 self._stage_valve = None
 
-    def teardown(self) -> None:
-        """Unsubscribe from the router so its dispatcher stops trying
-        to push payloads at a widget about to be destroyed. The
-        wrapper (`MotorChainListWidget._rebuild`) calls this before
-        deleteLater'ing each chain widget."""
+    def _subscribe_intermediates(self) -> None:
+        """Register the live-trace callback with the router. Idempotent;
+        failures are swallowed (the chain still works without live
+        graphs, the user just sees empty traces)."""
+        if self._intermediates_subscribed:
+            return
+        router = getattr(self._controller, "motor_router", None)
+        if router is not None and hasattr(router, "subscribe_intermediates"):
+            try:
+                router.subscribe_intermediates(
+                    self._device_name, self._motor_idx, self._chain_idx,
+                    self._intermediates_callback,
+                )
+                self._intermediates_subscribed = True
+            except Exception:
+                pass
+
+    def _unsubscribe_intermediates(self) -> None:
+        """Drop the live-trace callback. Idempotent."""
         if not self._intermediates_subscribed:
             return
+        self._intermediates_subscribed = False
         router = getattr(self._controller, "motor_router", None)
         if router is not None and hasattr(router, "unsubscribe_intermediates"):
             try:
@@ -1079,7 +2114,34 @@ class MotorSignalChainWidget(QFrame):
                 )
             except Exception:
                 pass
-        self._intermediates_subscribed = False
+
+    def showEvent(self, ev) -> None:
+        """(Re)subscribe when the chain actually comes on screen —
+        page switched to Device Routing, toy card expanded, window
+        restored. Pairs with hideEvent so off-screen chains are free."""
+        super().showEvent(ev)
+        self._subscribe_intermediates()
+
+    def hideEvent(self, ev) -> None:
+        """Pause the router feed while hidden (other page selected,
+        toy card collapsed). The widgets keep their state; fresh data
+        flows again on the next showEvent. The wrapper's ▸ Overview
+        subscription pauses the same way in MotorChainListWidget."""
+        super().hideEvent(ev)
+        self._unsubscribe_intermediates()
+
+    def teardown(self) -> None:
+        """Unsubscribe from the router so its dispatcher stops trying
+        to push payloads at a widget about to be destroyed. The
+        wrapper (`MotorChainListWidget._rebuild`) calls this before
+        deleteLater'ing each chain widget."""
+        # Stop the accordion animation first so a late `finished`/tick
+        # can't touch half-destroyed cards during teardown.
+        try:
+            self._accordion_anim.stop()
+        except (RuntimeError, AttributeError):
+            pass
+        self._unsubscribe_intermediates()
 
     # ------------------------------------------------------------ editors
 
@@ -1129,13 +2191,21 @@ class MotorSignalChainWidget(QFrame):
         gain_spin.setSingleStep(0.05)
         gain_spin.setDecimals(2)
         gain_spin.setValue(float(cfg.get("gain", 1.0)))
+        # Two-way sync with the collapsed card's quick gain slider: both
+        # write the same field; each mirrors the other (blockSignals
+        # guards the echo). Connect AFTER setValue so the seed is silent.
         gain_spin.valueChanged.connect(
-            lambda v, ck=channel_key: _update_chain_field(
-                self._controller, self._device_name, self._motor_idx, self._chain_idx,
-                (ck, "gain"), float(v),
-            )
+            lambda v, ck=channel_key: self._on_gain_from_spin(ck, float(v))
         )
+        self._gain_spins[channel_key] = gain_spin
         gain_row.addWidget(gain_spin)
+        gain_row.addWidget(self._ui._make_help_badge(
+            "Gain",
+            "Multiplies this channel after the curve. 1.0 = unchanged, "
+            "0 = silences the channel entirely, up to 2.0 = boost "
+            "(clamped to 1.0 downstream). Same knob as the slider on the "
+            "collapsed card."
+        ))
         gain_row.addStretch(1)
         lay.addLayout(gain_row)
 
@@ -1157,6 +2227,14 @@ class MotorSignalChainWidget(QFrame):
         param_spin.setRange(0.3, 8.0)
         param_spin.setValue(float(cfg.get("curve_param", 1.0)))
         curve_row.addWidget(param_spin)
+        curve_row.addWidget(self._ui._make_help_badge(
+            "Curve",
+            "Reshapes the 0–1 signal before the gain. <b>linear</b>: "
+            "unchanged. <b>power</b>: Param &lt;1 boosts light contact, "
+            "&gt;1 suppresses it. <b>s_curve</b>: eases both ends and "
+            "steepens the middle; Param is the iteration count — higher "
+            "= sharper switch-like response."
+        ))
         curve_row.addStretch(1)
 
         def sync_param_range(curve_text: str) -> None:
@@ -1192,6 +2270,35 @@ class MotorSignalChainWidget(QFrame):
         curve_combo.currentTextChanged.connect(on_curve_changed)
         param_spin.valueChanged.connect(on_param_changed)
         lay.addLayout(curve_row)
+
+        # Speed-only: fall-off. How long the speed signal keeps
+        # ringing after movement stops — the detector holds its peak
+        # and decays with this time constant, so a long fall-off
+        # reads as "the toy keeps going after I stopped".
+        if channel_key == "speed":
+            fo_row = _hbox(0, 8)
+            fo_row.addWidget(QLabel("Fall-off (ms):"))
+            fo_spin = QDoubleSpinBox()
+            fo_spin.setRange(10.0, 2000.0)
+            fo_spin.setSingleStep(50.0)
+            fo_spin.setDecimals(0)
+            fo_spin.setValue(float(cfg.get("decay_ms", 300.0)))
+            fo_spin.valueChanged.connect(
+                lambda v: _update_chain_field(
+                    self._controller, self._device_name, self._motor_idx,
+                    self._chain_idx, ("speed", "decay_ms"), float(v),
+                )
+            )
+            fo_row.addWidget(fo_spin)
+            fo_row.addWidget(self._ui._make_help_badge(
+                "Fall-off",
+                "How quickly Speed dies down once movement stops — the "
+                "detector holds its peak and decays with this time "
+                "constant. Lower = snappier cut-off, higher = lingering "
+                "tail."
+            ))
+            fo_row.addStretch(1)
+            lay.addLayout(fo_row)
         return host
 
     def _build_combine_editor(self) -> QWidget:
@@ -1201,10 +2308,21 @@ class MotorSignalChainWidget(QFrame):
         lay = _vbox(10, 8)
         host.setLayout(lay)
 
+        hdr_row = _hbox(0, 6)
         header = QLabel("Combine")
         hf = header.font(); hf.setBold(True)
         header.setFont(hf)
-        lay.addWidget(header)
+        hdr_row.addWidget(header)
+        hdr_row.addWidget(self._ui._make_help_badge(
+            "Combine",
+            "How the Depth and Speed channels merge into one signal. "
+            "<b>Add</b>: sum of both, clamped to 1. <b>Max</b>: louder "
+            "wins (the default). <b>Multiply</b>: the channels gate each "
+            "other — either at 0 forces the output to 0, so the motor "
+            "only runs while BOTH depth and movement are present."
+        ))
+        hdr_row.addStretch(1)
+        lay.addLayout(hdr_row)
 
         chain = _read_chain(self._controller, self._device_name, self._motor_idx, self._chain_idx)
         current = str(chain.get("combine", "max"))
@@ -1243,16 +2361,6 @@ class MotorSignalChainWidget(QFrame):
             btn.clicked.connect(on_clicked)
         lay.addLayout(row)
 
-        # One-line hint about Multiply's "zero kills output" semantics —
-        # the diagram makes it visible but a hint is cheap insurance.
-        hint = QLabel(
-            "Add: sum of channels (clamped). Max: louder wins. "
-            "Multiply: either channel at 0 → output 0."
-        )
-        hint.setProperty("muted", "true")
-        hint.setWordWrap(True)
-        self._ui._repolish(hint)
-        lay.addWidget(hint)
         return host
 
     def _build_gate_editor(self) -> QWidget:
@@ -1263,21 +2371,23 @@ class MotorSignalChainWidget(QFrame):
         lay = _vbox(10, 8)
         host.setLayout(lay)
 
+        hdr_row = _hbox(0, 6)
         header = QLabel("Activity gate")
         hf = header.font(); hf.setBold(True)
         header.setFont(hf)
-        lay.addWidget(header)
-
-        explain = QLabel(
+        hdr_row.addWidget(header)
+        hdr_row.addWidget(self._ui._make_help_badge(
+            "Activity gate",
             "Sidechain valve. Observes the speed detector's output; "
-            "opens when activity crosses Wake threshold; closes after "
-            "activity stays below threshold for Sleep delay seconds. "
-            "Off by default."
-        )
-        explain.setProperty("muted", "true")
-        explain.setWordWrap(True)
-        self._ui._repolish(explain)
-        lay.addWidget(explain)
+            "opens when activity crosses <b>Wake threshold</b>; closes "
+            "after activity stays below threshold for <b>Sleep delay</b> "
+            "seconds. <b>Build-up</b> / <b>Decay</b> set how slowly the "
+            "activity meter itself charges with movement and drains in "
+            "stillness — raise them to demand a few seconds of sustained "
+            "motion instead of waking on a twitch. Off by default."
+        ))
+        hdr_row.addStretch(1)
+        lay.addLayout(hdr_row)
 
         chain = _read_chain(self._controller, self._device_name, self._motor_idx, self._chain_idx)
         gate_cfg = chain.get("gate", {}) if isinstance(chain, dict) else {}
@@ -1324,6 +2434,47 @@ class MotorSignalChainWidget(QFrame):
         sd_row.addStretch(1)
         lay.addLayout(sd_row)
 
+        # Meter build-up: how long sustained movement takes to charge
+        # the activity meter. High values make the gate demand a few
+        # seconds of motion before waking instead of opening on the
+        # first twitch.
+        at_row = _hbox(0, 8)
+        at_row.addWidget(QLabel("Build-up (s):"))
+        at_spin = QDoubleSpinBox()
+        at_spin.setRange(0.01, 10.0)
+        at_spin.setSingleStep(0.1)
+        at_spin.setDecimals(2)
+        at_spin.setValue(float(gate_cfg.get("attack_s", 0.05)))
+        at_spin.valueChanged.connect(
+            lambda v: _update_chain_field(
+                self._controller, self._device_name, self._motor_idx, self._chain_idx,
+                ("gate", "attack_s"), float(v),
+            )
+        )
+        at_row.addWidget(at_spin)
+        at_row.addStretch(1)
+        lay.addLayout(at_row)
+
+        # Meter decay: how long the charged meter takes to drain once
+        # movement stops. High values keep the "budget" up across
+        # brief pauses instead of bouncing below threshold.
+        rl_row = _hbox(0, 8)
+        rl_row.addWidget(QLabel("Decay (s):"))
+        rl_spin = QDoubleSpinBox()
+        rl_spin.setRange(0.01, 10.0)
+        rl_spin.setSingleStep(0.1)
+        rl_spin.setDecimals(2)
+        rl_spin.setValue(float(gate_cfg.get("release_s", 0.5)))
+        rl_spin.valueChanged.connect(
+            lambda v: _update_chain_field(
+                self._controller, self._device_name, self._motor_idx, self._chain_idx,
+                ("gate", "release_s"), float(v),
+            )
+        )
+        rl_row.addWidget(rl_spin)
+        rl_row.addStretch(1)
+        lay.addLayout(rl_row)
+
         # Activity meter visual.
         meter_label = QLabel("Activity")
         meter_label.setProperty("muted", "true")
@@ -1357,20 +2508,20 @@ class MotorSignalChainWidget(QFrame):
         lay = _vbox(10, 8)
         host.setLayout(lay)
 
+        hdr_row = _hbox(0, 6)
         header = QLabel("Smoothing")
         hf = header.font(); hf.setBold(True)
         header.setFont(hf)
-        lay.addWidget(header)
-
-        explain = QLabel(
-            "Post-gate envelope follower. Rise controls how fast the "
-            "output ramps up; Fall how fast it decays. Same knobs "
-            "round the gate's open/close transitions."
-        )
-        explain.setProperty("muted", "true")
-        explain.setWordWrap(True)
-        self._ui._repolish(explain)
-        lay.addWidget(explain)
+        hdr_row.addWidget(header)
+        hdr_row.addWidget(self._ui._make_help_badge(
+            "Smoothing",
+            "Post-gate envelope follower. <b>Rise</b> controls how fast "
+            "the output ramps up; <b>Fall</b> how fast it decays. The "
+            "same knobs round the gate's open/close transitions, so no "
+            "separate gate-smoothing settings exist."
+        ))
+        hdr_row.addStretch(1)
+        lay.addLayout(hdr_row)
 
         chain = _read_chain(self._controller, self._device_name, self._motor_idx, self._chain_idx)
         sm_cfg = chain.get("smoothing", {}) if isinstance(chain, dict) else {}
@@ -1383,12 +2534,12 @@ class MotorSignalChainWidget(QFrame):
         rise_spin.setDecimals(0)
         rise_spin.setSuffix(" ms")
         rise_spin.setValue(float(sm_cfg.get("rise_ms", 50.0)))
+        # Connect AFTER setValue so seeding is silent; the handler persists
+        # and reflects the slower of rise/fall on the quick delay slider.
         rise_spin.valueChanged.connect(
-            lambda v: _update_chain_field(
-                self._controller, self._device_name, self._motor_idx, self._chain_idx,
-                ("smoothing", "rise_ms"), float(v),
-            )
+            lambda v: self._on_smoothing_spin_changed("rise_ms", float(v))
         )
+        self._smoothing_spins["rise_ms"] = rise_spin
         row.addWidget(rise_spin)
         row.addSpacing(12)
         row.addWidget(QLabel("Fall:"))
@@ -1399,11 +2550,9 @@ class MotorSignalChainWidget(QFrame):
         fall_spin.setSuffix(" ms")
         fall_spin.setValue(float(sm_cfg.get("fall_ms", 20.0)))
         fall_spin.valueChanged.connect(
-            lambda v: _update_chain_field(
-                self._controller, self._device_name, self._motor_idx, self._chain_idx,
-                ("smoothing", "fall_ms"), float(v),
-            )
+            lambda v: self._on_smoothing_spin_changed("fall_ms", float(v))
         )
+        self._smoothing_spins["fall_ms"] = fall_spin
         row.addWidget(fall_spin)
         row.addStretch(1)
         lay.addLayout(row)
@@ -1419,28 +2568,32 @@ class MotorSignalChainWidget(QFrame):
         lay = _vbox(10, 8)
         host.setLayout(lay)
 
+        hdr_row = _hbox(0, 6)
         header = QLabel("Output")
         hf = header.font(); hf.setBold(True)
         header.setFont(hf)
-        lay.addWidget(header)
+        hdr_row.addWidget(header)
 
         if not self._is_linear:
             # Continuous-output actuator — the chain's post-smoothing
             # value drives whichever physical effect the buttplug.io
             # OutputType describes. Phrase looked up from the shared
             # _KIND_DISPLAY table; unknown kinds fall back to the
-            # vibrate phrasing.
+            # vibrate phrasing. Help Mode badge instead of permanent
+            # text — there are no knobs here for vibrate motors.
             info = _KIND_DISPLAY.get(self._motor_kind, _DEFAULT_KIND_DISPLAY)
-            note = QLabel(
-                f"Continuous output — final post-smoothing value drives "
-                f"the {info.output_phrase}. Use the meter below the "
-                f"chain to see the live output."
-            )
-            note.setProperty("muted", "true")
-            note.setWordWrap(True)
-            self._ui._repolish(note)
-            lay.addWidget(note)
+            hdr_row.addWidget(self._ui._make_help_badge(
+                "Output",
+                f"Continuous output — the final post-smoothing value "
+                f"drives the {info.output_phrase}. Use the meter below "
+                f"the chain to see the live output. No settings needed "
+                f"for this motor kind."
+            ))
+            hdr_row.addStretch(1)
+            lay.addLayout(hdr_row)
             return host
+        hdr_row.addStretch(1)
+        lay.addLayout(hdr_row)
 
         # Linear actuator controls — Mode + Idle + stroke setup.
         ctrl = self._controller
@@ -1562,25 +2715,51 @@ class MotorSignalChainWidget(QFrame):
         """Wipe THIS chain's settings back to defaults — not the whole
         motor. Single-chain motors are unchanged in behaviour; the
         secondary chain (Cut 5) can be reset independently of the
-        primary. After the reset, rebuild every already-constructed
-        editor page so spinboxes show the new values."""
+        primary. After the reset, tear down any built editors (they
+        rebuild lazily with the fresh values on next expand), re-seed the
+        Depth/Speed quick gain sliders, and restore the expanded stage."""
         _reset_chain_to_defaults(
             self._controller, self._device_name, self._motor_idx,
             self._chain_idx,
         )
-        # Re-create any built editor pages so their spinboxes refresh.
-        for sid, was_built in list(self._editor_built.items()):
-            if not was_built:
+        # Drop the precise-spinbox registries; rebuilt editors re-register.
+        self._gain_spins.clear()
+        self._smoothing_spins.clear()
+        # Tear down any built editor so it rebuilds with the new values;
+        # drop its stale mini-graph reference too.
+        for sid in _STAGE_ORDER:
+            card = self._stage_cards.get(sid)
+            if card is None or not card.editor_built():
                 continue
-            idx = _STAGE_ORDER.index(sid)
-            old = self._editor_stack.widget(idx)
-            self._editor_stack.removeWidget(old)
-            old.setParent(None)
-            new_page = self._build_editor_for(sid)
-            self._editor_stack.insertWidget(idx, new_page)
-            self._editor_pages[sid] = new_page
-        # Re-activate the previously-active stage so the stack shows it.
-        self._activate_stage(self._active_stage)
+            card.reset_editor()
+            self._stage_graphs.pop(sid, None)
+        # Re-seed the collapsed quick controls from the defaults.
+        chain = _read_chain(
+            self._controller, self._device_name, self._motor_idx, self._chain_idx
+        )
+        for ck in (STAGE_DEPTH, STAGE_SPEED):
+            slider = self._gain_sliders.get(ck)
+            if slider is not None:
+                cfg = chain.get(ck, {}) if isinstance(chain, dict) else {}
+                try:
+                    slider.set_gain(float(cfg.get("gain", 1.0)))
+                except RuntimeError:
+                    self._gain_sliders.pop(ck, None)
+        if self._delay_control is not None:
+            sm = chain.get("smoothing", {}) if isinstance(chain, dict) else {}
+            try:
+                self._delay_control.set_ms(max(float(sm.get("rise_ms", 50.0)),
+                                               float(sm.get("fall_ms", 20.0))))
+            except RuntimeError:
+                self._delay_control = None
+        # Restore the previously-expanded stage (rebuilds its editor) or
+        # settle the collapsed strip.
+        active = self._active_stage
+        self._active_stage = None
+        if active is not None:
+            self._animate_to(active)
+        else:
+            self._apply_card_states(None)
 
 
 # ----------------------------------------------------------
@@ -2348,6 +3527,20 @@ class MotorChainListWidget(QFrame):
             router.unsubscribe_intermediates(key[0], key[1], key[2], cb)
         except Exception:
             pass
+
+    def showEvent(self, ev) -> None:
+        """Resume the ▸ Overview feed when the wrapper comes back on
+        screen (it pauses in hideEvent; the per-chain feeds do the
+        same in MotorSignalChainWidget)."""
+        super().showEvent(ev)
+        if getattr(self, "_overview_expanded", False):
+            self._subscribe_overview()
+
+    def hideEvent(self, ev) -> None:
+        """Pause the ▸ Overview feed while hidden — no router dispatch,
+        no graph pushes, for a graph nobody can see."""
+        super().hideEvent(ev)
+        self._unsubscribe_overview()
 
     def _make_overview_callback(self) -> Callable[[Dict[str, Any]], None]:
         """Build a callback that pushes the six overview traces onto

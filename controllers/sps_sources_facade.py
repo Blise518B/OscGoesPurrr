@@ -7,10 +7,11 @@ methods, and the routers read the live source map through
 math lives in sps_source.py.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from parameter_store import store
 from sps_source import evaluate_sps_source
+from zone_strength import zone_filter_strength
 
 
 class SpsSourcesFacade:
@@ -64,6 +65,29 @@ class SpsSourcesFacade:
             name = s.get("name")
             if name:
                 out[name] = evaluate_sps_source(s, params)
+        return out
+
+    def get_live_zone_strengths(
+        self,
+        specs: Sequence[Tuple[Any, Any, Optional[List[str]]]],
+    ) -> List[float]:
+        """Evaluate a batch of `(zone_name, zone_type, filters)` specs
+        against ONE parameter snapshot and return their 0..1 strengths.
+        Same math the OWO / PiShock / Coyote / bHaptics routers run per
+        tick (`zone_strength.zone_filter_strength`), exposed read-only so
+        the backend views can paint live activity rings on their cards.
+        Batch shape on purpose: one snapshot per UI tick, not per card."""
+        if not specs:
+            return []
+        params = store.get_all_parameters() or {}
+        sps = self._get_sps_source_map()
+        out: List[float] = []
+        for zone_name, zone_type, filters in specs:
+            try:
+                out.append(zone_filter_strength(
+                    zone_name, zone_type, filters or [], params, sps))
+            except Exception:
+                out.append(0.0)
         return out
 
     # ------------------------------------------------------------------

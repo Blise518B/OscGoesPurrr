@@ -5,42 +5,35 @@
 # Mirrors the Buttplug-side MotorRouter pattern: stateless evaluator
 # polled on a timer, debounced so we only push when the value changes.
 
-from typing import Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
-from parameter_store import store
 from polling import PollingThread
+from router_base import PollingRouter
 from steamvr_engine import SteamVREngine, TrackerConfig
 from utilities import strip_param_prefix
 
 
-class SteamVRRouter(PollingThread):
+class SteamVRRouter(PollingRouter):
+    """Per-tracker proximity router. Inherits the ~60 Hz poll + debounce from
+    PollingRouter; supplies the per-tracker max-over-address-list compute and
+    dispatches each changed strength to the engine.
+
+    Note: deliberately does NOT override _engine_ready (defaults to always
+    tick). The engine's set_strength no-ops when SteamVR isn't alive, matching
+    the pre-refactor behavior where the router never gated on connection."""
+
     def __init__(self,
                  engine: SteamVREngine,
                  get_all_configs: Callable[[], Dict[str, TrackerConfig]],
                  poll_rate_s: float = 0.016):  # ~60 Hz: low-latency change detection (debounced)
-        super().__init__("SteamVRRouter")
-        self.engine = engine
+        super().__init__("SteamVRRouter", engine, poll_rate_s=poll_rate_s)
         self.get_all_configs = get_all_configs
-        self.poll_rate_s = poll_rate_s
-        self._last_sent: Dict[str, float] = {}
 
-    def _run(self):
-        print("[SteamVR] Router thread started")
-        while not self._stop.is_set():
-            try:
-                self._tick()
-            except Exception as e:
-                print(f"[SteamVR][Router] tick error: {e}")
-            self._interruptible_sleep(self.poll_rate_s)
-
-    def _tick(self):
-        params = store.get_all_parameters()
-        if not params:
-            return
+    def compute_targets(self, params: Dict[str, Any]) -> Dict[str, float]:
         configs = self.get_all_configs()
         if not configs:
-            return
-
+            return {}
+        out: Dict[str, float] = {}
         for serial, cfg in configs.items():
             if not cfg.enabled:
                 continue
@@ -60,10 +53,11 @@ class SteamVRRouter(PollingThread):
                         continue
                     if v > best:
                         best = v
-            # Debounce: only push when the value actually changes
-            if self._last_sent.get(serial) != best:
-                self._last_sent[serial] = best
-                self.engine.set_strength(serial, best)
+            out[serial] = best
+        return out
+
+    def dispatch(self, serial: str, target: float) -> None:
+        self.engine.set_strength(serial, target)
 
 
 class SteamVRBatteryBroadcaster(PollingThread):

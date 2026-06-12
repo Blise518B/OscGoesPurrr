@@ -137,31 +137,45 @@ def merge_chains(values, op: str) -> float:
 # activity meter + gate
 # ----------------------------------------------------------
 
-# Hidden time constants for the activity meter. Locked so the
-# user-facing `wake_threshold` / `sleep_delay_s` knobs stay in
-# consistent units across motors and profiles. Attack is fast so new
-# movement registers immediately; release is slow so brief stillness
-# does not instantly drop the meter below threshold.
+# Default time constants for the activity meter. These used to be
+# hidden (locked) constants; they are now the fallbacks for the
+# per-chain `gate.attack_s` / `gate.release_s` knobs. The defaults
+# preserve the original feel: attack fast so new movement registers
+# immediately; release slow so brief stillness does not instantly
+# drop the meter below threshold. Raising attack makes the gate
+# demand *sustained* movement before it wakes (a slow "budget"
+# build-up); raising release makes the meter coast down over seconds
+# instead of collapsing between strokes.
 _ACTIVITY_ATTACK_TAU_S = 0.05
 _ACTIVITY_RELEASE_TAU_S = 0.50
 
+# Floor for either tau. `1 - exp(-dt/tau)` with tau at or below a
+# router tick is already "instant"; allowing 0 would divide by zero.
+_ACTIVITY_TAU_MIN_S = 0.01
 
-def activity_meter(prev: float, signal: float, dt_s: float) -> float:
+
+def activity_meter(prev: float, signal: float, dt_s: float,
+                   attack_tau_s: float = _ACTIVITY_ATTACK_TAU_S,
+                   release_tau_s: float = _ACTIVITY_RELEASE_TAU_S) -> float:
     """Asymmetric EMA on the speed-detector output, clamped to
     `[0, 1]` (anti-windup). Returns the new meter value given the
     previous meter, the current speed signal, and the elapsed
     seconds since the last update.
 
-    Rising uses `_ACTIVITY_ATTACK_TAU_S` (50 ms by default), falling
-    uses `_ACTIVITY_RELEASE_TAU_S` (500 ms). A non-positive `dt_s`
-    returns `prev` unchanged — no integration can happen in zero
-    elapsed time, and clock-rewind shouldn't blow up the meter."""
+    Rising uses `attack_tau_s` (default 50 ms), falling uses
+    `release_tau_s` (default 500 ms); both are floored at
+    `_ACTIVITY_TAU_MIN_S`. A non-positive `dt_s` returns `prev`
+    unchanged — no integration can happen in zero elapsed time, and
+    clock-rewind shouldn't blow up the meter."""
     prev_f = float(prev)
     sig = _clamp_unit(float(signal))
     dt = float(dt_s)
     if dt <= 0.0:
         return prev_f
-    tau = _ACTIVITY_ATTACK_TAU_S if sig > prev_f else _ACTIVITY_RELEASE_TAU_S
+    if sig > prev_f:
+        tau = max(_ACTIVITY_TAU_MIN_S, float(attack_tau_s))
+    else:
+        tau = max(_ACTIVITY_TAU_MIN_S, float(release_tau_s))
     alpha = 1.0 - math.exp(-dt / tau)
     new = prev_f + (sig - prev_f) * alpha
     return _clamp_unit(new)

@@ -41,6 +41,7 @@ from ui.icons import (
     icon_check as _icon_check,
     icon_cross as _icon_cross,
 )
+from ui.fold_strip import FoldCard as _FoldCard, FoldStrip as _FoldStrip
 from ui.widgets import (
     ToggleSwitch,
     Invoker as _Invoker,
@@ -98,6 +99,13 @@ class SteamVRMixin:
         self.steamvr_battery_interval_spin.setValue(5)
         self.steamvr_battery_interval_spin.valueChanged.connect(self._on_steamvr_battery_interval_changed)
         action_row.addWidget(self.steamvr_battery_interval_spin)
+        action_row.addWidget(self._make_help_badge(
+            "Battery poll",
+            "How often each SteamVR device's battery level is read and "
+            "published to its outgoing OSC address (so your avatar can "
+            "show tracker battery). Lower = fresher readings, slightly "
+            "more OSC traffic."
+        ))
 
         action_row.addStretch(1)
         slay.addLayout(action_row)
@@ -184,6 +192,13 @@ class SteamVRMixin:
         self._steamvr_refresh_timer.timeout.connect(self._refresh_steamvr_status_only)
         self._steamvr_refresh_timer.start()
 
+        # Fast tick driving the tracker cards' activity rings + arrows.
+        # Short-circuits while the view is hidden.
+        self._steamvr_level_timer = QTimer(self.window)
+        self._steamvr_level_timer.setInterval(100)
+        self._steamvr_level_timer.timeout.connect(self._refresh_steamvr_levels)
+        self._steamvr_level_timer.start()
+
     def _build_steamvr_pattern_row(self, label: str, idx: int):
         row = _hbox(0, 8)
         row.addWidget(QLabel(label + ":"))
@@ -202,6 +217,17 @@ class SteamVRMixin:
         row.addWidget(QLabel("Speed"))
         spin_speed = QSpinBox(); spin_speed.setRange(1, 64)
         row.addWidget(spin_speed)
+        row.addWidget(self._make_help_badge(
+            f"{label} pattern",
+            ("Reacts to the parameter's raw 0–1 value. "
+             if idx == 0 else
+             "Reacts to how fast the parameter is changing. ")
+            + "The pattern shapes the pulse train: <b>Constant</b> holds a "
+              "steady buzz, <b>Linear</b>/<b>Sine</b>/<b>Throb</b> modulate "
+              "it over time, <b>None</b> disables this half. Min/Max % "
+              "bound the pulse strength; Speed sets how fast the pattern "
+              "cycles."
+        ))
         row.addStretch(1)
 
         widgets = {"combo": combo, "min": spin_min, "max": spin_max, "speed": spin_speed}
@@ -328,7 +354,11 @@ class SteamVRMixin:
         )
 
     def _refresh_steamvr_status_only(self):
-        # Cheap refresh: status bar only, no list rebuild.
+        # Cheap refresh: status bar only, no list rebuild. Skipped
+        # while the page is hidden; select_view refreshes on arrival.
+        view = self.views.get("SteamVR Device Comms")
+        if view is not None and not view.isVisible():
+            return
         try:
             status = self.controller.get_steamvr_status()
         except Exception:
@@ -408,6 +438,9 @@ class SteamVRMixin:
             widgets["speed"].setValue(int(p.get("speed", 4)))
 
     def _rebuild_steamvr_tracker_list(self, trackers: list):
+        # Drop stale strip references before the widgets are deleted so
+        # the fast level timer never touches dead Qt objects.
+        self._steamvr_tracker_strips = []
         # Wipe existing rows.
         while self.steamvr_tracker_list_layout.count():
             item = self.steamvr_tracker_list_layout.takeAt(0)
@@ -482,46 +515,109 @@ class SteamVRMixin:
         enabled.setChecked(bool(cfg.get("enabled", True)))
         lay.addWidget(enabled)
 
-        # ---- Outgoing: battery OSC address (all device classes) ----
-        out_row = _hbox(0, 6)
-        out_row.addWidget(QLabel("Outgoing battery OSC address"))
-        lay.addLayout(out_row)
         battery_edit = QLineEdit()
         battery_edit.setText(str(cfg.get("battery_osc_address", "")))
         battery_edit.setPlaceholderText("HMD_Battery  (leave blank to disable)")
-        lay.addWidget(battery_edit)
 
-        # ---- Incoming: haptic OSC addresses (skip for HMD) ----
+        # ---- Haptics-capable devices get the fold strip: Input →
+        # Tuning → Tracker — same design language as Device Routing
+        # (folds joined by arrows, rings charged by the live incoming
+        # haptic level; see ui/fold_strip.py). HMDs are battery-only,
+        # so they keep a flat battery-address row instead.
         addr_edit = None
         mult = None
         bat_thr = None
         if supports_haptics:
-            in_row = _hbox(0, 6)
-            in_row.addWidget(QLabel("Incoming haptic OSC addresses (separate with ; )"))
-            lay.addLayout(in_row)
+            strip = _FoldStrip()
+
+            in_fold = strip.add_fold(_FoldCard("input", "Input", show_value=True))
+            in_fold.add_header_widget(self._make_help_badge(
+                "Input",
+                "The VRChat avatar parameters that drive this device's "
+                "haptic pulses (bare names, separated by ;). The live "
+                "number and the glowing ring show the strongest incoming "
+                "value right now."
+            ))
+            ie = in_fold.editor_layout
+            ie.addWidget(QLabel("Haptic OSC addresses (separate with ; )"))
             addr_edit = QLineEdit()
             addr_edit.setText(";".join(cfg.get("address_list", [])))
             addr_edit.setPlaceholderText("MyParam;OtherParam")
-            lay.addWidget(addr_edit)
+            ie.addWidget(addr_edit)
 
-            params_row = _hbox(0, 8)
-            params_row.addWidget(QLabel("Multiplier"))
+            tn_fold = strip.add_fold(_FoldCard("tuning", "Tuning"))
+            tn_fold.add_header_widget(self._make_help_badge(
+                "Tuning",
+                "<b>Multiplier</b> scales the incoming value before the "
+                "vibration patterns run — use it to balance devices with "
+                "weak or strong motors. <b>Battery threshold</b>: below "
+                "this battery %, the device buzzes a fading low-battery "
+                "alert and then stops pulsing to save what's left."
+            ))
+            te = tn_fold.editor_layout
+            mu_row = _hbox(0, 8)
+            mu_row.addWidget(QLabel("Multiplier"))
             mult = QDoubleSpinBox(); mult.setRange(0.0, 100.0); mult.setSingleStep(0.1)
             mult.setValue(float(cfg.get("multiplier_override", 1.0)))
-            params_row.addWidget(mult)
-
-            params_row.addWidget(QLabel("Battery threshold %"))
+            mu_row.addWidget(mult)
+            mu_row.addStretch(1)
+            te.addLayout(mu_row)
+            bt_row = _hbox(0, 8)
+            bt_row.addWidget(QLabel("Battery threshold %"))
             bat_thr = QSpinBox(); bat_thr.setRange(0, 100)
             bat_thr.setValue(int(cfg.get("battery_threshold", 20)))
-            params_row.addWidget(bat_thr)
-            params_row.addStretch(1)
-            lay.addLayout(params_row)
+            bt_row.addWidget(bat_thr)
+            bt_row.addStretch(1)
+            te.addLayout(bt_row)
+
+            dv_fold = strip.add_fold(_FoldCard("tracker", "Tracker"))
+            dv_fold.add_header_widget(self._make_help_badge(
+                "Tracker",
+                "The device end. <b>Outgoing battery OSC address</b> "
+                "publishes this device's battery level to your avatar as "
+                "a parameter (blank disables it). Use the header's "
+                "<b>Pulse Test</b> button to confirm which physical "
+                "device this is."
+            ))
+            de = dv_fold.editor_layout
+            de.addWidget(QLabel("Outgoing battery OSC address"))
+            de.addWidget(battery_edit)
+
+            lay.addWidget(strip)
+
+            def update_subtitles():
+                addrs = [a.strip() for a in addr_edit.text().split(";") if a.strip()]
+                if not addrs:
+                    in_sub = "no addresses"
+                elif len(addrs) == 1:
+                    in_sub = addrs[0]
+                else:
+                    in_sub = f"{addrs[0]} +{len(addrs) - 1}"
+                in_fold.set_subtitle(in_sub)
+                tn_fold.set_subtitle(
+                    f"×{float(mult.value()):.1f}"
+                    f" · bat ≥ {int(bat_thr.value())}%")
+                bat_addr = battery_edit.text().strip()
+                dv_fold.set_subtitle(
+                    f"battery → {bat_addr}" if bat_addr else "battery off")
+            update_subtitles()
+
+            self._steamvr_tracker_strips.append({
+                "strip": strip, "input_fold": in_fold,
+                "enabled": enabled, "addr_edit": addr_edit, "mult": mult,
+            })
         else:
+            out_row = _hbox(0, 6)
+            out_row.addWidget(QLabel("Outgoing battery OSC address"))
+            lay.addLayout(out_row)
+            lay.addWidget(battery_edit)
             lay.addWidget(self._muted_label("HMDs don't support haptic pulses — battery broadcast only."))
+            update_subtitles = lambda: None
 
         def push(_=None):
             if self._is_updating_steamvr:
                 return
+            update_subtitles()
             new_cfg = dict(cfg)
             new_cfg["enabled"] = enabled.isChecked()
             new_cfg["battery_osc_address"] = strip_param_prefix(battery_edit.text())
@@ -550,3 +646,39 @@ class SteamVRMixin:
         if bat_thr is not None:
             bat_thr.valueChanged.connect(push)
         return card
+
+    def _refresh_steamvr_levels(self):
+        """Fast tick: charge the tracker cards' activity rings + arrows
+        from the live incoming haptic parameters. Input shows the
+        hottest configured address (read straight from parameter_store
+        — the sanctioned live-debug reach-out); Tuning/Tracker show the
+        multiplied level the pulse loop would target."""
+        rows = getattr(self, "_steamvr_tracker_strips", None)
+        if not rows:
+            return
+        view = self.views.get("SteamVR Device Comms")
+        if view is not None and not view.isVisible():
+            return
+        params = store.get_all_parameters() or {}
+        for row in rows:
+            try:
+                addrs = [
+                    strip_param_prefix(a)
+                    for a in row["addr_edit"].text().split(";")
+                    if a.strip()
+                ]
+                level = 0.0
+                for a in addrs:
+                    try:
+                        v = float(params.get(a, 0.0) or 0.0)
+                    except (TypeError, ValueError):
+                        continue
+                    level = max(level, max(0.0, min(1.0, v)))
+                if row["enabled"].isChecked():
+                    out = max(0.0, min(1.0, level * float(row["mult"].value())))
+                else:
+                    out = 0.0
+                row["strip"].set_levels([level, out, out])
+                row["input_fold"].set_value(level)
+            except RuntimeError:
+                continue

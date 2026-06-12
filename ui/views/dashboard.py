@@ -108,6 +108,13 @@ class DashboardMixin:
         self.global_paste_btn.setProperty("role", "secondary")
         self.global_paste_btn.clicked.connect(lambda _=False: self.controller.paste_profile("global"))
         gflay.addWidget(self.global_paste_btn)
+        gflay.addWidget(self._make_help_badge(
+            "Paste profile",
+            "Creates a new global profile from the profile most recently "
+            "copied with a row's 📋 Copy button. Use Copy + Paste to "
+            "duplicate a setup before experimenting, or to turn an avatar "
+            "profile into a global one."
+        ))
         prof_lay.addWidget(gfooter)
 
         # ---- Divider ----
@@ -153,6 +160,13 @@ class DashboardMixin:
         self.avatar_paste_btn.setProperty("role", "secondary")
         self.avatar_paste_btn.clicked.connect(lambda _=False: self.controller.paste_profile("avatar"))
         aflay.addWidget(self.avatar_paste_btn)
+        aflay.addWidget(self._make_help_badge(
+            "Paste profile",
+            "Creates a new avatar profile (bound to the current avatar) "
+            "from the profile most recently copied with a row's 📋 Copy "
+            "button — handy for carrying a tuned setup over to a new "
+            "avatar."
+        ))
         prof_lay.addWidget(afooter)
 
         # Manage-all button lives below the "+ New / Paste" row so the
@@ -819,7 +833,7 @@ class DashboardMixin:
     # bHaptics, the OSC inspector, etc. before they've connected a toy.
     _SIMPLE_MODE_HIDDEN_VIEWS = (
         "Dashboard", "Device Routing", "SPS Sources", "SteamVR Device Comms",
-        "bHaptics", "OSC Inspector", "System Log",
+        "bHaptics", "PiShock", "Coyote", "OWO", "OSC Inspector", "System Log",
     )
 
     # Sidebar entries gated by Settings → Features. A view is hidden if any
@@ -828,14 +842,14 @@ class DashboardMixin:
     # one view.
     _FEATURE_VIEW_REQUIREMENTS = {
         "bHaptics":              ("feature_bhaptics",),
+        "PiShock":               ("feature_pishock",),
+        "Coyote":                ("feature_coyote",),
+        "OWO":                   ("feature_owo",),
         "OSC Inspector":         ("feature_osc_inspector",),
         "SteamVR Device Comms":  ("feature_steamvr_haptics", "feature_steamvr_battery"),
         # Device Routing is entirely about Intiface toy motor mapping, so hide
         # it when the user has turned Intiface off.
         "Device Routing":        ("feature_intiface",),
-        # Tune view shares the same mix subcard and routes through the
-        # Buttplug pipeline, so hide it when Intiface is off.
-        "Tune":                  ("feature_intiface",),
     }
 
     def _feature_allows_view(self, view_name: str) -> bool:
@@ -1039,28 +1053,88 @@ class DashboardMixin:
         title_lay.addStretch(1)
 
         help_toggle = ToggleSwitch("Help Mode")
-        help_toggle.setChecked(
-            bool(self.controller.get_app_setting("help_mode_enabled", False))
-        )
-
-        def on_help_toggled(checked):
-            self.controller.set_app_setting("help_mode_enabled", bool(checked))
-            self._set_help_badges_visible(bool(checked))
-
-        help_toggle.toggled.connect(on_help_toggled)
+        self._register_help_mode_toggle(help_toggle)
         title_lay.addWidget(help_toggle)
         parent_layout.addWidget(title_row)
+
+        # ---- Anti-stuck card (two-timer model; parity with SteamVR/bHaptics) ----
+        # Safety cutoff for frozen SPS inputs on the toy path. VRChat only
+        # sends OSC on parameter change, so a stuck proximity (avatar swap,
+        # partner leaves) would otherwise drive a toy at its last value
+        # forever. Global to Device Routing; persisted in app settings and
+        # read fresh by the routing tick (controller._get_toy_antistuck).
+        as_card = _Card()
+        aslay = _vbox(14, 8)
+        as_card.setLayout(aslay)
+        as_hdr = QLabel("Anti-stuck")
+        as_hdr.setObjectName("sectionTitle")
+        aslay.addWidget(as_hdr)
+        aslay.addWidget(self._muted_label(
+            "VRChat only sends OSC on parameter change. If an SPS input stops "
+            "updating (avatar swap, partner leaves, OSC routing loss), the last "
+            "value would drive the toy forever. The active timeout cuts "
+            "mid-range stuck values; the peaked timeout gives saturated (100%) "
+            "values a longer fuse — they often mean a legitimate hold — then "
+            "ramps them down."
+        ))
+        as_row = _hbox(0, 8)
+        self.toy_antistuck_check = ToggleSwitch("Enabled")
+        self.toy_antistuck_check.setChecked(
+            bool(self.controller.get_app_setting("toy_antistuck_enabled", True))
+        )
+        as_row.addWidget(self.toy_antistuck_check)
+        as_row.addSpacing(12)
+
+        as_row.addWidget(QLabel("Active timeout (s)"))
+        self.toy_antistuck_active_spin = QSpinBox()
+        self.toy_antistuck_active_spin.setRange(1, 600)
+        self.toy_antistuck_active_spin.setValue(
+            int(self.controller.get_app_setting("toy_antistuck_active_s", 7))
+        )
+        as_row.addWidget(self.toy_antistuck_active_spin)
+
+        as_row.addWidget(QLabel("Peaked timeout (s)"))
+        self.toy_antistuck_peaked_spin = QSpinBox()
+        self.toy_antistuck_peaked_spin.setRange(1, 600)
+        self.toy_antistuck_peaked_spin.setValue(
+            int(self.controller.get_app_setting("toy_antistuck_peaked_s", 15))
+        )
+        as_row.addWidget(self.toy_antistuck_peaked_spin)
+        as_row.addStretch(1)
+        aslay.addLayout(as_row)
+
+        # Connect AFTER seeding values so the initial setValue/setChecked
+        # calls above don't echo straight back into app settings.
+        self.toy_antistuck_check.toggled.connect(self._on_toy_antistuck_changed)
+        self.toy_antistuck_active_spin.valueChanged.connect(self._on_toy_antistuck_changed)
+        self.toy_antistuck_peaked_spin.valueChanged.connect(self._on_toy_antistuck_changed)
+        parent_layout.addWidget(as_card)
 
         self.devices_container_frame = _Card(dark_bg=True)
         container_lay = _vbox(10, 6)
         self.devices_container_frame.setLayout(container_lay)
         parent_layout.addWidget(self.devices_container_frame, 1)
 
+        toys_hdr_row = QWidget()
+        thl = _hbox(0, 6)
+        toys_hdr_row.setLayout(thl)
+        thl.addStretch(1)
         header = QLabel("Toys")
         f = header.font(); f.setBold(True); f.setPointSize(12)
         header.setFont(f)
         header.setAlignment(Qt.AlignHCenter)
-        container_lay.addWidget(header)
+        thl.addWidget(header)
+        thl.addWidget(self._make_help_badge(
+            "Toy cards",
+            "Every connected or remembered toy gets a card. Click the bar "
+            "to expand its per-motor signal chains (Input → Depth/Speed → "
+            "Combine → Gate → Smoothing → Output — click any stage to "
+            "edit it). <b>Mute</b> silences the toy without touching its "
+            "config; <b>Test</b> pulses the motors; the mini bars mirror "
+            "each motor's live output."
+        ))
+        thl.addStretch(1)
+        container_lay.addWidget(toys_hdr_row)
 
         # Scrollable list of device cards.
         scroll = QScrollArea()
@@ -1073,3 +1147,15 @@ class DashboardMixin:
         scroll.setWidget(inner)
         self.unified_devices_frame = inner
         container_lay.addWidget(scroll, 1)
+
+    def _on_toy_antistuck_changed(self, *_):
+        """Persist the Device Routing anti-stuck settings. The live routing
+        tick reads them fresh each evaluation via the controller's
+        `_get_toy_antistuck`, so the change takes effect on the next tick with
+        no explicit recalc kick."""
+        self.controller.set_app_setting(
+            "toy_antistuck_enabled", bool(self.toy_antistuck_check.isChecked()))
+        self.controller.set_app_setting(
+            "toy_antistuck_active_s", int(self.toy_antistuck_active_spin.value()))
+        self.controller.set_app_setting(
+            "toy_antistuck_peaked_s", int(self.toy_antistuck_peaked_spin.value()))

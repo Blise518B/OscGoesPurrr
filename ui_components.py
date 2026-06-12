@@ -67,8 +67,10 @@ from ui.views.settings import SettingsMixin
 from ui.views.sessions import SessionsMixin
 from ui.views.steamvr import SteamVRMixin
 from ui.views.bhaptics import BHapticsMixin
+from ui.views.pishock import PiShockMixin
+from ui.views.coyote import CoyoteMixin
+from ui.views.owo import OwoMixin
 from ui.views.device_frame import DeviceFrameMixin
-from ui.views.tune import TuneMixin
 from ui.views.overview import OverviewMixin
 from ui.views.sps_sources import SpsSourcesMixin
 
@@ -76,6 +78,18 @@ from ui.views.sps_sources import SpsSourcesMixin
 # ============================================================
 # Global QSS — maps the existing palette to Qt widgets
 # ============================================================
+
+def _image_url(name: str) -> str:
+    """Absolute url() path for a bundled Images/ asset, usable inside
+    the stylesheet. Resolves beside this file in dev and from the
+    PyInstaller bundle when frozen (same logic as the window icon).
+    QSS wants forward slashes, even on Windows."""
+    if getattr(sys, "frozen", False):
+        base = os.path.join(sys._MEIPASS, "Images")
+    else:
+        base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "Images")
+    return os.path.join(base, name).replace("\\", "/")
+
 
 GLOBAL_QSS = f"""
 * {{
@@ -118,6 +132,19 @@ QFrame#tuneStageCard[active="true"] {{
 }}
 QFrame#tuneStageCard:hover {{
     background-color: {COLOR_SURFACE};
+}}
+/* Accordion stage card sub-regions + live output number (Cut 9). */
+QFrame#stageQuick, QFrame#stageEditorRegion {{
+    background: transparent;
+    border: none;
+}}
+QLabel#stageOutNum {{
+    color: {COLOR_LIVE};
+    font-weight: bold;
+}}
+QLabel#gainValue {{
+    color: {COLOR_TEXT};
+    font-weight: bold;
 }}
 QFrame#overviewTile {{
     background-color: {COLOR_SURFACE};
@@ -341,6 +368,53 @@ QComboBox, QSpinBox, QDoubleSpinBox, QAbstractSpinBox {{
 QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover, QAbstractSpinBox:hover {{
     border-color: {COLOR_INPUT_FOCUS};
 }}
+/* Spinbox up/down buttons, owned by the stylesheet on purpose: the
+   Qt 6.7+ "windows11" base style paints the two arrows side by side
+   and (with an app stylesheet active) its hit-testing doesn't match
+   the painted arrows — the up arrow goes dead. Defining the
+   subcontrols here makes QStyleSheetStyle compute layout, painting
+   AND hit-testing from these same boxes, bypassing the broken native
+   path and restoring the classic stacked buttons in the app theme.
+   The arrows are pure-QSS border triangles (no image assets). */
+QAbstractSpinBox {{
+    padding-right: 20px;  /* reserve room for the button column */
+}}
+QAbstractSpinBox::up-button {{
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 18px;
+    border-left: 1px solid {COLOR_INPUT_BORDER};
+    border-top-right-radius: 3px;
+    background: transparent;
+}}
+QAbstractSpinBox::down-button {{
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 18px;
+    border-left: 1px solid {COLOR_INPUT_BORDER};
+    border-bottom-right-radius: 3px;
+    background: transparent;
+}}
+QAbstractSpinBox::up-button:hover, QAbstractSpinBox::down-button:hover {{
+    background: {COLOR_BUTTON};
+}}
+QAbstractSpinBox::up-button:pressed, QAbstractSpinBox::down-button:pressed {{
+    background: {COLOR_PRIMARY};
+}}
+QAbstractSpinBox::up-arrow {{
+    image: url("{_image_url('spin_arrow_up.svg')}");
+    width: 8px; height: 5px;
+}}
+QAbstractSpinBox::down-arrow {{
+    image: url("{_image_url('spin_arrow_down.svg')}");
+    width: 8px; height: 5px;
+}}
+QAbstractSpinBox::up-arrow:disabled, QAbstractSpinBox::up-arrow:off {{
+    image: url("{_image_url('spin_arrow_up_dim.svg')}");
+}}
+QAbstractSpinBox::down-arrow:disabled, QAbstractSpinBox::down-arrow:off {{
+    image: url("{_image_url('spin_arrow_down_dim.svg')}");
+}}
 QComboBox::drop-down {{
     border: none;
     width: 18px;
@@ -540,8 +614,10 @@ class OscGoesPurrrUI(
     SessionsMixin,
     SteamVRMixin,
     BHapticsMixin,
+    PiShockMixin,
+    CoyoteMixin,
+    OwoMixin,
     DeviceFrameMixin,
-    TuneMixin,
     OverviewMixin,
     SpsSourcesMixin,
 ):
@@ -625,8 +701,6 @@ class OscGoesPurrrUI(
         self.osc_debugger_button: Optional[QPushButton] = None
         self.osc_search_entry: Optional[QLineEdit] = None
         self.debugger_table: Optional[QTableWidget] = None
-        # Legacy HTML-rendered inspector kept alongside the table for comparison.
-        self.debugger_textbox: Optional[QTextEdit] = None
 
         # System log
         self.log_text: Optional[QTextEdit] = None
@@ -690,8 +764,8 @@ class OscGoesPurrrUI(
         root_layout.addWidget(self.main_stack, 1)
 
         view_names = ["Dashboard", "Overview", "Simple Mode",
-                      "Device Routing", "SPS Sources", "Tune",
-                      "SteamVR Device Comms", "bHaptics",
+                      "Device Routing", "SPS Sources",
+                      "SteamVR Device Comms", "bHaptics", "PiShock", "Coyote", "OWO",
                       "OSC Inspector", "OSC Diagnostics", "System Log",
                       "Settings", "Help"]
         builders = {
@@ -700,9 +774,11 @@ class OscGoesPurrrUI(
             "Simple Mode": self._build_simple_mode_view,
             "Device Routing": self._build_device_routing_view,
             "SPS Sources": self._build_sps_sources_view,
-            "Tune": self._build_tune_view,
             "SteamVR Device Comms": self._build_steamvr_view,
             "bHaptics": self._build_bhaptics_view,
+            "PiShock": self._build_pishock_view,
+            "Coyote": self._build_coyote_view,
+            "OWO": self._build_owo_view,
             "OSC Inspector": self._build_network_debug_view,
             "OSC Diagnostics": self._build_osc_diagnostics_view,
             "System Log": self._build_system_log_view,
@@ -734,6 +810,14 @@ class OscGoesPurrrUI(
             self.select_view("Simple Mode")
         else:
             self.select_view("Dashboard")
+
+        # Every view is built now — apply the persisted Help Mode state
+        # to ALL registered badges in one pass. (Badges are created
+        # hidden; per-view builds can't do this because views built
+        # later would be missed.)
+        self._set_help_badges_visible(
+            bool(self.controller.get_app_setting("help_mode_enabled", False))
+        )
 
     # ----------------------------------------------------------
     # Page wrapping (scroll area + optional max-width left-align)
@@ -774,8 +858,8 @@ class OscGoesPurrrUI(
         lay.addSpacing(12)
 
         nav_buttons = ["Dashboard", "Overview", "Simple Mode",
-                       "Device Routing", "SPS Sources", "Tune",
-                       "SteamVR Device Comms", "bHaptics",
+                       "Device Routing", "SPS Sources",
+                       "SteamVR Device Comms", "bHaptics", "PiShock", "Coyote", "OWO",
                        "OSC Inspector", "OSC Diagnostics", "System Log",
                        "Settings", "Help"]
         for name in nav_buttons:
@@ -791,8 +875,24 @@ class OscGoesPurrrUI(
         lay.addStretch(1)
 
         # ===== Bottom status / connection block =====
+        # Global Help Mode toggle — lives in the always-visible sidebar
+        # so the `?` badges scattered across every view can be turned on
+        # from anywhere. Synced with the Device Routing header toggle.
+        help_toggle = ToggleSwitch("Help Mode")
+        self._register_help_mode_toggle(help_toggle)
+        lay.addWidget(help_toggle, 0, Qt.AlignHCenter)
+        lay.addSpacing(6)
+
         # --- VRChat OSC Section ---
-        lay.addWidget(self._sidebar_section_title("VRChat OSC"))
+        lay.addWidget(self._sidebar_section_row(
+            "VRChat OSC",
+            "VRChat OSC",
+            "The link to VRChat's OSC bus — where every avatar contact "
+            "signal comes from. The app waits for VRChat to appear "
+            "(mDNS/OSCQuery discovery) before binding a port; hover the "
+            "pill for the live port. <b>🔍 Refresh</b> re-handshakes a "
+            "\"connected but silent\" link without a full reconnect."
+        ))
 
         # Matches the Intiface pill exactly: "CONNECTED"/"DISCONNECTED" with the
         # same rounded pill styling and ok/err tones (set in update_osc_status).
@@ -836,7 +936,14 @@ class OscGoesPurrrUI(
         intiface_lay.addWidget(sep)
         intiface_lay.addSpacing(8)
 
-        intiface_lay.addWidget(self._sidebar_section_title("Intiface Central"))
+        intiface_lay.addWidget(self._sidebar_section_row(
+            "Intiface Central",
+            "Intiface Central",
+            "The Buttplug.io server that talks to Bluetooth toys. Start "
+            "the Intiface Central app first, then Connect. <b>🔍 "
+            "Refresh</b> rescans for toys powered on after connecting "
+            "(an automatic rescan also runs periodically)."
+        ))
 
         self.status_label = QLabel("DISCONNECTED")
         self.status_label.setProperty("role", "pill")
@@ -876,6 +983,18 @@ class OscGoesPurrrUI(
         lbl.setAlignment(Qt.AlignHCenter)
         return lbl
 
+    def _sidebar_section_row(self, text: str, help_title: str,
+                             help_text: str) -> QWidget:
+        """Sidebar section title with a Help Mode `?` badge beside it."""
+        row = QWidget()
+        rl = _hbox(0, 4)
+        row.setLayout(rl)
+        rl.addStretch(1)
+        rl.addWidget(self._sidebar_section_title(text))
+        rl.addWidget(self._make_help_badge(help_title, help_text))
+        rl.addStretch(1)
+        return row
+
     # ----------------------------------------------------------
     # View switching
     # ----------------------------------------------------------
@@ -896,6 +1015,28 @@ class OscGoesPurrrUI(
             self.controller.toggle_osc_debugger()
         elif not is_inspector and debugging:
             self.controller.toggle_osc_debugger()
+
+        # Pages pause their periodic refreshers while hidden (the
+        # handlers early-out on isVisible) — run the page's refresher
+        # once on arrival so it never shows data older than one tick.
+        # Now that setCurrentWidget has run, the visibility checks pass.
+        arrival_refreshers = {
+            "Overview": "_refresh_overview_dynamic",
+            "SteamVR Device Comms": "_refresh_steamvr_status_only",
+            "bHaptics": "_refresh_bhaptics_status_only",
+            "PiShock": "_refresh_pishock_status_only",
+            "Coyote": "_refresh_coyote_status_only",
+            "OWO": "_refresh_owo_status_only",
+            "Settings": "_refresh_sessions_view",
+        }
+        fn = getattr(self, arrival_refreshers.get(view_name, ""), None)
+        if callable(fn):
+            try:
+                fn()
+            except Exception:
+                # Arrival refresh is best-effort; the periodic tick
+                # lands within a second or two anyway.
+                pass
 
     # ----------------------------------------------------------
     # Logging

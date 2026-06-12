@@ -1,0 +1,29 @@
+OWO suit backend — place OWO.dll here
+=====================================
+
+The OWO suit has no documented pure-Python protocol, so OscGoesPurrr drives it
+through OWO's official .NET SDK, loaded at runtime via pythonnet. Two optional
+prerequisites enable the OWO backend (it shows as "unavailable" without them):
+
+1. Install the CLR bridge:
+
+       pip install pythonnet
+
+2. Drop the OWO SDK assembly into THIS folder so the path is:
+
+       owo-sdk/OWO.dll
+
+   Get OWO.dll from OWO's developer SDK download (the same assembly the
+   community vrc-owo-suit project ships). It is a Windows / .NET binary and is
+   intentionally NOT checked into this repository (like the intiface-engine
+   binary), so you must supply it yourself.
+
+You also need the **My OWO phone app** running on the same Wi-Fi network and put
+into game mode ("Games > Scan Game") — the app is the only thing that talks to
+the suit over Bluetooth; the PC connects to the app, not the suit directly.
+
+Once both are present, relaunch OscGoesPurrr, open the OWO view, set your game
+ID (optional) / suit IP (blank = auto-discover), and click Connect.
+
+The PyInstaller build (build_OGP.bat) bundles this folder automatically when
+OWO.dll is present.

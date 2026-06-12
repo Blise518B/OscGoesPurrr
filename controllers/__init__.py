@@ -13,6 +13,9 @@ Each mixin assumes the host controller has these attributes/methods:
 from .steamvr_facade import SteamVRFacade
 from .steamvr_toys_facade import SteamVRToysFacade
 from .bhaptics_facade import BHapticsFacade
+from .pishock_facade import PiShockFacade
+from .coyote_facade import CoyoteFacade
+from .owo_facade import OwoFacade
 from .osc_facade import OscFacade
 from .profiles_facade import ProfilesFacade
 from .sessions_facade import SessionsFacade
@@ -22,6 +25,9 @@ __all__ = [
     "SteamVRFacade",
     "SteamVRToysFacade",
     "BHapticsFacade",
+    "PiShockFacade",
+    "CoyoteFacade",
+    "OwoFacade",
     "OscFacade",
     "ProfilesFacade",
     "SessionsFacade",

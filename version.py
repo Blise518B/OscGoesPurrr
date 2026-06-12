@@ -92,7 +92,13 @@ def _resolve_from_git() -> tuple[str, str]:
 
 try:
     from _version_baked import VERSION as __version__, SHORT_HASH as _SHORT_HASH
-except ImportError:
+except Exception:
+    # Broad on purpose: a missing baked file (normal source-tree runs)
+    # raises ImportError, but a truncated/corrupt one left behind by an
+    # interrupted build raises SyntaxError/ValueError. Either way fall back
+    # to the live git lookup rather than letting `import version` crash —
+    # that would take down both the app at startup and the build's own
+    # version query (which would then name the exe "OscGoesPurrr_.exe").
     __version__, _SHORT_HASH = _resolve_from_git()
 
 if _SHORT_HASH:

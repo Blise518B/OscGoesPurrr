@@ -16,12 +16,18 @@ import time
 from typing import Dict, List, Optional, Tuple
 
 from buttplug import ButtplugClient, DeviceOutputCommand, OutputType
-from constants import APP_NAME, HAPTIC_MAX_SEND_HZ, HAPTIC_POLL_RATE
+from constants import (
+    APP_NAME,
+    HAPTIC_MAX_SEND_HZ,
+    HAPTIC_POLL_RATE,
+    LINEAR_DURATION_OVERLAP,
+    LINEAR_MAX_SEND_INTERVAL_MS,
+    LINEAR_MIN_POSITION_DELTA,
+)
 from haptic_actuators import (
-    LINEAR_DEFAULTS,
-    STROKE_SPEED_DEFAULTS,
     LinearActuator,
     StrokeSpeedActuator,
+    compute_send_duration_ms,
 )
 from intiface_connection import (
     MODE_EXTERNAL,
@@ -153,15 +159,16 @@ class HapticEngine:
         # collected mid-flight. Each task removes itself on completion.
         self._pending_tasks: set = set()
 
-        # Per-(device_name, motor_idx) last continuous-output send time (ms,
-        # time.monotonic). Fire-and-forget removed the natural backpressure of
-        # awaiting each ack, so this enforces an explicit per-feature send-rate
-        # cap (HAPTIC_MAX_SEND_HZ): the loop may tick at 100 Hz for low latency,
-        # but no single motor is commanded faster than the cap — protecting real
-        # BLE toys from a flood on fast-changing input. The first send after a
-        # quiet gap is never delayed, so step/edge latency is unaffected. (Linear
-        # actuators keep awaiting, so they retain their own backpressure and are
-        # not capped here.)
+        # Per-(device_name, motor_idx) last send time (ms, time.monotonic).
+        # Fire-and-forget removed the natural backpressure of awaiting each ack,
+        # so this enforces an explicit per-feature send-rate cap (HAPTIC_MAX_SEND_HZ):
+        # the loop may tick at 100 Hz for low latency, but no single motor is
+        # commanded faster than the cap — protecting real BLE toys from a flood on
+        # fast-changing input. The first send after a quiet gap is never delayed, so
+        # step/edge latency is unaffected. Linear actuators are capped here too, and
+        # additionally use this timestamp to size their interpolation `duration`
+        # (= clamped gap * LINEAR_DURATION_OVERLAP) — see the linear branch of
+        # async_worker. Their physics still ticks every loop, independent of the cap.
         self._last_send_ms: Dict[Tuple[str, int], float] = {}
         self._min_send_interval_ms = 1000.0 / max(1.0, float(HAPTIC_MAX_SEND_HZ))
 
@@ -310,7 +317,7 @@ class HapticEngine:
         dispatch time. `mode` is "position" or "speed"; `idle` is "rest"
         or "hold". The min_pos/max_pos/resting_pos/resting_time_s kwargs
         are Phase 2 per-motor overrides — when `None`, the actuator keeps
-        whatever it was constructed with (the LINEAR_DEFAULTS values)."""
+        whatever it was constructed with (the haptic_actuators defaults)."""
         if mode not in ("position", "speed"):
             mode = "position"
         if idle not in ("rest", "hold"):
@@ -930,43 +937,62 @@ class HapticEngine:
                         target = self.device_targets.get((device_name, motor_idx), 0.0)
 
                         if kind in LINEAR_KINDS:
-                            # Gate the physics tick AND the send together on the
-                            # per-feature cap: ticking only when we actually send
-                            # keeps the actuator's dt equal to the real interval
-                            # the toy interpolates over, so a capped/skipped tick
-                            # can't desync the commanded duration. The in-flight
-                            # guard preserves command order — stroke positions
-                            # must never arrive out of sequence. When idle (no
-                            # send), the cap doesn't latch, so resting-return
-                            # physics still advances every loop.
-                            if not self._can_send_now((device_name, motor_idx), now_ms):
-                                continue
-                            # Linear actuator: pick mode ("position" depth-aware physics
-                            # vs "speed" continuous-oscillator) from per-motor config.
+                            # Integrate the stroke physics EVERY loop so the
+                            # trajectory stays smooth and fine-grained, decoupled
+                            # from how often we actually transmit. tick() returns
+                            # the current 0-1 position; the send policy below is
+                            # what's rate-capped, not the physics.
                             cfg = self.linear_configs.get((device_name, motor_idx), {})
                             mode = cfg.get("mode", "position")
                             idle = cfg.get("idle", "rest")
-
                             if mode == "speed":
                                 actuator = self.stroke_speed_actuators.get((device_name, motor_idx))
                             else:
                                 actuator = self.linear_actuators.get((device_name, motor_idx))
                             if actuator is None:
                                 continue
-                            result = actuator.tick(target, now_ms, idle_mode=idle)
-                            if result is None:
+                            position = actuator.tick(target, now_ms, idle_mode=idle)
+
+                            # Send policy: respect the per-feature cap + in-flight
+                            # guard (stroke positions must never arrive out of
+                            # order), and skip when the sleeve hasn't moved past the
+                            # last position we sent — so a held/resting stroke goes
+                            # quiet instead of re-commanding the same spot.
+                            if not self._can_send_now((device_name, motor_idx), now_ms):
                                 continue
-                            new_position, duration_ms = result
+                            last_pos = self.device_last_sent.get((device_name, motor_idx))
+                            if (last_pos is not None
+                                    and abs(position - last_pos) < LINEAR_MIN_POSITION_DELTA):
+                                continue
+
+                            # Command the move over a duration that OVERSHOOTS the
+                            # send gap (compute_send_duration_ms): the device holds
+                            # at the target once reached, so an undershoot is exactly
+                            # what made slow motion "step". Sized from the real gap
+                            # since our last send so it self-adapts to the device's
+                            # actual cadence (BLE jitter, in-flight stalls).
+                            last_send_ms = self._last_send_ms.get((device_name, motor_idx))
+                            interval = (now_ms - last_send_ms
+                                        if last_send_ms is not None
+                                        else self._min_send_interval_ms)
+                            duration_ms = compute_send_duration_ms(
+                                interval,
+                                LINEAR_DURATION_OVERLAP,
+                                self._min_send_interval_ms,
+                                LINEAR_MAX_SEND_INTERVAL_MS,
+                            )
+
                             # Fire-and-forget like the continuous path so a linear
                             # toy's ack never stalls the loop (or other devices).
+                            self.device_last_sent[(device_name, motor_idx)] = position
                             self._last_send_ms[(device_name, motor_idx)] = now_ms
                             if kind == "linear-d":
                                 coro = feature.run_output(
-                                    DeviceOutputCommand(output_type, new_position, duration=duration_ms)
+                                    DeviceOutputCommand(output_type, position, duration=duration_ms)
                                 )
                             else:
                                 coro = feature.run_output(
-                                    DeviceOutputCommand(output_type, new_position)
+                                    DeviceOutputCommand(output_type, position)
                                 )
                             self._dispatch_output(device_name, motor_idx, coro)
                         else:

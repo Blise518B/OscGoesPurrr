@@ -141,3 +141,8 @@ Thumbs.db
 # stays tracked). Same for an optional user-supplied device-config override.
 /intiface-engine/*
 !/intiface-engine/PLACE_INTIFACE_ENGINE_HERE.txt
+
+# OWO SDK: the proprietary OWO.dll is user-supplied per-machine, never
+# committed (see the placeholder note, which stays tracked).
+/owo-sdk/*
+!/owo-sdk/PLACE_OWO_DLL_HERE.txt

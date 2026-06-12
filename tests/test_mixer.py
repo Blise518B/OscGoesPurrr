@@ -340,8 +340,8 @@ class TestSamplePatternFrequency:
 # ============================================================ activity_meter
 
 class TestActivityMeter:
-    """Asymmetric EMA with locked time constants (50 ms attack,
-    500 ms release). Output always clamped to [0, 1]."""
+    """Asymmetric EMA with per-call time constants (defaults: 50 ms
+    attack, 500 ms release). Output always clamped to [0, 1]."""
 
     def test_zero_dt_returns_prev(self):
         # No time has passed — meter can't integrate. Output = prev.
@@ -381,6 +381,30 @@ class TestActivityMeter:
         # Defensive: negative signals don't drive the meter below 0.
         result = activity_meter(0.5, -1.0, 0.05)
         assert result >= 0.0
+
+    def test_custom_attack_slows_rise(self):
+        # Same dt, longer attack tau → less ground covered rising.
+        # This is the gate's "Build-up" knob: a 2 s tau makes the
+        # meter demand sustained movement instead of spiking on a
+        # single twitch.
+        default_rise = activity_meter(0.0, 1.0, 0.05)
+        slow_rise = activity_meter(0.0, 1.0, 0.05, attack_tau_s=2.0)
+        assert slow_rise < default_rise
+        assert slow_rise == pytest.approx(1.0 - math.exp(-0.05 / 2.0), abs=1e-9)
+
+    def test_custom_release_slows_fall(self):
+        # The gate's "Decay" knob: a 5 s tau keeps the charged meter
+        # coasting across pauses instead of collapsing.
+        default_fall = activity_meter(1.0, 0.0, 0.5)
+        slow_fall = activity_meter(1.0, 0.0, 0.5, release_tau_s=5.0)
+        assert slow_fall > default_fall
+        assert slow_fall == pytest.approx(math.exp(-0.5 / 5.0), abs=1e-9)
+
+    def test_tau_floor_guards_zero(self):
+        # tau ≤ 0 is floored at 10 ms, not a ZeroDivisionError. The
+        # floored tau is effectively instant at any realistic dt.
+        result = activity_meter(0.0, 1.0, 0.1, attack_tau_s=0.0)
+        assert result == pytest.approx(1.0 - math.exp(-10.0), abs=1e-9)
 
     def test_converges_to_signal_when_held(self):
         # Hold a constant signal and tick repeatedly — the meter

@@ -18,6 +18,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Set
 
+from engine_base import ReconnectingEngine
+
 try:
     import websocket  # websocket-client
     _WEBSOCKET_AVAILABLE = True
@@ -76,24 +78,26 @@ class DeviceConfig:
         )
 
 
-class BHapticsEngine:
-    """Sealed bHaptics Player WebSocket client. Threadsafe facade."""
+class BHapticsEngine(ReconnectingEngine):
+    """Sealed bHaptics Player WebSocket client. Threadsafe facade.
+
+    Connection lifecycle (connected flag, last_error, auto-connect gate,
+    state callback, start/stop, backoff reconnect loop, manual_connect) is
+    inherited from ReconnectingEngine; this class supplies the WebSocket
+    transport via `_open()` / `_close()` and keeps the hot `submit_dot_frame`
+    send path plus the Player status-mirror receive thread."""
 
     DEFAULT_PORT = 15881
     DEFAULT_PATH = "/v2/feedbacks"
     DURATION_MS = 100  # each submitted frame lasts this long on the device
 
     def __init__(self, host: str = "127.0.0.1", port: int = DEFAULT_PORT):
+        super().__init__("bHaptics")
         self.host = host
         self.port = port
         self._ws: Optional["websocket.WebSocket"] = None
         self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._connect_thread: Optional[threading.Thread] = None
         self._recv_thread: Optional[threading.Thread] = None
-        self._connected = False
-        self._last_error: Optional[str] = None
-        self._auto_connect_getter: Callable[[], bool] = lambda: False
 
         # Status mirror — populated by the receive thread when the Player
         # broadcasts {"Status": {...}} (or similar) frames. Empty when the
@@ -102,21 +106,18 @@ class BHapticsEngine:
         self._state_lock = threading.Lock()
         self._connected_positions: Set[str] = set()
         self._position_batteries: Dict[str, float] = {}
-        self._state_callback: Optional[Callable[[], None]] = None
 
-    # ---- Properties / status -----------------------------------------
+    # ---- Transport availability (ReconnectingEngine hooks) -----------
 
     @property
-    def is_available(self) -> bool:
+    def _available(self) -> bool:
         return _WEBSOCKET_AVAILABLE
 
     @property
-    def is_connected(self) -> bool:
-        return self._connected
+    def _unavailable_reason(self) -> str:
+        return "websocket-client not installed"
 
-    @property
-    def last_error(self) -> Optional[str]:
-        return self._last_error
+    # ---- Properties / status -----------------------------------------
 
     @property
     def url(self) -> str:
@@ -126,17 +127,7 @@ class BHapticsEngine:
         self.host = host
         self.port = int(port)
         # Force reconnect with new endpoint next loop iteration.
-        self._close_ws()
-
-    def set_auto_connect_getter(self, fn: Callable[[], bool]) -> None:
-        self._auto_connect_getter = fn
-
-    def set_state_callback(self, fn: Optional[Callable[[], None]]) -> None:
-        """Register a callback invoked (from background threads) whenever the
-        engine's connection state OR the per-position connected/battery
-        status changes. Callback must be cheap and threadsafe — the facade
-        typically posts a message to the UI thread queue inside it."""
-        self._state_callback = fn
+        self._close()
 
     # ---- Connected-device status mirror (consumed by the SteamVR facade) ----
 
@@ -155,58 +146,24 @@ class BHapticsEngine:
         with self._state_lock:
             return self._position_batteries.get(position)
 
-    # ---- Connection lifecycle ----------------------------------------
+    # ---- Connection transport (ReconnectingEngine hooks) -------------
 
-    def start(self) -> None:
-        if self._connect_thread is not None and self._connect_thread.is_alive():
-            return
-        self._stop.clear()
-        self._connect_thread = threading.Thread(
-            target=self._reconnect_loop, daemon=True, name="bHapticsReconnect")
-        self._connect_thread.start()
+    def _open(self) -> None:
+        """Open one WebSocket to the Player and start its status-receive
+        thread. Sets `_connected` on success; raises on failure. The base
+        reconnect loop / manual_connect own backoff, last_error, and the
+        state-change notify."""
+        ws = websocket.create_connection(self.url, timeout=2.0)
+        ws.settimeout(2.0)
+        with self._lock:
+            self._ws = ws
+            self._connected = True
+        print(f"[bHaptics] Connected to {self.url}")
+        # Fresh receive thread per connection: shutdown is implicit when the
+        # ws closes (its own ws.recv() raises and the thread exits).
+        self._start_recv_thread(ws)
 
-    def stop(self) -> None:
-        self._stop.set()
-        self._close_ws()
-
-    def _reconnect_loop(self) -> None:
-        backoff = 1.0
-        while not self._stop.is_set():
-            if not _WEBSOCKET_AVAILABLE:
-                time.sleep(5.0)
-                continue
-            if not self._auto_connect_getter():
-                # Auto-connect disabled — sit idle, don't open sockets.
-                if self._connected:
-                    self._close_ws()
-                time.sleep(1.0)
-                continue
-            if self._connected:
-                time.sleep(1.0)
-                continue
-            try:
-                ws = websocket.create_connection(self.url, timeout=2.0)
-                ws.settimeout(2.0)
-                with self._lock:
-                    self._ws = ws
-                    self._connected = True
-                    self._last_error = None
-                print(f"[bHaptics] Connected to {self.url}")
-                # Start a fresh receive thread for status broadcasts. A new
-                # thread per connection means we never have to coordinate
-                # shutdown with stale connections — the thread exits when
-                # its own ws.recv() raises.
-                self._start_recv_thread(ws)
-                self._notify_state_change()
-                backoff = 1.0
-            except Exception as e:
-                self._last_error = str(e)
-                self._connected = False
-                # Cap backoff at 10s so reconnect picks up the Player launching.
-                time.sleep(backoff)
-                backoff = min(backoff * 1.5, 10.0)
-
-    def _close_ws(self) -> None:
+    def _close(self) -> None:
         with self._lock:
             ws = self._ws
             self._ws = None
@@ -225,29 +182,6 @@ class BHapticsEngine:
             self._position_batteries.clear()
         if was_connected or changed:
             self._notify_state_change()
-
-    def manual_connect(self) -> bool:
-        """One-shot blocking attempt — used by the UI 'Connect' button."""
-        if not _WEBSOCKET_AVAILABLE:
-            self._last_error = "websocket-client not installed"
-            return False
-        if self._connected:
-            return True
-        try:
-            ws = websocket.create_connection(self.url, timeout=2.0)
-            ws.settimeout(2.0)
-            with self._lock:
-                self._ws = ws
-                self._connected = True
-                self._last_error = None
-            print(f"[bHaptics] Connected to {self.url}")
-            self._start_recv_thread(ws)
-            self._notify_state_change()
-            return True
-        except Exception as e:
-            self._last_error = str(e)
-            self._connected = False
-            return False
 
     # ---- Submission --------------------------------------------------
 

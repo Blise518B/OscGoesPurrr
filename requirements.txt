@@ -14,7 +14,24 @@
 PySide6>=6.5.0
 buttplug>=1.0.0
 python-osc>=1.8.0
+# Zeroconf/mDNS — required for VRChat OSCQuery auto-discovery
+# (_osc._udp.local advertisement + ServiceBrowser). Imported unguarded by
+# vrchat_osc.py, so the app cannot start without it.
+zeroconf>=0.131.0
 pystray>=0.19.0
 Pillow>=9.0.0
 openvr>=1.26.7
 websocket-client>=1.6
+# DG-Lab Coyote backend — direct BLE. Cross-platform; uses the WinRT backend
+# on Windows. Import is guarded, so the app still runs if it's absent.
+bleak>=0.21
+# PiShock backend — USB-serial transport (pyserial) and cloud HTTP transport
+# (requests). Both imports are guarded; only needed for the PiShock feature.
+pyserial>=3.5
+requests>=2.31
+# OWO suit backend is OPTIONAL and deliberately NOT a hard dependency: it needs
+# the .NET CLR bridge AND a vendored OWO.dll (Windows/.NET only). To enable it,
+# install pythonnet yourself and drop OWO.dll into owo-sdk/ (see
+# owo-sdk/PLACE_OWO_DLL_HERE.txt). Left out of the default install so it can't
+# break `pip install -r requirements.txt` on machines without .NET:
+#   pip install "pythonnet>=3.0"

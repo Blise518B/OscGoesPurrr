@@ -278,15 +278,6 @@ Order within a group is rough priority, not a hard sequence.
   routing redesign Phase 2 lands** — see
   [`ROUTING_REDESIGN.md`](docs/ROUTING_REDESIGN.md).
 
-- **Stuck-value safety cutoff.**
-  If an OSC float input stays exactly static for ~2 s (configurable),
-  treat it as a stuck/frozen sender and force the corresponding motors
-  to 0 until the value changes again. Prevents motors running forever
-  when VRChat or an avatar param hangs. If it's at 1.0 maybe have it
-  ramp down slowly because it could also mean all the way in.
-  _Note:_ bHaptics and SteamVR backends already have their own
-  anti-stuck handling; this item is specifically for the Buttplug
-  router.
 - **SteamVR-aware shutdown.**
   Detect when SteamVR exits and either auto-quit OscGoesPurrr or at
   minimum send 0 to every connected device and stop output. User

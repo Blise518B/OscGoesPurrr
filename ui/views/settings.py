@@ -136,6 +136,15 @@ class SettingsMixin:
         )
         switch_lay.addWidget(self.network_bind_switch)
         switch_lay.addWidget(self._bold_label("0.0.0.0 (Recommended)"))
+        switch_lay.addWidget(self._make_help_badge(
+            "OSC network bind",
+            "<b>0.0.0.0</b> listens on every network interface — required "
+            "when VRChat runs on another device (e.g. a standalone "
+            "headset) and the safe default on a home network. "
+            "<b>127.0.0.1</b> only accepts traffic from this PC — pick it "
+            "on untrusted networks when VRChat runs locally. Restart the "
+            "app after changing."
+        ))
         switch_lay.addStretch(1)
         net_lay.addWidget(switch_row)
 
@@ -546,6 +555,10 @@ Two views are stacked:
   • Bottom: a legacy HTML view kept as a diagnostic — if the top freezes but the bottom ticks, the bug is in the table update path; if both freeze, the OSC pipeline upstream is the suspect.
 
 Both consume the same data, so they stay in lockstep.
+""")
+
+        section("Help Mode — in-place explanations", """
+Flip the "Help Mode" toggle in the sidebar (or in the Device Routing header) and small "?" badges appear next to controls all over the app — zone pickers, gate knobs, safety caps, fold headers, connection sections. Click a badge for a short explanation of exactly that control, then click anywhere else to dismiss it. Turn the toggle off to hide every badge again; the layout doesn't shift either way.
 """)
 
         section("Where settings live on disk", """

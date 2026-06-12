@@ -2,18 +2,20 @@
 anti-stuck, and per-device enable + intensity."""
 
 import json
-import os
 from typing import Any, Dict
 
-from utilities import atomic_write_json, strip_param_prefix
+from utilities import strip_param_prefix
 
+from ._base import JsonSettingsManager
 from ._paths import BHAPTICS_SETTINGS_FILE
 
 
-class BHapticsSettingsManager:
+class BHapticsSettingsManager(JsonSettingsManager):
     """Persists bHaptics integration state: Player connection endpoint,
     auto-connect flag, and per-device enable + intensity. Per-device
     defaults match the v1.0.0 bHapticsOSC layout (9 device categories)."""
+
+    FILE_PATH = BHAPTICS_SETTINGS_FILE
 
     _DEFAULT_DEVICES: Dict[str, Dict[str, Any]] = {
         "Head":      {"enabled": True, "intensity": 100},
@@ -58,46 +60,23 @@ class BHapticsSettingsManager:
         "sps_mirror": _DEFAULT_SPS_MIRROR,
     }
 
-    def __init__(self):
-        self.settings: Dict[str, Any] = {}
-        self._load_or_create_defaults()
-
-    def _load_or_create_defaults(self) -> None:
-        if os.path.exists(BHAPTICS_SETTINGS_FILE):
-            try:
-                with open(BHAPTICS_SETTINGS_FILE, 'r') as f:
-                    loaded = json.load(f)
-                    if isinstance(loaded, dict):
-                        merged = {**self.DEFAULTS, **loaded}
-                        # Backfill any newly-added devices into older configs.
-                        devs = dict(self._DEFAULT_DEVICES)
-                        devs.update(loaded.get("devices", {}) or {})
-                        merged["devices"] = devs
-                        # Backfill the sps_mirror block if the loaded
-                        # config predates the feature; preserve the
-                        # user's existing entries otherwise.
-                        loaded_mirror = loaded.get("sps_mirror")
-                        if not isinstance(loaded_mirror, dict):
-                            merged["sps_mirror"] = json.loads(
-                                json.dumps(self._DEFAULT_SPS_MIRROR)
-                            )
-                        else:
-                            merged["sps_mirror"] = {
-                                "enabled": bool(loaded_mirror.get("enabled", False)),
-                                "entries": list(loaded_mirror.get("entries", [])),
-                            }
-                        self.settings = merged
-                        return
-            except (json.JSONDecodeError, IOError) as e:
-                print(f"bHaptics settings load error: {e}, using defaults")
-        self.settings = json.loads(json.dumps(self.DEFAULTS))
-        self._save()
-
-    def _save(self) -> None:
-        try:
-            atomic_write_json(BHAPTICS_SETTINGS_FILE, self.settings, indent=2)
-        except OSError as e:
-            print(f"bHaptics settings save error: {e}")
+    def _post_load(self, loaded: Dict[str, Any]) -> None:
+        # Backfill any newly-added devices into older configs.
+        devs = dict(self._DEFAULT_DEVICES)
+        devs.update(loaded.get("devices", {}) or {})
+        self.settings["devices"] = devs
+        # Backfill the sps_mirror block if the loaded config predates the
+        # feature; preserve the user's existing entries otherwise.
+        loaded_mirror = loaded.get("sps_mirror")
+        if not isinstance(loaded_mirror, dict):
+            self.settings["sps_mirror"] = json.loads(
+                json.dumps(self._DEFAULT_SPS_MIRROR)
+            )
+        else:
+            self.settings["sps_mirror"] = {
+                "enabled": bool(loaded_mirror.get("enabled", False)),
+                "entries": list(loaded_mirror.get("entries", [])),
+            }
 
     # ---- Endpoint ----
     def get_host(self) -> str:

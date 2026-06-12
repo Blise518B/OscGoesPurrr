@@ -41,6 +41,7 @@ from ui.icons import (
     icon_check as _icon_check,
     icon_cross as _icon_cross,
 )
+from ui.fold_strip import FoldCard as _FoldCard, FoldStrip as _FoldStrip
 from ui.widgets import (
     ToggleSwitch,
     Invoker as _Invoker,
@@ -67,8 +68,11 @@ class BHapticsMixin:
     # `_bhaptics_grids` holds the OUTPUT grid (post anti-stuck, post override —
     # what's actually sent to the device, and what the click-to-test interacts
     # with). `_bhaptics_raw_grids` holds the RAW input mirror.
+    # `_bhaptics_strips` holds each device card's fold strip so the same
+    # fast tick can charge the activity rings + arrows.
     _bhaptics_grids: Dict[str, "_BHapticsDotGrid"] = {}
     _bhaptics_raw_grids: Dict[str, "_BHapticsDotGrid"] = {}
+    _bhaptics_strips: Dict[str, "_FoldStrip"] = {}
 
     # Tracks the last set of detected device positions so the device list
     # only rebuilds when the avatar's bHaptics-capable set actually changes.
@@ -252,6 +256,13 @@ class BHapticsMixin:
     def _refresh_bhaptics_grids(self):
         if not self._bhaptics_grids:
             return
+        # Only animate the debug dots while the page is on screen —
+        # this 10 Hz pump (two engine snapshots + grid/strip updates)
+        # is pure cost on any other page. select_view refreshes the
+        # page on arrival so nothing looks stale.
+        view = self.views.get("bHaptics")
+        if view is not None and not view.isVisible():
+            return
         try:
             snap = self.controller.get_bhaptics_snapshot()
             raw_snap = self.controller.get_bhaptics_raw_snapshot()
@@ -261,6 +272,18 @@ class BHapticsMixin:
             raw_grid.set_values(raw_snap.get(pos))
         for pos, grid in self._bhaptics_grids.items():
             grid.set_values(snap.get(pos))
+        # Charge each card's fold strip: Input ring follows the hottest
+        # raw dot, Routing/Output the hottest output dot (post anti-stuck
+        # and overrides — what the suit actually feels).
+        for pos, strip in self._bhaptics_strips.items():
+            try:
+                raw_vals = raw_snap.get(pos) or []
+                out_vals = snap.get(pos) or []
+                raw_max = max(raw_vals) / 100.0 if raw_vals else 0.0
+                out_max = max(out_vals) / 100.0 if out_vals else 0.0
+                strip.set_levels([raw_max, out_max, out_max])
+            except RuntimeError:
+                continue
 
     # ---- bHaptics handlers ----
 
@@ -302,6 +325,9 @@ class BHapticsMixin:
             self.bhaptics_osc_connected_edit.setText(param)
 
     def _refresh_bhaptics_status_only(self):
+        view = self.views.get("bHaptics")
+        if view is not None and not view.isVisible():
+            return
         try:
             status = self.controller.get_bhaptics_status()
         except Exception:
@@ -383,6 +409,7 @@ class BHapticsMixin:
         # already-deleted Qt objects.
         self._bhaptics_grids = {}
         self._bhaptics_raw_grids = {}
+        self._bhaptics_strips = {}
         while self.bhaptics_device_list_layout.count():
             item = self.bhaptics_device_list_layout.takeAt(0)
             w = item.widget()
@@ -409,16 +436,21 @@ class BHapticsMixin:
         self.bhaptics_device_list_layout.addStretch(1)
 
     def _build_bhaptics_device_card(self, d: dict) -> QFrame:
+        """One device as a fold strip — Input → Routing → Output — in
+        the Device Routing chain's design language (folds joined by
+        arrows, activity rings charged by live dot levels; see
+        ui/fold_strip.py). The two live dot grids stay permanently on
+        display as non-expandable folds; the Routing fold in the middle
+        opens into the enable + intensity editor."""
         position = d["position"]
         cfg = d.get("config", {})
         nodes = int(d.get("node_count", 0))
 
         card = _Card()
-        # Cap card width so the device list reads as a column of compact cards
-        # instead of stretching with the window. The two side-by-side dot grids
-        # are the widest required element (vest = ~220 px); 480 fits them plus
-        # the intensity slider with comfortable padding.
-        card.setMaximumWidth(480)
+        # Cap card width so the device list reads as a column of compact
+        # cards instead of stretching with the window. Wide enough for
+        # the two dot-grid folds plus the routing fold between them.
+        card.setMaximumWidth(640)
         lay = _vbox(12, 6)
         card.setLayout(lay)
 
@@ -431,57 +463,66 @@ class BHapticsMixin:
         header.addStretch(1)
         lay.addLayout(header)
 
+        strip = _FoldStrip()
+        cols, rows = d.get("grid", (nodes, 1))
+
+        # ---- Input fold: raw OSC mirror, always visible ----
+        in_fold = strip.add_fold(_FoldCard("input", "Raw input", expandable=False))
+        in_fold.add_header_widget(self._make_help_badge(
+            "Raw input",
+            "Mirror of the v1 bHaptics OSC values exactly as the avatar "
+            "broadcasts them — before intensity scaling, anti-stuck, or "
+            "test overrides. If a dot lights here but not on Output, "
+            "something downstream is masking it (anti-stuck, disabled "
+            "device, intensity at 0)."
+        ))
+        raw_grid = _BHapticsDotGrid(
+            node_count=nodes, cols=int(cols), rows=int(rows), interactive=False
+        )
+        self._bhaptics_raw_grids[position] = raw_grid
+        in_fold.quick_layout.addWidget(raw_grid, 0, Qt.AlignHCenter)
+
+        # ---- Routing fold: enable + intensity ----
+        rt_fold = strip.add_fold(_FoldCard("routing", "Routing"))
+        rt_fold.add_header_widget(self._make_help_badge(
+            "Routing",
+            "Click to edit. <b>Enabled</b> gates the whole device; "
+            "<b>Intensity</b> scales every dot's strength (100% = "
+            "pass-through). Applies to both the v1 OSC layer and "
+            "Cross-Routing entries targeting this device."
+        ))
         enabled = ToggleSwitch("Enabled")
         enabled.setChecked(bool(cfg.get("enabled", True)))
-        lay.addWidget(enabled)
-
+        rt_fold.editor_layout.addWidget(enabled)
         intensity_row = _hbox(0, 8)
         intensity_row.addWidget(QLabel("Intensity"))
         slider = QSlider(Qt.Horizontal)
         slider.setRange(0, 100)
         slider.setValue(int(cfg.get("intensity", 100)))
-        # Cap the slider so it doesn't blow the card width up on wide windows;
-        # 240 px is plenty of resolution for a 0-100 control.
+        slider.setMinimumWidth(120)
         slider.setMaximumWidth(240)
         intensity_row.addWidget(slider, 1)
         intensity_label = QLabel(f"{slider.value()}%")
         intensity_label.setMinimumWidth(40)
         intensity_row.addWidget(intensity_label)
-        intensity_row.addStretch(1)
-        lay.addLayout(intensity_row)
+        rt_fold.editor_layout.addLayout(intensity_row)
 
-        # Live debug grids: dots colored red(0)→yellow(50)→green(100), laid out
-        # in the same orientation as the physical bHaptics device. Two side-by-
-        # side views — left is the raw OSC input, right is the actual output
-        # after anti-stuck ramping and manual overrides. Comparing them makes
-        # it obvious when anti-stuck is masking a real signal or when a test
-        # override is winning over OSC.
-        cols, rows = d.get("grid", (nodes, 1))
-        grids_row = _hbox(0, 12)
-
-        raw_col = _vbox(0, 4)
-        raw_lbl = QLabel("Raw input")
-        raw_lbl.setProperty("role", "muted")
-        raw_lbl.setAlignment(Qt.AlignHCenter)
-        raw_col.addWidget(raw_lbl)
-        raw_grid = _BHapticsDotGrid(
-            node_count=nodes, cols=int(cols), rows=int(rows), interactive=False
-        )
-        self._bhaptics_raw_grids[position] = raw_grid
-        raw_col.addWidget(raw_grid, 0, Qt.AlignHCenter)
-        grids_row.addLayout(raw_col)
-
-        out_col = _vbox(0, 4)
-        out_lbl = QLabel("Output (anti-stuck applied)")
-        out_lbl.setProperty("role", "muted")
-        out_lbl.setAlignment(Qt.AlignHCenter)
-        out_col.addWidget(out_lbl)
+        # ---- Output fold: what's actually sent (anti-stuck applied,
+        # click-and-hold a dot to test-fire it) ----
+        out_fold = strip.add_fold(_FoldCard("output", "Output", expandable=False))
+        out_fold.add_header_widget(self._make_help_badge(
+            "Output",
+            "What the suit actually feels: after intensity scaling, "
+            "anti-stuck ramping, and manual overrides, with Cross-Routing "
+            "entries max-merged in. <b>Click and hold any dot</b> to fire "
+            "it at 100% as a debug test."
+        ))
         grid = _BHapticsDotGrid(node_count=nodes, cols=int(cols), rows=int(rows))
         self._bhaptics_grids[position] = grid
-        out_col.addWidget(grid, 0, Qt.AlignHCenter)
-        grids_row.addLayout(out_col)
+        out_fold.quick_layout.addWidget(grid, 0, Qt.AlignHCenter)
 
-        lay.addLayout(grids_row)
+        lay.addWidget(strip)
+        self._bhaptics_strips[position] = strip
 
         # Debug: click-and-hold a dot on the output grid to fire it at 100%.
         # Routed through the controller so the router can max-merge it with
@@ -490,10 +531,17 @@ class BHapticsMixin:
         grid.dotPressed.connect(lambda idx, pos=position: self.controller.set_bhaptics_manual_dot(pos, idx, 100))
         grid.dotReleased.connect(lambda idx, pos=position: self.controller.set_bhaptics_manual_dot(pos, idx, None))
 
+        def update_subtitle():
+            rt_fold.set_subtitle(
+                f"{'on' if enabled.isChecked() else 'off'}"
+                f" · {slider.value()}%")
+        update_subtitle()
+
         def push(_=None):
             if self._is_updating_bhaptics:
                 return
             intensity_label.setText(f"{slider.value()}%")
+            update_subtitle()
             self.controller.set_bhaptics_device(position, {
                 "enabled": enabled.isChecked(),
                 "intensity": int(slider.value()),
@@ -670,6 +718,13 @@ class BHapticsMixin:
         # --- Row 2: source (zone type + zone name) + filters ---
         row2 = _hbox(0, 8)
         row2.addWidget(QLabel("Source"))
+        row2.addWidget(self._make_help_badge(
+            "Cross-routing source",
+            "The avatar contact to mirror: an OGB zone (or synthetic SPS "
+            "source) plus the interaction filters that count. The "
+            "strongest matching filter's 0–1 value drives the selected "
+            "dots each tick."
+        ))
         ztype_combo = QComboBox()
         ztype_combo.addItems(["Orf", "Pen"])
         cur_ztype = str(entry.get("zone_type", "Orf"))
@@ -734,6 +789,13 @@ class BHapticsMixin:
         # power users and paste support. The two stay in sync. ---
         pick_row = _hbox(0, 8)
         pick_row.addWidget(QLabel("Dots"))
+        pick_row.addWidget(self._make_help_badge(
+            "Dot picker",
+            "Which motors on the chosen device this entry drives — the "
+            "grid mirrors the device's physical layout; click dots to "
+            "toggle them. The text box is a comma-separated 0-based "
+            "fallback that stays in sync (handy for copy/paste)."
+        ))
         picker = _BHapticsDotPicker()
         cols, rows, node_count = self._bhaptics_xroute_geom.get(
             pos_combo.currentText(), (1, 1, 0)
@@ -827,6 +889,13 @@ class BHapticsMixin:
             lambda _v, i=idx: self._push_bhaptics_xroute_entry(i)
         )
         row4.addWidget(thresh_spin)
+        row4.addWidget(self._make_help_badge(
+            "Gain & Threshold",
+            "Contact strength below the threshold is ignored; above it, "
+            "the signal is scaled by the gain before hitting the dots. "
+            "Raise the threshold to ignore grazing contact, raise the "
+            "gain to make light contact hit harder."
+        ))
         row4.addStretch(1)
         lay.addLayout(row4)
 

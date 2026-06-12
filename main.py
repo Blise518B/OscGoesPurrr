@@ -33,6 +33,13 @@ from steamvr_engine import SteamVREngine
 from steamvr_router import SteamVRRouter, SteamVRBatteryBroadcaster
 from bhaptics_engine import BHapticsEngine
 from bhaptics_router import BHapticsRouter
+from pishock_engine import PiShockEngine
+from pishock_router import PiShockRouter
+from coyote_engine import CoyoteEngine
+from coyote_router import CoyoteRouter
+from owo_engine import OwoEngine
+from owo_router import OwoRouter
+from motor_param_out import resolve_param_out
 from constants import *
 from utilities import value_to_hex_color, toggle_windows_console, create_default_icon
 from version import __version__
@@ -44,6 +51,9 @@ from controllers import (
     SteamVRFacade,
     SteamVRToysFacade,
     BHapticsFacade,
+    PiShockFacade,
+    CoyoteFacade,
+    OwoFacade,
     OscFacade,
     ProfilesFacade,
     SessionsFacade,
@@ -55,6 +65,9 @@ class OscGoesPurrrApp(
     SteamVRFacade,
     SteamVRToysFacade,
     BHapticsFacade,
+    PiShockFacade,
+    CoyoteFacade,
+    OwoFacade,
     OscFacade,
     ProfilesFacade,
     SessionsFacade,
@@ -202,6 +215,47 @@ class OscGoesPurrrApp(
             get_device_configs=self._bhaptics_get_device_configs,
             get_antistuck=self._bhaptics_get_antistuck,
             get_sps_mirror_config=self.get_bhaptics_sps_mirror,
+            get_sps_sources=self._get_sps_source_map,
+        )
+
+        # PiShock integration — discrete-event shock/vibrate/beep router with
+        # hard safety caps enforced in the engine. Shares the parameter_store
+        # and resolves zones via the same zone_strength path as bHaptics.
+        ps = self.profile_manager.pishock_settings
+        self.pishock_engine = PiShockEngine(mode=ps.get_mode(), log=self.log_message)
+        self.pishock_engine.set_auto_connect_getter(self._pishock_get_auto_connect)
+        self.pishock_engine.configure(ps.get_engine_config())
+        self.pishock_router = PiShockRouter(
+            engine=self.pishock_engine,
+            get_zone_configs=self._pishock_get_zones,
+            get_sps_sources=self._get_sps_source_map,
+            get_global_rate=self._pishock_get_global_rate,
+        )
+
+        # DG-Lab Coyote integration — direct-BLE A/B e-stim. The engine owns
+        # its own asyncio loop + the 100 ms B0 cadence; the router pushes
+        # debounced per-channel strength targets resolved via zone_strength.
+        self.coyote_engine = CoyoteEngine(log=self.log_message)
+        self.coyote_engine.set_auto_connect_getter(self._coyote_get_auto_connect)
+        self.coyote_router = CoyoteRouter(
+            engine=self.coyote_engine,
+            get_channel_configs=self._coyote_get_channel_configs,
+            get_sps_sources=self._get_sps_source_map,
+        )
+
+        # OWO suit integration — muscle e-stim via the OWO .NET SDK (loaded
+        # through pythonnet, isolated in owo_sdk). The engine owns the sensation
+        # re-send cadence; the router pushes the active muscle map on change.
+        self.owo_engine = OwoEngine(
+            get_game_id=self._owo_get_game_id,
+            get_ip=self._owo_get_ip,
+            log=self.log_message,
+        )
+        self.owo_engine.set_auto_connect_getter(self._owo_get_auto_connect)
+        self.owo_router = OwoRouter(
+            engine=self.owo_engine,
+            get_muscle_configs=self._owo_get_muscle_configs,
+            get_frequency=self._owo_get_frequency,
             get_sps_sources=self._get_sps_source_map,
         )
 
@@ -693,6 +747,17 @@ class OscGoesPurrrApp(
         """Facade method for UI to safely update app settings."""
         self.profile_manager.app_settings.set(key, value)
 
+    def _get_toy_antistuck(self) -> Dict[str, Any]:
+        """Anti-stuck config for the toy (Device Routing) path, read from app
+        settings and reshaped into the `{enabled, active_s, peaked_s}` dict
+        the motor router expects. Threaded into `reevaluate_state` each tick;
+        a plain dict read on the GUI thread, so it holds the latency budget."""
+        return {
+            "enabled": bool(self.get_app_setting("toy_antistuck_enabled", True)),
+            "active_s": int(self.get_app_setting("toy_antistuck_active_s", 7)),
+            "peaked_s": int(self.get_app_setting("toy_antistuck_peaked_s", 15)),
+        }
+
     # ==================================================================
     # Feature toggles — Settings → Features panel uses these to gate the
     # expensive background subsystems (bHaptics, SteamVR haptics/battery,
@@ -706,6 +771,9 @@ class OscGoesPurrrApp(
         "feature_steamvr_haptics",
         "feature_steamvr_battery",
         "feature_intiface",
+        "feature_pishock",
+        "feature_coyote",
+        "feature_owo",
     )
 
     def get_feature_enabled(self, key: str) -> bool:
@@ -741,6 +809,47 @@ class OscGoesPurrrApp(
                 try:
                     self.bhaptics_router.stop()
                     self.bhaptics_engine.stop()
+                except Exception:
+                    pass
+        elif key == "feature_pishock":
+            if enabled:
+                try:
+                    self._pishock_apply_config()
+                    self.pishock_engine.start()
+                    self.pishock_router.start()
+                except Exception as e:
+                    self.log_message(f"PiShock start failed: {e}")
+            else:
+                try:
+                    self.pishock_router.stop()
+                    self.pishock_engine.stop()
+                except Exception:
+                    pass
+        elif key == "feature_coyote":
+            if enabled:
+                try:
+                    self.coyote_engine.start()
+                    self._coyote_apply_config()
+                    self.coyote_router.start()
+                except Exception as e:
+                    self.log_message(f"Coyote start failed: {e}")
+            else:
+                try:
+                    self.coyote_router.stop()
+                    self.coyote_engine.stop()
+                except Exception:
+                    pass
+        elif key == "feature_owo":
+            if enabled:
+                try:
+                    self.owo_engine.start()
+                    self.owo_router.start()
+                except Exception as e:
+                    self.log_message(f"OWO start failed: {e}")
+            else:
+                try:
+                    self.owo_router.stop()
+                    self.owo_engine.stop()
                 except Exception:
                     pass
         elif key == "feature_steamvr_haptics":
@@ -819,6 +928,10 @@ class OscGoesPurrrApp(
             updates = self.motor_router.reevaluate_simple_mode(
                 motor_counts, params, zones=zones
             )
+            # Simple Mode bypasses per-toy profile config, so the per-motor
+            # "mirror to VRChat parameter" feature (which lives in that config)
+            # is inactive here. None signals "skip param-out" below.
+            active = None
         else:
             active = self.profile_manager.get_active_profile_dict()
             if active is None:
@@ -826,6 +939,7 @@ class OscGoesPurrrApp(
             updates = self.motor_router.reevaluate_state(
                 active, params, zones=zones,
                 sps_sources=self._get_sps_source_map(),
+                antistuck=self._get_toy_antistuck(),
             )
         for device_name, target_val, motor_idx in updates:
             if dispatch_direct:
@@ -837,6 +951,33 @@ class OscGoesPurrrApp(
                 self.update_device_target(device_name, target_val, motor_idx)
             else:
                 self.thread_queue.put(("osc_haptic_update", (device_name, target_val, motor_idx)))
+            # Optional per-motor OSC-out mirror: push this motor's computed
+            # value back to VRChat as an avatar parameter. Rides the same
+            # change-debounced `updates`, so it only fires when the value
+            # actually moves. Independent of toy connection / mute — it
+            # reflects the contact, not the device. Skipped in Simple Mode.
+            if active is not None:
+                self._send_motor_param_out(active.get(device_name), motor_idx, target_val)
+
+    def _send_motor_param_out(self, device_config, motor_idx: int, value: float) -> None:
+        """Mirror a motor's computed 0..1 output to a VRChat avatar parameter
+        when this motor has param-out configured (Device Routing → per-motor
+        "Mirror to VRChat parameter"). Fire-and-forget OSC send — no queue
+        hop, no ack — so it holds the latency budget. No-op when OSC is down
+        or the motor has no param-out address; never raises into the routing
+        tick. `send_parameter` applies its own per-address rate limit, so
+        rapid changes stay bounded on the wire."""
+        osc = getattr(self, "osc_manager", None)
+        if osc is None or not getattr(osc, "is_connected", False):
+            return
+        try:
+            resolved = resolve_param_out(device_config, motor_idx, value)
+            if resolved is None:
+                return
+            address, send_value = resolved
+            osc.send_parameter(address, send_value)
+        except Exception as e:
+            self.log_message(f"Motor param-out send failed: {e}")
 
     def toggle_osc_debugger(self, *args):
         """Toggle the OSC debugger on/off (accepts *args for safe UI toggle compatibility)"""
@@ -1540,6 +1681,24 @@ class OscGoesPurrrApp(
             pass
 
         try:
+            self.pishock_router.stop()
+            self.pishock_engine.stop()
+        except Exception:
+            pass
+
+        try:
+            self.coyote_router.stop()
+            self.coyote_engine.stop()
+        except Exception:
+            pass
+
+        try:
+            self.owo_router.stop()
+            self.owo_engine.stop()
+        except Exception:
+            pass
+
+        try:
             bridge = getattr(self, "_steamvr_toy_bridge", None)
             if bridge is not None:
                 bridge.clear_devices()
@@ -1595,6 +1754,17 @@ class OscGoesPurrrApp(
             if not needs_tick and hasattr(self, 'motor_router'):
                 try:
                     needs_tick = self.motor_router.has_tune_subscription()
+                except Exception:
+                    pass
+            # Hardware safety: keep ticking while ANY motor output is
+            # non-zero, regardless of which page the UI shows (the UI
+            # trace subscriptions pause while hidden, so they no longer
+            # accidentally guarantee this). Smoothing tails settle and
+            # the anti-stuck cutoff fires on these ticks; once every
+            # output rests at zero the idle ticking stops again.
+            if not needs_tick and hasattr(self, 'motor_router'):
+                try:
+                    needs_tick = self.motor_router.needs_settling()
                 except Exception:
                     pass
             # Session logging samples on every tick — keep the recompute
@@ -1691,6 +1861,37 @@ class OscGoesPurrrApp(
                 self.bhaptics_router.start()
             except Exception as e:
                 self.log_message(f"bHaptics startup failed: {e}")
+
+        # Start PiShock engine + router. Auto-connect defaults OFF (a shock
+        # device shouldn't dial out unprompted), so the reconnect thread idles
+        # until the user connects; the router no-ops while disconnected.
+        if self.get_feature_enabled("feature_pishock"):
+            try:
+                self._pishock_apply_config()
+                self.pishock_engine.start()
+                self.pishock_router.start()
+            except Exception as e:
+                self.log_message(f"PiShock startup failed: {e}")
+
+        # Start Coyote engine (owns its asyncio loop thread) + router. Like
+        # PiShock, e-stim auto-connect defaults OFF so it idles until connected.
+        if self.get_feature_enabled("feature_coyote"):
+            try:
+                self.coyote_engine.start()
+                self._coyote_apply_config()
+                self.coyote_router.start()
+            except Exception as e:
+                self.log_message(f"Coyote startup failed: {e}")
+
+        # Start OWO engine + router. Auto-connect defaults OFF; the engine's
+        # reconnect thread idles (and reports unavailable) until pythonnet +
+        # OWO.dll are present and the user connects.
+        if self.get_feature_enabled("feature_owo"):
+            try:
+                self.owo_engine.start()
+                self.owo_router.start()
+            except Exception as e:
+                self.log_message(f"OWO startup failed: {e}")
 
         # Apply saved SteamVR autostart on boot (no-op if SteamVR is offline).
         if self.profile_manager.steamvr_settings.get_autostart():

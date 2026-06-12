@@ -8,7 +8,7 @@ import os
 import sys
 
 from PySide6.QtCore import (
-    Qt, Signal, QObject, QEvent, QSize, QPointF, QRectF
+    Qt, QTimer, Signal, QObject, QEvent, QSize, QPointF, QRectF
 )
 from PySide6.QtGui import (
     QFont, QColor, QTextCharFormat, QTextCursor, QIcon,
@@ -25,6 +25,7 @@ from ui import lovense_icons as _lovense_icons
 
 from constants import *
 from utilities import strip_param_prefix
+from motor_param_out import param_out_keys
 
 from ui.geometry import parse_tk_geometry as _parse_tk_geometry
 from ui.geometry import format_tk_geometry as _format_tk_geometry
@@ -318,6 +319,17 @@ class DeviceFrameMixin:
         # Real visibility is resolved by _set_help_badges_visible() once the
         # rebuild has parented every badge.
         badge.setVisible(False)
+        # Dynamic rebuilds (zone add/delete, tracker refresh, lazily-built
+        # stage editors) create badges while Help Mode is already ON.
+        # Defer one event-loop turn — by then the caller has parented the
+        # badge (no flash) — and apply the persisted state.
+        if bool(self.controller.get_app_setting("help_mode_enabled", False)):
+            def _apply(b=badge):
+                try:
+                    b.setVisible(True)
+                except RuntimeError:
+                    pass
+            QTimer.singleShot(0, _apply)
         return badge
 
     def _set_help_badges_visible(self, visible: bool) -> None:
@@ -332,6 +344,33 @@ class DeviceFrameMixin:
             except RuntimeError:
                 self._help_badges.remove(badge)
 
+    def _register_help_mode_toggle(self, toggle) -> None:
+        """Wire a Help Mode ToggleSwitch (there's one in the sidebar
+        and one in the Device Routing header): seed it from the
+        persisted app setting; flipping ANY registered toggle persists
+        the state, shows/hides every badge app-wide, and silently
+        mirrors the other toggles."""
+        if not hasattr(self, "_help_mode_toggles"):
+            self._help_mode_toggles = []
+        self._help_mode_toggles.append(toggle)
+        toggle.setChecked(
+            bool(self.controller.get_app_setting("help_mode_enabled", False))
+        )
+        toggle.toggled.connect(self._on_help_mode_toggled)
+
+    def _on_help_mode_toggled(self, checked: bool) -> None:
+        checked = bool(checked)
+        self.controller.set_app_setting("help_mode_enabled", checked)
+        self._set_help_badges_visible(checked)
+        for t in list(getattr(self, "_help_mode_toggles", ())):
+            try:
+                if t.isChecked() != checked:
+                    t.blockSignals(True)
+                    t.setChecked(checked)
+                    t.blockSignals(False)
+            except RuntimeError:
+                self._help_mode_toggles.remove(t)
+
     def _build_motor_card(self, device_name: str, motor_idx: int,
                           osc_addresses: dict,
                           motor_kind: Optional[str]) -> "tuple[QFrame, dict]":
@@ -345,9 +384,87 @@ class DeviceFrameMixin:
         for the Input stage editor on each chain, so that mixin
         method stays load-bearing.
 
-        Returns (widget, motor_var_dict) — the widget IS the card."""
-        widget = _MotorChainListWidget(self, device_name, motor_idx, motor_kind)
-        return widget, {"widget": widget}
+        Returns (card_widget, motor_var_dict). `motor_var["widget"]` is the
+        chain widget itself (the live-meter target the rest of the UI drives
+        via set_motor_value); the returned card wraps that chain widget plus
+        the per-motor "mirror to VRChat parameter" output row beneath it."""
+        chain_widget = _MotorChainListWidget(self, device_name, motor_idx, motor_kind)
+        card = QWidget()
+        card_lay = _vbox(0, 6)
+        card.setLayout(card_lay)
+        card_lay.addWidget(chain_widget)
+        card_lay.addWidget(self._build_motor_param_out_row(device_name, motor_idx))
+        return card, {"widget": chain_widget}
+
+    def _build_motor_param_out_row(self, device_name: str,
+                                   motor_idx: int) -> QWidget:
+        """Compact 'mirror this motor's output to a VRChat avatar parameter'
+        control. The motor's computed 0..1 value is sent back to VRChat (OSC
+        out) so the same contact that drives the toy can also drive an avatar
+        visual — a glow, a blendshape, a fill meter — in parallel with, or
+        instead of, a physical toy. Persists the two per-motor profile keys the
+        router reads via motor_param_out.resolve_param_out, mirroring the
+        save + recalc pattern of the interaction-filter toggles."""
+        enabled_key, address_key = param_out_keys(motor_idx)
+
+        row = QWidget()
+        lay = _hbox(0, 8)
+        row.setLayout(lay)
+
+        toggle = ToggleSwitch("Mirror to VRChat parameter")
+        toggle.setChecked(
+            bool(self.controller.get_profile_config(device_name, enabled_key, False))
+        )
+        lay.addWidget(toggle)
+        lay.addWidget(self._make_help_badge(
+            "Mirror to VRChat parameter",
+            "Also send this motor's output value (0.0–1.0) back to VRChat as "
+            "an avatar parameter, so the same contact that drives the toy can "
+            "drive an avatar visual (glow, blendshape, fill meter). Works even "
+            "with no toy connected. Enter the bare parameter name "
+            "(e.g. <b>TailWag</b>); the /avatar/parameters/ prefix is added "
+            "for you."
+        ))
+
+        addr_edit = QLineEdit()
+        addr_edit.setPlaceholderText("Avatar parameter name (e.g. TailWag)")
+        addr_edit.setText(strip_param_prefix(
+            self.controller.get_profile_config(device_name, address_key, "")
+        ))
+        addr_edit.setMinimumWidth(160)
+        lay.addWidget(addr_edit, 1)
+
+        pick_btn = QPushButton("Pick…")
+        pick_btn.setFixedHeight(BTN_HEIGHT_SMALL)
+        pick_btn.setProperty("role", "secondary")
+        lay.addWidget(pick_btn)
+
+        def persist_address():
+            name = strip_param_prefix(addr_edit.text())
+            if addr_edit.text() != name:
+                addr_edit.blockSignals(True)
+                addr_edit.setText(name)
+                addr_edit.blockSignals(False)
+            self.controller.update_device_config(device_name, address_key, name)
+            self.controller.save_profiles()
+
+        def on_toggle(checked):
+            self.controller.update_device_config(
+                device_name, enabled_key, bool(checked)
+            )
+            self.controller.save_profiles()
+            if hasattr(self.controller, 'force_recalculate'):
+                self.controller.force_recalculate()
+
+        def on_pick(picked: str):
+            addr_edit.setText(strip_param_prefix(picked))
+            persist_address()
+
+        toggle.toggled.connect(on_toggle)
+        addr_edit.editingFinished.connect(persist_address)
+        pick_btn.clicked.connect(lambda: self._open_variable_picker(on_pick))
+
+        return row
 
     def _build_listening_to_column(self, device_name: str, motor_idx: int,
                                    osc_addresses: dict) -> QWidget:
@@ -627,8 +744,8 @@ class DeviceFrameMixin:
     # The Phase 2 mix subcard and its helpers (_build_mix_subcard,
     # _build_mix_channel_card, _build_depth_more_knobs,
     # _build_speed_more_knobs, _get_mix_field, _update_mix_field,
-    # _reset_mix_to_defaults) lived here. Cut 4 removed them — both
-    # Device Routing and Tune now embed ui/motor_signal_chain.py's
+    # _reset_mix_to_defaults) lived here. Cut 4 removed them — Device
+    # Routing now embeds ui/motor_signal_chain.py's
     # MotorSignalChainWidget, which owns its own storage round-trip
     # against the chains-list schema from Cut 1.
 

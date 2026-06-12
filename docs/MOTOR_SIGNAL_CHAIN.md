@@ -121,13 +121,20 @@ Editor contents:
 * **Gain** — same shape as Depth.
 * **Curve** — same dropdown.
 * **Param** — same.
+* **Fall-off (ms)** — `QDoubleSpinBox`, 10–2000, step 50, default
+  300. How long the speed signal keeps ringing after movement stops
+  (the detector's peak-hold decay tau). Lower = snappier cut-off
+  when stroking stops; higher = lingering tail.
 
-Stored at `mix.<motor>.speed.{gain, curve, curve_param}`.
+Stored at `mix.<motor>.speed.{gain, curve, curve_param, decay_ms}`.
 
 **Removed from current Speed:** `enabled` flag, `mode`,
-`input_deadband`, `output_cutoff`, `decay_tau`. The first three of
+`input_deadband`, `output_cutoff`, `decay_tau`. The first two of
 those become invisible constants inside the speed detector (see
-"Speed-detector constants" below).
+"Speed-detector constants" below); `decay_tau` came back as the
+user-facing **Fall-off** knob (`decay_ms`) after field tuning showed
+the fixed 300 ms tail reads as "the toy keeps going after I
+stopped".
 
 ### Combine
 
@@ -163,21 +170,32 @@ Editor contents:
 * **Sleep delay** — `QDoubleSpinBox`, 0.0–10.0 s, step 0.1.
   How long activity must remain below threshold before the gate
   closes.
+* **Build-up (s)** — `QDoubleSpinBox`, 0.01–10.0 s, step 0.1,
+  default 0.05. The meter's attack tau: how long sustained movement
+  takes to charge the activity meter. High values make the gate
+  demand a few seconds of motion before waking instead of opening on
+  the first twitch.
+* **Decay (s)** — `QDoubleSpinBox`, 0.01–10.0 s, step 0.1, default
+  0.5. The meter's release tau: how long the charged meter takes to
+  drain once movement stops.
 
-Stored at `mix.<motor>.gate.{enabled, wake_threshold, sleep_delay_s}`.
+Stored at `mix.<motor>.gate.{enabled, wake_threshold, sleep_delay_s,
+attack_s, release_s}`.
 
 Internal model:
 
 * An activity meter `A ∈ [0, 1]` rises with `|d/dt|` as an asymmetric
-  EMA. Time constants are **hidden constants**, not user-tunable:
-  * `_ACTIVITY_ATTACK_TAU_S = 0.05` — 50 ms, fast rise so new movement
-    registers immediately.
-  * `_ACTIVITY_RELEASE_TAU_S = 0.50` — 500 ms, slow decay so brief
+  EMA. Time constants are per-chain knobs with conservative defaults
+  (they were hidden constants until the field-tuning pass found that
+  a fixed 50 ms attack lets a single twitch spike the meter over the
+  threshold — there was no way to require *sustained* movement):
+  * `gate.attack_s` — default 0.05 (50 ms), fast rise so new movement
+    registers immediately. Raise it to make the gate charge slowly.
+  * `gate.release_s` — default 0.50 (500 ms), slow decay so brief
     stillness does not instantly drop the meter below threshold.
-  The user tunes *behavior* (Wake threshold + Sleep delay); the
-  meter's *responsiveness* is fixed so threshold/delay values stay
-  meaningful across motors and profiles. The meter is clamped to
-  `[0, 1]` (anti-windup).
+    Raise it to make the activity "budget" coast across pauses.
+  Both are clamped to [0.01, 10.0] s by the router. The meter is
+  clamped to `[0, 1]` (anti-windup).
 * Gate state: open when `A ≥ wake_threshold`. Once open, closes after
   `A` has stayed below `wake_threshold` continuously for
   `sleep_delay_s` seconds.
@@ -331,15 +349,21 @@ Bake them as constants inside the speed detector:
 
 * `_SPEED_INPUT_DEADBAND = 0.005` (current default)
 * `_SPEED_OUTPUT_CUTOFF = 0.02` (current default)
-* `_SPEED_DECAY_TAU_S = 0.30` (current default)
+* `_SPEED_DECAY_TAU_S = 0.30` (fallback default — see below)
 
 The small `input_deadband` is kept (not exposed) so the activity
 meter operates in "real motion" units rather than "noise + motion"
 units. Without it, the gate's wake-threshold knob would have a
 mysterious noise floor the user discovers by trial.
 
-If a future need to retune these surfaces, they move to a single
-hidden Advanced panel in Settings, not back into the per-motor card.
+The decay tau turned out to need per-chain tuning after all: a fixed
+300 ms tail keeps the speed channel (and anything fed by it) running
+visibly after movement stops. It is exposed as the Speed stage's
+**Fall-off (ms)** knob (`speed.decay_ms`, clamp 10–2000 ms);
+`_SPEED_DECAY_TAU_S` remains as the fallback when the field is
+missing. Deadband and cutoff stay baked — if a need to retune those
+surfaces, they move to a single hidden Advanced panel in Settings,
+not back into the per-motor card.
 
 ---
 
@@ -358,12 +382,15 @@ is purely additive with no schema migration:
     "chains": [
         {
             "depth": {"gain": 1.0, "curve": "linear", "curve_param": 1.0},
-            "speed": {"gain": 1.0, "curve": "linear", "curve_param": 1.0},
+            "speed": {"gain": 1.0, "curve": "linear", "curve_param": 1.0,
+                      "decay_ms": 300.0},
             "combine": "max",                  # "add" | "max" | "multiply"
             "gate": {
                 "enabled": False,
                 "wake_threshold": 0.05,
                 "sleep_delay_s": 0.5,
+                "attack_s": 0.05,
+                "release_s": 0.5,
             },
             "smoothing": {"rise_ms": 50.0, "fall_ms": 20.0},
         },

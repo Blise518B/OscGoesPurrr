@@ -31,7 +31,7 @@ from utilities import strip_param_prefix
 from ui.geometry import parse_tk_geometry as _parse_tk_geometry
 from ui.geometry import format_tk_geometry as _format_tk_geometry
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox, clear_layout as _clear_layout
-from ui.text_helpers import truncate as _truncate, html_escape as _html_escape
+from ui.text_helpers import truncate as _truncate
 from ui.icons import (
     new_icon_pixmap as _new_icon_pixmap,
     icon_pencil as _icon_pencil,
@@ -71,9 +71,19 @@ class DiagnosticsMixin:
         sps_lay = _vbox(14, 6)
         sps_card.setLayout(sps_lay)
 
+        sps_hdr_row = _hbox(0, 6)
         sps_header = QLabel("Active Avatar SPS Zones")
         sps_header.setObjectName("cardHeader")
-        sps_lay.addWidget(sps_header)
+        sps_hdr_row.addWidget(sps_header)
+        sps_hdr_row.addWidget(self._make_help_badge(
+            "SPS zones",
+            "Orifices and penetrators auto-detected from the current "
+            "avatar's OGB/SPS parameters. These are the zones the zone "
+            "pickers across the app offer. Empty? The avatar isn't "
+            "broadcasting SPS parameters, or VRChat OSC isn't connected."
+        ))
+        sps_hdr_row.addStretch(1)
+        sps_lay.addLayout(sps_hdr_row)
 
         self.sps_status_label = QLabel("Waiting for VRChat...")
         self.sps_status_label.setWordWrap(True)
@@ -91,11 +101,20 @@ class DiagnosticsMixin:
         inspector_lay = _vbox(10, 6)
         inspector_card.setLayout(inspector_lay)
 
+        search_row = _hbox(0, 6)
         self.osc_search_entry = QLineEdit()
         self.osc_search_entry.setPlaceholderText(
             "Search parameters (e.g., Orifice, Touch, Float)..."
         )
-        inspector_lay.addWidget(self.osc_search_entry)
+        search_row.addWidget(self.osc_search_entry, 1)
+        search_row.addWidget(self._make_help_badge(
+            "OSC Inspector",
+            "Every avatar parameter currently in the parameter store, "
+            "updating live as VRChat sends OSC. Type to filter by "
+            "substring. Great for finding the exact contact-receiver "
+            "names to use in SPS Sources or custom address routing."
+        ))
+        inspector_lay.addLayout(search_row)
 
         self.debugger_table = QTableWidget(0, 2)
         self.debugger_table.setHorizontalHeaderLabels(["Parameter", "Value"])
@@ -118,31 +137,6 @@ class DiagnosticsMixin:
         inspector_lay.addWidget(self.debugger_table, 1)
 
         parent_layout.addWidget(inspector_card, 1)
-
-        # ----- Legacy HTML view (kept beneath the table) -----------------
-        # This is the pre-overhaul rendering: a QTextEdit re-rendered with
-        # setHtml() on every tick. Useful as a diagnostic — if the table
-        # above stops ticking but this one does, the regression is in the
-        # table update path, not in the OSC pipeline.
-        legacy_title = QLabel("Real-Time OSC Inspector (Legacy HTML View)")
-        legacy_title.setObjectName("sectionTitle")
-        legacy_title.setAlignment(Qt.AlignHCenter)
-        parent_layout.addWidget(legacy_title)
-
-        legacy_card = _Card(dark_bg=True)
-        legacy_lay = _vbox(10, 6)
-        legacy_card.setLayout(legacy_lay)
-
-        self.debugger_textbox = QTextEdit()
-        self.debugger_textbox.setReadOnly(True)
-        self.debugger_textbox.setLineWrapMode(QTextEdit.NoWrap)
-        legacy_font = QFont("Consolas")
-        legacy_font.setStyleHint(QFont.Monospace)
-        legacy_font.setPointSize(10)
-        self.debugger_textbox.setFont(legacy_font)
-        legacy_lay.addWidget(self.debugger_textbox, 1)
-
-        parent_layout.addWidget(legacy_card, 1)
 
     # ----------------------------------------------------------
     # OSC Diagnostics view
@@ -487,43 +481,7 @@ class DiagnosticsMixin:
         self._repolish(self.osc_debugger_button)
 
     def update_debugger_display(self, data):
-        # Render to both views: the table (default) and the legacy HTML box
-        # underneath. They consume the same data so they stay in sync.
         self._update_debugger_table(data)
-        self._update_debugger_textbox(data)
-
-    def _update_debugger_textbox(self, data):
-        """Legacy display: QTextEdit re-rendered via setHtml on every tick.
-        Mirrors the pre-overhaul implementation (see git 471f158)."""
-        box = self.debugger_textbox
-        if box is None:
-            return
-        sb = box.verticalScrollBar()
-        scroll_pos = sb.value()
-
-        if isinstance(data, list):
-            html_parts = []
-            for entry in data:
-                if not isinstance(entry, tuple):
-                    continue
-                if len(entry) == 3:
-                    addr_prefix, val_str, color = entry
-                else:
-                    addr_prefix, color = entry
-                    val_str = ""
-                safe_addr = _html_escape(addr_prefix)
-                safe_val = _html_escape(val_str)
-                line = (
-                    f'<span style="color:{COLOR_TEXT_MUTED}; white-space:pre">{safe_addr}&nbsp;:&nbsp;</span>'
-                    f'<span style="color:{color}">{safe_val}</span><br>'
-                )
-                html_parts.append(line)
-            html = f'<pre style="margin:0; font-family:Consolas,monospace;">{"".join(html_parts)}</pre>'
-            box.setHtml(html)
-        else:
-            box.setPlainText(str(data))
-
-        sb.setValue(scroll_pos)
 
     def _update_debugger_table(self, data):
         tbl = self.debugger_table

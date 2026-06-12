@@ -100,9 +100,20 @@ replicated per haptic backend.
 
 ### 3. The Muscles — a family of sealed engines
 
-The original "Muscle" was one engine. Today three hardware backends live
+The original "Muscle" was one engine. Today **six** hardware backends live
 side-by-side, all following the same sealed-box contract. The
 controller fans incoming OSC state out to whichever engines have config.
+
+The reconnecting backends share a *cold-path* connection supervisor in
+`engine_base.py`: `ReconnectingEngine` (thread-driven — bHaptics, OWO,
+PiShock-serial) and `AsyncReconnectingEngine` (owns its own asyncio loop
+thread — Coyote). It owns the connected flag, last-error, the auto-connect
+gate, the state-change callback, `start()` / `stop()` / `manual_connect()`,
+and the backoff reconnect loop, so each engine only implements its transport
+via `_open()` / `_close()` / `_available`. **Critical:** this base governs the
+cold path only (connect / reconnect / disconnect) — it never sits on an
+engine's hot send path. Buttplug (`haptic_engine`) and SteamVR
+(`steamvr_engine`) predate it and keep their own lifecycle.
 
 * **`haptic_engine.py` — Buttplug.io toys.** Runs its own isolated
   `asyncio` event loop in a worker thread. Owns the
@@ -131,6 +142,23 @@ controller fans incoming OSC state out to whichever engines have config.
 * **`bhaptics_engine.py` — bHaptics suits / vests.** WebSocket client
   that talks to the bHaptics Player. Paired with `bhaptics_router.py`
   which translates v1 bHapticsOSC bool params into dot-mode frames.
+* **`pishock_engine.py` — PiShock shock / vibrate / beep.** A
+  `ReconnectingEngine` over a swappable transport (`pishock_connection.py`
+  selects USB-serial or the pishock.com cloud HTTP API — same seam pattern as
+  the Intiface providers). Discrete `fire(op, intensity, duration)` hot path
+  with **hard safety caps re-clamped on every fire** (absolute intensity /
+  duration ceilings + a min-interval cooldown) so no caller — a buggy router,
+  a UI test button — can ever exceed them. Paired with `pishock_router.py`.
+* **`coyote_engine.py` — DG-Lab Coyote 3.0 e-stim.** An
+  `AsyncReconnectingEngine` driving the unit directly over BLE (`bleak`); the
+  20-byte / 7-byte wire encoding lives in the pure `coyote_protocol.py`. Owns
+  the ~100 ms B0 strength + waveform cadence loop and wakes it early on a
+  strength change (asyncio event). Paired with `coyote_router.py`.
+* **`owo_engine.py` — OWO suit muscle EMS.** A `ReconnectingEngine` over the
+  vendor OWO .NET SDK, isolated behind `owo_sdk.py` (pythonnet + a vendored
+  `OWO.dll`; both optional and guarded, so the app runs without them). Owns
+  the sensation re-send cadence because OWO pulses expire (~0.3 s). Paired
+  with `owo_router.py`.
 
 **Rule:** every engine owns its internal state. The outside world
 communicates with each one *exclusively* through its primitive-only
@@ -154,9 +182,29 @@ what to do.
 * **`bhaptics_router.py` — bHaptics dot routing.** Translates the OGB /
   bHapticsOSC parameter shape into per-position dot intensity grids,
   with antistuck timers, and emits frames through `BHapticsEngine`.
+* **`coyote_router.py` / `owo_router.py` — e-stim level routing.** Both map
+  OGB zones (+ filters) to a per-output level, shaped by a per-output
+  threshold / gain, then dispatch only changed targets. Coyote drives two A/B
+  channels; OWO drives ten muscle groups (coalesced into one debounce key so
+  the engine gets the whole active map).
+* **`pishock_router.py` — PiShock discrete-event routing.** *Not* a level
+  router: a shock fires a single (op, intensity, duration) event on a
+  **rising edge**, with hysteresis re-arm, a per-zone cooldown, and a global
+  sliding-window rate backstop — a second safety layer on top of the engine's
+  hard caps. Its `decide_fire` / `map_intensity` / `RateLimiter` helpers are
+  pure and unit-tested without a thread.
 
 Each router lives next to its engine; none of them holds long-lived
-hardware state.
+hardware state. The continuous-level routers share `router_base.py`'s
+`PollingRouter`: a debounced ~60 Hz poll loop where a subclass declares only
+`compute_targets()` + `dispatch()`. `steamvr_router`, `coyote_router`, and
+`owo_router` subclass it directly; `bhaptics_router` keeps its bespoke `_tick`
+(anti-stuck ramp + raw/override snapshots don't fit the flat target model) but
+still inherits the loop; `motor_router` stays fully separate (it's driven from
+the UI thread via `force_recalculate`, not a poll thread); and `pishock_router`
+keeps its own edge logic. The shared OGB / SPS zone→strength math lives in
+`zone_strength.py` (pure functions), so every non-Buttplug router resolves a
+zone — detected OGB or synthetic SPS source — identically.
 
 ### 5. The Face — `ui_components.py` + the `ui/` package
 
@@ -179,14 +227,14 @@ hardware state.
     * `ui/layout_helpers.py`, `ui/text_helpers.py` — small helpers.
     * `ui/views/` — one module per sidebar view (`overview`, `dashboard`,
       `device_frame`, `steamvr`, `bhaptics`, `sps_sources`, `sessions`,
-      `diagnostics`, `settings`, `tune`). Each builds its view and calls
+      `diagnostics`, `settings`). Each builds its view and calls
       *only* controller facade methods.
     * `ui/motor_signal_chain.py` — the per-motor signal-chain widget
       (Input → Depth/Speed → Combine → Gate → Smoothing → Output),
-      embedded in both Device Routing and Tune (see
+      embedded in Device Routing's motor cards (see
       `docs/MOTOR_SIGNAL_CHAIN.md`).
     * `ui/trace_graph.py` — custom-painted scrolling time-series plot used
-      by the chain mini-graphs and the Tune overview.
+      by the chain mini-graphs and the chains' `▸ Overview` disclosure.
     * `ui/osc_variable_picker.py` — modal picker listing live avatar
       parameters from `parameter_store`, with search + manual entry.
     * `ui/help_mode.py` — toggle-driven `?` badges + popovers anchored to
@@ -215,6 +263,9 @@ hardware state.
     * `controllers/steamvr_facade.py` — `SteamVRFacade`
     * `controllers/steamvr_toys_facade.py` — `SteamVRToysFacade`
     * `controllers/bhaptics_facade.py` — `BHapticsFacade`
+    * `controllers/pishock_facade.py` — `PiShockFacade`
+    * `controllers/coyote_facade.py` — `CoyoteFacade`
+    * `controllers/owo_facade.py` — `OwoFacade`
     * `controllers/osc_facade.py` — `OscFacade` (VRChat OSC connection
       lifecycle + diagnostics)
     * `controllers/profiles_facade.py` — `ProfilesFacade` (global +
@@ -284,6 +335,17 @@ an ack adds latency. Keep each stage tight.
   physics tick is gated *together with* the send so the commanded
   `duration` stays equal to the real send interval, and an in-flight guard
   keeps position commands strictly in order.
+* **Per-motor VRChat param-out** (`motor_param_out.py` →
+  `osc_manager.send_parameter`). Optional: a motor can mirror its computed
+  0..1 output back to VRChat as an avatar parameter (drive a visual, not a
+  toy). It rides the *same* change-debounced `updates` list inside
+  `force_recalculate` — so it only sends on a real value change — and the
+  send is a fire-and-forget UDP write on the producing thread (no queue hop,
+  no ack), bounded by `send_parameter`'s per-address rate limit. The pure
+  config→(address, value) mapping lives in `motor_param_out.py`; the
+  controller owns the actual send. Active in full routing mode only (Simple
+  Mode bypasses per-toy profile config); independent of toy connection and
+  per-toy mute, since it reflects the contact, not the device.
 * **bHaptics** (`bhaptics_router` → `bhaptics_engine`). Router polls
   `parameter_store` at ~60 Hz (debounced — held contacts don't resubmit);
   the engine submit is a fire-and-forget `ws.send`.
@@ -293,6 +355,22 @@ an ack adds latency. Keep each stage tight.
   interval. The sustain cadence / intensity model is unchanged — only a
   *changed* value pulses early. Floor is OpenVR's one-pulse-per-frame limit
   (~90 Hz).
+* **Coyote** (`coyote_router` → `coyote_engine`). Router polls ~60 Hz
+  (debounced via `PollingRouter`); the engine owns the ~100 ms B0 frame
+  cadence (the hardware's send cap) and **wakes it early** on a strength
+  change (an asyncio event), so a contact edge reaches the device with
+  near-zero added latency. BLE writes are fire-and-forget (`response=False`).
+* **OWO** (`owo_router` → `owo_engine`). Router polls ~60 Hz (debounced); the
+  engine owns a ~0.25 s sensation re-send loop because OWO pulses expire at
+  ~0.3 s. A changed muscle map is applied immediately; the loop only keeps a
+  held contact alive.
+* **PiShock** (`pishock_router` → `pishock_engine`). A *discrete-event*
+  backend, not a level stream: the router polls ~60 Hz and fires one event on
+  a rising edge, fire-and-forget. Here the per-feature send cap is a
+  deliberate **safety** floor — a min-interval cooldown re-clamped inside
+  `fire()` plus a global rate backstop in the router — so the device rate is
+  intentionally bounded *for the human*, not for latency. The first edge after
+  idle still fires immediately.
 
 **The patterns (reach for these):**
 
@@ -333,8 +411,12 @@ router poll rates are constructor defaults (~16 ms).
 The on-disk config file is `profiles.json` (v2 schema). The individual
 settings managers and their file-path constants live in the `settings/`
 package (one module per concern: `app.py`, `bhaptics.py`, `steamvr.py`,
-`known_devices.py`, `sps_sources.py`, `sessions.py`; paths in `_paths.py`)
-and are re-exported from `config_manager.py` so existing `from
+`pishock.py`, `coyote.py`, `owo.py`, `known_devices.py`, `sps_sources.py`,
+`sessions.py`; paths in `_paths.py`). Most concerns share the
+load-or-create-defaults / merge / atomic-save plumbing in
+`settings/_base.py`'s `JsonSettingsManager` — a subclass declares only
+`DEFAULTS` + `FILE_PATH` and (for nested structure) `_post_load()`. The
+managers are re-exported from `config_manager.py` so existing `from
 config_manager import X` callers keep working. `ProfileManager` (in
 `config_manager.py`) composes the profile-related stores below (the
 session-settings manager is owned by `SessionsFacade` instead):
@@ -351,6 +433,15 @@ session-settings manager is owned by `SessionsFacade` instead):
 * **`bhaptics_settings`** (`BHapticsSettingsManager`) — endpoint,
   auto-connect, per-position device configs, antistuck timings, the
   `bHaptics_Connected` OSC bool config.
+* **`pishock_settings`** (`PiShockSettingsManager`) — transport mode
+  (serial / cloud) + its connection fields, auto-connect, the user's safety
+  caps (clamped again in the engine), the global rate backstop, and the
+  per-zone rising-edge configs.
+* **`coyote_settings`** (`CoyoteSettingsManager`) — BLE device address / name,
+  auto-connect, per-channel A/B strength limits + waveform, and the per-channel
+  zone routing.
+* **`owo_settings`** (`OwoSettingsManager`) — OWO app connection (game id /
+  IP), auto-connect, frequency, and the per-muscle zone routing.
 * **`known_devices`** (`KnownDevicesRegistry`) — global registry of
   every toy ever seen; profiles inherit from it on first creation.
 * **`sps_sources`** (`SpsSourceManager`) — global registry of
@@ -395,6 +486,18 @@ All handled in `ProfileManager`:
 * `intiface_connection.py` / `intiface_external.py` /
   `intiface_integrated.py` — the Buttplug-server connection providers and
   their selecting factory (see the haptic_engine entry above).
+* `engine_base.py` / `router_base.py` / `zone_strength.py` — the shared base
+  layer the newer backends build on: the cold-path connection supervisors
+  (`ReconnectingEngine` / `AsyncReconnectingEngine`), the debounced
+  `PollingRouter` poll loop, and the pure OGB / SPS zone→strength evaluator.
+* `pishock_connection.py` / `pishock_serial.py` / `pishock_cloud.py` — the
+  PiShock transports (USB-serial / pishock.com cloud) and their selecting
+  factory, mirroring the Intiface seam so neither `serial` nor `requests` is
+  imported until its mode is chosen.
+* `coyote_protocol.py` — pure Coyote 3.0 BLE wire codec (B0 / B1 / BF
+  frames + UUIDs); no I/O, trivially testable.
+* `owo_sdk.py` — guarded one-shot loader for the vendor OWO .NET SDK via
+  pythonnet, so the rest of the app never imports `clr`.
 * `utilities.py` — small helpers (`value_to_hex_color`,
   `toggle_windows_console`, `create_default_icon`).
 * `version.py` — single source of truth for `__version__`.
@@ -448,13 +551,21 @@ Run with `testbench/run_testbench.bat` (`python -m testbench`); build with
 ## How to add a new haptic backend (the official pattern)
 
 1. **Engine** — write `myhardware_engine.py` with a sealed-box class:
-   primitive-only public methods, all state private. If async, run its
-   own loop; otherwise its own thread. Talk to the outside world via
-   the shared `thread_queue` and/or a `state_callback`.
+   primitive-only public methods, all state private. If it reconnects,
+   subclass `ReconnectingEngine` / `AsyncReconnectingEngine` from
+   `engine_base.py` and implement only `_open()` / `_close()` / `_available`
+   — the connect / reconnect / backoff machinery is shared. Otherwise run
+   your own loop / thread. Talk to the outside world via the shared
+   `thread_queue` and/or a `state_callback`.
 2. **Router** — write `myhardware_router.py` as a pure stateless
-   calculator. Read the Brain (`parameter_store.snapshot()`) and the
-   per-device configs via a getter passed in by the controller. Debounce
-   on `last_outputs`.
+   calculator. If it maps zones to a continuous level, subclass
+   `PollingRouter` from `router_base.py` (declare only `compute_targets()` +
+   `dispatch()`); resolve OGB / SPS zones via
+   `zone_strength.zone_filter_strength()` so a synthetic source routes like a
+   detected zone. Discrete-event devices (e.g. a shock) keep their own
+   rising-edge logic instead. Read the Brain (`parameter_store.snapshot()`)
+   and the per-device configs via a getter passed in by the controller;
+   debounce on `last_outputs`.
 3. **Controller mixin** — add `controllers/myhardware_facade.py`
    containing a `MyHardwareFacade` mixin with the UI-facing methods
    (`get_myhardware_status()`, `set_myhardware_*()`). The mixin's
@@ -462,8 +573,11 @@ Run with `testbench/run_testbench.bat` (`python -m testbench`); build with
 4. **Compose** — add `MyHardwareFacade` to `OscGoesPurrrApp`'s base
    list in `main.py`. Instantiate the engine + router in
    `_setup_components()`.
-5. **Settings** — add a `MyHardwareSettingsManager` to
-   `config_manager.py`, owned by `ProfileManager`.
+5. **Settings** — add a `MyHardwareSettingsManager` in `settings/`
+   (subclass `JsonSettingsManager` from `settings/_base.py`: declare
+   `DEFAULTS` + `FILE_PATH`, override `_post_load()` for nested backfills),
+   register its path in `settings/_paths.py`, re-export it from
+   `config_manager.py`, and instantiate it on `ProfileManager`.
 6. **UI** — add a card / tab in `ui_components.py` that calls *only*
    the new facade methods. **Do not** import the engine or router from
    the UI.

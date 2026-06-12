@@ -169,6 +169,13 @@ class SpsSourcesMixin:
                             "velocity multiplier.")
         max_spin.valueChanged.connect(lambda _v, i=idx: self._push_sps_source(i))
         row2.addWidget(max_spin)
+        row2.addWidget(self._make_help_badge(
+            "Max value",
+            "Ceiling clamp on the raw proximity signal, applied <b>before</b> "
+            "the velocity multiplier. Use it when a receiver saturates too "
+            "early — e.g. cap at 0.8 so only the deepest contact reads as "
+            "full strength."
+        ))
         row2.addSpacing(12)
 
         row2.addWidget(QLabel("Velocity ×"))
@@ -184,6 +191,13 @@ class SpsSourcesMixin:
                              "contact is firing.")
         mult_spin.valueChanged.connect(lambda _v, i=idx: self._push_sps_source(i))
         row2.addWidget(mult_spin)
+        row2.addWidget(self._make_help_badge(
+            "Velocity multiplier",
+            "While ANY of the Velocity contacts below is firing, the "
+            "source's output is multiplied by this. >1 boosts the signal "
+            "during fast/entering contact; <1 dampens it; 1.0 disables the "
+            "effect."
+        ))
         row2.addStretch(1)
         lay.addLayout(row2)
 
@@ -191,15 +205,35 @@ class SpsSourcesMixin:
         prox_edit = self._sps_contact_row(
             lay, "Proximity", src.get("proximity"),
             "Comma-separated receiver names, e.g. Contact/GSpotProx",
-            idx)
+            idx,
+            help_text=(
+                "Proximity contacts",
+                "The analog 0–1 signal. List one or more proximity receiver "
+                "parameters from your avatar (comma-separated); when several "
+                "fire at once, the <b>highest</b> value wins."
+            ))
         act_edit = self._sps_contact_row(
             lay, "Activation", src.get("activation"),
             "Binary gate contacts (OR). Empty = always on.",
-            idx)
+            idx,
+            help_text=(
+                "Activation contacts",
+                "Binary gate. The proximity signal only counts while at "
+                "least one of these contacts is firing — use it to pin the "
+                "source to a very specific spot. Leave empty for "
+                "always-on."
+            ))
         vel_edit = self._sps_contact_row(
             lay, "Velocity", src.get("velocity"),
             "Binary on-enter contacts that apply the multiplier.",
-            idx)
+            idx,
+            help_text=(
+                "Velocity contacts",
+                "Binary on-enter contacts. While any of them fires, the "
+                "output is multiplied by <b>Velocity ×</b> above — a cheap "
+                "way to reward fast or fresh contact with a stronger "
+                "signal."
+            ))
 
         self._sps_source_rows.append({
             "orig_name": str(src.get("name", "")),
@@ -215,11 +249,14 @@ class SpsSourcesMixin:
         })
         return card
 
-    def _sps_contact_row(self, parent_lay, label, value, placeholder, idx):
+    def _sps_contact_row(self, parent_lay, label, value, placeholder, idx,
+                         help_text=None):
         row = _hbox(0, 8)
         lbl = QLabel(label)
         lbl.setMinimumWidth(80)
         row.addWidget(lbl)
+        if help_text is not None:
+            row.addWidget(self._make_help_badge(*help_text))
         edit = QLineEdit(self._fmt_contacts(value))
         edit.setPlaceholderText(placeholder)
         edit.editingFinished.connect(lambda i=idx: self._push_sps_source(i))

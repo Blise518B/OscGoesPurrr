@@ -363,6 +363,107 @@ class TestReevaluateSimpleMode:
         second = router.reevaluate_simple_mode({"dev": 1}, params, zones=zones)
         assert second == []
 
+    # ---- Simple Mode anti-stuck: flat, non-adjustable 2 s cutoff ----
+
+    @staticmethod
+    def _others(amount: float) -> dict:
+        return {"OGB/Orf/Z/TouchOthersClose": True, "OGB/Orf/Z/TouchOthers": amount}
+
+    def test_antistuck_cuts_stuck_value_after_two_seconds(self, router, clock):
+        zones = {("Orf", "Z")}
+        params = self._others(0.7)
+        out = router.reevaluate_simple_mode({"dev": 1}, params, zones=zones)
+        assert out == [("dev", pytest.approx(0.7), 0)]
+        # Under 2 s — value held (debounced, no change).
+        clock.advance(1.9)
+        assert router.reevaluate_simple_mode({"dev": 1}, params, zones=zones) == []
+        # Crosses 2 s of a frozen value → forced to 0.
+        clock.advance(0.2)
+        out = router.reevaluate_simple_mode({"dev": 1}, params, zones=zones)
+        assert out == [("dev", 0.0, 0)]
+
+    def test_antistuck_resets_when_value_changes(self, router, clock):
+        zones = {("Orf", "Z")}
+        router.reevaluate_simple_mode({"dev": 1}, self._others(0.7), zones=zones)
+        clock.advance(1.9)
+        # Value moves before the cut → fuse restarts, new value flows.
+        out = router.reevaluate_simple_mode({"dev": 1}, self._others(0.6), zones=zones)
+        assert out == [("dev", pytest.approx(0.6), 0)]
+        # 1 s into the fresh window → still held.
+        clock.advance(1.0)
+        assert router.reevaluate_simple_mode({"dev": 1}, self._others(0.6), zones=zones) == []
+        # Past 2 s from the change → now cut.
+        clock.advance(1.2)
+        out = router.reevaluate_simple_mode({"dev": 1}, self._others(0.6), zones=zones)
+        assert out == [("dev", 0.0, 0)]
+
+    def test_antistuck_stays_cut_until_value_changes(self, router, clock):
+        zones = {("Orf", "Z")}
+        router.reevaluate_simple_mode({"dev": 1}, self._others(0.7), zones=zones)
+        clock.advance(2.1)
+        assert router.reevaluate_simple_mode(
+            {"dev": 1}, self._others(0.7), zones=zones) == [("dev", 0.0, 0)]
+        # Still frozen → stays cut, nothing new emitted.
+        clock.advance(3.0)
+        assert router.reevaluate_simple_mode(
+            {"dev": 1}, self._others(0.7), zones=zones) == []
+        # Value finally moves → restored.
+        out = router.reevaluate_simple_mode({"dev": 1}, self._others(0.4), zones=zones)
+        assert out == [("dev", pytest.approx(0.4), 0)]
+
+    def test_reset_outputs_resets_simple_antistuck_fuse(self, router, clock):
+        zones = {("Orf", "Z")}
+        params = self._others(0.7)
+        router.reevaluate_simple_mode({"dev": 1}, params, zones=zones)
+        clock.advance(1.9)
+        router.reevaluate_simple_mode({"dev": 1}, params, zones=zones)  # age fuse to 1.9 s
+        router.reset_outputs()  # clears the fuse + debounce
+        # Fresh start: value passes again and is NOT instantly cut despite the
+        # clock already being at t=1.9 (a stale fuse would fire next tick).
+        out = router.reevaluate_simple_mode({"dev": 1}, params, zones=zones)
+        assert out == [("dev", pytest.approx(0.7), 0)]
+        clock.advance(1.0)  # only 1 s since reset → still held
+        assert router.reevaluate_simple_mode({"dev": 1}, params, zones=zones) == []
+
+
+class TestNeedsSettling:
+    """`needs_settling` keeps main.py's routing tick alive while any
+    motor output is non-zero — the hardware-safety condition that lets
+    smoothing tails finish and anti-stuck fire after VRChat goes
+    silent, independent of any UI trace subscription (those pause
+    while their pages are hidden)."""
+
+    def _profile(self):
+        return {
+            "dev": {
+                "motor_count": 1,
+                "osc_addresses": {"0": ["P"]},
+                **_basic_motor_cfg(),
+            }
+        }
+
+    def test_idle_router_does_not_need_settling(self, router):
+        assert router.needs_settling() is False
+
+    def test_driven_motor_needs_settling_until_it_rests(self, router):
+        profile = self._profile()
+        router.reevaluate_state(profile, {"P": 0.8}, zones=set())
+        assert router.needs_settling() is True
+        # Input released: pass-through config (no smoothing) lands the
+        # output at exactly 0 on the next recompute → idle again.
+        router.reevaluate_state(profile, {"P": 0.0}, zones=set())
+        assert router.needs_settling() is False
+
+    def test_frozen_nonzero_output_keeps_needing_ticks(self, router, clock):
+        # The anti-stuck scenario: VRChat freezes mid-contact, no OSC
+        # wake-up is ever coming. The router must keep reporting "tick
+        # me" so the cutoff logic gets a chance to run.
+        profile = self._profile()
+        router.reevaluate_state(profile, {"P": 0.6}, zones=set())
+        clock.advance(5.0)
+        router.reevaluate_state(profile, {"P": 0.6}, zones=set())
+        assert router.needs_settling() is True
+
 
 class TestResetOutputs:
     def test_clears_last_outputs(self, router):
@@ -514,6 +615,78 @@ class TestMixerIntegration:
         assert out == 0.0
 
 
+# ============================================================ Tier 3.4: speed fall-off
+
+class TestSpeedFalloffIntegration:
+    """Per-chain `speed.decay_ms` threaded through the speed detector.
+    The depth channel is muted (gain 0) so the output is the speed
+    channel alone, and smoothing is disabled so the detector's decay
+    is the only time constant in play."""
+
+    def _speed_cfg(self, decay_ms=None):
+        cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
+        chain = cfg["mix"]["0"]["chains"][0]
+        chain["depth"]["gain"] = 0.0
+        chain["speed"] = {"gain": 1.0, "curve": "linear", "curve_param": 1.0}
+        if decay_ms is not None:
+            chain["speed"]["decay_ms"] = decay_ms
+        chain["smoothing"] = {"rise_ms": 0.0, "fall_ms": 0.0}
+        return cfg
+
+    def _charge_then_stop(self, router, clock, cfg, settle_s):
+        """Drive a vigorous stroke until the speed channel saturates,
+        then hold the position still for `settle_s` seconds and return
+        the final output."""
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        for i in range(10):
+            clock.advance(0.03)
+            p = 0.5 if i % 2 == 0 else 0.0
+            router._calculate_motor_target("dev", 0, cfg, {"P": p}, zones=set())
+        out = None
+        ticks = int(round(settle_s / 0.02))
+        for _ in range(ticks):
+            clock.advance(0.02)
+            out = router._calculate_motor_target(
+                "dev", 0, cfg, {"P": 0.0}, zones=set()
+            )
+        return out
+
+    def test_stroke_saturates_speed_channel(self, router, clock):
+        # Sanity for the helper: right after the stroke the channel is hot.
+        cfg = self._speed_cfg(decay_ms=300.0)
+        out = self._charge_then_stop(router, clock, cfg, settle_s=0.02)
+        assert out > 0.8
+
+    def test_short_falloff_cuts_speed_quickly(self, router, clock):
+        # 50 ms tau: 0.4 s of stillness is 8 taus → far below the
+        # output cutoff → exact 0. This is the user-facing fix for
+        # "the toy keeps going after I stopped".
+        cfg = self._speed_cfg(decay_ms=50.0)
+        out = self._charge_then_stop(router, clock, cfg, settle_s=0.4)
+        assert out == 0.0
+
+    def test_long_falloff_keeps_speed_ringing(self, router, clock):
+        # 1 s tau: 0.4 s of stillness only sheds ~1/3 of the charge.
+        cfg = self._speed_cfg(decay_ms=1000.0)
+        out = self._charge_then_stop(router, clock, cfg, settle_s=0.4)
+        assert out > 0.4
+
+    def test_missing_field_falls_back_to_300ms(self, router, clock):
+        # Profiles written before the knob existed keep the original
+        # 300 ms feel: after 0.4 s ≈ e^(-4/3) ≈ 0.26 of the charge left.
+        cfg = self._speed_cfg(decay_ms=None)
+        out = self._charge_then_stop(router, clock, cfg, settle_s=0.4)
+        assert 0.05 < out < 0.5
+
+    def test_falloff_clamped_to_floor(self, router, clock):
+        # An absurd 0 ms from a hand-edited profile clamps to the 10 ms
+        # floor (no division-by-zero in the exp decay) and the channel
+        # still dies out smoothly after the stroke.
+        cfg = self._speed_cfg(decay_ms=0.0)
+        out = self._charge_then_stop(router, clock, cfg, settle_s=0.2)
+        assert out == 0.0
+
+
 # ============================================================ Tier 3.5: activity gate
 
 class TestActivityGateIntegration:
@@ -595,6 +768,57 @@ class TestActivityGateIntegration:
             out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.4}, zones=set())
         assert router._motor_state[("dev", 0)]["chains"][0]["gate_open"] is False
         assert out == 0.0
+
+    def test_slow_buildup_requires_sustained_movement(self, router, clock):
+        # `gate.attack_s` is the "Build-up" knob: with a 2 s tau and a
+        # 0.5 threshold the meter needs ~1.4 s of continuous movement
+        # to wake the gate — a brief twitch is ignored entirely.
+        cfg = self._gate_cfg(wake_threshold=0.5, sleep_delay_s=0.5,
+                             attack_s=2.0, release_s=0.5)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        # ~0.3 s of vigorous movement: with the default 50 ms attack
+        # this would already be wide open; with 2 s it must stay shut.
+        for i in range(10):
+            clock.advance(0.03)
+            p = 0.5 if i % 2 == 0 else 0.0
+            router._calculate_motor_target("dev", 0, cfg, {"P": p}, zones=set())
+        chain_state = router._motor_state[("dev", 0)]["chains"][0]
+        assert chain_state["gate_open"] is False
+        assert chain_state["activity_meter"] < 0.5
+        # Keep going to ~2.4 s total — now the budget has built up.
+        for i in range(70):
+            clock.advance(0.03)
+            p = 0.5 if i % 2 == 0 else 0.0
+            router._calculate_motor_target("dev", 0, cfg, {"P": p}, zones=set())
+        chain_state = router._motor_state[("dev", 0)]["chains"][0]
+        assert chain_state["gate_open"] is True
+
+    def test_slow_release_coasts_across_pauses(self, router, clock):
+        # `gate.release_s` is the "Decay" knob: a 5 s tau keeps the
+        # charged meter above threshold through a 1 s pause, where the
+        # default 0.5 s tau would have dropped it long since.
+        def run(device, release_s):
+            cfg = self._gate_cfg(wake_threshold=0.3, sleep_delay_s=0.0,
+                                 attack_s=0.05, release_s=release_s)
+            router._calculate_motor_target(device, 0, cfg, {"P": 0.0}, zones=set())
+            for i in range(20):
+                clock.advance(0.03)
+                p = 0.5 if i % 2 == 0 else 0.0
+                router._calculate_motor_target(device, 0, cfg, {"P": p}, zones=set())
+            assert router._motor_state[(device, 0)]["chains"][0]["gate_open"] is True
+            # 1 s pause, motionless. sleep_delay 0 → the gate closes the
+            # moment the meter dips below threshold; staying open means
+            # the meter itself stayed charged.
+            for _ in range(50):
+                clock.advance(0.02)
+                router._calculate_motor_target(device, 0, cfg, {"P": 0.4}, zones=set())
+            return router._motor_state[(device, 0)]["chains"][0]
+
+        slow = run("devSlow", 5.0)
+        fast = run("devFast", 0.1)
+        assert slow["gate_open"] is True
+        assert slow["activity_meter"] > 0.3
+        assert fast["gate_open"] is False
 
     def test_gate_observes_speed_detector_not_per_channel_shaping(self, router, clock):
         # Critical placement test: changing depth gain/curve must NOT
@@ -925,6 +1149,143 @@ class TestIntermediatesSubscribers:
             "dev", 0, self._pass_through(), {"P": 0.5}, zones=set()
         )
         assert out == pytest.approx(0.5)
+
+
+# ============================================================ Anti-stuck cutoff
+
+class TestAntiStuck:
+    """Per-resolved-input stuck-value safety cutoff. VRChat only sends OSC
+    on parameter change, so a frozen SPS proximity must not drive a toy
+    forever. Two-timer model: mid-range static is cut hard after the active
+    timeout; saturated (~1.0) static gets the longer peaked fuse then ramps.
+    Detection is on combined d_raw; the cut scales the final output without
+    perturbing the speed detector or smoothing envelope."""
+
+    def _cfg(self):
+        # Depth-only pass-through, no smoothing — so the output equals the
+        # held input times the anti-stuck factor, making the math assertable.
+        return _basic_motor_cfg(osc_addresses={"0": ["P"]})
+
+    def _on(self, active_s=2.0, peaked_s=10.0):
+        return {"enabled": True, "active_s": active_s, "peaked_s": peaked_s}
+
+    def _drive(self, router, cfg, p, asc):
+        return router._calculate_motor_target(
+            "dev", 0, cfg, {"P": p}, zones=set(), antistuck=asc
+        )
+
+    def test_default_none_never_cuts(self, router, clock):
+        # Backward compat: no antistuck arg (default None) holds forever.
+        cfg = self._cfg()
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.5}, zones=set())
+        assert out == pytest.approx(0.5)
+        for _ in range(200):
+            clock.advance(0.05)  # 10 s of frozen input
+            out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.5}, zones=set())
+        assert out == pytest.approx(0.5)
+
+    def test_disabled_config_never_cuts(self, router, clock):
+        cfg = self._cfg()
+        off = {"enabled": False, "active_s": 2.0, "peaked_s": 10.0}
+        out = self._drive(router, cfg, 0.5, off)
+        assert out == pytest.approx(0.5)
+        clock.advance(60.0)
+        out = self._drive(router, cfg, 0.5, off)
+        assert out == pytest.approx(0.5)
+
+    def test_midrange_static_cut_after_active_timeout(self, router, clock):
+        cfg = self._cfg()
+        asc = self._on(active_s=2.0, peaked_s=10.0)
+        assert self._drive(router, cfg, 0.5, asc) == pytest.approx(0.5)
+        clock.advance(1.9)
+        assert self._drive(router, cfg, 0.5, asc) == pytest.approx(0.5)
+        clock.advance(0.2)  # crosses 2.0 s static
+        assert self._drive(router, cfg, 0.5, asc) == 0.0
+
+    def test_stays_cut_until_input_changes(self, router, clock):
+        cfg = self._cfg()
+        asc = self._on(active_s=2.0, peaked_s=10.0)
+        self._drive(router, cfg, 0.5, asc)
+        clock.advance(2.1)
+        assert self._drive(router, cfg, 0.5, asc) == 0.0
+        # Still frozen → still cut.
+        clock.advance(5.0)
+        assert self._drive(router, cfg, 0.5, asc) == 0.0
+        # Input finally moves → fuse resets, output follows immediately.
+        clock.advance(0.05)
+        assert self._drive(router, cfg, 0.3, asc) == pytest.approx(0.3)
+
+    def test_input_change_resets_fuse(self, router, clock):
+        cfg = self._cfg()
+        asc = self._on(active_s=2.0, peaked_s=10.0)
+        self._drive(router, cfg, 0.5, asc)
+        clock.advance(1.95)
+        assert self._drive(router, cfg, 0.5, asc) == pytest.approx(0.5)
+        # Change before the cut — fuse restarts from here.
+        clock.advance(0.05)  # t=2.0, but input changes this tick
+        assert self._drive(router, cfg, 0.6, asc) == pytest.approx(0.6)
+        # 1.0 s after the change is still under the 2 s active timeout.
+        clock.advance(1.0)
+        assert self._drive(router, cfg, 0.6, asc) == pytest.approx(0.6)
+
+    def test_saturated_holds_through_active_then_ramps(self, router, clock):
+        cfg = self._cfg()
+        asc = self._on(active_s=2.0, peaked_s=4.0)
+        assert self._drive(router, cfg, 1.0, asc) == pytest.approx(1.0)
+        # Past the active timeout but under the peaked fuse → still full.
+        clock.advance(3.0)
+        assert self._drive(router, cfg, 1.0, asc) == pytest.approx(1.0)
+        # Halfway through the ramp (peaked 4 + 1.5 of the 3 s ramp = 5.5 s).
+        clock.advance(2.5)
+        assert self._drive(router, cfg, 1.0, asc) == pytest.approx(0.5)
+        # Past peaked + full ramp window (4 + 3 = 7 s) → fully cut.
+        clock.advance(1.6)
+        assert self._drive(router, cfg, 1.0, asc) == 0.0
+
+    def test_cut_does_not_perturb_speed_detector(self, router, clock):
+        # The cut scales the final output, NOT d_raw — so the speed
+        # detector still sees the true held value (no spoofed motion spike).
+        cfg = self._cfg()
+        asc = self._on(active_s=2.0, peaked_s=10.0)
+        self._drive(router, cfg, 0.5, asc)
+        clock.advance(2.1)
+        assert self._drive(router, cfg, 0.5, asc) == 0.0
+        chain_state = router._motor_state[("dev", 0)]["chains"][0]
+        assert chain_state["last_position"] == pytest.approx(0.5)
+        # Static input → no derived speed despite the output being cut.
+        assert chain_state["smoothed_speed"] == pytest.approx(0.0)
+
+    def test_enabling_midsession_does_not_instantly_fire(self, router, clock):
+        # A value already static while the feature was OFF must not be cut
+        # the instant the user enables it — the fuse starts fresh on enable.
+        cfg = self._cfg()
+        off = {"enabled": False, "active_s": 2.0, "peaked_s": 10.0}
+        on = self._on(active_s=2.0, peaked_s=10.0)
+        self._drive(router, cfg, 0.5, off)
+        clock.advance(5.0)  # long static hold, but disabled
+        assert self._drive(router, cfg, 0.5, off) == pytest.approx(0.5)
+        # Enable now — output still passes (fuse reset while disabled).
+        assert self._drive(router, cfg, 0.5, on) == pytest.approx(0.5)
+        # Only cut after a fresh active timeout from the enable point.
+        clock.advance(2.1)
+        assert self._drive(router, cfg, 0.5, on) == 0.0
+
+    def test_reevaluate_state_threads_antistuck(self, router, clock):
+        # End-to-end through the public entry point the routing tick uses.
+        profile = {
+            "dev": {**_basic_motor_cfg(osc_addresses={"0": ["P"]}),
+                    "motor_count": 1},
+        }
+        asc = self._on(active_s=2.0, peaked_s=10.0)
+        updates = router.reevaluate_state(
+            profile, {"P": 0.5}, zones=set(), antistuck=asc
+        )
+        assert updates == [("dev", pytest.approx(0.5), 0)]
+        clock.advance(2.1)
+        updates = router.reevaluate_state(
+            profile, {"P": 0.5}, zones=set(), antistuck=asc
+        )
+        assert updates == [("dev", 0.0, 0)]
 
 
 # ============================================================ Tier 3.8: per-chain providers + toy suppression (Cut 7)

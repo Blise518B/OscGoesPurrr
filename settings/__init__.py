@@ -10,7 +10,10 @@ from ._paths import (
     APPDATA_DIR,
     APP_SETTINGS_FILE,
     BHAPTICS_SETTINGS_FILE,
+    COYOTE_SETTINGS_FILE,
     KNOWN_DEVICES_FILE,
+    OWO_SETTINGS_FILE,
+    PISHOCK_SETTINGS_FILE,
     PROFILE_FILE,
     SESSIONS_DIR,
     SESSIONS_SETTINGS_FILE,
@@ -19,7 +22,10 @@ from ._paths import (
 )
 from .app import AppSettingsManager, DEFAULT_APP_SETTINGS
 from .bhaptics import BHapticsSettingsManager
+from .coyote import CoyoteSettingsManager
 from .known_devices import KnownDevicesRegistry
+from .owo import OwoSettingsManager
+from .pishock import PiShockSettingsManager
 from .sessions import SessionSettingsManager
 from .sps_sources import SpsSourceManager
 from .steamvr import SteamVRSettingsManager
@@ -28,7 +34,10 @@ __all__ = [
     "APPDATA_DIR",
     "APP_SETTINGS_FILE",
     "BHAPTICS_SETTINGS_FILE",
+    "COYOTE_SETTINGS_FILE",
     "KNOWN_DEVICES_FILE",
+    "OWO_SETTINGS_FILE",
+    "PISHOCK_SETTINGS_FILE",
     "PROFILE_FILE",
     "SESSIONS_DIR",
     "SESSIONS_SETTINGS_FILE",
@@ -36,8 +45,11 @@ __all__ = [
     "STEAMVR_SETTINGS_FILE",
     "AppSettingsManager",
     "BHapticsSettingsManager",
+    "CoyoteSettingsManager",
     "DEFAULT_APP_SETTINGS",
     "KnownDevicesRegistry",
+    "OwoSettingsManager",
+    "PiShockSettingsManager",
     "SessionSettingsManager",
     "SpsSourceManager",
     "SteamVRSettingsManager",

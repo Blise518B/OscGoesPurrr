@@ -2,20 +2,22 @@
 no-data timeout, and per-tracker config keyed by tracker serial."""
 
 import json
-import os
 from typing import Any, Dict
 
-from utilities import atomic_write_json, strip_param_prefix
+from utilities import strip_param_prefix
 
+from ._base import JsonSettingsManager
 from ._paths import STEAMVR_SETTINGS_FILE
 
 
-class SteamVRSettingsManager:
+class SteamVRSettingsManager(JsonSettingsManager):
     """Persists SteamVR Haptics section state: autostart flag, vibration
     pattern configs, no-data timeout, and per-tracker config (keyed by
     tracker serial). Lives outside profiles because SteamVR trackers are
     physical hardware, not avatar-bound state.
     """
+
+    FILE_PATH = STEAMVR_SETTINGS_FILE
 
     DEFAULTS: Dict[str, Any] = {
         "autostart_with_steamvr": False,
@@ -66,41 +68,18 @@ class SteamVRSettingsManager:
                     changed = True
         return changed
 
-    def __init__(self):
-        self.settings: Dict[str, Any] = {}
-        self._load_or_create_defaults()
-
-    def _load_or_create_defaults(self) -> None:
-        if os.path.exists(STEAMVR_SETTINGS_FILE):
-            try:
-                with open(STEAMVR_SETTINGS_FILE, 'r') as f:
-                    loaded = json.load(f)
-                    if isinstance(loaded, dict):
-                        merged = {**self.DEFAULTS, **loaded}
-                        if "patterns" not in loaded or not isinstance(loaded.get("patterns"), list) \
-                                or len(loaded["patterns"]) != 2:
-                            merged["patterns"] = self.DEFAULTS["patterns"]
-                        if "trackers" not in loaded or not isinstance(loaded.get("trackers"), dict):
-                            merged["trackers"] = {}
-                        self.settings = merged
-                        # One-shot migration: older configs stored full
-                        # `/avatar/parameters/MyParam` paths. The router and
-                        # UI both speak in bare names now, so strip the
-                        # prefix at load time and persist the cleaned form.
-                        if self._migrate_tracker_addresses():
-                            self._save()
-                        return
-            except (json.JSONDecodeError, IOError) as e:
-                print(f"SteamVR settings load error: {e}, using defaults")
-        # Deep-copy defaults so callers don't mutate the class attribute
-        self.settings = json.loads(json.dumps(self.DEFAULTS))
-        self._save()
-
-    def _save(self) -> None:
-        try:
-            atomic_write_json(STEAMVR_SETTINGS_FILE, self.settings, indent=2)
-        except OSError as e:
-            print(f"SteamVR settings save error: {e}")
+    def _post_load(self, loaded: Dict[str, Any]) -> None:
+        if "patterns" not in loaded or not isinstance(loaded.get("patterns"), list) \
+                or len(loaded["patterns"]) != 2:
+            self.settings["patterns"] = json.loads(json.dumps(self.DEFAULTS["patterns"]))
+        if "trackers" not in loaded or not isinstance(loaded.get("trackers"), dict):
+            self.settings["trackers"] = {}
+        # One-shot migration: older configs stored full
+        # `/avatar/parameters/MyParam` paths. The router and UI both speak in
+        # bare names now, so strip the prefix at load time and persist the
+        # cleaned form.
+        if self._migrate_tracker_addresses():
+            self._save()
 
     # ---- Top-level fields ----
     def get_autostart(self) -> bool:

@@ -15,14 +15,20 @@ from settings import (
     APPDATA_DIR,
     APP_SETTINGS_FILE,
     BHAPTICS_SETTINGS_FILE,
+    COYOTE_SETTINGS_FILE,
     KNOWN_DEVICES_FILE,
+    OWO_SETTINGS_FILE,
+    PISHOCK_SETTINGS_FILE,
     PROFILE_FILE,
     SPS_SOURCES_FILE,
     STEAMVR_SETTINGS_FILE,
     AppSettingsManager,
     BHapticsSettingsManager,
+    CoyoteSettingsManager,
     DEFAULT_APP_SETTINGS,
     KnownDevicesRegistry,
+    OwoSettingsManager,
+    PiShockSettingsManager,
     SpsSourceManager,
     SteamVRSettingsManager,
 )
@@ -70,6 +76,9 @@ class ProfileManager:
         self.app_settings = AppSettingsManager()
         self.steamvr_settings = SteamVRSettingsManager()
         self.bhaptics_settings = BHapticsSettingsManager()
+        self.pishock_settings = PiShockSettingsManager()
+        self.coyote_settings = CoyoteSettingsManager()
+        self.owo_settings = OwoSettingsManager()
         self.known_devices = KnownDevicesRegistry()
         self.sps_sources = SpsSourceManager()
         self._load_or_create_default()

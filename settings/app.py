@@ -23,6 +23,17 @@ DEFAULT_APP_SETTINGS = {
     # Help Mode toggle for the Device Routing view header. Persisted so
     # the user doesn't have to re-enable it every session.
     "help_mode_enabled": False,
+    # Anti-stuck safety cutoff for the toy (Device Routing / Buttplug) path.
+    # VRChat OSC only fires on parameter change, so a frozen SPS proximity
+    # (avatar swap, partner leaves, OSC routing loss) would otherwise drive a
+    # motor at its last value forever. Two-timer model, parity with the
+    # SteamVR/bHaptics backends (which have their own): a mid-range value
+    # stuck for `active_s` is cut hard; a saturated (~100%) value gets the
+    # longer `peaked_s` fuse then a gentle ramp. Defaults match the SteamVR
+    # backend (7 / 15 s). Configured from the Device Routing → Anti-stuck card.
+    "toy_antistuck_enabled": True,
+    "toy_antistuck_active_s": 7,
+    "toy_antistuck_peaked_s": 15,
     # How often the router re-evaluates all motors. Time-constant math
     # (decay_tau / attack_ms / release_ms) is wall-clock-based so this
     # is purely a CPU-vs-fidelity knob — no recalibration needed when
@@ -39,6 +50,12 @@ DEFAULT_APP_SETTINGS = {
     "feature_steamvr_haptics": True,
     "feature_steamvr_battery": True,
     "feature_intiface": True,
+    # Newer backends. Visible by default so they're discoverable; each engine
+    # still requires an explicit connect (e-stim auto-connect defaults OFF in
+    # the per-backend settings) before anything fires.
+    "feature_pishock": True,
+    "feature_owo": True,
+    "feature_coyote": True,
     # Intiface server provisioning. True (default) = OscGoesPurrr spawns and
     # supervises its own bundled intiface-engine, so no separate Intiface
     # Central launch is needed. False = connect to a user-run Intiface Central

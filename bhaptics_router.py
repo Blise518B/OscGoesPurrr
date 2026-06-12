@@ -19,8 +19,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from parameter_store import store
 from bhaptics_engine import BHapticsEngine, DeviceConfig, NODE_COUNTS
-from polling import PollingThread
-from sps_source import evaluate_sps_source
+from router_base import PollingRouter
+from zone_strength import truthy, zone_filter_strength
 
 
 # (position, v1_slot, node_count)
@@ -53,15 +53,10 @@ def _store_key_bosc_v1(position: str, node_1based: int) -> str:
     return f"bOSC_v1_{position}_{node_1based}"
 
 
-def _truthy(value) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    try:
-        return float(value) > 0.5
-    except (TypeError, ValueError):
-        return False
+# _truthy kept as a module-level alias so this router's hot _tick (and any
+# external importer) keeps working unchanged; the implementation now lives in
+# zone_strength so every backend shares one definition.
+_truthy = truthy
 
 
 # ----------------------------------------------------------
@@ -80,34 +75,19 @@ def _sps_entry_strength(entry: Dict[str, Any],
     When the entry's zone name matches a synthetic SPS source (in the
     `sps_sources` map), that source's evaluated value is returned
     directly — synthetic sources carry their own gating, so the entry's
-    filters / zone_type don't apply."""
-    zone_name = str(entry.get("ogb_zone", "")).strip()
-    if not zone_name:
-        return 0.0
-    if sps_sources:
-        defn = sps_sources.get(zone_name)
-        if defn is not None:
-            return evaluate_sps_source(defn, params)
-    filters = entry.get("filters") or []
-    if not filters:
-        return 0.0
-    zone_type = str(entry.get("zone_type", "Orf")).strip() or "Orf"
-    prefix = f"OGB/{zone_type}/{zone_name}"
-    best = 0.0
-    for fname in filters:
-        close_key = f"{prefix}/{fname}Close"
-        if close_key in params and not _truthy(params.get(close_key)):
-            continue
-        val = params.get(f"{prefix}/{fname}")
-        if val is None:
-            continue
-        try:
-            f = max(0.0, min(1.0, float(val)))
-        except (TypeError, ValueError):
-            continue
-        if f > best:
-            best = f
-    return best
+    filters / zone_type don't apply.
+
+    Thin adapter over `zone_strength.zone_filter_strength`: the mirror
+    entry just unpacks into the shared (zone, type, filters) call so
+    bHaptics and the OWO / PiShock / Coyote routers all evaluate zones
+    through one code path."""
+    return zone_filter_strength(
+        entry.get("ogb_zone"),
+        entry.get("zone_type", "Orf"),
+        entry.get("filters") or [],
+        params,
+        sps_sources,
+    )
 
 
 def compute_sps_mirror_dots(sps_cfg: Optional[Dict[str, Any]],
@@ -171,8 +151,13 @@ def compute_sps_mirror_dots(sps_cfg: Optional[Dict[str, Any]],
     return out
 
 
-class BHapticsRouter(PollingThread):
-    """Polls parameter_store and pushes per-device frames to the engine."""
+class BHapticsRouter(PollingRouter):
+    """Polls parameter_store and pushes per-device frames to the engine.
+
+    Inherits the ~60 Hz poll loop (`_run`) from PollingRouter but keeps its own
+    bespoke `_tick`: the anti-stuck ramp, the per-dot raw/override snapshots,
+    and the zero-frame-on-disable don't fit the flat compute_targets/dispatch
+    model, so `compute_targets`/`dispatch` are intentionally unused here."""
 
     def __init__(self,
                  engine: BHapticsEngine,
@@ -181,10 +166,8 @@ class BHapticsRouter(PollingThread):
                  get_antistuck: Callable[[], Dict[str, float]] | None = None,
                  get_sps_mirror_config: Callable[[], Dict[str, Any]] | None = None,
                  get_sps_sources: Callable[[], Dict[str, Any]] | None = None):
-        super().__init__("bHapticsRouter")
-        self.engine = engine
+        super().__init__("bHapticsRouter", engine, poll_rate_s=poll_rate_s)
         self.get_device_configs = get_device_configs
-        self.poll_rate_s = poll_rate_s
         # Returns {"enabled": bool, "hold_s": float, "ramp_s": float}.
         # Read on every tick so config changes apply live.
         self.get_antistuck = get_antistuck or (lambda: {"enabled": False, "hold_s": 2.0, "ramp_s": 2.0})
@@ -217,15 +200,6 @@ class BHapticsRouter(PollingThread):
         # is driving that node.
         self._overrides: Dict[str, Dict[int, int]] = {}
         self._overrides_lock = threading.Lock()
-
-    def _run(self):
-        print("[bHaptics] Router thread started")
-        while not self._stop.is_set():
-            try:
-                self._tick()
-            except Exception as e:
-                print(f"[bHaptics][Router] tick error: {e}")
-            self._interruptible_sleep(self.poll_rate_s)
 
     def get_snapshot(self) -> Dict[str, List[int]]:
         """Return a copy of the current per-device dot intensity arrays.
