@@ -547,6 +547,47 @@ Endpoint:
   • Host / Port are editable. "Apply" reconnects with the new endpoint. "Connect Now" forces a single connection attempt regardless of the auto-connect setting.
 """)
 
+        section("PiShock", """
+Fires PiShock shock / vibrate / beep events from avatar contacts. Unlike the continuous backends, a shock is a discrete event: a zone fires once when its contact strength crosses the threshold, then must re-arm by dropping below threshold − hysteresis before it can fire again.
+
+Transports:
+  • serial — a PiShock hub plugged into this PC over USB (COM port + shocker ID). Lowest latency, works offline.
+  • cloud  — the PiShock web API (username, API key, share code).
+
+Per-zone rules (Source → Trigger → Output folds):
+  • Source: an OGB zone or synthetic SPS source plus interaction filters. The fold's ring and number show the live contact strength.
+  • Trigger: op (shock / vibrate / beep), threshold, hysteresis.
+  • Output: intensity range (contact strength at fire time maps min→max), duration, per-zone cooldown, optional Sustain that re-fires every Cadence seconds while held.
+
+Safety is layered: the engine hard-caps intensity / duration / interval on EVERY fire (settings can only lower the caps), each zone has its own cooldown, and a global sliding-window rate limit stops multiple zones ganging up. Test with vibrate first; keep Auto Connect off until you trust the config.
+""")
+
+        section("DG-Lab Coyote", """
+Drives a DG-Lab Coyote 3.0 e-stim unit over Bluetooth LE directly from this PC (no phone app needed; requires a BLE adapter and pip install bleak).
+
+Setup: Scan, pick the device to fill in its address, Apply. Set the hardware soft strength limits LOW before first connecting — they are written to the device itself, so no routing config or bug can exceed them.
+
+Channels A and B each route independently (Source → Shaping → Output folds):
+  • Source: OGB zone / synthetic source + interaction filters, with a live strength ring.
+  • Shaping: strength below the threshold outputs nothing; above it, (strength − threshold) × gain sets the level.
+  • Output: max strength scales onto the channel's 0-200 range (still capped by the hardware soft limit); waveform frequency / intensity set the pulse texture.
+
+The status card shows live battery and the current A/B strengths.
+""")
+
+        section("OWO Suit", """
+Maps avatar contacts onto OWO muscle-group sensations (the suit's ten muscles, Pectoral through Lumbar).
+
+Requirements: the My OWO phone app on the same Wi-Fi (use 'Scan Game' to pair), plus the OWO SDK on this PC — pip install pythonnet and drop OWO.dll into the owo-sdk folder. Without those the backend shows as unavailable.
+
+Per-muscle routing (Source → Shaping → Output folds):
+  • Source: OGB zone / synthetic source + interaction filters, with a live strength ring.
+  • Shaping: threshold + gain, same math as the Coyote channels.
+  • Output: max intensity caps the muscle's 0-100 sensation level.
+
+Sensation frequency (Connection card) sets the texture suit-wide — low feels like slow thumps, high like a dense buzz; per-muscle intensity stays separate.
+""")
+
         section("Real-Time OSC Inspector", """
 OSC Inspector shows every OSC parameter your avatar is broadcasting. It starts automatically when you open the page and stops when you leave — useful for finding the exact name of a parameter before mapping it to a motor / tracker / bHaptics zone.
 
@@ -568,6 +609,10 @@ Flip the "Help Mode" toggle in the sidebar (or in the Device Routing header) and
   • app_settings.json        — global app preferences
   • steamvr_settings.json    — autostart, patterns, per-tracker config, battery interval
   • bhaptics_settings.json   — Player endpoint, per-device enable + intensity, anti-stuck
+  • pishock_settings.json    — transport, credentials, safety caps, zone rules
+  • coyote_settings.json     — device address, hardware soft limits, channel configs
+  • owo_settings.json        — connection, sensation frequency, per-muscle configs
+  • sessions_settings.json   — session-logger preferences
 """)
 
         inner_lay.addStretch(1)

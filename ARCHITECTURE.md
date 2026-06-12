@@ -235,10 +235,16 @@ zone — detected OGB or synthetic SPS source — identically.
       `docs/MOTOR_SIGNAL_CHAIN.md`).
     * `ui/trace_graph.py` — custom-painted scrolling time-series plot used
       by the chain mini-graphs and the chains' `▸ Overview` disclosure.
+    * `ui/fold_strip.py` — the chain's visual language (collapsible fold
+      cards joined by painted arrows, purple→pink activity rings)
+      extracted into reusable `FoldCard` / `FoldStrip` widgets; the
+      backend views build their per-item cards on it.
     * `ui/osc_variable_picker.py` — modal picker listing live avatar
       parameters from `parameter_store`, with search + manual entry.
     * `ui/help_mode.py` — toggle-driven `?` badges + popovers anchored to
-      the controls they explain.
+      the controls they explain; badges live in every view, toggled from
+      the sidebar (or the Device Routing header), and stage editors keep
+      their explanations in badges instead of permanent labels.
     * `ui/flow_layout.py` — a `FlowLayout` port (PySide6 ships none) for
       the Overview tile grid.
 * **Rule:** It only knows how to draw widgets. If the user clicks a
@@ -248,6 +254,17 @@ zone — detected OGB or synthetic SPS source — identically.
   `ui_components.py` plus the `ui/` package, and nothing else. The
   sole sanctioned reach-out to backend code is reading
   `parameter_store.store` for live debug views.
+* **Rule: hidden pages do no background work.** Every periodic UI
+  refresher (status pollers, activity-ring ticks, the bHaptics grid
+  pump) early-outs while its page isn't visible, the chain widgets'
+  router trace subscriptions attach on `showEvent` and detach on
+  `hideEvent`, and `select_view` refreshes a page once on arrival so
+  it never shows stale data. New views must follow the same pattern.
+  Signal processing never depends on this: the engines/routers run in
+  their own threads, and `motor_router.needs_settling()` keeps the
+  routing tick alive while any motor output is non-zero, so smoothing
+  tails and the anti-stuck cutoff always complete no matter which
+  page is on screen.
 
 ### 6. The Traffic Cop — `main.py` + the `controllers/` mixins
 

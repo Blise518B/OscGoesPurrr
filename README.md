@@ -157,6 +157,11 @@ Sidebar views (toggle from the left rail):
   install/uninstall.
 * **Help** — short docs for each feature.
 
+**Help Mode**: flip the toggle in the sidebar and small `?` badges
+appear next to controls across every view — zone pickers, gate knobs,
+safety caps, fold headers. Click a badge for a short in-place
+explanation of exactly that control.
+
 ## 🎮 SteamVR Toy Driver
 
 The toy driver is an optional C++ OpenVR driver that lives in

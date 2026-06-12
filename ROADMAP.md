@@ -1,85 +1,9 @@
-# OscGoesPurrr — Roadmap
+﻿# OscGoesPurrr — Roadmap
 
 A loose list of features we want to land, grouped by theme.
 Order within a group is rough priority, not a hard sequence.
 
 ## Haptics Features
-
-- **Routing redesign: per-motor mixer, UI refresh, live tuning.**
-  Full overhaul of Device Routing — collapsed-by-default toy cards,
-  a new two-channel depth/speed mixer with per-channel gain / curve /
-  modulate-other modes, Help Mode for in-context parameter
-  explanations, and a new Tune tab with a live multi-curve graph and
-  simulated input patterns for offline tuning. Phased: UI shell →
-  mixer math → Tune tab. See [`ROUTING_REDESIGN.md`](docs/ROUTING_REDESIGN.md).
-
-- **SPS → bHaptics zone mirror.**
-  When an OGB SPS contact fires (Boob, Tummy, etc.), also pulse a
-  configured subset of bHaptics dots so the suit reinforces what the
-  toy is feeling. Defaults that ship out of the box:
-
-  | OGB zone | bHaptics target | Dots |
-  |---|---|---|
-  | Boob (chest) | VestFront | 5, 6, 9, 10 (center-upper) |
-  | Tummy        | VestFront | 13, 14, 17, 18 (center-lower) |
-  | Booty        | VestBack  | (TBD — pick equivalent center-lower indices) |
-  | Crotch       | VestFront | 17, 18, 19 (belt line, lower) |
-  | Tail         | VestBack  | (TBD) |
-  | Head         | Head      | all 6 dots |
-
-  **VestFront grid reference** (4 cols × 5 rows, indexed left-to-right
-  top-to-bottom — see `bhaptics_router._GRID_LAYOUTS`):
-  ```
-  Row 0:  0  1  2  3   ← upper chest / collarbone
-  Row 1:  4  5  6  7   ← chest (boobs)
-  Row 2:  8  9 10 11   ← lower chest / solar plexus
-  Row 3: 12 13 14 15   ← tummy
-  Row 4: 16 17 18 19   ← lower tummy / belt
-  ```
-  VestBack uses the same 4×5 layout.
-
-  **Design decisions (locked):**
-  * Hybrid mapping: built-in defaults + user-editable table on a
-    "Cross-Routing" sub-tab inside the bHaptics view.
-  * OGB zone source = **picker** populated from
-    `parameter_store.get_detected_zones()`, not fuzzy name matching.
-  * Stacking with the existing bHapticsOSC v1 layer = **max-wins per
-    dot** (same merging policy `motor_router` uses for multi-zone).
-  * Per-entry **gain** (0–2× multiplier) + **threshold** (deadband
-    below) so each mirror can be tuned independently.
-  * Filters per entry: which OGB interaction types fire it
-    (`TouchSelf`, `TouchOthers`, `PenSelf`, `PenOthers`) — mirrors the
-    same checkbox set the main router exposes.
-
-  **Implementation notes:**
-  * Extend `bhaptics_router.py` with a second input layer; merge with
-    the v1 OSC layer before the final frame is built (so anti-stuck
-    and manual-override paths keep working unchanged).
-  * Add `BHapticsSettingsManager.get_sps_mirror()` /
-    `set_sps_mirror_entry()` / `delete_sps_mirror_entry()` in
-    `config_manager.py`. Persist as a `sps_mirror` field on
-    `bhaptics_settings.json`:
-    ```json
-    {
-      "sps_mirror": {
-        "enabled": false,
-        "entries": [
-          {
-            "name": "Boob",
-            "ogb_zone": "Boob",
-            "zone_type": "Orf",
-            "filters": ["TouchSelf", "TouchOthers", "PenSelf", "PenOthers"],
-            "position": "VestFront",
-            "dot_indices": [5, 6, 9, 10],
-            "gain": 1.0,
-            "threshold": 0.0
-          }
-        ]
-      }
-    }
-    ```
-  * New facade methods on `controllers/bhaptics_facade.py`. UI stays
-    inside `_build_bhaptics_view()` (no new top-level tab).
 
 - **Manual pattern mode.**
   A library of pre-baked vibration patterns the user can trigger
@@ -264,19 +188,15 @@ Order within a group is rough priority, not a hard sequence.
 
 ## Reliability & Lifecycle
 
-- **Stateless router test suite.**
-  Pytest coverage for `motor_router.py`, `steamvr_router.py`, and
-  `bhaptics_router.py`. Each router is a near-pure function over
-  (profile, `parameter_store` snapshot) → output, which is exactly
-  what pytest is best at. Pin down current behaviour for the common
-  cases (multi-zone merging, touch/pen/self/other filters, linear-
-  actuator Position vs Speed modes, antistuck timing, per-motor
-  debouncing) so the routing-redesign Phase 2 mixer rework can be
-  verified to preserve behaviour for cases the user hasn't
-  customized. Test cases also become living documentation of router
-  semantics for future maintainers. **Worth doing before the
-  routing redesign Phase 2 lands** — see
-  [`ROUTING_REDESIGN.md`](docs/ROUTING_REDESIGN.md).
+- **Stateless router test suite — finish the remaining routers.**
+  `motor_router.py` (plus the mixer, the new backends' routers, and
+  the shared engine/router bases) now has deep pytest coverage, but
+  `steamvr_router.py` and `bhaptics_router.py` still don't have
+  dedicated suites. Each is a near-pure function over (config,
+  `parameter_store` snapshot) → output, which is exactly what pytest
+  is best at — pin down pattern shaping, anti-stuck timing, and the
+  v1/cross-routing dot merging so refactors can be verified to
+  preserve behaviour.
 
 - **SteamVR-aware shutdown.**
   Detect when SteamVR exits and either auto-quit OscGoesPurrr or at
@@ -290,87 +210,6 @@ Order within a group is rough priority, not a hard sequence.
   profile, vibe meters, master toggle) for use as a desktop overlay
   while in VR. Toggle from the main window; remembers its own size and
   position.
-
-- **Dashboard view redesign: unified everything-grid.**
-  Restyle the existing Dashboard sidebar view as a modern card-grid in
-  the aesthetic of the lazarus-muya/New-PySide6-ui-design financial
-  dashboard — which was the original color inspiration for the app.
-  **Every connected thing gets its own tile**, across every backend,
-  arranged in one cohesive grid so you can take in the entire state
-  of the rig at a glance. Read-only — this is the **at-a-glance**
-  view, not an editor. Clicking a tile jumps to the appropriate
-  editor view for that thing.
-
-  **Why a separate view, not a replacement.** Heavy users have 8–10
-  stored toys (disconnected ones stay visible so they can still be
-  edited) plus potentially 5–10 SteamVR trackers and multiple bHaptics
-  positions. That's too much to navigate
-  as a master-detail workflow but ideal for a glanceable grid. The
-  vertical-list editing workflow in
-  [`ROUTING_REDESIGN.md`](docs/ROUTING_REDESIGN.md) stays as the home for
-  configuration; this gives the live-state view its own visual
-  treatment. Both ship.
-
-  ### Tile types
-
-  Grouped into sections so 25+ tiles stay navigable; each section is
-  its own flowing grid, collapsible to a one-line header. Order:
-
-  * **Toys** (per Buttplug device) — Lovense icon, name, connect
-    dot, battery (with the no-battery glyph), live vibe meter,
-    active zones summary. One tile per stored device, connected or
-    not.
-  * **SteamVR trackers** (per tracker) — tracker name / role icon,
-    battery, last-pulse intensity sparkline, OSC address it listens
-    to.
-  * **bHaptics suit** — by default one suit-silhouette tile showing
-    every enabled position's current dot intensities as a heatmap on
-    a mannequin outline. Click to expand into per-position tiles
-    (VestFront, VestBack, ForearmL, etc.) if the user wants finer
-    granularity. Aggregated by default to avoid swamping the grid
-    with 9 vest-piece tiles.
-  * **System** — OSC connection (mDNS-discovered VRChat, port,
-    packets/sec), active profile + avatar binding, per-backend
-    health pills for Intiface / bHaptics Player / SteamVR runtime.
-    Small tiles, top of the grid.
-
-  Toys made visible in SteamVR's device strip by the Toy Driver
-  appear **only** in the Toys section, never duplicated as fake
-  SteamVR trackers — the dashboard reflects haptic intent, not the
-  driver implementation detail.
-
-  ### Tile sizes
-
-  Snap grid: 1×1 / 2×1 / 2×2. 1×1 is the default for all tiles
-  (essentials only). User can click a tile to grow it for more
-  detail — e.g. a toy tile at 2×1 shows the vibe meter as a live
-  sparkline over the last few seconds; at 2×2 it adds the active
-  zones and the recent OSC source list. Sizes persist per-tile to
-  `app_settings.json` (`dashboard_tile_sizes`).
-
-  ### Filtering
-
-  Header row of chip filters: **All / Toys / Trackers / Suit /
-  Stats / System**. Toggle off categories you don't care about so a
-  user with no bHaptics suit doesn't see those sections at all.
-  Per-user persisted.
-
-  ### Implementation notes
-
-  * Custom `FlowLayout`-style container per section with snap-grid
-    sizes (no arbitrary widths; tiles always occupy whole cells).
-  * Smooth resize animations via `QPropertyAnimation` on tile
-    geometry so size changes feel like rearrangement, not jumps.
-  * Each tile is a small `QFrame` with a section-specific
-    background-gradient class via the `GLOBAL_QSS` stylesheet —
-    reuses the existing rainbow / gradient vocabulary already in
-    use for `RainbowMeter` and the device gradient rings.
-  * Read-only contract is load-bearing: no sliders, no toggles. If a
-    user needs to change something, they navigate to the appropriate
-    editor view. This keeps the dashboard glanceable and free of
-    Demeter-violation pressure (no UI reaches into engines for
-    writes — only for reads, via the existing controller facade
-    methods like `get_steamvr_status()` and `get_bhaptics_status()`).
 
 ---
 
