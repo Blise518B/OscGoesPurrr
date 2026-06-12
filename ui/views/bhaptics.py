@@ -284,6 +284,44 @@ class BHapticsMixin:
                 strip.set_levels([raw_max, out_max, out_max])
             except RuntimeError:
                 continue
+        # Cross-Routing entry strips: Source ring = live zone strength;
+        # Shaping/Output mirror the router's (strength − threshold) ×
+        # gain shaping, zeroed while the master enable is off.
+        rows = self._bhaptics_xroute_rows
+        if rows:
+            specs = []
+            live_rows = []
+            for row in rows:
+                try:
+                    specs.append((
+                        row["ogb_zone"].currentText(),
+                        row["zone_type"].currentText(),
+                        [fn for fn, cb in row["filters"].items() if cb.isChecked()],
+                    ))
+                    live_rows.append(row)
+                except RuntimeError:
+                    continue
+            try:
+                strengths = self.controller.get_live_zone_strengths(specs)
+            except Exception:
+                return
+            try:
+                master_on = bool(self.bhaptics_xroute_enable_check.isChecked())
+            except (AttributeError, RuntimeError):
+                master_on = False
+            for row, strength in zip(live_rows, strengths):
+                try:
+                    thr = float(row["threshold"].value())
+                    gain = float(row["gain"].value())
+                    if not master_on or strength <= thr:
+                        shaped = 0.0
+                    else:
+                        shaped = max(0.0, min(1.0, (strength - thr) * gain))
+                    row["strip"].set_levels([strength, shaped, shaped])
+                    row["source_fold"].set_value(strength)
+                    self._update_bhaptics_xroute_subtitles(row)
+                except RuntimeError:
+                    continue
 
     # ---- bHaptics handlers ----
 
@@ -693,8 +731,12 @@ class BHapticsMixin:
 
     def _build_bhaptics_xroute_entry_card(self, idx: int,
                                           entry: Dict[str, Any]) -> QFrame:
+        """One Cross-Routing entry as a fold strip — Source → Shaping →
+        Output — in the Device Routing chain's design language, with
+        activity rings charged by the live zone strength (see
+        ui/fold_strip.py)."""
         card = _Card()
-        card.setMaximumWidth(640)
+        card.setMaximumWidth(860)
         lay = _vbox(12, 6)
         card.setLayout(lay)
 
@@ -715,16 +757,22 @@ class BHapticsMixin:
         row1.addWidget(del_btn)
         lay.addLayout(row1)
 
-        # --- Row 2: source (zone type + zone name) + filters ---
-        row2 = _hbox(0, 8)
-        row2.addWidget(QLabel("Source"))
-        row2.addWidget(self._make_help_badge(
+        # Fold strip — Source → Shaping → Output, same design language
+        # as the other backend cards (see ui/fold_strip.py).
+        strip = _FoldStrip()
+
+        # ---- Source fold: which contact to mirror ----
+        src_fold = strip.add_fold(_FoldCard("source", "Source", show_value=True))
+        src_fold.add_header_widget(self._make_help_badge(
             "Cross-routing source",
             "The avatar contact to mirror: an OGB zone (or synthetic SPS "
             "source) plus the interaction filters that count. The "
             "strongest matching filter's 0–1 value drives the selected "
             "dots each tick."
         ))
+        se = src_fold.editor_layout
+        st_row = _hbox(0, 8)
+        st_row.addWidget(QLabel("Type"))
         ztype_combo = QComboBox()
         ztype_combo.addItems(["Orf", "Pen"])
         cur_ztype = str(entry.get("zone_type", "Orf"))
@@ -732,8 +780,12 @@ class BHapticsMixin:
         ztype_combo.currentTextChanged.connect(
             lambda _t, i=idx: self._on_bhaptics_xroute_ztype_changed(i)
         )
-        row2.addWidget(ztype_combo)
+        st_row.addWidget(ztype_combo)
+        st_row.addStretch(1)
+        se.addLayout(st_row)
 
+        sz_row = _hbox(0, 8)
+        sz_row.addWidget(QLabel("Zone"))
         zone_combo = QComboBox()
         zone_combo.setEditable(True)
         zone_combo.setMinimumWidth(160)
@@ -745,25 +797,76 @@ class BHapticsMixin:
         zone_combo.editTextChanged.connect(
             lambda _t, i=idx: self._push_bhaptics_xroute_entry(i)
         )
-        row2.addWidget(zone_combo, 1)
+        sz_row.addWidget(zone_combo, 1)
+        se.addLayout(sz_row)
 
-        row2.addSpacing(8)
-        row2.addWidget(QLabel("Filters"))
         filter_checks: Dict[str, QCheckBox] = {}
         cur_filters = set(entry.get("filters") or [])
-        for fname in ("TouchSelf", "TouchOthers", "PenSelf", "PenOthers"):
-            cb = QCheckBox(fname)
-            cb.setChecked(fname in cur_filters)
-            cb.toggled.connect(
-                lambda _checked=False, i=idx: self._push_bhaptics_xroute_entry(i)
-            )
-            row2.addWidget(cb)
-            filter_checks[fname] = cb
-        lay.addLayout(row2)
+        for pair in (("TouchSelf", "TouchOthers"), ("PenSelf", "PenOthers")):
+            fr = _hbox(0, 8)
+            for fname in pair:
+                cb = QCheckBox(fname)
+                cb.setChecked(fname in cur_filters)
+                cb.toggled.connect(
+                    lambda _checked=False, i=idx: self._push_bhaptics_xroute_entry(i)
+                )
+                fr.addWidget(cb)
+                filter_checks[fname] = cb
+            fr.addStretch(1)
+            se.addLayout(fr)
 
-        # --- Row 3: output position ---
-        row3 = _hbox(0, 8)
-        row3.addWidget(QLabel("Output"))
+        # ---- Shaping fold: threshold + gain ----
+        shp_fold = strip.add_fold(_FoldCard("shaping", "Shaping"))
+        shp_fold.add_header_widget(self._make_help_badge(
+            "Gain & Threshold",
+            "Contact strength below the threshold is ignored; above it, "
+            "the signal is scaled by the gain before hitting the dots. "
+            "Raise the threshold to ignore grazing contact, raise the "
+            "gain to make light contact hit harder."
+        ))
+        he = shp_fold.editor_layout
+        gt_row = _hbox(0, 8)
+        gt_row.addWidget(QLabel("Threshold"))
+        thresh_spin = QDoubleSpinBox()
+        thresh_spin.setRange(0.0, 1.0)
+        thresh_spin.setSingleStep(0.05)
+        thresh_spin.setDecimals(2)
+        try:
+            thresh_spin.setValue(float(entry.get("threshold", 0.0)))
+        except (TypeError, ValueError):
+            thresh_spin.setValue(0.0)
+        thresh_spin.valueChanged.connect(
+            lambda _v, i=idx: self._push_bhaptics_xroute_entry(i)
+        )
+        gt_row.addWidget(thresh_spin)
+        gt_row.addWidget(QLabel("Gain"))
+        gain_spin = QDoubleSpinBox()
+        gain_spin.setRange(0.0, 2.0)
+        gain_spin.setSingleStep(0.05)
+        gain_spin.setDecimals(2)
+        try:
+            gain_spin.setValue(float(entry.get("gain", 1.0)))
+        except (TypeError, ValueError):
+            gain_spin.setValue(1.0)
+        gain_spin.valueChanged.connect(
+            lambda _v, i=idx: self._push_bhaptics_xroute_entry(i)
+        )
+        gt_row.addWidget(gain_spin)
+        gt_row.addStretch(1)
+        he.addLayout(gt_row)
+
+        # ---- Output fold: device position + dot selection ----
+        out_fold = strip.add_fold(_FoldCard("output", "Output"))
+        out_fold.add_header_widget(self._make_help_badge(
+            "Dot picker",
+            "Which motors on the chosen device this entry drives — the "
+            "grid mirrors the device's physical layout; click dots to "
+            "toggle them. The text box is a comma-separated 0-based "
+            "fallback that stays in sync (handy for copy/paste)."
+        ))
+        oe = out_fold.editor_layout
+        po_row = _hbox(0, 8)
+        po_row.addWidget(QLabel("Position"))
         pos_combo = QComboBox()
         pos_combo.addItems(self._bhaptics_xroute_positions)
         cur_pos = str(entry.get("position", "VestFront"))
@@ -775,27 +878,20 @@ class BHapticsMixin:
         pos_combo.currentTextChanged.connect(
             lambda _t, i=idx: self._on_bhaptics_xroute_position_changed(i)
         )
-        row3.addWidget(pos_combo)
+        po_row.addWidget(pos_combo)
 
-        row3.addStretch(1)
+        po_row.addStretch(1)
         # Tiny count read-out updates from the picker's selectionChanged.
         dot_count_lbl = QLabel("0 dots")
         dot_count_lbl.setProperty("role", "muted")
-        row3.addWidget(dot_count_lbl)
-        lay.addLayout(row3)
+        po_row.addWidget(dot_count_lbl)
+        oe.addLayout(po_row)
 
         # --- Row 4: visual dot picker (mirrors the chosen device's
         # physical layout) + comma-separated text fallback for
         # power users and paste support. The two stay in sync. ---
         pick_row = _hbox(0, 8)
         pick_row.addWidget(QLabel("Dots"))
-        pick_row.addWidget(self._make_help_badge(
-            "Dot picker",
-            "Which motors on the chosen device this entry drives — the "
-            "grid mirrors the device's physical layout; click dots to "
-            "toggle them. The text box is a comma-separated 0-based "
-            "fallback that stays in sync (handy for copy/paste)."
-        ))
         picker = _BHapticsDotPicker()
         cols, rows, node_count = self._bhaptics_xroute_geom.get(
             pos_combo.currentText(), (1, 1, 0)
@@ -857,52 +953,14 @@ class BHapticsMixin:
         pick_col.addWidget(dots_edit)
         pick_col.addStretch(1)
         pick_row.addLayout(pick_col, 1)
-        lay.addLayout(pick_row)
+        oe.addLayout(pick_row)
 
-        # --- Row 4: gain + threshold ---
-        row4 = _hbox(0, 8)
-        row4.addWidget(QLabel("Gain"))
-        gain_spin = QDoubleSpinBox()
-        gain_spin.setRange(0.0, 2.0)
-        gain_spin.setSingleStep(0.05)
-        gain_spin.setDecimals(2)
-        try:
-            gain_spin.setValue(float(entry.get("gain", 1.0)))
-        except (TypeError, ValueError):
-            gain_spin.setValue(1.0)
-        gain_spin.valueChanged.connect(
-            lambda _v, i=idx: self._push_bhaptics_xroute_entry(i)
-        )
-        row4.addWidget(gain_spin)
-
-        row4.addSpacing(12)
-        row4.addWidget(QLabel("Threshold"))
-        thresh_spin = QDoubleSpinBox()
-        thresh_spin.setRange(0.0, 1.0)
-        thresh_spin.setSingleStep(0.05)
-        thresh_spin.setDecimals(2)
-        try:
-            thresh_spin.setValue(float(entry.get("threshold", 0.0)))
-        except (TypeError, ValueError):
-            thresh_spin.setValue(0.0)
-        thresh_spin.valueChanged.connect(
-            lambda _v, i=idx: self._push_bhaptics_xroute_entry(i)
-        )
-        row4.addWidget(thresh_spin)
-        row4.addWidget(self._make_help_badge(
-            "Gain & Threshold",
-            "Contact strength below the threshold is ignored; above it, "
-            "the signal is scaled by the gain before hitting the dots. "
-            "Raise the threshold to ignore grazing contact, raise the "
-            "gain to make light contact hit harder."
-        ))
-        row4.addStretch(1)
-        lay.addLayout(row4)
+        lay.addWidget(strip)
 
         # Store widget refs so the push handler can read them by index.
         # `picker` is the canonical dot-selection source; `dot_indices`
         # is the synced text shadow we keep for tooltip / paste support.
-        self._bhaptics_xroute_rows.append({
+        row = {
             "name": name_edit,
             "zone_type": ztype_combo,
             "ogb_zone": zone_combo,
@@ -913,8 +971,28 @@ class BHapticsMixin:
             "dot_count_label": dot_count_lbl,
             "gain": gain_spin,
             "threshold": thresh_spin,
-        })
+            "strip": strip, "source_fold": src_fold,
+            "shaping_fold": shp_fold, "output_fold": out_fold,
+        }
+        self._bhaptics_xroute_rows.append(row)
+        self._update_bhaptics_xroute_subtitles(row)
         return card
+
+    def _update_bhaptics_xroute_subtitles(self, row: Dict[str, Any]) -> None:
+        """Collapsed-fold summaries derived from the row's widgets."""
+        try:
+            zone_name = row["ogb_zone"].currentText().strip() or "—"
+            row["source_fold"].set_subtitle(
+                f"{row['zone_type'].currentText()} · {zone_name}")
+            row["shaping_fold"].set_subtitle(
+                f"≥ {float(row['threshold'].value()):.2f}"
+                f" · ×{float(row['gain'].value()):.2f}")
+            sel = row["picker"].selection()
+            row["output_fold"].set_subtitle(
+                f"{row['position'].currentText()}"
+                f" · {len(sel)} dot{'s' if len(sel) != 1 else ''}")
+        except RuntimeError:
+            pass
 
     def _populate_xroute_zone_combo(self, combo: QComboBox, zone_type: str):
         """Fill the OGB-zone dropdown from the avatar's currently-detected

@@ -34,9 +34,11 @@ visual (colours, arrowheads, hover, epsilon gating) matches the chain
 so the tabs read as one design.
 """
 
-from typing import List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
-from PySide6.QtCore import QPoint, QPointF, Qt, Signal
+from PySide6.QtCore import (
+    QEasingCurve, QPoint, QPointF, Qt, QVariantAnimation, Signal,
+)
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QWidget
 
@@ -61,6 +63,10 @@ _CONNECTOR_GAP = 18
 # Arrow attach height when a fold is expanded (cards top-align and the
 # arrow rides the header row instead of mid-editor).
 _HEADER_CENTER_Y = 17
+# Expand/collapse animation — same duration + easing as the chain's
+# accordion so the two read as one motion language.
+_ANIM_MS = 160
+_QWIDGETSIZE_MAX = 16_777_215  # Qt's QWIDGETSIZE_MAX ("unbounded")
 
 
 def lerp_color(lo: QColor, hi: QColor, t: float) -> QColor:
@@ -221,16 +227,76 @@ class FoldCard(QFrame):
         return self._expanded
 
     def set_expanded(self, expanded: bool) -> None:
-        """Show the editor (hiding the quick summary) or collapse back.
-        Mirrors the chain cards: the editor replaces the quick row so
-        the two never show stale duplicates of the same knob. A no-op
-        on non-expandable folds."""
+        """Instantly show the editor (hiding the quick summary) or
+        collapse back. Mirrors the chain cards: the editor replaces the
+        quick row so the two never show stale duplicates of the same
+        knob. A no-op on non-expandable folds. The strip's animated
+        path uses the begin_/end_ stages below instead."""
         expanded = bool(expanded) and self._expandable
         if expanded == self._expanded:
             return
         self._expanded = expanded
         self._quick.setVisible(not expanded)
         self._editor.setVisible(expanded)
+        self._editor.setMaximumHeight(_QWIDGETSIZE_MAX)
+
+    # ---- animated expand/collapse staging (driven by FoldStrip) ----
+    def begin_expand(self) -> None:
+        """Stage 1 of an animated expand: swap quick → editor with the
+        editor squashed to zero height, ready to grow."""
+        if not self._expandable:
+            return
+        self._expanded = True
+        self._quick.setVisible(False)
+        self._editor.setMaximumHeight(0)
+        self._editor.setVisible(True)
+
+    def end_expand(self) -> None:
+        self._editor.setMaximumHeight(_QWIDGETSIZE_MAX)
+
+    def begin_collapse(self) -> None:
+        """Stage 1 of an animated collapse: flip the state flag but keep
+        the editor on screen so its height can shrink visibly."""
+        self._expanded = False
+
+    def end_collapse(self) -> None:
+        self._editor.setVisible(False)
+        self._editor.setMaximumHeight(_QWIDGETSIZE_MAX)
+        self._quick.setVisible(True)
+
+    def set_editor_max_height(self, h: int) -> None:
+        self._editor.setMaximumHeight(max(0, int(h)))
+
+    def editor_target_height(self) -> int:
+        """The editor's natural height (the grow animation's endpoint).
+        sizeHint is the layout's preference — unaffected by the
+        temporary maximumHeight pin."""
+        return max(0, self._editor.sizeHint().height())
+
+    # ------------------------------------------------------------ width
+    def set_width_px(self, w: int) -> None:
+        """Pin the card to an exact width (min == max) during animation."""
+        w = max(0, int(w))
+        self.setMinimumWidth(w)
+        self.setMaximumWidth(w)
+
+    def clear_width(self) -> None:
+        """Release the width pin so the card flows naturally again."""
+        self.setMinimumWidth(0)
+        self.setMaximumWidth(_QWIDGETSIZE_MAX)
+
+    def collapsed_width_hint(self) -> int:
+        """sizeHint width as if collapsed (editor hidden, quick shown),
+        regardless of the current staging — the collapse animation's
+        width endpoint."""
+        editor_vis = self._editor.isVisibleTo(self)
+        quick_vis = self._quick.isVisibleTo(self)
+        self._editor.setVisible(False)
+        self._quick.setVisible(True)
+        w = self.sizeHint().width()
+        self._editor.setVisible(editor_vis)
+        self._quick.setVisible(quick_vis)
+        return w
 
     # ------------------------------------------------------------ live
     def set_level(self, level: float) -> None:
@@ -295,6 +361,20 @@ class FoldStrip(QWidget):
         self._lay.setContentsMargins(0, 0, 0, 0)
         self._lay.setSpacing(0)
         self.setLayout(self._lay)
+        # Accordion animation — one eased 0→1 progress value drives every
+        # card's pinned width and the active editors' max-heights, with
+        # the connector arrows repainted against the live geometry each
+        # frame (same approach as the chain strip).
+        self._anim = QVariantAnimation(self)
+        self._anim.setDuration(_ANIM_MS)
+        self._anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._anim.setStartValue(0.0)
+        self._anim.setEndValue(1.0)
+        self._anim.valueChanged.connect(self._on_anim_tick)
+        self._anim.finished.connect(self._finalize_anim)
+        self._anim_w: Dict[FoldCard, Tuple[int, int]] = {}
+        self._anim_h: Dict[FoldCard, Tuple[int, int]] = {}
+        self._anim_role: Dict[FoldCard, str] = {}
 
     # ------------------------------------------------------------ build
     def add_fold(self, card: FoldCard) -> FoldCard:
@@ -318,12 +398,113 @@ class FoldStrip(QWidget):
     # ------------------------------------------------------------ accordion
     def _on_fold_clicked(self, fold_id: str) -> None:
         target = None if fold_id == self._expanded_id else fold_id
+        if not self.isVisible():
+            # Off-screen (or headless tests): apply instantly — there is
+            # nothing to animate and no geometry to measure.
+            self._apply_states_instant(target)
+            return
+        self._animate_to(target)
+
+    def _apply_states_instant(self, target: Optional[str]) -> None:
         self._expanded_id = target
         any_open = target is not None
         for card in self._cards:
             card.set_expanded(any_open and card.fold_id == target)
             self._lay.setAlignment(
                 card, Qt.AlignTop if any_open else Qt.AlignVCenter)
+        self.update()
+
+    def _animate_to(self, target: Optional[str]) -> None:
+        """Animated accordion switch. Pins every card to its current
+        width, stages the content swap (expanding editor squashed to
+        zero height, collapsing editor kept visible), then eases widths
+        and editor heights to their measured endpoints. Pins release on
+        finish so the layout flows naturally again."""
+        # Supersede any in-flight run: snap it to its end state first so
+        # the begin_/end_ staging never nests.
+        if self._anim.state() == QVariantAnimation.Running:
+            self._anim.stop()
+            self._finalize_anim()
+
+        prev = self._expanded_id
+        self._expanded_id = target
+        any_open = target is not None
+
+        old_w: Dict[FoldCard, int] = {}
+        for card in self._cards:
+            try:
+                old_w[card] = card.width()
+            except RuntimeError:
+                continue
+
+        # Stage content: only the target expands; only the previously
+        # expanded card collapses; everything else keeps its quick row.
+        self._anim_role.clear()
+        for card in self._cards:
+            if any_open and card.fold_id == target:
+                self._anim_role[card] = "expand"
+                card.begin_expand()
+            elif prev is not None and card.fold_id == prev and card.is_expanded():
+                self._anim_role[card] = "collapse"
+                card.begin_collapse()
+            self._lay.setAlignment(
+                card, Qt.AlignTop if any_open else Qt.AlignVCenter)
+
+        # Measure endpoints with the new states applied, then pin the
+        # old widths so the layout doesn't jump before the first tick.
+        self._anim_w.clear()
+        self._anim_h.clear()
+        for card, w0 in old_w.items():
+            role = self._anim_role.get(card)
+            if role == "collapse":
+                w1 = card.collapsed_width_hint()
+            else:
+                w1 = card.sizeHint().width()
+            if role == "expand":
+                self._anim_h[card] = (0, card.editor_target_height())
+            elif role == "collapse":
+                self._anim_h[card] = (card.editor_target_height(), 0)
+            self._anim_w[card] = (w0, w1)
+            card.set_width_px(w0)
+
+        self._anim.start()
+
+    def _on_anim_tick(self, value) -> None:
+        try:
+            t = float(value)
+        except (TypeError, ValueError):
+            return
+        for card, (w0, w1) in list(self._anim_w.items()):
+            try:
+                card.set_width_px(int(round(w0 + (w1 - w0) * t)))
+            except RuntimeError:
+                self._anim_w.pop(card, None)
+        for card, (h0, h1) in list(self._anim_h.items()):
+            try:
+                card.set_editor_max_height(int(round(h0 + (h1 - h0) * t)))
+            except RuntimeError:
+                self._anim_h.pop(card, None)
+        self.update()
+
+    def _finalize_anim(self) -> None:
+        """Release pins and settle the staged content swaps. Idempotent —
+        also called when a new run supersedes an unfinished one."""
+        for card in list(self._anim_w):
+            try:
+                card.clear_width()
+            except RuntimeError:
+                pass
+        for card, role in list(self._anim_role.items()):
+            try:
+                if role == "expand":
+                    card.end_expand()
+                else:
+                    card.end_collapse()
+            except RuntimeError:
+                pass
+        self._anim_w.clear()
+        self._anim_h.clear()
+        self._anim_role.clear()
         self.update()
 
     # ------------------------------------------------------------ live

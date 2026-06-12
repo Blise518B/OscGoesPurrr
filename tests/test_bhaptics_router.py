@@ -240,3 +240,188 @@ class TestComputeMirrorDots:
         ]}
         out = compute_sps_mirror_dots(cfg, self._params_boob_touch(0.5))
         assert out == {"VestFront": {5: pytest.approx(0.5)}}
+
+
+# ============================================================ schema detection
+
+from types import SimpleNamespace
+
+import bhaptics_router
+from bhaptics_router import BHapticsRouter, detected_positions
+
+
+def _zone_params(strength=0.6, zone="Boob", f="TouchOthers"):
+    return {
+        f"OGB/Orf/{zone}/{f}Close": True,
+        f"OGB/Orf/{zone}/{f}": strength,
+    }
+
+
+class TestDetectedPositions:
+    def test_detects_both_schemas(self):
+        params = {"bHaptics_Vest_Front_1_bool": True, "bOSC_v1_HandL_2": 0.4}
+        assert detected_positions(params) == {"VestFront", "HandL"}
+
+    def test_empty_params_detect_nothing(self):
+        assert detected_positions({}) == set()
+
+
+# ============================================================ router _tick
+# Driven directly with a fake engine, a fake parameter store
+# (monkeypatched module global) and a fake clock - no Player, no thread.
+# Covers what the pure-function tests above can't: the v1 bool/float
+# per-dot max-wins merge, intensity scaling, frame debounce, the
+# anti-stuck hold->ramp, manual overrides, the disabled-device zero
+# frame, and disconnect cleanup.
+
+
+class _FakeStore:
+    def __init__(self):
+        self.params = {}
+
+    def get_all_parameters(self):
+        return dict(self.params)
+
+
+class _FakeClock:
+    def __init__(self):
+        self.now = 1000.0
+
+    def time(self):
+        return self.now
+
+    def advance(self, s):
+        self.now += s
+
+
+class _FakeEngine:
+    is_connected = True
+
+    def __init__(self):
+        self.frames = []
+
+    def submit_dot_frame(self, position, dots):
+        self.frames.append((position, list(dots)))
+
+
+def _mk(monkeypatch, configs, antistuck=None, sps_cfg=None):
+    """Router + fake engine/store/clock, no thread started."""
+    fake_store = _FakeStore()
+    clock = _FakeClock()
+    monkeypatch.setattr(bhaptics_router, "store", fake_store)
+    monkeypatch.setattr(bhaptics_router.time, "time", clock.time)
+    eng = _FakeEngine()
+    r = BHapticsRouter(
+        eng,
+        get_device_configs=lambda: configs,
+        get_antistuck=(lambda: antistuck) if antistuck else None,
+        get_sps_mirror_config=(lambda: sps_cfg) if sps_cfg else None,
+    )
+    return r, eng, fake_store, clock
+
+
+def _dev(enabled=True, intensity=100):
+    """Duck-typed DeviceConfig - _tick reads .enabled / .intensity."""
+    return SimpleNamespace(enabled=enabled, intensity=intensity)
+
+
+class TestRouterTick:
+    def test_bool_schema_drives_dot_at_device_intensity(self, monkeypatch):
+        r, eng, st, _ = _mk(monkeypatch, {"VestFront": _dev(intensity=80)})
+        st.params["bHaptics_Vest_Front_5_bool"] = True
+        r._tick()
+        assert eng.frames == [("VestFront", [0] * 4 + [80] + [0] * 15)]
+
+    def test_float_schema_scales_by_intensity(self, monkeypatch):
+        r, eng, st, _ = _mk(monkeypatch, {"VestFront": _dev(intensity=80)})
+        st.params["bOSC_v1_VestFront_5"] = 0.5
+        r._tick()
+        assert eng.frames[-1][1][4] == 40
+
+    def test_schemas_merge_max_wins_per_dot(self, monkeypatch):
+        r, eng, st, _ = _mk(monkeypatch, {"VestFront": _dev(intensity=80)})
+        st.params["bHaptics_Vest_Front_5_bool"] = True   # -> 80
+        st.params["bOSC_v1_VestFront_5"] = 0.5           # -> 40
+        r._tick()
+        assert eng.frames[-1][1][4] == 80
+
+    def test_sps_mirror_layer_merges_in(self, monkeypatch):
+        sps_cfg = {"enabled": True, "entries": [{
+            "ogb_zone": "Boob", "zone_type": "Orf",
+            "filters": ["TouchOthers"], "position": "VestFront",
+            "dot_indices": [4], "gain": 1.0, "threshold": 0.0,
+        }]}
+        r, eng, st, _ = _mk(
+            monkeypatch, {"VestFront": _dev(intensity=100)}, sps_cfg=sps_cfg)
+        st.params.update(_zone_params(0.6))
+        r._tick()
+        assert eng.frames[-1][1][4] == 60
+
+    def test_unchanged_frames_are_debounced(self, monkeypatch):
+        r, eng, st, _ = _mk(monkeypatch, {"VestFront": _dev()})
+        st.params["bHaptics_Vest_Front_1_bool"] = True
+        r._tick()
+        r._tick()
+        assert len(eng.frames) == 1
+
+    def test_antistuck_holds_then_ramps_to_zero(self, monkeypatch):
+        antistuck = {"enabled": True, "hold_s": 1.0, "ramp_s": 2.0}
+        r, eng, st, clock = _mk(
+            monkeypatch, {"VestFront": _dev(intensity=100)}, antistuck=antistuck)
+        st.params["bHaptics_Vest_Front_1_bool"] = True
+        r._tick()
+        assert eng.frames[-1][1][0] == 100
+        # Inside the hold window: unchanged, debounced - no new frame.
+        clock.advance(0.5)
+        r._tick()
+        assert len(eng.frames) == 1
+        # Halfway down the ramp (age 2.0 -> ramp_t 1.0 of 2.0): 50%.
+        clock.advance(1.5)
+        r._tick()
+        assert eng.frames[-1][1][0] == 50
+        # Past the ramp: silenced.
+        clock.advance(2.0)
+        r._tick()
+        assert eng.frames[-1][1][0] == 0
+        # A real input change resets the timer and springs back.
+        st.params["bHaptics_Vest_Front_1_bool"] = False
+        r._tick()
+        st.params["bHaptics_Vest_Front_1_bool"] = True
+        r._tick()
+        assert eng.frames[-1][1][0] == 100
+
+    def test_manual_override_wins_even_on_disabled_device(self, monkeypatch):
+        r, eng, st, _ = _mk(monkeypatch, {"VestFront": _dev(enabled=False)})
+        r.set_manual_override("VestFront", 4, 100)
+        r._tick()
+        assert eng.frames[-1] == ("VestFront", [0] * 4 + [100] + [0] * 15)
+        r.set_manual_override("VestFront", 4, None)  # clear
+        st.params["keepalive"] = 1.0  # _tick early-outs on no params + no overrides
+        r._tick()
+        assert eng.frames[-1][1][4] == 0
+
+    def test_disabling_device_pushes_one_zero_frame(self, monkeypatch):
+        cfg = _dev()
+        r, eng, st, _ = _mk(monkeypatch, {"VestFront": cfg})
+        st.params["bHaptics_Vest_Front_1_bool"] = True
+        r._tick()
+        assert any(eng.frames[-1][1])
+        cfg.enabled = False
+        r._tick()
+        assert eng.frames[-1] == ("VestFront", [0] * 20)
+        n = len(eng.frames)
+        r._tick()  # stays silent, no frame spam
+        assert len(eng.frames) == n
+
+    def test_disconnect_clears_state_for_clean_reconnect(self, monkeypatch):
+        r, eng, st, _ = _mk(monkeypatch, {"VestFront": _dev()})
+        st.params["bHaptics_Vest_Front_1_bool"] = True
+        r._tick()
+        assert r.get_snapshot()
+        eng.is_connected = False
+        r._tick()
+        assert r.get_snapshot() == {}
+        # Reconnect: the debounce was wiped, so the frame re-submits.
+        eng.is_connected = True
+        r._tick()
+        assert eng.frames[-1][1][0] == 100
