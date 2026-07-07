@@ -308,7 +308,24 @@ def _register_path(driver_root: Path, log) -> bool:
 
     data = _read_paths_file(paths_file, log)
     if data is None:
-        # Brand-new file — SteamVR will rewrite the structure on next launch.
+        if paths_file.exists():
+            # The file EXISTS but could not be read/parsed (transient lock,
+            # permissions, corruption). Writing a skeleton over it would
+            # permanently destroy every other app's external_drivers entry
+            # (Space Calibrator, Driver4VR, ...) and the runtime path — so
+            # back it up and refuse instead.
+            try:
+                backup = paths_file.with_name(paths_file.name + ".bak")
+                shutil.copy2(paths_file, backup)
+                log(f"[steamvr-toys] backed up unreadable vrpath to {backup}")
+            except OSError as e:
+                log(f"[steamvr-toys] could not back up vrpath: {e}")
+            log("[steamvr-toys] openvrpaths.vrpath exists but is unreadable/"
+                "malformed — refusing to overwrite it. Repair it (or let "
+                "SteamVR rewrite it on next launch) and retry.")
+            return False
+        # Genuinely brand-new file — SteamVR will rewrite the structure on
+        # next launch.
         data = {
             "config":   [str(_local_appdata() / "openvr")],
             "external_drivers": [],
