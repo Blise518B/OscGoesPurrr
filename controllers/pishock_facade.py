@@ -76,7 +76,9 @@ class PiShockFacade:
         self._pishock_settings().set_serial(port, shocker_id)
         self._pishock_apply_config()
 
-    def set_pishock_cloud(self, username: str, apikey: str, code: str, name: str) -> None:
+    def set_pishock_cloud(self, username: str, apikey, code: str, name: str) -> None:
+        """`apikey=None` keeps the stored key (the UI never round-trips the
+        key into its field, so an untouched form submits None, not '')."""
         self._pishock_settings().set_cloud(username, apikey, code, name)
         self._pishock_apply_config()
 

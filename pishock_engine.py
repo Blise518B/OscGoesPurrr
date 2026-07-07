@@ -75,17 +75,21 @@ class PiShockEngine(ReconnectingEngine):
             mode = MODE_SERIAL
         if mode == self._mode and self._provider is not None:
             return
-        self._mode = mode
-        old = self._provider
-        self._provider = make_pishock_connection(mode, log=self._log)
-        self._provider.configure(self._config)
-        if old is not None:
-            try:
-                old.shutdown()
-            except Exception:
-                pass
-        # Force the reconnect loop to re-open with the new transport.
-        self._connected = False
+        # Serialize against any in-flight _open() (manual connect now runs
+        # on a worker thread): swapping + shutting down the provider under
+        # a mid-open one would tear its port/socket down beneath it.
+        with self._connect_lock:
+            self._mode = mode
+            old = self._provider
+            self._provider = make_pishock_connection(mode, log=self._log)
+            self._provider.configure(self._config)
+            if old is not None:
+                try:
+                    old.shutdown()
+                except Exception:
+                    pass
+            # Force the reconnect loop to re-open with the new transport.
+            self._connected = False
 
     def configure(self, config: dict) -> None:
         """Push connection config + safety caps. Caps are clamped to the

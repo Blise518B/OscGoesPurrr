@@ -69,19 +69,41 @@ class PiShockSettingsManager(JsonSettingsManager):
             self.settings["shocker_id"] = 0
         self._save()
 
-    def set_cloud(self, username: str, apikey: str, code: str, name: str) -> None:
+    def set_cloud(self, username: str, apikey, code: str, name: str) -> None:
+        """`apikey=None` preserves the stored key; pass "" to clear it
+        explicitly. The UI never shows the stored key back into its field,
+        so an unconditional overwrite silently destroyed it on every Apply
+        after a restart."""
         self.settings["username"] = str(username or "").strip()
-        self.settings["apikey"] = str(apikey or "").strip()
+        if apikey is not None:
+            self.settings["apikey"] = str(apikey).strip()
         self.settings["code"] = str(code or "").strip()
         self.settings["name"] = str(name or "OscGoesPurrr").strip() or "OscGoesPurrr"
         self._save()
 
     # ---- Caps + rate ----
+    @staticmethod
+    def _num(value, default, lo, hi, cast=int):
+        """Tolerant coercion for values read back OFF DISK: the setters
+        clamp, but a hand-edited file bypasses them, and a bare int()/
+        float() here used to crash app boot (get_engine_config runs before
+        the UI exists). Bad values degrade to the clamped default."""
+        try:
+            v = cast(value)
+        except (TypeError, ValueError):
+            return default
+        if v != v:  # NaN
+            return default
+        return max(lo, min(hi, v))
+
     def get_caps(self) -> Dict[str, Any]:
+        s = self.settings
         return {
-            "max_intensity": int(self.settings.get("max_intensity", 30)),
-            "max_duration_ms": int(self.settings.get("max_duration_ms", 1000)),
-            "min_interval_s": float(self.settings.get("min_interval_s", 1.0)),
+            "max_intensity": self._num(s.get("max_intensity", 30), 30, 1, 100),
+            "max_duration_ms": self._num(s.get("max_duration_ms", 1000),
+                                         1000, 1, 15000),
+            "min_interval_s": self._num(s.get("min_interval_s", 1.0),
+                                        1.0, 0.3, 3600.0, cast=float),
         }
 
     def set_caps(self, max_intensity: int, max_duration_ms: int,
@@ -95,9 +117,11 @@ class PiShockSettingsManager(JsonSettingsManager):
         self._save()
 
     def get_global_rate(self) -> Dict[str, Any]:
+        s = self.settings
         return {
-            "max_events": int(self.settings.get("rate_max_events", 6)),
-            "window_s": float(self.settings.get("rate_window_s", 10.0)),
+            "max_events": self._num(s.get("rate_max_events", 6), 6, 1, 100),
+            "window_s": self._num(s.get("rate_window_s", 10.0),
+                                  10.0, 0.1, 600.0, cast=float),
         }
 
     def set_global_rate(self, max_events: int, window_s: float) -> None:
