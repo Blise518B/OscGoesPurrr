@@ -38,6 +38,9 @@ class HelpBadge(QToolButton):
 
     def _show_popover(self):
         popover = HelpPopover(self._title, self._text, parent=self)
+        # Qt.Popup widgets are only HIDDEN on click-away; without this each
+        # badge click accumulated another zombie popover under the badge.
+        popover.setAttribute(Qt.WA_DeleteOnClose, True)
         popover.adjustSize()
         anchor = self.mapToGlobal(QPoint(0, self.height() + 4))
         screen = QApplication.screenAt(anchor)

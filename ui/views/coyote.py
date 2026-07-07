@@ -16,6 +16,9 @@ from PySide6.QtWidgets import (
 from constants import BTN_HEIGHT_SMALL
 from ui.fold_strip import FoldCard, FoldStrip
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
+from ui.views._backend_common import (
+    on_zone_type_changed, populate_zone_combo, zone_signature,
+)
 from ui.widgets import ToggleSwitch, Card as _Card
 
 _FILTERS = ("TouchSelf", "TouchOthers", "PenSelf", "PenOthers")
@@ -54,10 +57,10 @@ class CoyoteMixin:
         self.coyote_auto_check = ToggleSwitch("Auto Connect (Coyote)")
         self.coyote_auto_check.toggled.connect(self._on_coyote_auto)
         row.addWidget(self.coyote_auto_check)
-        connect_btn = QPushButton("Connect Now")
-        connect_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
-        connect_btn.clicked.connect(self._on_coyote_connect)
-        row.addWidget(connect_btn)
+        self.coyote_connect_btn = QPushButton("Connect Now")
+        self.coyote_connect_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+        self.coyote_connect_btn.clicked.connect(self._on_coyote_connect)
+        row.addWidget(self.coyote_connect_btn)
         row.addStretch(1)
         slay.addLayout(row)
         parent_layout.addWidget(status_card)
@@ -79,10 +82,10 @@ class CoyoteMixin:
         d_hdr.addStretch(1)
         dlay.addLayout(d_hdr)
         scan_row = _hbox(0, 8)
-        scan_btn = QPushButton("Scan")
-        scan_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
-        scan_btn.clicked.connect(self._on_coyote_scan)
-        scan_row.addWidget(scan_btn)
+        self.coyote_scan_btn = QPushButton("Scan")
+        self.coyote_scan_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+        self.coyote_scan_btn.clicked.connect(self._on_coyote_scan)
+        scan_row.addWidget(self.coyote_scan_btn)
         self.coyote_scan_combo = QComboBox()
         self.coyote_scan_combo.setMinimumWidth(260)
         self.coyote_scan_combo.activated.connect(self._on_coyote_pick)
@@ -182,7 +185,8 @@ class CoyoteMixin:
         st_row = _hbox(0, 8)
         st_row.addWidget(QLabel("Type"))
         ztype = QComboBox(); ztype.addItems(["Orf", "Pen"])
-        ztype.currentTextChanged.connect(lambda _=None, c=ch: self._push_coyote_channel(c))
+        ztype.currentTextChanged.connect(
+            lambda t, c=ch: self._on_coyote_ztype_changed(c, t))
         st_row.addWidget(ztype)
         st_row.addStretch(1)
         se.addLayout(st_row)
@@ -348,6 +352,12 @@ class CoyoteMixin:
             self._apply_coyote_status(status, full=False)
         finally:
             self._is_updating_coyote = False
+        # Fold newly detected zones/sources into the combos when the set
+        # changes while the page is open (avatar loaded mid-visit).
+        sig = zone_signature(self.controller)
+        if sig != getattr(self, "_coyote_zone_sig", None):
+            self._coyote_zone_sig = sig
+            self._repopulate_coyote_zone_combos()
 
     def _apply_coyote_status(self, status: dict, full: bool):
         if not status.get("available"):
@@ -405,13 +415,39 @@ class CoyoteMixin:
         self.controller.set_coyote_auto_connect(bool(checked))
 
     def _on_coyote_connect(self):
-        ok = self.controller.coyote_connect_now()
-        self.log_message("Coyote: connected" if ok else "Coyote: connect failed")
-        self._refresh_coyote_view()
+        # A BLE connect blocks for seconds — keep it off the Qt thread
+        # (which also hosts the Buttplug routing tick).
+        self.run_ui_task(
+            self.controller.coyote_connect_now,
+            self._on_coyote_connect_done,
+            buttons=[self.coyote_connect_btn],
+        )
+
+    def _on_coyote_connect_done(self, result):
+        if isinstance(result, Exception):
+            self.log_message(f"Coyote: connect failed — {result}")
+        else:
+            self.log_message("Coyote: connected" if result
+                             else "Coyote: connect failed")
+        # Status-only: this fires seconds after the click — a full refresh
+        # here would rewrite fields the user may be editing by now.
+        self._refresh_coyote_status_only()
 
     def _on_coyote_scan(self):
+        # The 6 s BLE discover used to freeze the whole app (the 'scanning…'
+        # line below never even painted). Run it on a worker instead.
         self.log_message("Coyote: scanning for BLE devices…")
-        devices = self.controller.coyote_scan_devices()
+        self.run_ui_task(
+            self.controller.coyote_scan_devices,
+            self._on_coyote_scan_done,
+            buttons=[self.coyote_scan_btn],
+        )
+
+    def _on_coyote_scan_done(self, result):
+        if isinstance(result, Exception):
+            self.log_message(f"Coyote: scan failed — {result}")
+            return
+        devices = result or []
         self.coyote_scan_combo.clear()
         for name, addr in devices:
             self.coyote_scan_combo.addItem(f"{name}  [{addr}]", addr)
@@ -456,26 +492,23 @@ class CoyoteMixin:
             self.log_message(f"Coyote channel save failed: {e}")
 
     def _populate_coyote_zone_combo(self, combo: QComboBox, zone_type: str):
-        combo.blockSignals(True)
-        try:
-            current = combo.currentText()
-            combo.clear()
+        populate_zone_combo(self.controller, combo, zone_type)
+
+    def _on_coyote_ztype_changed(self, ch: str, new_type: str):
+        if self._is_updating_coyote:
+            return
+        row = self._coyote_channel_rows.get(ch)
+        if not row:
+            return
+        on_zone_type_changed(self.controller, row["ogb_zone"], new_type,
+                             lambda: self._push_coyote_channel(ch))
+
+    def _repopulate_coyote_zone_combos(self):
+        """Page arrival: fold in zones detected while the page was hidden,
+        keeping each combo's current selection."""
+        for row in self._coyote_channel_rows.values():
             try:
-                zones = self.controller.get_detected_zones() or {}
-            except Exception:
-                zones = {}
-            key = "Orifices" if zone_type == "Orf" else "Penetrators"
-            names = list(zones.get(key) or [])
-            try:
-                custom = self.controller.get_sps_source_names_by_type() or {}
-            except Exception:
-                custom = {}
-            for nm in (custom.get(key) or []):
-                if nm not in names:
-                    names.append(nm)
-            combo.addItems(names)
-            if current and combo.findText(current) < 0:
-                combo.addItem(current)
-            combo.setEditText(current)
-        finally:
-            combo.blockSignals(False)
+                populate_zone_combo(self.controller, row["ogb_zone"],
+                                    row["zone_type"].currentText())
+            except RuntimeError:
+                continue

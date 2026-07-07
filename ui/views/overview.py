@@ -509,11 +509,24 @@ class OverviewMixin:
 
     def _refresh_trackers_values(self) -> None:
         refs = self._overview_sections.get("trackers")
-        if refs is None or not refs["tiles"]:
+        if refs is None:
             return
         if not hasattr(self.controller, "get_steamvr_status"):
             return
         status = self.controller.get_steamvr_status() or {}
+        if not refs["tiles"]:
+            # Section is showing a placeholder (built while SteamVR was
+            # down / trackerless). Rebuild when trackers appear AND when the
+            # alive flag flips either way, so the placeholder text tracks
+            # reality ("not running" vs "no trackers") instead of sticking
+            # for the whole session. The alive-state latch keeps this from
+            # rebuilding every tick in a steady placeholder state.
+            alive = bool(status.get("alive"))
+            last_alive = getattr(self, "_overview_trackers_last_alive", None)
+            self._overview_trackers_last_alive = alive
+            if (alive and (status.get("trackers") or [])) or alive != last_alive:
+                self._build_trackers_section()
+            return
         if not status.get("alive"):
             # Runtime dropped — rebuild the whole section so the
             # "not running" placeholder shows.

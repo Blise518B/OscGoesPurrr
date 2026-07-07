@@ -222,4 +222,11 @@ def open_osc_variable_picker(
 
     refresh()
     search.setFocus()
+    # Stop the refresh timers when the dialog closes and destroy it —
+    # exec() only hides the dialog, so without this every open leaked a
+    # live QDialog whose 1.5 s tick kept polling the parameter store and
+    # rewriting an invisible tree for the rest of the session.
+    dlg.finished.connect(tick.stop)
+    dlg.finished.connect(debounce.stop)
     dlg.exec()
+    dlg.deleteLater()

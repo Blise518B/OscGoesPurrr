@@ -10,7 +10,7 @@ import os
 import sys
 
 from PySide6.QtCore import (
-    Qt, QTimer, Signal, QObject, QEvent, QSize, QPointF, QRectF
+    Qt, QThread, QTimer, Signal, QObject, QEvent, QSize, QPointF, QRect, QRectF
 )
 from PySide6.QtGui import (
     QFont, QColor, QTextCharFormat, QTextCursor, QIcon,
@@ -70,6 +70,7 @@ from ui.views.bhaptics import BHapticsMixin
 from ui.views.pishock import PiShockMixin
 from ui.views.coyote import CoyoteMixin
 from ui.views.owo import OwoMixin
+from ui.views.handy import HandyMixin
 from ui.views.device_frame import DeviceFrameMixin
 from ui.views.overview import OverviewMixin
 from ui.views.sps_sources import SpsSourcesMixin
@@ -617,6 +618,7 @@ class OscGoesPurrrUI(
     PiShockMixin,
     CoyoteMixin,
     OwoMixin,
+    HandyMixin,
     DeviceFrameMixin,
     OverviewMixin,
     SpsSourcesMixin,
@@ -766,6 +768,7 @@ class OscGoesPurrrUI(
         view_names = ["Dashboard", "Overview", "Simple Mode",
                       "Device Routing", "SPS Sources",
                       "SteamVR Device Comms", "bHaptics", "PiShock", "Coyote", "OWO",
+                      "Handy",
                       "OSC Inspector", "OSC Diagnostics", "System Log",
                       "Settings", "Help"]
         builders = {
@@ -779,6 +782,7 @@ class OscGoesPurrrUI(
             "PiShock": self._build_pishock_view,
             "Coyote": self._build_coyote_view,
             "OWO": self._build_owo_view,
+            "Handy": self._build_handy_view,
             "OSC Inspector": self._build_network_debug_view,
             "OSC Diagnostics": self._build_osc_diagnostics_view,
             "System Log": self._build_system_log_view,
@@ -860,6 +864,7 @@ class OscGoesPurrrUI(
         nav_buttons = ["Dashboard", "Overview", "Simple Mode",
                        "Device Routing", "SPS Sources",
                        "SteamVR Device Comms", "bHaptics", "PiShock", "Coyote", "OWO",
+                       "Handy",
                        "OSC Inspector", "OSC Diagnostics", "System Log",
                        "Settings", "Help"]
         for name in nav_buttons:
@@ -1017,32 +1022,48 @@ class OscGoesPurrrUI(
             self.controller.toggle_osc_debugger()
 
         # Pages pause their periodic refreshers while hidden (the
-        # handlers early-out on isVisible) — run the page's refresher
+        # handlers early-out on isVisible) — run the page's refresher(s)
         # once on arrival so it never shows data older than one tick.
         # Now that setCurrentWidget has run, the visibility checks pass.
+        # The backend pages also repopulate their zone dropdowns here so
+        # zones detected while the page was hidden become selectable.
         arrival_refreshers = {
-            "Overview": "_refresh_overview_dynamic",
-            "SteamVR Device Comms": "_refresh_steamvr_status_only",
-            "bHaptics": "_refresh_bhaptics_status_only",
-            "PiShock": "_refresh_pishock_status_only",
-            "Coyote": "_refresh_coyote_status_only",
-            "OWO": "_refresh_owo_status_only",
-            "Settings": "_refresh_sessions_view",
+            "Overview": ("_refresh_overview_dynamic",),
+            "SteamVR Device Comms": ("_refresh_steamvr_status_only",),
+            "bHaptics": ("_refresh_bhaptics_status_only",),
+            "PiShock": ("_refresh_pishock_status_only",
+                        "_repopulate_pishock_zone_combos"),
+            "Coyote": ("_refresh_coyote_status_only",
+                       "_repopulate_coyote_zone_combos"),
+            "OWO": ("_refresh_owo_status_only",
+                    "_repopulate_owo_zone_combos"),
+            "Handy": ("_refresh_handy_status_only",
+                      "_repopulate_handy_zone_combos"),
+            "Settings": ("_refresh_sessions_view",),
         }
-        fn = getattr(self, arrival_refreshers.get(view_name, ""), None)
-        if callable(fn):
-            try:
-                fn()
-            except Exception:
-                # Arrival refresh is best-effort; the periodic tick
-                # lands within a second or two anyway.
-                pass
+        for name in arrival_refreshers.get(view_name, ()):
+            fn = getattr(self, name, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    # Arrival refresh is best-effort; the periodic tick
+                    # lands within a second or two anyway.
+                    pass
 
     # ----------------------------------------------------------
     # Logging
     # ----------------------------------------------------------
 
     def log_message(self, message: str):
+        # This sink is handed to the backend engines as their `log=` callback,
+        # so it gets called from reconnect/send worker threads. Qt widgets may
+        # only be touched on the GUI thread — marshal through the Invoker
+        # when we're anywhere else (one queued hop for a log line is fine;
+        # this is not a haptic path).
+        if QThread.currentThread() is not self._invoker.thread():
+            self._invoker.schedule(0, lambda m=message: self.log_message(m))
+            return
         if self.log_text is not None:
             self.log_text.append(f"> {message}")
             sb = self.log_text.verticalScrollBar()
@@ -1125,7 +1146,24 @@ class OscGoesPurrrUI(
         w, h, x, y = parsed
         self.window.resize(int(w), int(h))
         if x is not None and y is not None:
-            self.window.move(int(x), int(y))
+            # Clamp against the current virtual desktop: a position saved on
+            # a since-disconnected monitor must not restore the window fully
+            # off-screen (negative coords for a left-of-primary monitor that
+            # still exists remain valid — we only rescue invisible windows).
+            x, y = int(x), int(y)
+            visible = False
+            for screen in QApplication.screens():
+                avail = screen.availableGeometry()
+                if avail.intersects(QRect(x, y, int(w), max(int(h), 1))):
+                    visible = True
+                    break
+            if not visible:
+                primary = QApplication.primaryScreen()
+                if primary is not None:
+                    avail = primary.availableGeometry()
+                    x = max(avail.left(), min(x, avail.right() - int(w)))
+                    y = max(avail.top(), min(y, avail.bottom() - 100))
+            self.window.move(x, y)
 
     def get_geometry(self) -> str:
         # Width/height come from geometry() (client-area size, matches
@@ -1142,6 +1180,53 @@ class OscGoesPurrrUI(
     def schedule_callback(self, delay_ms: int, func) -> None:
         """Run `func` on the UI thread after `delay_ms` (thread-safe)."""
         self._invoker.schedule(delay_ms, func)
+
+    def run_ui_task(self, work, on_done, buttons=(),
+                    watchdog_ms: int = 30000) -> None:
+        """Run blocking `work()` on a short-lived worker thread and deliver
+        `on_done(result)` back on the UI thread.
+
+        For button-triggered actions that block on I/O (manual connects,
+        BLE scans): the Qt event loop must never stall on them — it hosts
+        the Buttplug routing tick. Any widgets in `buttons` are disabled
+        while the task runs and re-enabled with the result. Errors inside
+        `work` are delivered as the exception object so `on_done` can
+        format a message instead of the task dying silently.
+
+        The watchdog re-enables the buttons even if `work` wedges forever
+        (a dead COM port, a black-holing network) — a stuck task must not
+        leave a dead Connect button for the rest of the session.
+        """
+        import threading as _threading
+
+        def _set_enabled(enabled: bool) -> None:
+            for b in buttons:
+                try:
+                    b.setEnabled(enabled)
+                except RuntimeError:
+                    pass  # widget deleted while the task ran
+
+        _set_enabled(False)
+        if watchdog_ms > 0:
+            self._invoker.schedule(watchdog_ms, lambda: _set_enabled(True))
+
+        def _deliver(result):
+            _set_enabled(True)
+            try:
+                on_done(result)
+            except Exception:
+                # on_done is best-effort UI work; it must never propagate
+                # into the Invoker slot.
+                pass
+
+        def _run():
+            try:
+                result = work()
+            except Exception as e:
+                result = e
+            self._invoker.schedule(0, lambda r=result: _deliver(r))
+
+        _threading.Thread(target=_run, daemon=True, name="UITask").start()
 
     def schedule_on_main_thread(self, func) -> None:
         self._invoker.schedule(0, func)

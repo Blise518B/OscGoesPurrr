@@ -16,6 +16,9 @@ from PySide6.QtWidgets import (
 from constants import BTN_HEIGHT_SMALL
 from ui.fold_strip import FoldCard, FoldStrip
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
+from ui.views._backend_common import (
+    on_zone_type_changed, populate_zone_combo, zone_signature,
+)
 from ui.widgets import (
     ToggleSwitch, Card as _Card, install_rainbow_scrollbars as _install_rainbow_scrollbars,
 )
@@ -57,10 +60,10 @@ class OwoMixin:
         self.owo_auto_check = ToggleSwitch("Auto Connect (OWO)")
         self.owo_auto_check.toggled.connect(self._on_owo_auto)
         row.addWidget(self.owo_auto_check)
-        connect_btn = QPushButton("Connect Now")
-        connect_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
-        connect_btn.clicked.connect(self._on_owo_connect)
-        row.addWidget(connect_btn)
+        self.owo_connect_btn = QPushButton("Connect Now")
+        self.owo_connect_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+        self.owo_connect_btn.clicked.connect(self._on_owo_connect)
+        row.addWidget(self.owo_connect_btn)
         row.addStretch(1)
         slay.addLayout(row)
         parent_layout.addWidget(status_card)
@@ -176,7 +179,8 @@ class OwoMixin:
         st_row = _hbox(0, 8)
         st_row.addWidget(QLabel("Type"))
         ztype = QComboBox(); ztype.addItems(["Orf", "Pen"])
-        ztype.currentTextChanged.connect(lambda _=None, n=name: self._push_owo_muscle(n))
+        ztype.currentTextChanged.connect(
+            lambda t, n=name: self._on_owo_ztype_changed(n, t))
         st_row.addWidget(ztype)
         st_row.addStretch(1)
         se.addLayout(st_row)
@@ -326,6 +330,12 @@ class OwoMixin:
             self._apply_owo_status(status, full=False)
         finally:
             self._is_updating_owo = False
+        # Fold newly detected zones/sources into the combos when the set
+        # changes while the page is open (avatar loaded mid-visit).
+        sig = zone_signature(self.controller)
+        if sig != getattr(self, "_owo_zone_sig", None):
+            self._owo_zone_sig = sig
+            self._repopulate_owo_zone_combos()
 
     def _apply_owo_status(self, status: dict, full: bool):
         if not status.get("available"):
@@ -375,9 +385,22 @@ class OwoMixin:
         self.controller.set_owo_auto_connect(bool(checked))
 
     def _on_owo_connect(self):
-        ok = self.controller.owo_connect_now()
-        self.log_message("OWO: connected" if ok else "OWO: connect failed")
-        self._refresh_owo_view()
+        # The SDK's AutoConnect LAN scan blocks for seconds — keep it off
+        # the Qt thread (which also hosts the Buttplug routing tick).
+        self.run_ui_task(
+            self.controller.owo_connect_now,
+            self._on_owo_connect_done,
+            buttons=[self.owo_connect_btn],
+        )
+
+    def _on_owo_connect_done(self, result):
+        if isinstance(result, Exception):
+            self.log_message(f"OWO: connect failed — {result}")
+        else:
+            self.log_message("OWO: connected" if result else "OWO: connect failed")
+        # Status-only: this fires seconds after the click — a full refresh
+        # here would rewrite fields the user may be editing by now.
+        self._refresh_owo_status_only()
 
     def _on_owo_conn_apply(self):
         self.controller.set_owo_connection(
@@ -410,26 +433,23 @@ class OwoMixin:
             self.log_message(f"OWO muscle save failed: {e}")
 
     def _populate_owo_zone_combo(self, combo: QComboBox, zone_type: str):
-        combo.blockSignals(True)
-        try:
-            current = combo.currentText()
-            combo.clear()
+        populate_zone_combo(self.controller, combo, zone_type)
+
+    def _on_owo_ztype_changed(self, name: str, new_type: str):
+        if self._is_updating_owo:
+            return
+        row = self._owo_muscle_rows.get(name)
+        if not row:
+            return
+        on_zone_type_changed(self.controller, row["ogb_zone"], new_type,
+                             lambda: self._push_owo_muscle(name))
+
+    def _repopulate_owo_zone_combos(self):
+        """Page arrival: fold in zones detected while the page was hidden,
+        keeping each combo's current selection."""
+        for row in self._owo_muscle_rows.values():
             try:
-                zones = self.controller.get_detected_zones() or {}
-            except Exception:
-                zones = {}
-            key = "Orifices" if zone_type == "Orf" else "Penetrators"
-            names = list(zones.get(key) or [])
-            try:
-                custom = self.controller.get_sps_source_names_by_type() or {}
-            except Exception:
-                custom = {}
-            for nm in (custom.get(key) or []):
-                if nm not in names:
-                    names.append(nm)
-            combo.addItems(names)
-            if current and combo.findText(current) < 0:
-                combo.addItem(current)
-            combo.setEditText(current)
-        finally:
-            combo.blockSignals(False)
+                populate_zone_combo(self.controller, row["ogb_zone"],
+                                    row["zone_type"].currentText())
+            except RuntimeError:
+                continue

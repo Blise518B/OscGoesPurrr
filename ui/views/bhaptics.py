@@ -131,10 +131,10 @@ class BHapticsMixin:
         self.bhaptics_auto_connect_check.toggled.connect(self._on_bhaptics_auto_connect_toggled)
         action_row.addWidget(self.bhaptics_auto_connect_check)
 
-        connect_btn = QPushButton("Connect Now")
-        connect_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
-        connect_btn.clicked.connect(self._on_bhaptics_connect_clicked)
-        action_row.addWidget(connect_btn)
+        self.bhaptics_connect_btn = QPushButton("Connect Now")
+        self.bhaptics_connect_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+        self.bhaptics_connect_btn.clicked.connect(self._on_bhaptics_connect_clicked)
+        action_row.addWidget(self.bhaptics_connect_btn)
 
         action_row.addSpacing(16)
         action_row.addWidget(QLabel("Host"))
@@ -331,9 +331,23 @@ class BHapticsMixin:
         self.controller.set_bhaptics_auto_connect(bool(checked))
 
     def _on_bhaptics_connect_clicked(self):
-        ok = self.controller.bhaptics_connect_now()
-        self.log_message("bHaptics: connected" if ok else "bHaptics: connect failed (is the Player running?)")
-        self._refresh_bhaptics_view()
+        # The websocket connect has a 2 s timeout — keep it off the Qt
+        # thread (which also hosts the Buttplug routing tick).
+        self.run_ui_task(
+            self.controller.bhaptics_connect_now,
+            self._on_bhaptics_connect_done,
+            buttons=[self.bhaptics_connect_btn],
+        )
+
+    def _on_bhaptics_connect_done(self, result):
+        if isinstance(result, Exception):
+            self.log_message(f"bHaptics: connect failed — {result}")
+        else:
+            self.log_message("bHaptics: connected" if result
+                             else "bHaptics: connect failed (is the Player running?)")
+        # Status-only: this fires seconds after the click — a full refresh
+        # here would rewrite fields the user may be editing by now.
+        self._refresh_bhaptics_status_only()
 
     def _on_bhaptics_antistuck_changed(self, *_):
         if self._is_updating_bhaptics:
@@ -370,15 +384,20 @@ class BHapticsMixin:
             status = self.controller.get_bhaptics_status()
         except Exception:
             return
-        self._apply_bhaptics_status(status)
-        # Rebuild the device list only when the avatar's detected device set
-        # actually changes (avatar swap, freshly-loaded params). Doing this in
-        # the cheap status tick keeps the page responsive to avatar changes
-        # without tearing down widgets every refresh.
-        detected = frozenset(d["position"] for d in status.get("devices", []) if d.get("detected"))
-        if detected != self._bhaptics_last_detected:
-            self._bhaptics_last_detected = detected
-            self._rebuild_bhaptics_device_list(status.get("devices", []))
+        self._is_updating_bhaptics = True
+        try:
+            self._apply_bhaptics_status(status, full=False)
+            # Rebuild the device list only when the avatar's detected device
+            # set actually changes (avatar swap, freshly-loaded params).
+            # Doing this in the cheap status tick keeps the page responsive
+            # to avatar changes without tearing down widgets every refresh.
+            detected = frozenset(
+                d["position"] for d in status.get("devices", []) if d.get("detected"))
+            if detected != self._bhaptics_last_detected:
+                self._bhaptics_last_detected = detected
+                self._rebuild_bhaptics_device_list(status.get("devices", []))
+        finally:
+            self._is_updating_bhaptics = False
 
     def _refresh_bhaptics_view(self):
         if not hasattr(self, "bhaptics_device_list_layout"):
@@ -386,7 +405,7 @@ class BHapticsMixin:
         self._is_updating_bhaptics = True
         try:
             status = self.controller.get_bhaptics_status()
-            self._apply_bhaptics_status(status)
+            self._apply_bhaptics_status(status, full=True)
             devices = status.get("devices", [])
             self._bhaptics_last_detected = frozenset(
                 d["position"] for d in devices if d.get("detected")
@@ -395,7 +414,7 @@ class BHapticsMixin:
         finally:
             self._is_updating_bhaptics = False
 
-    def _apply_bhaptics_status(self, status: dict):
+    def _apply_bhaptics_status(self, status: dict, full: bool = True):
         if not status.get("available"):
             self.bhaptics_status_label.setText("bHaptics: websocket-client missing — pip install websocket-client")
             self.bhaptics_status_label.setProperty("role", "alert")
@@ -409,6 +428,13 @@ class BHapticsMixin:
         self.bhaptics_status_label.style().unpolish(self.bhaptics_status_label)
         self.bhaptics_status_label.style().polish(self.bhaptics_status_label)
 
+        self.bhaptics_auto_connect_check.setChecked(bool(status.get("auto_connect")))
+        if not full:
+            # Periodic tick: status + toggle only. The endpoint / OSC-param
+            # fields are Apply-gated — rewriting them from the store on a
+            # timer clobbers whatever the user is typing.
+            return
+
         # Endpoint widgets — only set if value differs to avoid cursor jumps.
         host = status.get("host", "127.0.0.1")
         port = int(status.get("port", 15881))
@@ -416,7 +442,6 @@ class BHapticsMixin:
             self.bhaptics_host_edit.setText(host)
         if self.bhaptics_port_spin.value() != port:
             self.bhaptics_port_spin.setValue(port)
-        self.bhaptics_auto_connect_check.setChecked(bool(status.get("auto_connect")))
 
         oc_cfg = status.get("osc_connected") or {}
         if hasattr(self, "bhaptics_osc_connected_check"):

@@ -16,6 +16,9 @@ from PySide6.QtWidgets import (
 from constants import BTN_HEIGHT_SMALL
 from ui.fold_strip import FoldCard, FoldStrip
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
+from ui.views._backend_common import (
+    on_zone_type_changed, populate_zone_combo, zone_signature,
+)
 from ui.widgets import (
     ToggleSwitch, Card as _Card, install_rainbow_scrollbars as _install_rainbow_scrollbars,
 )
@@ -56,10 +59,10 @@ class PiShockMixin:
         self.pishock_auto_connect_check = ToggleSwitch("Auto Connect (PiShock)")
         self.pishock_auto_connect_check.toggled.connect(self._on_pishock_auto_connect)
         row.addWidget(self.pishock_auto_connect_check)
-        connect_btn = QPushButton("Connect Now")
-        connect_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
-        connect_btn.clicked.connect(self._on_pishock_connect)
-        row.addWidget(connect_btn)
+        self.pishock_connect_btn = QPushButton("Connect Now")
+        self.pishock_connect_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+        self.pishock_connect_btn.clicked.connect(self._on_pishock_connect)
+        row.addWidget(self.pishock_connect_btn)
         row.addStretch(1)
         for op in _OPS:
             tb = QPushButton(f"Test {op}")
@@ -107,10 +110,10 @@ class PiShockMixin:
         self.pishock_shocker_id = QSpinBox()
         self.pishock_shocker_id.setRange(0, 999999)
         ser.addWidget(self.pishock_shocker_id)
-        ser_apply = QPushButton("Apply")
-        ser_apply.setMinimumHeight(BTN_HEIGHT_SMALL)
-        ser_apply.clicked.connect(self._on_pishock_serial_apply)
-        ser.addWidget(ser_apply)
+        self.pishock_serial_apply_btn = QPushButton("Apply")
+        self.pishock_serial_apply_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+        self.pishock_serial_apply_btn.clicked.connect(self._on_pishock_serial_apply)
+        ser.addWidget(self.pishock_serial_apply_btn)
         ser.addStretch(1)
         tlay.addWidget(self.pishock_serial_panel)
 
@@ -126,6 +129,11 @@ class PiShockMixin:
         self.pishock_apikey = QLineEdit(); self.pishock_apikey.setEchoMode(QLineEdit.Password)
         self.pishock_apikey.setFixedWidth(220)
         cl_row1.addWidget(self.pishock_apikey)
+        clear_key_btn = QPushButton("Clear key")
+        clear_key_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+        clear_key_btn.setToolTip("Forget the stored API key.")
+        clear_key_btn.clicked.connect(self._on_pishock_clear_apikey)
+        cl_row1.addWidget(clear_key_btn)
         cl_row1.addStretch(1)
         cl.addLayout(cl_row1)
         cl_row2 = _hbox(0, 8)
@@ -135,10 +143,10 @@ class PiShockMixin:
         cl_row2.addWidget(QLabel("Name"))
         self.pishock_name = QLineEdit(); self.pishock_name.setFixedWidth(160)
         cl_row2.addWidget(self.pishock_name)
-        cl_apply = QPushButton("Apply")
-        cl_apply.setMinimumHeight(BTN_HEIGHT_SMALL)
-        cl_apply.clicked.connect(self._on_pishock_cloud_apply)
-        cl_row2.addWidget(cl_apply)
+        self.pishock_cloud_apply_btn = QPushButton("Apply")
+        self.pishock_cloud_apply_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+        self.pishock_cloud_apply_btn.clicked.connect(self._on_pishock_cloud_apply)
+        cl_row2.addWidget(self.pishock_cloud_apply_btn)
         cl_row2.addStretch(1)
         cl.addLayout(cl_row2)
         tlay.addWidget(self.pishock_cloud_panel)
@@ -245,7 +253,7 @@ class PiShockMixin:
         self._is_updating_pishock = True
         try:
             status = self.controller.get_pishock_status()
-            self._apply_pishock_status(status)
+            self._apply_pishock_status(status, full=True)
             self._rebuild_pishock_zones(status.get("zones", []))
         finally:
             self._is_updating_pishock = False
@@ -260,11 +268,21 @@ class PiShockMixin:
             return
         self._is_updating_pishock = True
         try:
-            self._apply_pishock_status(status)
+            self._apply_pishock_status(status, full=False)
         finally:
             self._is_updating_pishock = False
+        # Fold newly detected zones/sources into the combos when the set
+        # changes while the page is open (avatar loaded mid-visit).
+        sig = zone_signature(self.controller)
+        if sig != getattr(self, "_pishock_zone_sig", None):
+            self._pishock_zone_sig = sig
+            self._repopulate_pishock_zone_combos()
 
-    def _apply_pishock_status(self, status: dict):
+    def _apply_pishock_status(self, status: dict, full: bool):
+        """`full=False` is the periodic tick: it may only touch the status
+        label and the auto-connect toggle. The connection/config fields are
+        Apply-gated — rewriting them from the store on a timer used to wipe
+        whatever the user was typing (e.g. 'COM3' reset mid-keystroke)."""
         if not status.get("available"):
             self.pishock_status_label.setText(
                 f"PiShock: {status.get('status_label','')} library missing")
@@ -280,6 +298,8 @@ class PiShockMixin:
         self.pishock_status_label.style().polish(self.pishock_status_label)
 
         self.pishock_auto_connect_check.setChecked(bool(status.get("auto_connect")))
+        if not full:
+            return
         mode = status.get("mode", "serial")
         if self.pishock_mode_combo.currentText() != mode:
             self.pishock_mode_combo.setCurrentText(mode)
@@ -295,6 +315,13 @@ class PiShockMixin:
             self.pishock_code.setText(status.get("code", ""))
         if self.pishock_name.text() != status.get("name", "OscGoesPurrr"):
             self.pishock_name.setText(status.get("name", "OscGoesPurrr"))
+        # The API key itself is never round-tripped into the UI; show
+        # whether one is stored so an empty field reads as "kept", not
+        # "missing" (Apply preserves the stored key when left blank).
+        if status.get("has_apikey"):
+            self.pishock_apikey.setPlaceholderText("•••••• (saved — blank keeps it)")
+        else:
+            self.pishock_apikey.setPlaceholderText("paste your PiShock API key")
 
         caps = status.get("caps", {})
         absolute = status.get("absolute", {})
@@ -317,9 +344,27 @@ class PiShockMixin:
         self.controller.set_pishock_auto_connect(bool(checked))
 
     def _on_pishock_connect(self):
-        ok = self.controller.pishock_connect_now()
-        self.log_message("PiShock: connected" if ok else "PiShock: connect failed")
-        self._refresh_pishock_view()
+        # Serial open / cloud validation can block for seconds — run it off
+        # the Qt thread (which also hosts the Buttplug routing tick). The
+        # transport controls are locked too so a mode flip can't swap the
+        # provider under the in-flight open.
+        self.run_ui_task(
+            self.controller.pishock_connect_now,
+            self._on_pishock_connect_done,
+            buttons=[self.pishock_connect_btn, self.pishock_mode_combo,
+                     self.pishock_serial_apply_btn, self.pishock_cloud_apply_btn],
+        )
+
+    def _on_pishock_connect_done(self, result):
+        if isinstance(result, Exception):
+            self.log_message(f"PiShock: connect failed — {result}")
+        else:
+            self.log_message("PiShock: connected" if result
+                             else "PiShock: connect failed")
+        # Status-only: this fires seconds after the click, when the user may
+        # be typing again — a full refresh here would clobber their edits
+        # (the exact bug the full/status-only split exists to prevent).
+        self._refresh_pishock_status_only()
 
     def _on_pishock_test(self, op: str):
         self.controller.pishock_test_fire(op)
@@ -336,10 +381,25 @@ class PiShockMixin:
         self.log_message("PiShock: serial config applied")
 
     def _on_pishock_cloud_apply(self):
+        # The API key is never shown back into the field, so after a restart
+        # it is legitimately empty — an empty submit means "keep the stored
+        # key", not "erase it" (use Clear key to erase).
+        apikey = self.pishock_apikey.text().strip() or None
         self.controller.set_pishock_cloud(
-            self.pishock_username.text().strip(), self.pishock_apikey.text().strip(),
+            self.pishock_username.text().strip(), apikey,
             self.pishock_code.text().strip(), self.pishock_name.text().strip())
-        self.log_message("PiShock: cloud config applied")
+        self.pishock_apikey.clear()
+        self.log_message("PiShock: cloud config applied"
+                         + ("" if apikey else " (stored API key kept)"))
+        self._refresh_pishock_view()
+
+    def _on_pishock_clear_apikey(self):
+        self.pishock_apikey.clear()
+        self.controller.set_pishock_cloud(
+            self.pishock_username.text().strip(), "",
+            self.pishock_code.text().strip(), self.pishock_name.text().strip())
+        self.log_message("PiShock: stored API key cleared")
+        self._refresh_pishock_view()
 
     def _on_pishock_caps(self, *_):
         if self._is_updating_pishock:
@@ -411,7 +471,8 @@ class PiShockMixin:
         st_row.addWidget(QLabel("Type"))
         ztype = QComboBox(); ztype.addItems(["Orf", "Pen"])
         ztype.setCurrentText(zone.get("zone_type", "Orf"))
-        ztype.currentTextChanged.connect(lambda _=None, i=idx: self._push_pishock_zone(i))
+        ztype.currentTextChanged.connect(
+            lambda t, i=idx: self._on_pishock_ztype_changed(i, t))
         st_row.addWidget(ztype)
         st_row.addStretch(1)
         se.addLayout(st_row)
@@ -588,29 +649,26 @@ class PiShockMixin:
                 continue
 
     def _populate_pishock_zone_combo(self, combo: QComboBox, zone_type: str):
-        combo.blockSignals(True)
-        try:
-            current = combo.currentText()
-            combo.clear()
+        populate_zone_combo(self.controller, combo, zone_type)
+
+    def _on_pishock_ztype_changed(self, idx: int, new_type: str):
+        if self._is_updating_pishock:
+            return
+        if idx < 0 or idx >= len(self._pishock_zone_rows):
+            return
+        row = self._pishock_zone_rows[idx]
+        on_zone_type_changed(self.controller, row["ogb_zone"], new_type,
+                             lambda: self._push_pishock_zone(idx))
+
+    def _repopulate_pishock_zone_combos(self):
+        """Page arrival: fold in zones detected while the page was hidden,
+        keeping each combo's current selection."""
+        for row in self._pishock_zone_rows:
             try:
-                zones = self.controller.get_detected_zones() or {}
-            except Exception:
-                zones = {}
-            key = "Orifices" if zone_type == "Orf" else "Penetrators"
-            names = list(zones.get(key) or [])
-            try:
-                custom = self.controller.get_sps_source_names_by_type() or {}
-            except Exception:
-                custom = {}
-            for nm in (custom.get(key) or []):
-                if nm not in names:
-                    names.append(nm)
-            combo.addItems(names)
-            if current and combo.findText(current) < 0:
-                combo.addItem(current)
-            combo.setEditText(current)
-        finally:
-            combo.blockSignals(False)
+                populate_zone_combo(self.controller, row["ogb_zone"],
+                                    row["zone_type"].currentText())
+            except RuntimeError:
+                continue
 
     def _push_pishock_zone(self, idx: int):
         if self._is_updating_pishock:
