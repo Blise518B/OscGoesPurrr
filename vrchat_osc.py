@@ -23,7 +23,7 @@ from typing import Callable, Dict, Any, List, Optional
 
 from pythonosc.udp_client import SimpleUDPClient
 from pythonosc.dispatcher import Dispatcher
-from pythonosc.osc_server import ThreadingOSCUDPServer
+from pythonosc.osc_server import BlockingOSCUDPServer
 from pythonosc.osc_bundle_builder import OscBundleBuilder
 from pythonosc.osc_message_builder import OscMessageBuilder
 from zeroconf import ServiceBrowser, Zeroconf, ServiceStateChange, ServiceInfo
@@ -841,6 +841,14 @@ class VRChatOSCManager:
 
     def _fetch_osc_ports(self):
         try:
+            # Snapshot the server: this runs on a zeroconf callback thread
+            # and can race stop() (which closes and Nones the server). Bail
+            # out BEFORE mutating any connection state — otherwise a stopped
+            # manager could be left claiming is_connected with a rebuilt
+            # osc_client.
+            server = self.osc_server
+            if server is None or self._shutdown.is_set():
+                return
             self._log(f"fetching OSCQuery root from http://{self.vrc_ip}:{self.http_port}/")
             response = requests.get(f"http://{self.vrc_ip}:{self.http_port}/", timeout=2)
             if response.status_code == 200:
@@ -861,9 +869,9 @@ class VRChatOSCManager:
                 # CRITICAL FIX: Send ping via the SERVER socket so VRChat replies to the correct port
                 ping_msg = OscMessageBuilder(address="/OscGoesPurrr/ping")
                 ping_msg.add_arg(True)
-                self.osc_server.socket.sendto(ping_msg.build().dgram, (self.vrc_ip, self.vrc_osc_port))
+                server.socket.sendto(ping_msg.build().dgram, (self.vrc_ip, self.vrc_osc_port))
                 self._log(f"sent handshake ping to {self.vrc_ip}:{self.vrc_osc_port} "
-                          f"from local socket {self.osc_server.socket.getsockname()}")
+                          f"from local socket {server.socket.getsockname()}")
 
                 self.poll_current_parameters()
                 if self.on_connected:
@@ -882,6 +890,10 @@ class VRChatOSCManager:
         if self.osc_server:
             self._log("tearing down previous OSC server before rebind")
             self.osc_server.shutdown()
+            try:
+                self.osc_server.server_close()  # release the bound port
+            except Exception:
+                pass
 
         self.dispatcher.set_default_handler(self._handle_incoming_osc)
 
@@ -898,8 +910,16 @@ class VRChatOSCManager:
         # after the loopback bind, but the OSCQuery advertisement still
         # points at 127.0.0.1 (where the firewall lets VRChat through).
         udp_bind_ip = "127.0.0.1"
+        # BlockingOSCUDPServer, deliberately: the threading variant spawns a
+        # fresh OS thread PER UDP DATAGRAM (hundreds/s during contact) and
+        # voids packet ordering — two updates to the same parameter can apply
+        # reversed, leaving a release edge stuck at the pre-release value.
+        # Our handler is microsecond-cheap (a locked dict write; slow work is
+        # already deferred to timers/threads), so a single in-order serve
+        # loop is both faster and correct. VRChat never sends future-time-
+        # tagged bundles, so the blocking server cannot stall on those.
         try:
-            self.osc_server = ThreadingOSCUDPServer((udp_bind_ip, self.local_listen_port), self.dispatcher)
+            self.osc_server = BlockingOSCUDPServer((udp_bind_ip, self.local_listen_port), self.dispatcher)
         except OSError as e:
             self._log(f"OSC UDP bind FAILED on {udp_bind_ip}:{self.local_listen_port} — "
                       f"{type(e).__name__}: {e}. Another OSC app likely owns this port.")
@@ -1368,5 +1388,17 @@ class VRChatOSCManager:
         self.zeroconf.close()
         if self.osc_server:
             self.osc_server.shutdown()
+            # shutdown() only stops serve_forever — the UDP socket stays
+            # bound without server_close(), blocking any later rebind.
+            try:
+                self.osc_server.server_close()
+            except Exception:
+                pass
+            self.osc_server = None
         if hasattr(self, 'http_server') and self.http_server:
             self.http_server.shutdown()
+            try:
+                self.http_server.server_close()
+            except Exception:
+                pass
+            self.http_server = None
