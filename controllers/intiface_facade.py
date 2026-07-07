@@ -239,7 +239,35 @@ class IntifaceFacade:
                 self.log_message(error_msg)
                 self.update_connection_status(False, "")
         else:
-            # Disconnect when clicked (if connected)
+            # Disconnect when clicked (if connected).
+            #
+            # Stop auto-refresh and auto-connect for the rest of this
+            # session FIRST — the flags are in-memory and safe to clear
+            # regardless of whether the disconnect RPC below succeeds. The
+            # old ordering cleared them only after a successful
+            # future.result(), so a slow/wedged disconnect left
+            # auto-connect armed and update_connection_status immediately
+            # re-dialed the session the user just hung up. We deliberately
+            # do NOT persist these to disk: the user's long-term
+            # preferences in app_settings stay True, so the next launch
+            # starts fresh — a manual Disconnect means "stop doing that
+            # now", not "change my configuration".
+            self.auto_refresh_enabled = False
+            if self._auto_refresh_task:
+                try:
+                    self._auto_refresh_task.cancel()
+                except Exception:
+                    pass
+                self._auto_refresh_task = None
+
+            self.auto_connect_enabled = False
+            if self._auto_connect_task:
+                try:
+                    self._auto_connect_task.cancel()
+                except Exception:
+                    pass
+                self._auto_connect_task = None
+
             try:
                 future = asyncio.run_coroutine_threadsafe(
                     self.haptic_engine.async_disconnect(),
@@ -247,31 +275,10 @@ class IntifaceFacade:
                 )
                 future.result(timeout=2)
                 self.update_connection_status(False, "")
-
-                # Stop auto-refresh and auto-connect for the rest of this
-                # session. We deliberately do NOT persist these to disk: the
-                # user's long-term preferences in app_settings stay True,
-                # so the next launch starts fresh. Setting only the in-memory
-                # flag means a manual Disconnect respects the user's intent
-                # ("stop doing that now") without overwriting the checkbox
-                # state they configured earlier. Reconnect via the same
-                # button leaves both flags off until the user re-toggles —
-                # by design, so auto-reconnect doesn't immediately undo the
-                # disconnect they just triggered.
-                self.auto_refresh_enabled = False
-                if self._auto_refresh_task:
-                    self._auto_refresh_task.cancel()
-                    self._auto_refresh_task = None
-
-                self.auto_connect_enabled = False
-                if self._auto_connect_task:
-                    try:
-                        self._auto_connect_task.cancel()
-                    except Exception:
-                        pass
-                    self._auto_connect_task = None
             except Exception as e:
-                pass
+                # Visible instead of the old silent pass — a failed/slow
+                # disconnect otherwise looked like a dead button.
+                self.log_message(f"Disconnect failed (or timed out): {e}")
 
     def set_haptic_connected(self, connected: bool) -> None:
         """Facade: keep the haptic engine's connection flag in sync with the
