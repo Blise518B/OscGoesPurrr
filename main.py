@@ -39,6 +39,8 @@ from coyote_engine import CoyoteEngine
 from coyote_router import CoyoteRouter
 from owo_engine import OwoEngine
 from owo_router import OwoRouter
+from handy_engine import HandyEngine
+from handy_router import HandyRouter
 from motor_param_out import resolve_param_out
 from constants import *
 from utilities import value_to_hex_color, toggle_windows_console, create_default_icon
@@ -54,6 +56,7 @@ from controllers import (
     PiShockFacade,
     CoyoteFacade,
     OwoFacade,
+    HandyFacade,
     OscFacade,
     ProfilesFacade,
     SessionsFacade,
@@ -68,6 +71,7 @@ class OscGoesPurrrApp(
     PiShockFacade,
     CoyoteFacade,
     OwoFacade,
+    HandyFacade,
     OscFacade,
     ProfilesFacade,
     SessionsFacade,
@@ -256,6 +260,23 @@ class OscGoesPurrrApp(
             engine=self.owo_engine,
             get_muscle_configs=self._owo_get_muscle_configs,
             get_frequency=self._owo_get_frequency,
+            get_sps_sources=self._get_sps_source_map,
+        )
+
+        # The Handy integration — official handyfeeling.com REST API v3
+        # (cloud; firmware 4 / Handy 2). The engine owns a rate-capped,
+        # latest-wins send loop (HAMP velocity or HDSP position commands);
+        # the router pushes the shaped 0-1 level on change.
+        self.handy_engine = HandyEngine(
+            get_connection_key=self._handy_get_connection_key,
+            get_api_key=self._handy_get_api_key,
+            get_motion_config=self._handy_get_motion,
+            log=self.log_message,
+        )
+        self.handy_engine.set_auto_connect_getter(self._handy_get_auto_connect)
+        self.handy_router = HandyRouter(
+            engine=self.handy_engine,
+            get_zone_config=self._handy_get_zone_config,
             get_sps_sources=self._get_sps_source_map,
         )
 
@@ -774,6 +795,7 @@ class OscGoesPurrrApp(
         "feature_pishock",
         "feature_coyote",
         "feature_owo",
+        "feature_handy",
     )
 
     def get_feature_enabled(self, key: str) -> bool:
@@ -850,6 +872,19 @@ class OscGoesPurrrApp(
                 try:
                     self.owo_router.stop()
                     self.owo_engine.stop()
+                except Exception:
+                    pass
+        elif key == "feature_handy":
+            if enabled:
+                try:
+                    self.handy_engine.start()
+                    self.handy_router.start()
+                except Exception as e:
+                    self.log_message(f"Handy start failed: {e}")
+            else:
+                try:
+                    self.handy_router.stop()
+                    self.handy_engine.stop()
                 except Exception:
                     pass
         elif key == "feature_steamvr_haptics":
@@ -991,7 +1026,20 @@ class OscGoesPurrrApp(
         self.ui.update_osc_debugger_button(self.is_debugging_osc)
 
     def refresh_debugger_ui(self):
-        """Refresh the debugger display at 10Hz (100ms intervals)"""
+        """Refresh the debugger display at 10Hz (100ms intervals).
+
+        The body must never kill the loop: the reschedule runs in `finally`
+        (an unhandled exception in a QTimer slot would otherwise silently end
+        this chain for the rest of the session)."""
+        try:
+            self._refresh_debugger_ui_body()
+        except Exception:
+            debug_log.get_logger().exception("refresh_debugger_ui failed")
+        finally:
+            # Schedule the next refresh (throttled to save UI thread).
+            self.ui.schedule_callback(UI_REFRESH_RATE_MS, self.refresh_debugger_ui)
+
+    def _refresh_debugger_ui_body(self):
         # Update SPS Zones Status
         if hasattr(self, 'osc_manager'):
             fresh_zones = store.get_detected_zones()
@@ -1045,9 +1093,6 @@ class OscGoesPurrrApp(
         # so this is cheap when the user is elsewhere.
         if hasattr(self.ui, "refresh_osc_diagnostics_view"):
             self.ui.refresh_osc_diagnostics_view()
-
-        # Schedule the next refresh (Throttled to save UI thread)
-        self.ui.schedule_callback(UI_REFRESH_RATE_MS, self.refresh_debugger_ui)
 
     def get_device_motor_counts(self) -> dict:
         """Facade method to get motor counts safely from the hardware engine."""
@@ -1699,6 +1744,12 @@ class OscGoesPurrrApp(
             pass
 
         try:
+            self.handy_router.stop()
+            self.handy_engine.stop()
+        except Exception:
+            pass
+
+        try:
             bridge = getattr(self, "_steamvr_toy_bridge", None)
             if bridge is not None:
                 bridge.clear_devices()
@@ -1750,61 +1801,78 @@ class OscGoesPurrrApp(
         # samples it on each tick — so we keep the tick firing whenever
         # Tune has a motor subscribed even if VRChat is silent.
         def routing_tick():
-            needs_tick = getattr(self, '_needs_recalculation', False)
-            if not needs_tick and hasattr(self, 'motor_router'):
-                try:
-                    needs_tick = self.motor_router.has_tune_subscription()
-                except Exception:
-                    pass
-            # Hardware safety: keep ticking while ANY motor output is
-            # non-zero, regardless of which page the UI shows (the UI
-            # trace subscriptions pause while hidden, so they no longer
-            # accidentally guarantee this). Smoothing tails settle and
-            # the anti-stuck cutoff fires on these ticks; once every
-            # output rests at zero the idle ticking stops again.
-            if not needs_tick and hasattr(self, 'motor_router'):
-                try:
-                    needs_tick = self.motor_router.needs_settling()
-                except Exception:
-                    pass
-            # Session logging samples on every tick — keep the recompute
-            # firing so the motor broadcast hits the logger consistently
-            # at the configured router rate, even when VRChat is silent.
-            if not needs_tick and hasattr(self, 'is_session_logging_active'):
-                try:
-                    if self.is_session_logging_active():
-                        needs_tick = True
-                except Exception:
-                    pass
-            if needs_tick:
-                self._needs_recalculation = False
-                # Direct dispatch: skip the UI queue so the freshly computed
-                # target reaches the engine this tick, not up to 50 ms later.
-                self.force_recalculate(dispatch_direct=True)
-            # After recompute, hand the OGB + bHaptics snapshots to the
-            # session logger if it's recording. The logger's internal
-            # change-diff drops the OGB event when nothing changed, so
-            # idle ticks are cheap.
-            if hasattr(self, 'is_session_logging_active'):
-                try:
-                    if self.is_session_logging_active():
-                        self._session_sample_tick()
-                except Exception:
-                    pass
-            # Re-read the rate on each tick so a Settings change takes
-            # effect on the very next reschedule with no restart.
+            # The whole body is guarded and the reschedule lives in
+            # `finally`: one unhandled exception must not end this chain for
+            # the rest of the session — a dead routing tick doesn't just stop
+            # fresh routing, it disables the needs_settling / anti-stuck
+            # HARDWARE-SAFETY ticks while the engine keeps commanding the
+            # last non-zero targets.
             try:
-                hz = int(self.get_app_setting("router_poll_rate_hz", 60))
-                hz = max(10, min(240, hz))
-                interval = max(1, int(round(1000.0 / hz)))
-            except (TypeError, ValueError):
-                interval = ROUTER_POLL_RATE_MS
-            self.ui.schedule_callback(interval, routing_tick)
+                needs_tick = getattr(self, '_needs_recalculation', False)
+                if not needs_tick and hasattr(self, 'motor_router'):
+                    try:
+                        needs_tick = self.motor_router.has_tune_subscription()
+                    except Exception:
+                        pass
+                # Hardware safety: keep ticking while ANY motor output is
+                # non-zero, regardless of which page the UI shows (the UI
+                # trace subscriptions pause while hidden, so they no longer
+                # accidentally guarantee this). Smoothing tails settle and
+                # the anti-stuck cutoff fires on these ticks; once every
+                # output rests at zero the idle ticking stops again.
+                if not needs_tick and hasattr(self, 'motor_router'):
+                    try:
+                        needs_tick = self.motor_router.needs_settling()
+                    except Exception:
+                        pass
+                # Session logging samples on every tick — keep the recompute
+                # firing so the motor broadcast hits the logger consistently
+                # at the configured router rate, even when VRChat is silent.
+                if not needs_tick and hasattr(self, 'is_session_logging_active'):
+                    try:
+                        if self.is_session_logging_active():
+                            needs_tick = True
+                    except Exception:
+                        pass
+                if needs_tick:
+                    self._needs_recalculation = False
+                    # Direct dispatch: skip the UI queue so the freshly computed
+                    # target reaches the engine this tick, not up to 50 ms later.
+                    self.force_recalculate(dispatch_direct=True)
+                # After recompute, hand the OGB + bHaptics snapshots to the
+                # session logger if it's recording. The logger's internal
+                # change-diff drops the OGB event when nothing changed, so
+                # idle ticks are cheap.
+                if hasattr(self, 'is_session_logging_active'):
+                    try:
+                        if self.is_session_logging_active():
+                            self._session_sample_tick()
+                    except Exception:
+                        pass
+            except Exception:
+                debug_log.get_logger().exception("routing_tick failed")
+            finally:
+                # Re-read the rate on each tick so a Settings change takes
+                # effect on the very next reschedule with no restart.
+                try:
+                    hz = int(self.get_app_setting("router_poll_rate_hz", 60))
+                    hz = max(10, min(240, hz))
+                    interval = max(1, int(round(1000.0 / hz)))
+                except Exception:
+                    interval = ROUTER_POLL_RATE_MS
+                self.ui.schedule_callback(interval, routing_tick)
 
-        # Periodically check for UI updates from async thread
+        # Periodically check for UI updates from async thread. Same rule as
+        # routing_tick: the reschedule always runs — this pump carries every
+        # cross-thread status/device event, and one malformed message must
+        # not silently kill it.
         def check_queue():
-            self.process_async_queue()
-            self.ui.schedule_callback(QUEUE_POLL_RATE_MS, check_queue)
+            try:
+                self.process_async_queue()
+            except Exception:
+                debug_log.get_logger().exception("check_queue failed")
+            finally:
+                self.ui.schedule_callback(QUEUE_POLL_RATE_MS, check_queue)
 
         # Slow heartbeat that re-syncs the per-toy connect dots from
         # the engine's current device list. Defensive against rare
@@ -1892,6 +1960,16 @@ class OscGoesPurrrApp(
                 self.owo_router.start()
             except Exception as e:
                 self.log_message(f"OWO startup failed: {e}")
+
+        # Start Handy engine + router. Auto-connect defaults OFF (moving
+        # hardware); the reconnect thread idles until the user enters their
+        # connection key + API key and connects.
+        if self.get_feature_enabled("feature_handy"):
+            try:
+                self.handy_engine.start()
+                self.handy_router.start()
+            except Exception as e:
+                self.log_message(f"Handy startup failed: {e}")
 
         # Apply saved SteamVR autostart on boot (no-op if SteamVR is offline).
         if self.profile_manager.steamvr_settings.get_autostart():

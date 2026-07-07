@@ -27,6 +27,7 @@ websocket-client>=1.6
 bleak>=0.21
 # PiShock backend — USB-serial transport (pyserial) and cloud HTTP transport
 # (requests). Both imports are guarded; only needed for the PiShock feature.
+# requests also powers The Handy backend (handyfeeling.com REST API v3).
 pyserial>=3.5
 requests>=2.31
 # OWO suit backend is OPTIONAL and deliberately NOT a hard dependency: it needs

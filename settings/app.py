@@ -56,6 +56,7 @@ DEFAULT_APP_SETTINGS = {
     "feature_pishock": True,
     "feature_owo": True,
     "feature_coyote": True,
+    "feature_handy": True,
     # Intiface server provisioning. True (default) = OscGoesPurrr spawns and
     # supervises its own bundled intiface-engine, so no separate Intiface
     # Central launch is needed. False = connect to a user-run Intiface Central

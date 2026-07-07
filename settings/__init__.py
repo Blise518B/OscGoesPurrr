@@ -11,6 +11,7 @@ from ._paths import (
     APP_SETTINGS_FILE,
     BHAPTICS_SETTINGS_FILE,
     COYOTE_SETTINGS_FILE,
+    HANDY_SETTINGS_FILE,
     KNOWN_DEVICES_FILE,
     OWO_SETTINGS_FILE,
     PISHOCK_SETTINGS_FILE,
@@ -23,6 +24,7 @@ from ._paths import (
 from .app import AppSettingsManager, DEFAULT_APP_SETTINGS
 from .bhaptics import BHapticsSettingsManager
 from .coyote import CoyoteSettingsManager
+from .handy import HandySettingsManager
 from .known_devices import KnownDevicesRegistry
 from .owo import OwoSettingsManager
 from .pishock import PiShockSettingsManager
@@ -35,6 +37,7 @@ __all__ = [
     "APP_SETTINGS_FILE",
     "BHAPTICS_SETTINGS_FILE",
     "COYOTE_SETTINGS_FILE",
+    "HANDY_SETTINGS_FILE",
     "KNOWN_DEVICES_FILE",
     "OWO_SETTINGS_FILE",
     "PISHOCK_SETTINGS_FILE",
@@ -47,6 +50,7 @@ __all__ = [
     "BHapticsSettingsManager",
     "CoyoteSettingsManager",
     "DEFAULT_APP_SETTINGS",
+    "HandySettingsManager",
     "KnownDevicesRegistry",
     "OwoSettingsManager",
     "PiShockSettingsManager",

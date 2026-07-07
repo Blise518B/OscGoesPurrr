@@ -39,11 +39,12 @@ SPS_SOURCES_FILE = APPDATA_DIR / "sps_sources.json"
 
 # Newer backends — one settings file per integration, same convention as the
 # managers above. OWO suit (muscle e-stim), PiShock (shock collar), DG-Lab
-# Coyote (A/B e-stim). Like SteamVR/bHaptics these hold hardware + routing
-# config, not avatar-bound profile state.
+# Coyote (A/B e-stim), The Handy (cloud stroker). Like SteamVR/bHaptics these
+# hold hardware + routing config, not avatar-bound profile state.
 OWO_SETTINGS_FILE = APPDATA_DIR / "owo_settings.json"
 PISHOCK_SETTINGS_FILE = APPDATA_DIR / "pishock_settings.json"
 COYOTE_SETTINGS_FILE = APPDATA_DIR / "coyote_settings.json"
+HANDY_SETTINGS_FILE = APPDATA_DIR / "handy_settings.json"
 
 # Session logger: a directory holding one JSONL file per recorded VR
 # session, plus a tiny settings file for the engine's enable / auto-start

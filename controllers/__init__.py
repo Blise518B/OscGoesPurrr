@@ -16,6 +16,7 @@ from .bhaptics_facade import BHapticsFacade
 from .pishock_facade import PiShockFacade
 from .coyote_facade import CoyoteFacade
 from .owo_facade import OwoFacade
+from .handy_facade import HandyFacade
 from .osc_facade import OscFacade
 from .profiles_facade import ProfilesFacade
 from .sessions_facade import SessionsFacade
@@ -28,6 +29,7 @@ __all__ = [
     "PiShockFacade",
     "CoyoteFacade",
     "OwoFacade",
+    "HandyFacade",
     "OscFacade",
     "ProfilesFacade",
     "SessionsFacade",

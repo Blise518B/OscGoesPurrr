@@ -31,7 +31,10 @@ ICONS_DIR = Path(__file__).resolve().parent.parent / "Images" / "lovense_icons"
 # (key, display_name, [match_patterns]) — patterns are normalized (lowercase, alphanumerics
 # and single spaces). Patterns are sorted by length descending at match time so the most
 # specific variant wins (e.g. "solace pro" before "solace", "lush 4" before "lush").
+# Despite the module name the catalog isn't Lovense-only: non-Lovense devices with a
+# procedurally drawn icon (see tools/generate_handy_icon.py) live here too.
 TOYS: List[Tuple[str, str, List[str]]] = [
+    ("the_handy",        "The Handy",        ["the handy", "thehandy", "handy"]),
     ("velvo",            "Velvo",            ["velvo"]),
     ("lush_4",           "Lush 4",           ["lush 4", "lush4"]),
     ("lush_mini",        "Lush Mini",        ["lush mini", "lushmini"]),

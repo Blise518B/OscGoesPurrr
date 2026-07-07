@@ -2,8 +2,8 @@
 
 A VRChat OSC → multi-backend haptic router (Buttplug.io toys, SteamVR
 tracker haptics, bHaptics suits, OWO suits, PiShock + DG-Lab Coyote
-e-stim, optional SteamVR Toy Driver). Python 3.10+, PySide6 UI,
-Windows-first.
+e-stim, The Handy via the handyfeeling cloud API, optional SteamVR Toy
+Driver). Python 3.10+, PySide6 UI, Windows-first.
 
 Read [`README.md`](README.md) for the feature overview and
 [`ARCHITECTURE.md`](ARCHITECTURE.md) for the layered design
