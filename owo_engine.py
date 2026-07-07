@@ -9,6 +9,7 @@
 # change (debounced); this engine owns the re-send loop, mirroring how the
 # Coyote engine owns its B0 cadence.
 
+import math
 import threading
 import time
 from typing import Callable, Dict, Optional
@@ -18,6 +19,7 @@ import owo_sdk
 
 RESEND_INTERVAL_S = 0.25   # < the ~0.3 s sensation duration, so output stays continuous
 SENSATION_DURATION_S = 0.3
+MIN_SEND_GAP_S = 0.05      # wake-on-change floor so a 60 Hz router can't flood the app
 
 
 class OwoEngine(ReconnectingEngine):
@@ -33,6 +35,10 @@ class OwoEngine(ReconnectingEngine):
         self._frequency = 100
         self._state_lock = threading.Lock()
         self._send_thread: Optional[threading.Thread] = None
+        # Wakes the cadence loop early on a real map/frequency change so a
+        # contact edge doesn't wait out the 0.25 s re-send interval
+        # (ARCHITECTURE.md latency pattern #5: event-driven wake).
+        self._wake_evt = threading.Event()
 
     @property
     def _available(self) -> bool:
@@ -44,9 +50,35 @@ class OwoEngine(ReconnectingEngine):
 
     # ---- hot path (called from the router thread) --------------------
     def set_active(self, muscle_intensities: Dict[str, int], frequency: int) -> None:
+        # The engine is the last line of defense for an EMS suit: clamp
+        # intensity to 0-100 here (like frequency) regardless of the caller,
+        # and drop garbage/non-finite values instead of raising (int(inf)
+        # raises OverflowError, int(nan) ValueError — neither may escape
+        # into the router's dispatch, where the exception would leave the
+        # PREVIOUS map re-sending forever behind a committed debounce key).
+        new_active: Dict[str, int] = {}
+        for k, v in muscle_intensities.items():
+            try:
+                f = float(v)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(f):
+                continue
+            iv = int(f)
+            if iv > 0:
+                new_active[k] = min(100, iv)
+        try:
+            f = float(frequency)
+            new_freq = max(0, min(100, int(f))) if math.isfinite(f) else 100
+        except (TypeError, ValueError):
+            new_freq = 100
         with self._state_lock:
-            self._active = {k: int(v) for k, v in muscle_intensities.items() if int(v) > 0}
-            self._frequency = max(0, min(100, int(frequency)))
+            changed = (new_active != self._active
+                       or new_freq != self._frequency)
+            self._active = new_active
+            self._frequency = new_freq
+        if changed:
+            self._wake_evt.set()
 
     # ---- ReconnectingEngine transport hooks --------------------------
     def _open(self) -> None:
@@ -87,11 +119,18 @@ class OwoEngine(ReconnectingEngine):
         t.start()
 
     def _send_loop(self) -> None:
+        last_send = 0.0
+        had_active = False
         while self._connected:
             with self._state_lock:
                 active = dict(self._active)
                 freq = self._frequency
             if active:
+                # A wake-on-change edge goes out immediately after idle; only
+                # consecutive rapid changes are spaced by the minimum gap.
+                gap = time.monotonic() - last_send
+                if gap < MIN_SEND_GAP_S:
+                    time.sleep(MIN_SEND_GAP_S - gap)
                 try:
                     owo = owo_sdk.OWO
                     factory = owo_sdk.SensationsFactory
@@ -102,8 +141,19 @@ class OwoEngine(ReconnectingEngine):
                         sensation = factory.Create(
                             freq, SENSATION_DURATION_S, int(intensity), 0, 0, 0)
                         owo.Send(sensation, muscle)
+                    last_send = time.monotonic()
+                    had_active = True
                 except Exception as e:
                     self._log(f"OWO send failed: {e}")
                     self._connected = False
                     break
-            time.sleep(RESEND_INTERVAL_S)
+            elif had_active:
+                # Release edge: end the current pulse now instead of letting
+                # it run out its ~0.3 s tail.
+                had_active = False
+                try:
+                    owo_sdk.OWO.Stop()
+                except Exception:
+                    pass
+            self._wake_evt.wait(timeout=RESEND_INTERVAL_S)
+            self._wake_evt.clear()

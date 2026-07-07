@@ -1,6 +1,7 @@
-import json
-import os
 import ctypes
+import json
+import math
+import os
 from pathlib import Path
 from typing import Any, Union
 
@@ -31,8 +32,23 @@ def atomic_write_json(path: Union[str, Path], data: Any, **dumps_kwargs) -> None
 
 
 def normalize_osc_value(v: float) -> float:
-    """Normalizes an incoming OSC float (0.0 to 1.0) or int (0 to 255) to a safe 0.0-1.0 range."""
-    return max(0.0, min(1.0, v if v <= 1.0 else v / 255.0))
+    """Normalizes an incoming OSC float (0.0 to 1.0) or int (0 to 255) to a
+    safe 0.0-1.0 range.
+
+    Only genuine ints get the 0-255 byte rescale; a float slightly above 1.0
+    saturates at 1.0 instead of collapsing to v/255. Non-finite (NaN/inf) and
+    non-numeric values return 0.0 — this sits on the hot input path for
+    custom addresses and SPS proximity, and NaN must never reach a device.
+    """
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(f):
+        return 0.0
+    if isinstance(v, int) and not isinstance(v, bool) and v > 1:
+        f = f / 255.0
+    return max(0.0, min(1.0, f))
 
 
 def strip_param_prefix(addr: Any) -> str:

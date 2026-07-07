@@ -938,11 +938,11 @@ class MotorRouter:
             param_val = all_params.get(literal)
             if param_val is None:
                 continue
-            try:
-                v = float(param_val)
-            except (ValueError, TypeError):
-                continue
-            cand = normalize_osc_value(v)
+            # RAW value in: normalize_osc_value does its own coercion and
+            # needs the original type to tell an int byte param (0-255,
+            # rescaled) from a float (clamped). A float() pre-cast here
+            # would defeat the rescale and saturate byte params to 1.0.
+            cand = normalize_osc_value(param_val)
             if cand > d_raw:
                 d_raw = cand
 
@@ -950,11 +950,7 @@ class MotorRouter:
             for param_name, param_val in all_params.items():
                 if not any(fnmatch.fnmatch(param_name, g) for g in compiled["globs"]):
                     continue
-                try:
-                    v = float(param_val)
-                except (ValueError, TypeError):
-                    continue
-                cand = normalize_osc_value(v)
+                cand = normalize_osc_value(param_val)
                 if cand > d_raw:
                     d_raw = cand
 

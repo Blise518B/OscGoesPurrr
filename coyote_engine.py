@@ -62,7 +62,15 @@ class CoyoteEngine(AsyncReconnectingEngine):
 
     @property
     def strengths(self) -> Tuple[int, int]:
-        return (self._strength_a, self._strength_b)
+        return self._clamped_strengths()
+
+    def _clamped_strengths(self) -> Tuple[int, int]:
+        """The strengths actually sent to the device: the user's per-channel
+        limits are enforced in SOFTWARE here, every frame. The BF frame pushes
+        the same limits to the hardware, but its write is unacknowledged
+        (response=False) — this clamp holds even if that write was lost."""
+        return (min(self._strength_a, self._limit_a),
+                min(self._strength_b, self._limit_b))
 
     # ---- config (from the facade/settings) ---------------------------
     def configure(self, *, address: str = "", name: str = "",
@@ -81,13 +89,20 @@ class CoyoteEngine(AsyncReconnectingEngine):
         # Apply new soft limits live if connected.
         if self._connected:
             self._submit(self._send_bf())
-        # Force a reconnect to the new device if the target changed.
+        # Target changed: tear the old BLE link down properly (disconnect the
+        # client, cancel the B0 task) — just flipping _connected would leak a
+        # live BleakClient that keeps the old unit paired to this host. The
+        # reconnect loop (or a manual connect) then dials the new device.
         if addr_changed and self._connected:
-            self._connected = False
+            self._submit(self._safe_close())
 
     # ---- hot path (callable from the router thread) ------------------
     def set_channel_strength(self, channel: str, value: int) -> None:
-        value = max(0, min(STRENGTH_MAX, int(value)))
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return
+        value = max(0, min(STRENGTH_MAX, value))
         if channel == "A":
             if self._strength_a == value:
                 return
@@ -146,6 +161,20 @@ class CoyoteEngine(AsyncReconnectingEngine):
 
     # ---- AsyncReconnectingEngine transport hooks ---------------------
     async def _open(self) -> None:
+        # Snapshot the configured target: if the user picks a different
+        # device while we're mid-dial (the scan alone can take 8 s), the
+        # connect must fail rather than latch onto the OLD unit.
+        dialed = (self._device_addr, self._device_name)
+        # A previous session's client may survive a flag-only disconnect
+        # (remote drop, send failure) — disconnect it before dialing so a
+        # stale BLE link can never sit under the new one.
+        old = self._client
+        if old is not None:
+            self._client = None
+            try:
+                await old.disconnect()
+            except Exception:
+                pass
         target = await self._resolve_target()
         if target is None:
             raise RuntimeError("Coyote not found (set its BLE address or name)")
@@ -153,15 +182,40 @@ class CoyoteEngine(AsyncReconnectingEngine):
         await client.connect()
         self._client = client
         try:
-            await client.start_notify(NOTIFY_UUID, self._on_notify)
+            try:
+                await client.start_notify(NOTIFY_UUID, self._on_notify)
+            except Exception:
+                pass
+            await self._read_battery(client)
+            # Push hardware soft limits before any output frame. The limits
+            # are part of the safety contract: if this write fails, the
+            # connect fails (the loop backs off and retries) — we never run
+            # output frames against a device whose ceiling we couldn't set.
+            # (_clamped_strengths still enforces them in software either way.)
+            await client.write_gatt_char(
+                WRITE_UUID, encode_bf(self._limit_a, self._limit_b),
+                response=False)
         except Exception:
-            pass
-        await self._read_battery(client)
-        # Push hardware soft limits before any output frame.
-        try:
-            await client.write_gatt_char(WRITE_UUID, encode_bf(self._limit_a, self._limit_b), response=False)
-        except Exception as e:
-            self._log(f"Coyote BF write failed: {e}")
+            self._client = None
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            raise
+        if (self._device_addr, self._device_name) != dialed:
+            # configure() re-targeted while we were dialing: this link goes
+            # to the wrong unit — tear it down and let the loop retry.
+            self._client = None
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+            raise RuntimeError("Coyote target changed during connect")
+        # Start every session from zero: replaying pre-disconnect strengths
+        # here could deliver a surprise e-stim burst minutes later. The
+        # router's clear-on-disconnect re-dispatches fresh values right away.
+        self._strength_a = 0
+        self._strength_b = 0
         self._connected = True
         self._change_evt = asyncio.Event()
         self._b0_task = asyncio.get_event_loop().create_task(self._b0_loop(client))
@@ -193,7 +247,8 @@ class CoyoteEngine(AsyncReconnectingEngine):
         a change so an edge isn't delayed by up to a full cadence."""
         try:
             while self._connected:
-                frame = build_b0(self._next_seq(), self._strength_a, self._strength_b,
+                sa, sb = self._clamped_strengths()
+                frame = build_b0(self._next_seq(), sa, sb,
                                  self._wave_a, self._wave_b)
                 try:
                     await client.write_gatt_char(WRITE_UUID, frame, response=False)
@@ -233,8 +288,13 @@ class CoyoteEngine(AsyncReconnectingEngine):
             # (seq, strength_a, strength_b) — device echoing applied strengths.
             self._battery = self._battery  # no-op; hook point for future use
 
-    def _on_disconnect(self, _client) -> None:
-        self._connected = False
+    def _on_disconnect(self, client) -> None:
+        # Only the CURRENT client may flip the flag: _open deliberately
+        # disconnects discarded clients (stale link cleanup, failed setup),
+        # and bleak can deliver their disconnect callbacks seconds later —
+        # after a fresh session is already live.
+        if client is self._client:
+            self._connected = False
 
     def _next_seq(self) -> int:
         self._seq = (self._seq + 1) & 0x0F

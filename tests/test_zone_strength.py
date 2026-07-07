@@ -68,6 +68,22 @@ class TestZoneFilterStrength:
         assert zone_filter_strength("Boob", "Orf", ["TouchSelf"],
                                     {"OGB/Orf/Boob/TouchSelf": "not a number"}) == 0.0
 
+    @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_value_is_zero_not_full_power(self, bad):
+        # Regression: min(1.0, nan) returns 1.0 in CPython, so an unguarded
+        # clamp turned one NaN packet into FULL strength on every backend
+        # that resolves zones through this function (e-stim included).
+        assert zone_filter_strength("Boob", "Orf", ["TouchSelf"],
+                                    {"OGB/Orf/Boob/TouchSelf": bad}) == 0.0
+
+    def test_non_finite_value_does_not_mask_other_filters(self):
+        params = {
+            "OGB/Orf/Boob/TouchSelf": float("nan"),
+            "OGB/Orf/Boob/TouchOthers": 0.4,
+        }
+        out = zone_filter_strength("Boob", "Orf", ["TouchSelf", "TouchOthers"], params)
+        assert out == pytest.approx(0.4)
+
     def test_pen_zone_type_path(self):
         params = {"OGB/Pen/Shaft/PenSelf": 0.6, "OGB/Pen/Shaft/PenSelfClose": True}
         assert zone_filter_strength("Shaft", "Pen", ["PenSelf"], params) == pytest.approx(0.6)
@@ -104,3 +120,13 @@ class TestSyntheticSourceDelegation:
         params = {"OGB/Orf/Boob/TouchSelf": 0.7}
         out = zone_filter_strength("Boob", "Orf", ["TouchSelf"], params, sources)
         assert out == pytest.approx(0.7)
+
+    def test_source_result_is_clamped_and_never_nan(self):
+        # Whatever the synthetic evaluator returns, this chokepoint clamps to
+        # [0, 1] and rejects non-finite — routers must never see NaN.
+        sources = {"GSpot": {
+            "proximity": ["Contact/GSpotProx"], "activation": [],
+            "velocity": [], "multiplier": 1.0, "max_value": 1.0,
+        }}
+        params = {"Contact/GSpotProx": float("nan")}
+        assert zone_filter_strength("GSpot", "Orf", [], params, sources) == 0.0

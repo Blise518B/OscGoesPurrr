@@ -21,6 +21,7 @@ Pure functions only: no globals, no I/O, no Qt. Safe to call from any router
 thread and trivially unit-testable.
 """
 
+import math
 from typing import Any, Dict, List, Optional
 
 from sps_source import evaluate_sps_source
@@ -69,7 +70,13 @@ def zone_filter_strength(zone_name: Any,
     if sps_sources:
         defn = sps_sources.get(zone_name)
         if defn is not None:
-            return evaluate_sps_source(defn, params)
+            try:
+                v = float(evaluate_sps_source(defn, params))
+            except (TypeError, ValueError):
+                return 0.0
+            if not math.isfinite(v):
+                return 0.0
+            return min(max(v, 0.0), 1.0)
 
     if not filters:
         return 0.0
@@ -86,9 +93,14 @@ def zone_filter_strength(zone_name: Any,
         if val is None:
             continue
         try:
-            f = max(0.0, min(1.0, float(val)))
+            f = float(val)
         except (TypeError, ValueError):
             continue
+        # NaN must not survive: min(1.0, nan) returns 1.0 in CPython, which
+        # would drive an e-stim/EMS backend to FULL power off one bad packet.
+        if not math.isfinite(f):
+            continue
+        f = min(max(f, 0.0), 1.0)
         if f > best:
             best = f
     return best

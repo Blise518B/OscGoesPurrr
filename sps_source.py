@@ -57,16 +57,6 @@ DEFAULT_MAX_VALUE = 1.0
 # evaluator stays self-contained and pure)
 # ----------------------------------------------------------
 
-def _get_float(params: Dict[str, Any], name: str) -> Optional[float]:
-    v = params.get(name)
-    if v is None:
-        return None
-    try:
-        return float(v)
-    except (TypeError, ValueError):
-        return None
-
-
 def _get_bool(params: Dict[str, Any], name: str) -> bool:
     v = params.get(name)
     if v is None:
@@ -147,11 +137,14 @@ def evaluate_sps_source(defn: Dict[str, Any], params: Dict[str, Any]) -> float:
     for name in (defn.get("proximity") or []):
         if not name:
             continue
-        v = _get_float(params, name)
-        if v is None:
+        raw = params.get(name)
+        if raw is None:
             continue
         seen = True
-        nv = normalize_osc_value(v)
+        # RAW value in: normalize_osc_value needs the original type to give
+        # int byte params (0-255) their rescale — a float() pre-cast would
+        # saturate them to 1.0. It also absorbs garbage/non-finite as 0.0.
+        nv = normalize_osc_value(raw)
         if nv > prox:
             prox = nv
     if not seen:

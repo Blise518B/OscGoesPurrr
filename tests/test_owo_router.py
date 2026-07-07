@@ -51,6 +51,42 @@ class TestEngineSetActive:
             assert eng._active == {"Pectoral_R": 50, "Lumbar_R": 80}
             assert eng._frequency == 90
 
+    def test_set_active_clamps_intensity_to_100(self):
+        # The engine is the last line of defense for the EMS suit: a buggy
+        # caller must not be able to command an out-of-range intensity.
+        from owo_engine import OwoEngine
+        eng = OwoEngine(get_game_id=lambda: "", get_ip=lambda: "")
+        eng.set_active({"Pectoral_R": 250}, 90)
+        with eng._state_lock:
+            assert eng._active == {"Pectoral_R": 100}
+
+    def test_set_active_drops_garbage_and_nan(self):
+        from owo_engine import OwoEngine
+        eng = OwoEngine(get_game_id=lambda: "", get_ip=lambda: "")
+        eng.set_active({"Pectoral_R": "abc", "Arm_L": float("nan"),
+                        "Sacral": float("inf"), "Lumbar_R": 40}, 90)
+        with eng._state_lock:
+            assert eng._active == {"Lumbar_R": 40}
+
+    def test_set_active_garbage_frequency_defaults_not_raises(self):
+        from owo_engine import OwoEngine
+        eng = OwoEngine(get_game_id=lambda: "", get_ip=lambda: "")
+        eng.set_active({"Lumbar_R": 40}, float("nan"))
+        with eng._state_lock:
+            assert eng._frequency == 100
+        eng.set_active({"Lumbar_R": 40}, "fast")
+        with eng._state_lock:
+            assert eng._frequency == 100
+
+    def test_set_active_change_wakes_send_loop(self):
+        from owo_engine import OwoEngine
+        eng = OwoEngine(get_game_id=lambda: "", get_ip=lambda: "")
+        eng.set_active({"Pectoral_R": 50}, 90)
+        assert eng._wake_evt.is_set()        # change -> wake
+        eng._wake_evt.clear()
+        eng.set_active({"Pectoral_R": 50}, 90)
+        assert not eng._wake_evt.is_set()    # identical map -> no wake
+
     def test_unavailable_without_sdk(self):
         from owo_engine import OwoEngine
         eng = OwoEngine(get_game_id=lambda: "", get_ip=lambda: "")
