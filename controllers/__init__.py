@@ -10,6 +10,7 @@ Each mixin assumes the host controller has these attributes/methods:
   - `self.log_message(str)`
 """
 
+from .intiface_facade import IntifaceFacade
 from .steamvr_facade import SteamVRFacade
 from .steamvr_toys_facade import SteamVRToysFacade
 from .bhaptics_facade import BHapticsFacade
@@ -23,6 +24,7 @@ from .sessions_facade import SessionsFacade
 from .sps_sources_facade import SpsSourcesFacade
 
 __all__ = [
+    "IntifaceFacade",
     "SteamVRFacade",
     "SteamVRToysFacade",
     "BHapticsFacade",

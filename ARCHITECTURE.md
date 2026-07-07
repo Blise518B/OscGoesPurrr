@@ -293,11 +293,15 @@ zone — detected OGB or synthetic SPS source — identically.
 * **Mechanism:** `OscGoesPurrrApp` in `main.py` boots the threads,
   holds the `profile_manager`, and routes data between layers. Its
   call surface is intentionally split:
-  * `main.py` itself holds the core API — boot, queue draining,
-    Buttplug profile / device config, simple-mode, OSC diagnostics,
-    profile copy/paste plumbing, etc.
+  * `main.py` itself holds the core API — boot, queue draining, the
+    routing tick, profile / device config plumbing, feature flags,
+    simple-mode, and OSC diagnostics.
   * Per-engine and per-subsystem facade mixins live under `controllers/`
     and are composed into `OscGoesPurrrApp` via multiple inheritance:
+    * `controllers/intiface_facade.py` — `IntifaceFacade` (the
+      Buttplug/Intiface surface: engine-loop bootstrap, manual +
+      auto-connect lifecycle, device rescans, per-toy tests/mutes,
+      linear-config sync, hot target dispatch)
     * `controllers/steamvr_facade.py` — `SteamVRFacade`
     * `controllers/steamvr_toys_facade.py` — `SteamVRToysFacade`
     * `controllers/bhaptics_facade.py` — `BHapticsFacade`
