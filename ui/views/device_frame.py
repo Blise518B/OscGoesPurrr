@@ -65,6 +65,11 @@ class DeviceFrameMixin:
 
     def update_stored_devices_ui(self):
         connected_names = self.controller.get_connected_device_names()
+        # Cache for the hot path: _set_motor_levels runs per changed motor
+        # inside the routing tick and must not re-query the facade (a fresh
+        # set built from the client's device map) every call. This 1 Hz
+        # heartbeat + build_device_list_ui keep the cache current.
+        self._connected_names_cache = frozenset(connected_names)
         for device_name, frame_data in self.stored_device_frames.items():
             status_label: Optional[QLabel] = frame_data.get("status_label")
             delete_button: Optional[QPushButton] = frame_data.get("delete_button")
@@ -950,6 +955,13 @@ class DeviceFrameMixin:
         )
 
     def build_device_list_ui(self, devices_dict: dict):
+        # Device set changed — refresh the connected-name cache the motor
+        # meters read on the routing tick.
+        try:
+            self._connected_names_cache = frozenset(
+                self.controller.get_connected_device_names())
+        except Exception:
+            pass
         controller = self.controller
         if not devices_dict:
             return
@@ -965,10 +977,6 @@ class DeviceFrameMixin:
                 motor_count = 1
 
             actual_motor_count = device_motor_counts.get(device_name, motor_count)
-            controller.log_message(
-                f"DEBUG: {device_name} - devices_dict motor_count={motor_count}, "
-                f"actual_motor_count={actual_motor_count}"
-            )
 
             if device_name not in self.device_ui_frames:
                 osc_addresses = {}
@@ -1058,9 +1066,15 @@ class DeviceFrameMixin:
         isn't there to receive them), but if the UI shows the meter
         moving anyway it reads as 'the toy is live' which is a lie.
         So when the device isn't currently connected, we force the
-        displayed value to 0."""
+        displayed value to 0. Reads the event-refreshed cache — this
+        runs per changed motor inside the routing tick, so it must not
+        rebuild the connected-name set from the facade every call."""
         try:
-            connected = self.controller.get_connected_device_names()
+            connected = getattr(self, "_connected_names_cache", None)
+            if connected is None:
+                connected = frozenset(
+                    self.controller.get_connected_device_names())
+                self._connected_names_cache = connected
             if device_name not in connected:
                 value = 0.0
         except Exception:

@@ -75,13 +75,24 @@ class TraceGraph(QWidget):
     # ------------------------------------------------------------------
 
     def push_sample(self, trace_id: str, t_s: float, value: float) -> None:
-        """Append a sample and request a repaint. Stale samples that
-        fall outside the time window are dropped lazily during paint —
-        leaving them in the buffer keeps push_sample O(1)."""
+        """Append a sample, prune the stale tail, and request a repaint.
+
+        Pruning happens on ingest (amortised O(1) popleft) so the buffer
+        stays at roughly window-size. Relying on the maxlen cap alone
+        meant every repaint iterated up to 4096 tuples per trace just to
+        skip the ~180 visible ones — at tick-rate repaint frequency, on
+        the GUI thread that also hosts the routing tick."""
         trace = self._traces.get(trace_id)
         if trace is None:
             return
-        trace["samples"].append((float(t_s), float(value)))
+        t = float(t_s)
+        samples = trace["samples"]
+        samples.append((t, float(value)))
+        # Keep a half-window margin so a slightly-older sibling trace
+        # still defines the left edge correctly.
+        cutoff = t - self._window_s * 1.5
+        while samples and samples[0][0] < cutoff:
+            samples.popleft()
         self.update()
 
     def set_trace_visible(self, trace_id: str, visible: bool) -> None:

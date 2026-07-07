@@ -28,6 +28,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import (
     Qt, QTimer, Signal, QVariantAnimation, QEasingCurve, QPoint, QPointF,
+    QRectF,
 )
 from PySide6.QtGui import (
     QColor, QFont, QFontMetrics, QPainter, QPen, QBrush, QPolygonF,
@@ -63,6 +64,57 @@ def _default_chain() -> Dict[str, Any]:
 def _default_mix() -> Dict[str, Any]:
     from motor_router import MotorRouter
     return copy.deepcopy(MotorRouter.DEFAULT_MIX_CONFIG)
+
+
+class _NoTrackSpin(QDoubleSpinBox):
+    """QDoubleSpinBox whose valueChanged fires on commit (arrows, wheel,
+    focus-out, Enter) instead of per typed keystroke. Every spinbox in the
+    chain persists straight to profiles.json on valueChanged — typing
+    "150" must not write the profile three times."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setKeyboardTracking(False)
+
+
+class _ProfileSaveDebouncer:
+    """Coalesces per-slider-step profile saves into one disk write.
+
+    `update_device_config` already mutated the live in-memory profile —
+    the router reads that, so haptics react to a drag instantly. Only the
+    PERSISTENCE (a full serialize + fsync'd atomic replace on the GUI
+    thread) is deferred, landing once per gesture instead of once per
+    integer step crossed. A pending save lost to app close is covered by
+    the controller's close-time profile save."""
+
+    INTERVAL_MS = 600
+
+    def __init__(self) -> None:
+        self._timer: Optional[QTimer] = None
+        self._controller = None
+
+    def schedule(self, controller) -> None:
+        if not hasattr(controller, "save_profiles"):
+            return
+        self._controller = controller
+        if self._timer is None:
+            self._timer = QTimer()
+            self._timer.setSingleShot(True)
+            self._timer.setInterval(self.INTERVAL_MS)
+            self._timer.timeout.connect(self._flush)
+        self._timer.start()
+
+    def _flush(self) -> None:
+        controller, self._controller = self._controller, None
+        if controller is None:
+            return
+        try:
+            controller.save_profiles()
+        except Exception:
+            pass
+
+
+_save_debouncer = _ProfileSaveDebouncer()
 
 
 # Cap on chains per motor — matches motor_router._MAX_CHAINS_PER_MOTOR.
@@ -133,8 +185,9 @@ def _write_per_motor(controller, device_name: str, motor_idx: int,
         mix_root = {}
     mix_root[str(motor_idx)] = per_motor
     controller.update_device_config(device_name, "mix", mix_root)
-    if hasattr(controller, "save_profiles"):
-        controller.save_profiles()
+    # Apply + recalc are live (the drag stays responsive on the toy);
+    # only the disk write is debounced — it used to fsync per slider step.
+    _save_debouncer.schedule(controller)
     if hasattr(controller, "force_recalculate"):
         controller.force_recalculate()
 
@@ -172,18 +225,29 @@ def _update_chain_field(controller, device_name: str, motor_idx: int,
     motor, creating missing parents from defaults. Writes the full
     `mix` block back via the controller facade, then asks the router
     to recompute."""
+    _update_chain_fields(controller, device_name, motor_idx, chain_idx,
+                         ((path, value),))
+
+
+def _update_chain_fields(controller, device_name: str, motor_idx: int,
+                         chain_idx: int, updates) -> None:
+    """Update several `(path, value)` fields inside `chains[chain_idx]`
+    in ONE read-modify-write pass — a control that sets two fields per
+    gesture (the delay slider writes rise_ms AND fall_ms) must not pay
+    two full write/recalc cycles."""
     per_motor = copy.deepcopy(
         _read_per_motor(controller, device_name, motor_idx)
     )
     chain = _ensure_chain_at(per_motor, chain_idx)
-    cursor: Any = chain
-    for k in path[:-1]:
-        sub = cursor.get(k)
-        if not isinstance(sub, dict):
-            sub = {}
-            cursor[k] = sub
-        cursor = sub
-    cursor[path[-1]] = value
+    for path, value in updates:
+        cursor: Any = chain
+        for k in path[:-1]:
+            sub = cursor.get(k)
+            if not isinstance(sub, dict):
+                sub = {}
+                cursor[k] = sub
+            cursor = sub
+        cursor[path[-1]] = value
     _write_per_motor(controller, device_name, motor_idx, per_motor)
 
 
@@ -907,6 +971,9 @@ class _StageCard(QFrame):
         root.addWidget(self._editor_region)
 
         self._editor_built = False
+        # Live activity ring — PAINTED over the QSS transparent border in
+        # paintEvent instead of restyled per tick (see set_activity_color).
+        self._activity_color: Optional[QColor] = None
 
     # ------------------------------------------------------------ basics
     @property
@@ -916,6 +983,29 @@ class _StageCard(QFrame):
     @property
     def quick_layout(self):
         return self._quick_lay
+
+    def set_activity_color(self, color: QColor) -> None:
+        """Charge the card's border ring. Cheap: stores the colour and
+        repaints one frame — setStyleSheet here repolished the card's
+        whole descendant subtree (labels, sliders, mounted editor) up to
+        ~50×/s per card, synchronously inside the routing tick."""
+        self._activity_color = color
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)  # QSS background / radius / base border
+        color = self._activity_color
+        if color is None or self.property("active") == "true":
+            # No signal seen yet, or the QSS active rule owns the border
+            # (the expanded card's green outline).
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(QPen(color, 1.0))
+        p.setBrush(Qt.NoBrush)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.drawRoundedRect(r, 8.0, 8.0)
+        p.end()
 
     def mousePressEvent(self, ev) -> None:
         if ev.button() == Qt.LeftButton:
@@ -1574,11 +1664,13 @@ class MotorSignalChainWidget(QFrame):
         return QColor(r, g, b)
 
     def _apply_stage_card_color(self, stage_id: str, level: float) -> None:
-        """Update the stage card's border colour to reflect the
-        signal level at that stage. Skips the write when the change
-        is below `_STAGE_BORDER_EPSILON` to keep stylesheet churn off
-        the hot path. The active-stage selector keeps its green
-        border via the inline override below."""
+        """Update the stage card's border colour to reflect the signal
+        level at that stage. Skips the write when the change is below
+        `_STAGE_BORDER_EPSILON`. The colour is PAINTED by the card
+        (set_activity_color -> paintEvent) — the old per-tick
+        setStyleSheet forced a full subtree repolish on every step, and
+        it ran synchronously inside the routing tick. The active-stage
+        selector keeps its green border via the global QSS rule."""
         card = self._stage_cards.get(stage_id)
         if card is None:
             return
@@ -1586,26 +1678,8 @@ class MotorSignalChainWidget(QFrame):
         if abs(level - last) < _STAGE_BORDER_EPSILON:
             return
         self._stage_last_level[stage_id] = level
-        color = self._lerp_purple_pink(level)
-        # Per-widget stylesheet overrides the global tuneStageCard
-        # rules for this widget only. We re-include the bg / radius
-        # / padding values so the override is self-contained.
         try:
-            card.setStyleSheet(
-                f"QFrame#tuneStageCard {{"
-                f"  background-color: {COLOR_SURFACE_HOVER};"
-                f"  border-radius: 8px;"
-                f"  border: 1px solid {color.name()};"
-                f"  padding: 4px;"
-                f"}}"
-                f"QFrame#tuneStageCard[active=\"true\"] {{"
-                f"  border: 1px solid {COLOR_SUCCESS};"
-                f"  background-color: {COLOR_SURFACE};"
-                f"}}"
-                f"QFrame#tuneStageCard:hover {{"
-                f"  background-color: {COLOR_SURFACE};"
-                f"}}"
-            )
+            card.set_activity_color(self._lerp_purple_pink(level))
         except RuntimeError:
             self._stage_cards.pop(stage_id, None)
 
@@ -1894,15 +1968,13 @@ class MotorSignalChainWidget(QFrame):
 
     def _on_delay_from_slider(self, ms: int) -> None:
         """Quick smoothing-delay slider edit: set BOTH rise and fall to the
-        same delay, and mirror the precise rise/fall spinboxes."""
+        same delay (one write/recalc pass), and mirror the precise
+        rise/fall spinboxes."""
         m = float(int(ms))
-        _update_chain_field(
+        _update_chain_fields(
             self._controller, self._device_name, self._motor_idx,
-            self._chain_idx, ("smoothing", "rise_ms"), m,
-        )
-        _update_chain_field(
-            self._controller, self._device_name, self._motor_idx,
-            self._chain_idx, ("smoothing", "fall_ms"), m,
+            self._chain_idx,
+            ((("smoothing", "rise_ms"), m), (("smoothing", "fall_ms"), m)),
         )
         for key in ("rise_ms", "fall_ms"):
             spin = self._smoothing_spins.get(key)
@@ -2186,7 +2258,7 @@ class MotorSignalChainWidget(QFrame):
         # Gain.
         gain_row = _hbox(0, 8)
         gain_row.addWidget(QLabel("Gain:"))
-        gain_spin = QDoubleSpinBox()
+        gain_spin = _NoTrackSpin()
         gain_spin.setRange(0.0, 2.0)
         gain_spin.setSingleStep(0.05)
         gain_spin.setDecimals(2)
@@ -2221,7 +2293,7 @@ class MotorSignalChainWidget(QFrame):
 
         param_label = QLabel("Param:")
         curve_row.addWidget(param_label)
-        param_spin = QDoubleSpinBox()
+        param_spin = _NoTrackSpin()
         param_spin.setSingleStep(0.1)
         param_spin.setDecimals(2)
         param_spin.setRange(0.3, 8.0)
@@ -2278,7 +2350,7 @@ class MotorSignalChainWidget(QFrame):
         if channel_key == "speed":
             fo_row = _hbox(0, 8)
             fo_row.addWidget(QLabel("Fall-off (ms):"))
-            fo_spin = QDoubleSpinBox()
+            fo_spin = _NoTrackSpin()
             fo_spin.setRange(10.0, 2000.0)
             fo_spin.setSingleStep(50.0)
             fo_spin.setDecimals(0)
@@ -2406,7 +2478,7 @@ class MotorSignalChainWidget(QFrame):
         # Wake threshold.
         wt_row = _hbox(0, 8)
         wt_row.addWidget(QLabel("Wake threshold:"))
-        wt_spin = QDoubleSpinBox()
+        wt_spin = _NoTrackSpin()
         wt_spin.setRange(0.0, 1.0)
         wt_spin.setSingleStep(0.01)
         wt_spin.setDecimals(2)
@@ -2419,7 +2491,7 @@ class MotorSignalChainWidget(QFrame):
         # Sleep delay.
         sd_row = _hbox(0, 8)
         sd_row.addWidget(QLabel("Sleep delay (s):"))
-        sd_spin = QDoubleSpinBox()
+        sd_spin = _NoTrackSpin()
         sd_spin.setRange(0.0, 10.0)
         sd_spin.setSingleStep(0.1)
         sd_spin.setDecimals(1)
@@ -2440,7 +2512,7 @@ class MotorSignalChainWidget(QFrame):
         # first twitch.
         at_row = _hbox(0, 8)
         at_row.addWidget(QLabel("Build-up (s):"))
-        at_spin = QDoubleSpinBox()
+        at_spin = _NoTrackSpin()
         at_spin.setRange(0.01, 10.0)
         at_spin.setSingleStep(0.1)
         at_spin.setDecimals(2)
@@ -2460,7 +2532,7 @@ class MotorSignalChainWidget(QFrame):
         # brief pauses instead of bouncing below threshold.
         rl_row = _hbox(0, 8)
         rl_row.addWidget(QLabel("Decay (s):"))
-        rl_spin = QDoubleSpinBox()
+        rl_spin = _NoTrackSpin()
         rl_spin.setRange(0.01, 10.0)
         rl_spin.setSingleStep(0.1)
         rl_spin.setDecimals(2)
@@ -2528,7 +2600,7 @@ class MotorSignalChainWidget(QFrame):
 
         row = _hbox(0, 8)
         row.addWidget(QLabel("Rise:"))
-        rise_spin = QDoubleSpinBox()
+        rise_spin = _NoTrackSpin()
         rise_spin.setRange(0.0, 2000.0)
         rise_spin.setSingleStep(10.0)
         rise_spin.setDecimals(0)
@@ -2543,7 +2615,7 @@ class MotorSignalChainWidget(QFrame):
         row.addWidget(rise_spin)
         row.addSpacing(12)
         row.addWidget(QLabel("Fall:"))
-        fall_spin = QDoubleSpinBox()
+        fall_spin = _NoTrackSpin()
         fall_spin.setRange(0.0, 2000.0)
         fall_spin.setSingleStep(10.0)
         fall_spin.setDecimals(0)
@@ -2651,7 +2723,7 @@ class MotorSignalChainWidget(QFrame):
         for key, label, lo, hi, step, decimals, default in knob_specs:
             krow = _hbox(0, 8)
             krow.addWidget(QLabel(label))
-            spin = QDoubleSpinBox()
+            spin = _NoTrackSpin()
             spin.setRange(lo, hi)
             spin.setSingleStep(step)
             spin.setDecimals(decimals)
@@ -3120,7 +3192,7 @@ class MotorChainListWidget(QFrame):
         # Row 1: frequency + amplitude + waveform
         r1 = _hbox(0, 12)
         r1.addWidget(QLabel("Frequency:"))
-        freq_spin = QDoubleSpinBox()
+        freq_spin = _NoTrackSpin()
         freq_spin.setRange(0.05, 5.0)
         freq_spin.setSingleStep(0.05)
         freq_spin.setDecimals(2)
@@ -3130,7 +3202,7 @@ class MotorChainListWidget(QFrame):
         r1.addWidget(freq_spin)
         r1.addSpacing(8)
         r1.addWidget(QLabel("Amplitude:"))
-        amp_spin = QDoubleSpinBox()
+        amp_spin = _NoTrackSpin()
         amp_spin.setRange(0.0, 1.0)
         amp_spin.setSingleStep(0.05)
         amp_spin.setDecimals(2)

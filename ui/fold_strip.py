@@ -37,7 +37,7 @@ so the tabs read as one design.
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from PySide6.QtCore import (
-    QEasingCurve, QPoint, QPointF, Qt, QVariantAnimation, Signal,
+    QEasingCurve, QPoint, QPointF, QRectF, Qt, QVariantAnimation, Signal,
 )
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QWidget
@@ -142,6 +142,7 @@ class FoldCard(QFrame):
         super().__init__(parent)
         self._fold_id = str(fold_id)
         self._last_level = -1.0
+        self._ring_color: Optional[QColor] = None
         self._last_value = -1.0
         self._expanded = False
         # Non-expandable folds keep their quick content permanently on
@@ -301,7 +302,13 @@ class FoldCard(QFrame):
     # ------------------------------------------------------------ live
     def set_level(self, level: float) -> None:
         """Charge the border ring with the live signal level [0, 1].
-        Epsilon-gated so a quiet card costs nothing per tick."""
+        Epsilon-gated so a quiet card costs nothing per tick.
+
+        The ring is PAINTED (see paintEvent) rather than restyled:
+        setStyleSheet invalidates and repolishes the card's entire
+        descendant subtree — under live signal that ran dozens of times a
+        second per card, synchronously inside the routing tick. Storing a
+        colour and repainting one frame is orders of magnitude cheaper."""
         try:
             lv = max(0.0, min(1.0, float(level)))
         except (TypeError, ValueError):
@@ -309,20 +316,22 @@ class FoldCard(QFrame):
         if abs(lv - self._last_level) < LEVEL_EPSILON:
             return
         self._last_level = lv
-        color = activity_border_color(lv)
-        # Same per-widget override the chain applies to its stage
-        # cards — keeps hover/active QSS behaviour intact.
-        self.setStyleSheet(
-            f"QFrame#tuneStageCard {{"
-            f"  background-color: {COLOR_SURFACE_HOVER};"
-            f"  border-radius: 8px;"
-            f"  border: 1px solid {color.name()};"
-            f"  padding: 4px;"
-            f"}}"
-            f"QFrame#tuneStageCard:hover {{"
-            f"  background-color: {COLOR_SURFACE};"
-            f"}}"
-        )
+        self._ring_color = activity_border_color(lv)
+        self.update()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)  # QSS background / radius / base border
+        color = self._ring_color
+        if color is None or self.property("active") == "true":
+            # No signal seen yet, or the QSS active rule owns the border.
+            return
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setPen(QPen(color, 1.0))
+        p.setBrush(Qt.NoBrush)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.drawRoundedRect(r, 8.0, 8.0)
+        p.end()
 
     def set_value(self, value: float) -> None:
         """Update the live value readout (if enabled), churn-gated."""

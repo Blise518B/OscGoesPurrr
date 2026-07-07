@@ -76,8 +76,15 @@ def test_storage_helpers_round_trip():
     _update_chain_field(ctrl, "DevX", 0, 0, ("depth", "gain"), 0.42)
     chain = _read_chain(ctrl, "DevX", 0, 0)
     assert chain["depth"]["gain"] == 0.42
-    assert ctrl.saved >= 1
+    # The recalc is live (the drag must stay responsive on the toy)...
     assert ctrl.recalced >= 1
+    # ...but the DISK write is debounced — a slider drag used to fsync
+    # profiles.json once per integer step. Nothing saved synchronously;
+    # flushing the debouncer performs exactly the coalesced save.
+    from ui import motor_signal_chain as _msc
+    assert ctrl.saved == 0
+    _msc._save_debouncer._flush()
+    assert ctrl.saved == 1
 
     # The full mix block now exists in the chains-list shape.
     mix = ctrl.profiles["DevX"]["mix"]["0"]
