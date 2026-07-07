@@ -309,6 +309,14 @@ class SteamVREngine:
         self._threads: Dict[str, _FeedbackThread] = {}
         self._devices: List[VRTracker] = []
         self._manifest = SteamVRManifest()
+        # Consecutive pose-query failures: a stale OpenVR handle (SteamVR
+        # exited) fails every call but try_init early-outs on `_vr is not
+        # None`, so without this the engine played dead until app restart.
+        self._pose_failures = 0
+        # True while shutdown() runs (and forever after a permanent one):
+        # blocks a concurrently-ticking broadcaster thread from re-initing
+        # OpenVR / respawning feedback threads mid-teardown.
+        self._closing = False
 
         # Config providers (called every tick — keep them cheap)
         self.get_tracker_config = get_tracker_config
@@ -341,6 +349,8 @@ class SteamVREngine:
             if not quiet:
                 print("[SteamVR] openvr python binding not available.")
             return False
+        if self._closing:
+            return False  # a shutdown is in flight (or the app is quitting)
         if self._vr is not None:
             return True
         try:
@@ -353,18 +363,88 @@ class SteamVREngine:
                 print(f"[SteamVR] Failed to initialize OpenVR: {e}")
             return False
 
-    def shutdown(self):
+    def shutdown(self, permanent: bool = True):
+        """Tear OpenVR down. `permanent=True` (app quit) leaves the engine
+        closed for good; `permanent=False` (runtime-gone reset) re-arms it
+        so the periodic try_init can attach to a fresh vrserver."""
         with self._lock:
-            for t in self._threads.values():
+            self._closing = True
+            threads = list(self._threads.values())
+            for t in threads:
                 t.stop()
             self._threads.clear()
-            if self._vr is not None and _OPENVR_AVAILABLE:
+            # Null the handle FIRST so concurrent callers (_raw_pulse,
+            # battery polls on other threads) stop dispatching new native
+            # calls before the runtime is freed below.
+            vr = self._vr
+            self._vr = None
+            self._vr_apps = None
+            self._devices = []
+            self._pose_failures = 0
+        # Join OUTSIDE the lock: a feedback thread woken mid-tick may be
+        # inside a native OpenVR call — tearing the runtime down while
+        # it's in flight is the classic exit-time access violation. Their
+        # wake events make the exits prompt.
+        wedged = False
+        for t in threads:
+            try:
+                t.join(timeout=1.0)
+            except RuntimeError:
+                pass
+            if t.is_alive():
+                wedged = True
+        if vr is not None and _OPENVR_AVAILABLE:
+            if wedged:
+                # A thread is stuck inside a native call (hung vrserver):
+                # freeing the runtime under it is an access violation.
+                # Leaking the handle is the safe failure mode.
+                print("[SteamVR] a feedback thread is wedged in a native "
+                      "call — leaving the OpenVR handle un-freed")
+            else:
+                # Small grace so an already-dispatched native call on
+                # another thread (battery poll) can drain first.
+                time.sleep(0.05)
                 try:
                     openvr.shutdown()
                 except Exception:
                     pass
-            self._vr = None
-            self._vr_apps = None
+        if not permanent:
+            with self._lock:
+                self._closing = False
+
+    def _handle_runtime_gone(self, reason: str) -> None:
+        """SteamVR exited under us: drop the dead handle so the periodic
+        auto-connect tick's try_init() can attach to the NEW vrserver once
+        it's back — a stale handle can never reattach, which used to leave
+        haptics silently dead until an app restart."""
+        print(f"[SteamVR] runtime gone ({reason}) — resetting OpenVR handle")
+        self.shutdown(permanent=False)
+
+    def _pump_runtime_events(self) -> bool:
+        """Drain pending VREvents. Returns False when the runtime announced
+        shutdown — acknowledged so SteamVR doesn't force-kill the process
+        for ignoring Quit."""
+        if self._vr is None:
+            return True
+        try:
+            event = openvr.VREvent_t()
+            quit_events = {
+                getattr(openvr, "VREvent_Quit", -1),
+                getattr(openvr, "VREvent_ProcessQuit", -2),
+                getattr(openvr, "VREvent_DriverRequestedQuit", -3),
+            }
+            while self._vr.pollNextEvent(event):
+                if event.eventType in quit_events:
+                    try:
+                        self._vr.acknowledgeQuit_Exiting()
+                    except Exception:
+                        pass
+                    return False
+        except Exception:
+            # A dead handle can raise here instead of delivering Quit —
+            # the pose-failure counter in refresh_devices makes that call.
+            pass
+        return True
 
     # ---- Discovery ---------------------------------------------------
 
@@ -372,12 +452,26 @@ class SteamVREngine:
         if not self.try_init(quiet):
             return []
 
+        # This runs on the periodic auto-connect / battery tick, so it's
+        # also our runtime-liveness probe: react to a Quit event promptly...
+        if not self._pump_runtime_events():
+            self._handle_runtime_gone("VREvent_Quit")
+            return []
+
         try:
             poses = self._vr.getDeviceToAbsoluteTrackingPose(
                 openvr.TrackingUniverseStanding, 0, openvr.k_unMaxTrackedDeviceCount)
+            self._pose_failures = 0
         except Exception as e:
+            # ...and treat repeated pose-query failures as a dead handle
+            # (some runtimes fail calls instead of delivering Quit).
+            self._pose_failures += 1
             if not quiet:
                 print(f"[SteamVR] Pose query failed: {e}")
+            if self._pose_failures >= 3:
+                self._handle_runtime_gone(
+                    f"{self._pose_failures} consecutive pose-query failures")
+                return []
             return self._devices
 
         devices: List[VRTracker] = []
@@ -420,13 +514,32 @@ class SteamVREngine:
         devices.sort(key=lambda d: (_class_order.get(d.device_class, 9), d.serial))
         self._devices = devices
 
-        # Spawn a haptic feedback thread for each haptic-capable device.
+        # Reconcile the per-tracker feedback threads with the fresh set:
+        # spawn for new serials, reap threads whose tracker vanished (a
+        # departed tracker used to keep a 20 Hz thread forever), and
+        # re-point survivors at the fresh VRTracker — device indices are
+        # NOT stable across SteamVR restarts / re-enumeration, so a stale
+        # index pulses the wrong device or none at all.
+        stale: List[_FeedbackThread] = []
         with self._lock:
-            for dev in devices:
-                if dev.supports_haptics and dev.serial not in self._threads:
+            if self._closing:
+                # shutdown() raced this in-flight refresh — do not respawn
+                # threads it just reaped.
+                return []
+            fresh = {d.serial: d for d in devices if d.supports_haptics}
+            for serial in list(self._threads.keys()):
+                if serial not in fresh:
+                    stale.append(self._threads.pop(serial))
+            for serial, dev in fresh.items():
+                th = self._threads.get(serial)
+                if th is None:
                     th = _FeedbackThread(dev, self)
-                    self._threads[dev.serial] = th
+                    self._threads[serial] = th
                     th.start()
+                else:
+                    th.tracker = dev
+        for th in stale:
+            th.stop()
 
         return devices
 
