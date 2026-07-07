@@ -16,6 +16,7 @@ from settings import (
     APP_SETTINGS_FILE,
     BHAPTICS_SETTINGS_FILE,
     COYOTE_SETTINGS_FILE,
+    HANDY_SETTINGS_FILE,
     KNOWN_DEVICES_FILE,
     OWO_SETTINGS_FILE,
     PISHOCK_SETTINGS_FILE,
@@ -26,6 +27,7 @@ from settings import (
     BHapticsSettingsManager,
     CoyoteSettingsManager,
     DEFAULT_APP_SETTINGS,
+    HandySettingsManager,
     KnownDevicesRegistry,
     OwoSettingsManager,
     PiShockSettingsManager,
@@ -79,6 +81,7 @@ class ProfileManager:
         self.pishock_settings = PiShockSettingsManager()
         self.coyote_settings = CoyoteSettingsManager()
         self.owo_settings = OwoSettingsManager()
+        self.handy_settings = HandySettingsManager()
         self.known_devices = KnownDevicesRegistry()
         self.sps_sources = SpsSourceManager()
         self._load_or_create_default()
@@ -88,19 +91,49 @@ class ProfileManager:
     # ------------------------------------------------------------------
 
     def _load_or_create_default(self) -> None:
-        """Load profiles from JSON file or create default if not exists."""
+        """Load profiles from JSON file or create default if not exists.
+
+        A file that EXISTS but can't be used is never silently clobbered:
+        transient read errors run this session on defaults without touching
+        the file, and a corrupt/mis-shaped one is renamed aside to
+        profiles.json.bak before defaults are persisted — profiles are the
+        user's tuning work, losing them to a disk hiccup is not acceptable.
+        """
         raw: Any = None
-        if os.path.exists(PROFILE_FILE):
+        exists = os.path.exists(PROFILE_FILE)
+        if exists:
             try:
-                with open(PROFILE_FILE, 'r') as f:
+                # utf-8 explicitly: the atomic writer emits utf-8; the locale
+                # codec (cp1252) only worked while values stayed ASCII.
+                with open(PROFILE_FILE, 'r', encoding='utf-8') as f:
                     raw = json.load(f)
                     print(f"Loaded profiles from {PROFILE_FILE}")
-            except (json.JSONDecodeError, IOError) as e:
+            except ValueError as e:
+                # JSONDecodeError / UnicodeDecodeError: corrupt content.
                 print(f"Profile load error: {e}, creating default profile")
                 raw = None
+            except OSError as e:
+                # Transient read failure — the file may be healthy. Run on
+                # an in-memory default and leave the file alone; the
+                # degraded flag makes any later save (a UI edit, the
+                # quit-time save) back the file up before overwriting it.
+                print(f"Profile read error: {e}, running on an in-memory "
+                      "default without overwriting profiles.json")
+                self._degraded_load = True
+                self.profiles = {"Default": {}}
+                self.avatar_profiles = {}
+                self.avatar_bindings = {}
+                return
 
         if not isinstance(raw, dict):
-            # Brand-new install (or unreadable file): start fresh.
+            if exists:
+                backup = str(PROFILE_FILE) + ".bak"
+                try:
+                    os.replace(PROFILE_FILE, backup)
+                    print(f"[profiles] unreadable profiles.json backed up to {backup}")
+                except OSError as e:
+                    print(f"[profiles] could not back up profiles.json: {e}")
+            # Brand-new install (or corrupt file, now backed up): start fresh.
             self.profiles = {"Default": {}}
             self.avatar_profiles = {}
             self.avatar_bindings = {}
@@ -189,7 +222,11 @@ class ProfileManager:
 
         for source in (self.profiles, self.avatar_profiles):
             for profile in source.values():
+                if not isinstance(profile, dict):
+                    continue  # hand-edited / shape-corrupted entry
                 for device in profile.values():
+                    if not isinstance(device, dict):
+                        continue
                     osc_addresses = device.get("osc_addresses", {})
                     if isinstance(osc_addresses, dict):
                         for key, val in list(osc_addresses.items()):
@@ -223,8 +260,22 @@ class ProfileManager:
         """
         return self._load_or_create_default()
 
+    # True when this session loaded on an in-memory default because the
+    # (possibly healthy) profiles.json could not be READ — the first save
+    # must preserve the on-disk file before overwriting it.
+    _degraded_load = False
+
     def save_profiles(self) -> None:
         """Save current profiles to JSON file in the v2 schema."""
+        if self._degraded_load:
+            backup = str(PROFILE_FILE) + ".bak"
+            try:
+                os.replace(PROFILE_FILE, backup)
+                print(f"[profiles] unreadable-at-boot profiles.json backed "
+                      f"up to {backup} before first save")
+            except OSError as e:
+                print(f"[profiles] could not back up profiles.json: {e}")
+            self._degraded_load = False
         payload = {
             "schema": self.SCHEMA_VERSION,
             "global_profiles": self.profiles,

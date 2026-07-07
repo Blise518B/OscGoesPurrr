@@ -70,10 +70,17 @@ class CoyoteSettingsManager(JsonSettingsManager):
 
     # ---- limits ----
     def get_limits(self) -> Dict[str, int]:
-        return {
-            "limit_a": int(self.settings.get("limit_a", 100)),
-            "limit_b": int(self.settings.get("limit_b", 100)),
-        }
+        # Tolerant + clamped on READ: this feeds the connect path and the
+        # status poll, and a hand-edited "limit_a": null used to crash
+        # both. Mirrors the clamps set_limits applies on write.
+        def _lim(key: str) -> int:
+            try:
+                v = int(self.settings.get(key, 100))
+            except (TypeError, ValueError):
+                return 100
+            return max(0, min(200, v))
+
+        return {"limit_a": _lim("limit_a"), "limit_b": _lim("limit_b")}
 
     def set_limits(self, limit_a: int, limit_b: int) -> None:
         self.settings["limit_a"] = max(0, min(200, int(limit_a)))

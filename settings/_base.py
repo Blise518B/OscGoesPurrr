@@ -53,20 +53,63 @@ class JsonSettingsManager:
     def _load_or_create_defaults(self) -> None:
         path = self.FILE_PATH
         if path and os.path.exists(path):
+            corrupt = False
             try:
-                with open(path, "r") as f:
+                # Explicit utf-8: atomic_write_json writes utf-8, so reading
+                # with the locale codec (cp1252 on Windows) only worked while
+                # every value happened to be ASCII-escaped.
+                with open(path, "r", encoding="utf-8") as f:
                     loaded = json.load(f)
                 if isinstance(loaded, dict):
                     # Top-level merge: defaults provide any missing keys, the
                     # on-disk values win for keys that are present.
                     self.settings = {**self._defaults_copy(), **loaded}
-                    self._post_load(loaded)
-                    return
-            except (json.JSONDecodeError, IOError) as e:
+                    try:
+                        self._post_load(loaded)
+                    except Exception as e:
+                        # A structurally-malformed (but valid-JSON) file must
+                        # degrade to defaults, never crash app boot.
+                        print(f"{type(self).__name__} post-load error: {e}, "
+                              "using defaults")
+                        corrupt = True
+                    else:
+                        return
+                else:
+                    corrupt = True  # valid JSON, wrong shape
+            except ValueError as e:
+                # JSONDecodeError / UnicodeDecodeError: the file has content
+                # we can't parse — corrupt (or hand-edited badly).
                 print(f"{type(self).__name__} load error: {e}, using defaults")
-        # Missing / unreadable / non-dict: start from defaults and persist.
+                corrupt = True
+            except OSError as e:
+                # Transient read failure (lock, permissions, cloud-sync
+                # placeholder): run on defaults for this session but do NOT
+                # overwrite the file — it may be perfectly healthy. The
+                # degraded flag makes any LATER save back the file up first
+                # (a settings edit or the quit-time save would otherwise
+                # clobber it with this defaults-based state anyway).
+                print(f"{type(self).__name__} read error: {e}, running on "
+                      "defaults without overwriting the file")
+                self._degraded_load = True
+                self.settings = self._defaults_copy()
+                return
+            if corrupt:
+                # Preserve the user's data for manual recovery before we
+                # persist defaults over it.
+                self._backup_corrupt_file(path)
+        # Missing / corrupt / non-dict: start from defaults and persist.
         self.settings = self._defaults_copy()
         self._save()
+
+    def _backup_corrupt_file(self, path) -> None:
+        backup = str(path) + ".bak"
+        try:
+            os.replace(path, backup)
+            print(f"{type(self).__name__}: unreadable settings backed up "
+                  f"to {backup}")
+        except OSError as e:
+            print(f"{type(self).__name__}: could not back up corrupt "
+                  f"settings: {e}")
 
     def _post_load(self, loaded: Dict[str, Any]) -> None:
         """Hook: after a successful top-level merge, backfill nested defaults
@@ -75,9 +118,16 @@ class JsonSettingsManager:
         ``self._save()`` if a migration changed persistable state."""
         pass
 
+    # True when this session loaded on defaults because the (possibly
+    # healthy) file could not be READ — the first save must preserve it.
+    _degraded_load = False
+
     def _save(self) -> None:
         if not self.FILE_PATH:
             return
+        if self._degraded_load:
+            self._backup_corrupt_file(self.FILE_PATH)
+            self._degraded_load = False
         try:
             atomic_write_json(self.FILE_PATH, self.settings, indent=2)
         except OSError as e:

@@ -69,17 +69,83 @@ class SteamVRSettingsManager(JsonSettingsManager):
         return changed
 
     def _post_load(self, loaded: Dict[str, Any]) -> None:
-        if "patterns" not in loaded or not isinstance(loaded.get("patterns"), list) \
-                or len(loaded["patterns"]) != 2:
-            self.settings["patterns"] = json.loads(json.dumps(self.DEFAULTS["patterns"]))
-        if "trackers" not in loaded or not isinstance(loaded.get("trackers"), dict):
-            self.settings["trackers"] = {}
+        # Patterns: per-SLOT repair instead of all-or-nothing. The old
+        # length-!=-2 check wiped BOTH tuned pattern configs when a future
+        # build appended a third entry or a truncation dropped one — and
+        # never type-checked the elements it kept. Each slot merges over
+        # its default with numeric fields coerced, extra slots ignored.
+        defaults = json.loads(json.dumps(self.DEFAULTS["patterns"]))
+        raw_patterns = loaded.get("patterns")
+        raw_patterns = raw_patterns if isinstance(raw_patterns, list) else []
+        repaired = []
+        for i, default_slot in enumerate(defaults):
+            slot = raw_patterns[i] if i < len(raw_patterns) else None
+            merged = {**default_slot, **slot} if isinstance(slot, dict) \
+                else dict(default_slot)
+            for k, dv in default_slot.items():
+                if isinstance(dv, bool):
+                    merged[k] = bool(merged.get(k, dv))
+                elif isinstance(dv, (int, float)):
+                    try:
+                        fv = float(merged.get(k, dv))
+                        if fv != fv:  # NaN
+                            raise ValueError
+                        merged[k] = type(dv)(fv)
+                    except (TypeError, ValueError):
+                        merged[k] = dv
+            repaired.append(merged)
+        self.settings["patterns"] = repaired
+
+        # Trackers: per-entry validation — a null / garbage entry used to
+        # survive load and then raise inside that tracker's feedback
+        # thread (TrackerConfig.from_dict), silently killing its haptics.
+        raw_trackers = loaded.get("trackers")
+        raw_trackers = raw_trackers if isinstance(raw_trackers, dict) else {}
+        self.settings["trackers"] = {
+            str(serial): self._clean_tracker(cfg)
+            for serial, cfg in raw_trackers.items()
+        }
         # One-shot migration: older configs stored full
         # `/avatar/parameters/MyParam` paths. The router and UI both speak in
         # bare names now, so strip the prefix at load time and persist the
         # cleaned form.
         if self._migrate_tracker_addresses():
             self._save()
+
+    _TRACKER_DEFAULTS: Dict[str, Any] = {
+        "enabled": True,
+        "address_list": ["..."],
+        "multiplier_override": 1.0,
+        "battery_threshold": 20,
+        "battery_osc_address": "",
+    }
+
+    @classmethod
+    def _clean_tracker(cls, cfg: Any) -> Dict[str, Any]:
+        """Merge an entry over the defaults with coerced/clamped fields.
+        Unknown extra keys inside the entry are preserved."""
+        out = dict(cfg) if isinstance(cfg, dict) else {}
+        merged = {**json.loads(json.dumps(cls._TRACKER_DEFAULTS)), **out}
+        merged["enabled"] = bool(merged.get("enabled", True))
+        addrs = merged.get("address_list")
+        if isinstance(addrs, list):
+            merged["address_list"] = \
+                [str(a) for a in addrs if isinstance(a, str)] or ["..."]
+        else:
+            merged["address_list"] = ["..."]
+        try:
+            f = float(merged.get("multiplier_override", 1.0))
+            merged["multiplier_override"] = f if f == f else 1.0
+        except (TypeError, ValueError):
+            merged["multiplier_override"] = 1.0
+        try:
+            merged["battery_threshold"] = max(
+                0, min(100, int(merged.get("battery_threshold", 20))))
+        except (TypeError, ValueError):
+            merged["battery_threshold"] = 20
+        merged["battery_osc_address"] = str(
+            merged.get("battery_osc_address") or "")
+        return merged
 
     # ---- Top-level fields ----
     def get_autostart(self) -> bool:
@@ -106,19 +172,29 @@ class SteamVRSettingsManager(JsonSettingsManager):
     def get_no_data(self) -> Dict[str, Any]:
         # Backward-compat: older configs only stored `no_data_timeout_s`. Use
         # it as the peaked timeout (the original semantics) and derive a
-        # reasonable active timeout if nothing newer is set.
+        # reasonable active timeout if nothing newer is set. Coercion is
+        # tolerant — this getter runs on every feedback-thread tick (the
+        # anti-stuck fuse), and a hand-edited value must not kill it.
+        def _int(value, default):
+            try:
+                return max(1, int(value))
+            except (TypeError, ValueError):
+                return default
+
         legacy = self.settings.get("no_data_timeout_s")
-        peaked = self.settings.get("no_data_timeout_peaked_s",
-                                   legacy if legacy is not None else 15)
-        active = self.settings.get("no_data_timeout_active_s",
-                                   max(1, int(int(peaked) * 7 / 15)))
+        peaked = _int(self.settings.get(
+            "no_data_timeout_peaked_s",
+            legacy if legacy is not None else 15), 15)
+        active = _int(self.settings.get(
+            "no_data_timeout_active_s", max(1, int(peaked * 7 / 15))),
+            max(1, int(peaked * 7 / 15)))
         return {
             "enabled": bool(self.settings.get("no_data_enabled", True)),
-            "timeout_active_s": int(active),
-            "timeout_peaked_s": int(peaked),
+            "timeout_active_s": active,
+            "timeout_peaked_s": peaked,
             # Keep the legacy key in the response so any old consumer that
             # reads `timeout_s` keeps working (we use the peaked value).
-            "timeout_s": int(peaked),
+            "timeout_s": peaked,
         }
 
     def set_no_data(self, enabled: bool, timeout_active_s: int,
@@ -161,22 +237,19 @@ class SteamVRSettingsManager(JsonSettingsManager):
         return dict(self.settings.get("trackers", {}))
 
     def get_tracker(self, serial: str) -> Dict[str, Any]:
-        trackers = self.settings.setdefault("trackers", {})
-        if serial not in trackers:
-            trackers[serial] = {
-                "enabled": True,
-                "address_list": ["..."],
-                "multiplier_override": 1.0,
-                "battery_threshold": 20,
-                "battery_osc_address": "",
-            }
-            self._save()
-        else:
-            # Backfill new fields onto pre-existing entries.
-            if "battery_osc_address" not in trackers[serial]:
-                trackers[serial]["battery_osc_address"] = ""
-                self._save()
-        return dict(trackers[serial])
+        """READ-ONLY: this getter runs on every per-tracker feedback-thread
+        tick (via the engine's config provider), so it must never mutate
+        settings or write to disk from those threads. Unknown serials get a
+        clean default copy; the entry is persisted by the first
+        set_tracker() from the UI. (_post_load already backfilled fields
+        on every stored entry.)"""
+        trackers = self.settings.get("trackers")
+        if not isinstance(trackers, dict):
+            return self._clean_tracker({})
+        cfg = trackers.get(serial)
+        if not isinstance(cfg, dict):
+            return self._clean_tracker({})
+        return dict(cfg)
 
     def set_tracker(self, serial: str, cfg: Dict[str, Any]) -> None:
         # Defensive normalisation: addresses are always stored as bare

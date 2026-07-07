@@ -60,10 +60,35 @@ class BHapticsSettingsManager(JsonSettingsManager):
         "sps_mirror": _DEFAULT_SPS_MIRROR,
     }
 
+    @staticmethod
+    def _clean_device(cfg: Any, default: Dict[str, Any]) -> Dict[str, Any]:
+        """Per-entry validation (the pattern the sibling managers use):
+        a hand-edited "Head": null or "intensity": "abc" used to survive
+        load wholesale and then blow up BHapticsDeviceConfig.from_dict —
+        inside the router's 60 Hz tick, killing ALL bHaptics output."""
+        out = dict(cfg) if isinstance(cfg, dict) else {}
+        merged = {**default, **out}
+        merged["enabled"] = bool(merged.get("enabled", True))
+        try:
+            merged["intensity"] = max(0, min(100, int(merged.get("intensity", 100))))
+        except (TypeError, ValueError):
+            merged["intensity"] = int(default.get("intensity", 100))
+        return merged
+
     def _post_load(self, loaded: Dict[str, Any]) -> None:
-        # Backfill any newly-added devices into older configs.
-        devs = dict(self._DEFAULT_DEVICES)
-        devs.update(loaded.get("devices", {}) or {})
+        # Backfill any newly-added devices into older configs, validating
+        # each entry (unknown extra keys inside an entry are preserved).
+        raw = loaded.get("devices")
+        raw = raw if isinstance(raw, dict) else {}
+        devs: Dict[str, Dict[str, Any]] = {}
+        for pos, default in self._DEFAULT_DEVICES.items():
+            devs[pos] = self._clean_device(raw.get(pos), default)
+        # Preserve positions we don't know about (a newer build's file
+        # meeting this one) instead of silently dropping them on save.
+        for pos, cfg in raw.items():
+            if pos not in devs:
+                devs[pos] = self._clean_device(
+                    cfg, {"enabled": True, "intensity": 100})
         self.settings["devices"] = devs
         # Backfill the sps_mirror block if the loaded config predates the
         # feature; preserve the user's existing entries otherwise.
