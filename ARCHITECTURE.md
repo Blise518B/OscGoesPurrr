@@ -100,19 +100,23 @@ replicated per haptic backend.
 
 ### 3. The Muscles — a family of sealed engines
 
-The original "Muscle" was one engine. Today **six** hardware backends live
+The original "Muscle" was one engine. Today **seven** hardware backends live
 side-by-side, all following the same sealed-box contract. The
 controller fans incoming OSC state out to whichever engines have config.
 
 The reconnecting backends share a *cold-path* connection supervisor in
 `engine_base.py`: `ReconnectingEngine` (thread-driven — bHaptics, OWO,
-PiShock-serial) and `AsyncReconnectingEngine` (owns its own asyncio loop
-thread — Coyote). It owns the connected flag, last-error, the auto-connect
-gate, the state-change callback, `start()` / `stop()` / `manual_connect()`,
-and the backoff reconnect loop, so each engine only implements its transport
-via `_open()` / `_close()` / `_available`. **Critical:** this base governs the
-cold path only (connect / reconnect / disconnect) — it never sits on an
-engine's hot send path. Buttplug (`haptic_engine`) and SteamVR
+PiShock-serial, Handy) and `AsyncReconnectingEngine` (owns its own asyncio loop
+thread — Coyote). Both flavours expose the identical public surface (pinned by
+a contract-parity test): connected flag, last-error, the auto-connect gate,
+the state-change callback, `start()` / `stop()` / `manual_connect()`, and the
+backoff reconnect loop, so each engine only implements its transport via
+`_open()` / `_close()` / `_available`. A connect lock serializes every open
+(manual button vs the loop), and `manual_connect()` latches a *manual hold*:
+while auto-connect is off, the loop only tears down links it opened itself —
+a user's Connect Now session survives until it drops on its own or the engine
+stops. **Critical:** this base governs the cold path only (connect /
+reconnect / disconnect) — it never sits on an engine's hot send path. Buttplug (`haptic_engine`) and SteamVR
 (`steamvr_engine`) predate it and keep their own lifecycle.
 
 * **`haptic_engine.py` — Buttplug.io toys.** Runs its own isolated
@@ -159,6 +163,16 @@ engine's hot send path. Buttplug (`haptic_engine`) and SteamVR
   `OWO.dll`; both optional and guarded, so the app runs without them). Owns
   the sensation re-send cadence because OWO pulses expire (~0.3 s). Paired
   with `owo_router.py`.
+* **`handy_engine.py` — The Handy stroker (Handy 2 / Pro 2).** A
+  `ReconnectingEngine` over the official handyfeeling.com REST API v3
+  (cloud-routed; firmware 4 devices). Two control modes straight from the
+  first-party examples: HAMP (`/hamp/velocity`, level drives stroke speed —
+  the default) and HDSP (`/hdsp/xpt` position+duration, fire-and-forget via
+  `immediate_rsp`). The cloud API is rate limited (~240 req/min documented),
+  so the engine owns a latest-wins send loop with a configurable per-command
+  cap; the pure `HandySpeedPlanner` / `HandyPositionPlanner` decision cores
+  decide WHAT to send and are unit-tested without network. Paired with
+  `handy_router.py`.
 
 **Rule:** every engine owns its internal state. The outside world
 communicates with each one *exclusively* through its primitive-only
@@ -182,11 +196,13 @@ what to do.
 * **`bhaptics_router.py` — bHaptics dot routing.** Translates the OGB /
   bHapticsOSC parameter shape into per-position dot intensity grids,
   with antistuck timers, and emits frames through `BHapticsEngine`.
-* **`coyote_router.py` / `owo_router.py` — e-stim level routing.** Both map
-  OGB zones (+ filters) to a per-output level, shaped by a per-output
-  threshold / gain, then dispatch only changed targets. Coyote drives two A/B
-  channels; OWO drives ten muscle groups (coalesced into one debounce key so
-  the engine gets the whole active map).
+* **`coyote_router.py` / `owo_router.py` / `handy_router.py` — level
+  routing.** All map OGB zones (+ filters) to a per-output level, shaped by a
+  per-output threshold / gain, then dispatch only changed targets. Coyote
+  drives two A/B channels; OWO drives ten muscle groups (coalesced into one
+  debounce key so the engine gets the whole active map); the Handy is a
+  single-output stroker, so its router pushes one quantized 0-1 level and the
+  engine decides what it means (HAMP velocity vs HDSP position).
 * **`pishock_router.py` — PiShock discrete-event routing.** *Not* a level
   router: a shock fires a single (op, intensity, duration) event on a
   **rising edge**, with hysteresis re-arm, a per-zone cooldown, and a global
@@ -197,8 +213,13 @@ what to do.
 Each router lives next to its engine; none of them holds long-lived
 hardware state. The continuous-level routers share `router_base.py`'s
 `PollingRouter`: a debounced ~60 Hz poll loop where a subclass declares only
-`compute_targets()` + `dispatch()`. `steamvr_router`, `coyote_router`, and
-`owo_router` subclass it directly; `bhaptics_router` keeps its bespoke `_tick`
+`compute_targets()` + `dispatch()`. The base also owns the **stale-signal
+cutoff**: when no OSC packet has arrived for ~5 s (VRChat crashed or closed
+mid-contact), every enabled output is pulled to its zero level once and the
+router goes idle until traffic returns — the shared analogue of
+motor_router's anti-stuck fuse and SteamVR's no-data fallback, so e-stim /
+EMS / stroking can never latch on a frozen parameter snapshot. `steamvr_router`, `coyote_router`,
+`owo_router`, and `handy_router` subclass it directly; `bhaptics_router` keeps its bespoke `_tick`
 (anti-stuck ramp + raw/override snapshots don't fit the flat target model) but
 still inherits the loop; `motor_router` stays fully separate (it's driven from
 the UI thread via `force_recalculate`, not a poll thread); and `pishock_router`
@@ -283,6 +304,7 @@ zone — detected OGB or synthetic SPS source — identically.
     * `controllers/pishock_facade.py` — `PiShockFacade`
     * `controllers/coyote_facade.py` — `CoyoteFacade`
     * `controllers/owo_facade.py` — `OwoFacade`
+    * `controllers/handy_facade.py` — `HandyFacade`
     * `controllers/osc_facade.py` — `OscFacade` (VRChat OSC connection
       lifecycle + diagnostics)
     * `controllers/profiles_facade.py` — `ProfilesFacade` (global +
@@ -348,10 +370,14 @@ an ack adds latency. Keep each stage tight.
   **fire-and-forget** (never awaits Intiface's ack), bounded by a
   per-feature cap (`HAPTIC_MAX_SEND_HZ`, ~60 Hz) so a real BLE toy isn't
   flooded. ≈27 ms end-to-end on the bench (was ≈60 ms).
-* **Linear / strokers** — same engine loop; fire-and-forget, but the
-  physics tick is gated *together with* the send so the commanded
-  `duration` stays equal to the real send interval, and an in-flight guard
-  keeps position commands strictly in order.
+* **Linear / strokers** — same engine loop; fire-and-forget, with an
+  in-flight guard keeping position commands strictly in order. Sends are
+  capped at `LINEAR_MAX_SEND_HZ` (20 Hz) — lower than the vibrate cap
+  because Buttplug Spec v4 servers coalesce strokers to one flush per
+  device message gap anyway (The Handy: 50 ms per the official device
+  config) — and the commanded `duration` is sized from the *real* gap
+  since the last send (× overlap) so motion stays continuous at that
+  cadence. The stroke physics still ticks every loop.
 * **Per-motor VRChat param-out** (`motor_param_out.py` →
   `osc_manager.send_parameter`). Optional: a motor can mirror its computed
   0..1 output back to VRChat as an avatar parameter (drive a visual, not a
@@ -379,8 +405,10 @@ an ack adds latency. Keep each stage tight.
   near-zero added latency. BLE writes are fire-and-forget (`response=False`).
 * **OWO** (`owo_router` → `owo_engine`). Router polls ~60 Hz (debounced); the
   engine owns a ~0.25 s sensation re-send loop because OWO pulses expire at
-  ~0.3 s. A changed muscle map is applied immediately; the loop only keeps a
-  held contact alive.
+  ~0.3 s. A changed muscle map **wakes the loop** (threading event, floored
+  at a 50 ms send gap so a sweeping router can't flood the OWO app) so an
+  edge is applied immediately; the cadence only keeps a held contact alive,
+  and a release edge sends an explicit Stop instead of waiting out the tail.
 * **PiShock** (`pishock_router` → `pishock_engine`). A *discrete-event*
   backend, not a level stream: the router polls ~60 Hz and fires one event on
   a rising edge, fire-and-forget. Here the per-feature send cap is a
@@ -388,6 +416,15 @@ an ack adds latency. Keep each stage tight.
   `fire()` plus a global rate backstop in the router — so the device rate is
   intentionally bounded *for the human*, not for latency. The first edge after
   idle still fires immediately.
+* **Handy** (`handy_router` → `handy_engine`). Router polls ~60 Hz (debounced,
+  level quantized); the engine owns a latest-wins send loop because the
+  transport is the handyfeeling **cloud** REST API (v3) with a documented
+  ~240 req/min budget — here the send cap protects the *account quota*, not a
+  BLE radio. The loop wakes early on a level change (threading event), the
+  first command after a quiet gap goes immediately, and HTTP runs on the
+  loop's own thread with `immediate_rsp` so nothing upstream ever blocks on
+  the round-trip. Cloud RTT dominates this backend's end-to-end latency; the
+  app-side budget rules still apply so we never add to it.
 
 **The patterns (reach for these):**
 
@@ -428,8 +465,8 @@ router poll rates are constructor defaults (~16 ms).
 The on-disk config file is `profiles.json` (v2 schema). The individual
 settings managers and their file-path constants live in the `settings/`
 package (one module per concern: `app.py`, `bhaptics.py`, `steamvr.py`,
-`pishock.py`, `coyote.py`, `owo.py`, `known_devices.py`, `sps_sources.py`,
-`sessions.py`; paths in `_paths.py`). Most concerns share the
+`pishock.py`, `coyote.py`, `owo.py`, `handy.py`, `known_devices.py`,
+`sps_sources.py`, `sessions.py`; paths in `_paths.py`). Most concerns share the
 load-or-create-defaults / merge / atomic-save plumbing in
 `settings/_base.py`'s `JsonSettingsManager` — a subclass declares only
 `DEFAULTS` + `FILE_PATH` and (for nested structure) `_post_load()`. The
@@ -459,6 +496,10 @@ session-settings manager is owned by `SessionsFacade` instead):
   zone routing.
 * **`owo_settings`** (`OwoSettingsManager`) — OWO app connection (game id /
   IP), auto-connect, frequency, and the per-muscle zone routing.
+* **`handy_settings`** (`HandySettingsManager`) — handyfeeling cloud
+  credentials (connection key + API key), auto-connect, motion settings
+  (control mode, slider stroke zone, speed cap, command-rate cap), and the
+  single zone routing.
 * **`known_devices`** (`KnownDevicesRegistry`) — global registry of
   every toy ever seen; profiles inherit from it on first creation.
 * **`sps_sources`** (`SpsSourceManager`) — global registry of
@@ -522,7 +563,7 @@ All handled in `ProfileManager`:
   (see the Profile model section above).
 * `tools/` — developer scripts, not loaded at runtime
   (`flatten_lovense_icons.py`, `generate_bhaptics_icons.py`,
-  `generate_sim_icon.py`).
+  `generate_handy_icon.py`, `generate_sim_icon.py`).
 
 ---
 

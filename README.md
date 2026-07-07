@@ -3,7 +3,7 @@
 A multi-backend haptic feedback router for VRChat. Reads your avatar's
 OSC parameters and translates them into smooth output for Bluetooth
 toys, SteamVR trackers, bHaptics suits, OWO suits, e-stim units
-(PiShock, DG-Lab Coyote), and the SteamVR overlay.
+(PiShock, DG-Lab Coyote), The Handy, and the SteamVR overlay.
 
 ## ✨ Features
 
@@ -36,6 +36,12 @@ toys, SteamVR trackers, bHaptics suits, OWO suits, e-stim units
   sensations for full-torso EMS feedback, via the OWO app over Wi-Fi.
   (Optional: needs `pythonnet` plus a vendored `OWO.dll` — see
   [`owo-sdk/`](owo-sdk/).)
+* **The Handy (Handy 2 / Pro 2).** Drives the stroker through the
+  official handyfeeling.com API (v3): contact strength sets the stroke
+  speed (HAMP) or steers the slider position directly (HDSP), with a
+  device-enforced stroke zone, a speed ceiling, and a command-rate cap
+  sized to the cloud API's request budget. (A Handy also still works as
+  a regular Buttplug.io toy over Bluetooth via Intiface.)
 * **SteamVR Toy Driver.** Optional virtual-device bridge that makes
   your connected toys and configured bHaptics positions show up as
   trackers in SteamVR's device strip, complete with battery icons.
@@ -77,6 +83,11 @@ toys, SteamVR trackers, bHaptics suits, OWO suits, e-stim units
    app. The OWO backend also needs `pip install pythonnet` and a vendored
    `OWO.dll` dropped into [`owo-sdk/`](owo-sdk/); it is deliberately left out
    of the default install (see that folder's note).
+8. *(Optional)* A [Handy 2 / Handy Pro 2](https://www.thehandy.com/) on
+   Wi-Fi, linked to your Handy account. The native backend needs the device
+   connection key (Handyverse app) and an API key (Application ID) from
+   [user.handyfeeling.com](https://user.handyfeeling.com) — commands route
+   through the official handyfeeling.com cloud API.
 
 > Bluetooth (`bleak`), serial (`pyserial`), and cloud (`requests`) support
 > install automatically with `requirements.txt`; their imports are guarded,
@@ -147,6 +158,9 @@ Sidebar views (toggle from the left rail):
   and waveform, zone routing, plus live battery and strength readouts.
 * **OWO** — OWO app connection (game id / IP), frequency, and
   per-muscle zone routing for the suit's ten muscle groups.
+* **Handy** — handyfeeling.com connection (connection key + API key),
+  control mode (stroke speed / position), stroke zone, command-rate
+  cap, and the stroker's zone routing chain.
 * **OSC Inspector** — live tree of every parameter currently in the
   cache (the "shadow state").
 * **OSC Diagnostics** — packets-handled counter, phonebook GET log,
@@ -195,6 +209,8 @@ All user state is stored under `%APPDATA%\OscGoesPurrr\`:
   waveform, and zone routing.
 * `owo_settings.json` — OWO app connection + frequency + per-muscle
   routing.
+* `handy_settings.json` — Handy cloud credentials + motion settings +
+  zone routing.
 * `known_devices.json` — global registry of every toy ever seen.
 * `sps_sources.json` — user-defined synthetic SPS sources.
 
