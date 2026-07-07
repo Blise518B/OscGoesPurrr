@@ -42,6 +42,7 @@ from owo_router import OwoRouter
 from handy_engine import HandyEngine
 from handy_router import HandyRouter
 from motor_param_out import resolve_param_out
+from queue_drain import drain_and_coalesce
 from constants import *
 from utilities import value_to_hex_color, toggle_windows_console, create_default_icon
 from version import __version__
@@ -412,24 +413,13 @@ class OscGoesPurrrApp(
         coalesced — only the most recent target value matters for hardware,
         so we drop the stale ones and dispatch a single command per motor.
         """
-        # Collect-and-coalesce phase. We need to preserve relative order of
-        # non-haptic events, so haptic updates land in a side dict keyed by
-        # (device, motor) and replay at the end. Sequence preservation matters
-        # for stuff like `connection_status` → `devices_found`.
-        try:
-            haptic_latest: Dict[tuple, tuple] = {}
-            ordered_events: List[tuple] = []
-            drained = 0
-            while drained < self._QUEUE_BATCH_CAP:
-                msg = self.thread_queue.get_nowait()
-                drained += 1
-                if isinstance(msg, tuple) and len(msg) == 2 and msg[0] == "osc_haptic_update":
-                    device_name, val_float, motor_index = msg[1]
-                    haptic_latest[(device_name, motor_index)] = (device_name, val_float, motor_index)
-                    continue
-                ordered_events.append(msg)
-        except queue.Empty:
-            pass
+        # Collect-and-coalesce phase (pure, unit-tested in queue_drain.py):
+        # haptic updates land latest-wins in a side dict keyed by
+        # (device, motor) and replay at the end; the relative order of every
+        # other event is preserved. Sequence preservation matters for stuff
+        # like `connection_status` → `devices_found`.
+        ordered_events, haptic_latest = drain_and_coalesce(
+            self.thread_queue, self._QUEUE_BATCH_CAP)
 
         for msg in ordered_events:
             if not isinstance(msg, tuple):
