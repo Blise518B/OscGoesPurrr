@@ -119,6 +119,53 @@ class OSCQueryHandler(BaseHTTPRequestHandler):
         pass  # Suppress HTTP request spam in console
 
 
+class SendRateLimiter:
+    """Per-address outbound rate limiter with a trailing-edge flush.
+
+    ``allow(address, value, now)`` returns True when the send may go out
+    now. When it returns False the value is REMEMBERED: ``poll_flush(now)``
+    later yields each suppressed address's newest value once its window
+    expires, so the terminal value of a burst always reaches the wire. The
+    naive suppress-and-forget limiter this replaces could leave a
+    change-debounced producer (the per-motor VRChat param-out mirror) stuck
+    at a stale non-zero value on the avatar indefinitely.
+
+    Pure and clock-injected — unit-tested without a socket in
+    tests/test_send_rate_limiter.py. Not thread-safe by itself; the manager
+    serializes access (send path + one flush timer).
+    """
+
+    def __init__(self, rate_hz: float):
+        self.rate_hz = float(rate_hz)
+        self._last_sent: Dict[str, float] = {}
+        self._pending: Dict[str, Any] = {}
+
+    def allow(self, address: str, value: Any, now: float) -> bool:
+        interval = 1.0 / self.rate_hz
+        last = self._last_sent.get(address)
+        if last is not None and (now - last) < interval:
+            self._pending[address] = value  # latest-wins
+            return False
+        self._last_sent[address] = now
+        self._pending.pop(address, None)
+        return True
+
+    def poll_flush(self, now: float) -> List[tuple]:
+        """``[(address, value), ...]`` whose suppressed sends are now due."""
+        if not self._pending:
+            return []
+        interval = 1.0 / self.rate_hz
+        out: List[tuple] = []
+        for address in list(self._pending.keys()):
+            if (now - self._last_sent.get(address, 0.0)) >= interval:
+                out.append((address, self._pending.pop(address)))
+                self._last_sent[address] = now
+        return out
+
+    def has_pending(self) -> bool:
+        return bool(self._pending)
+
+
 class VRChatOSCManager:
     # ------------------------------------------------------------------
     # Diagnostic / watchdog thresholds. Tunable up here so they're easy
@@ -209,7 +256,9 @@ class VRChatOSCManager:
         self.parameter_callbacks: Dict[str, list[Callable]] = {}
         self._param_types: Dict[str, str] = {}
         self.rate_limit_hz = rate_limit_hz
-        self._last_sent_times: Dict[str, float] = {}
+        self._send_limiter = SendRateLimiter(rate_limit_hz)
+        self._flush_timer: Optional[threading.Timer] = None
+        self._flush_lock = threading.Lock()
         self.on_connected: Callable = None
         self.on_disconnected: Callable = None  # fired when VRChat goes away (mDNS removal or HTTP health-check failure)
         self.global_osc_callback: Callable = None
@@ -1272,21 +1321,52 @@ class VRChatOSCManager:
 
     def send_parameter(self, address: str, value: Any, ignore_rate_limit: bool = False):
         if not self.is_connected or not self.osc_client: return
-        current_time = time.time()
-        if not ignore_rate_limit and address in self._last_sent_times:
-            if (current_time - self._last_sent_times[address]) < (1.0 / self.rate_limit_hz):
-                return 
-        self._last_sent_times[address] = current_time
+        if not ignore_rate_limit and not self._send_limiter.allow(
+                address, value, time.time()):
+            # Suppressed — the limiter remembered the value; a one-shot
+            # timer delivers the TERMINAL value of the burst once the
+            # window expires. Without the trailing flush, a change-debounced
+            # producer (the per-motor param-out mirror) whose final update
+            # landed inside the window stuck the avatar parameter at a
+            # stale non-zero value until the motor next changed.
+            self._arm_flush_timer()
+            return
+        self._send_raw(address, value)
 
+    def _send_raw(self, address: str, value: Any) -> None:
         expected_type = self._param_types.get(address)
         if expected_type:
             if expected_type == 'f': value = float(value)
             elif expected_type == 'i': value = int(value)
             elif expected_type in ['T', 'F']: value = bool(value)
         elif isinstance(value, int):
-            value = float(value) 
+            value = float(value)
 
         self.osc_client.send_message(address, value)
+
+    def _arm_flush_timer(self) -> None:
+        with self._flush_lock:
+            if self._flush_timer is not None:
+                return  # a flush is already scheduled
+            t = threading.Timer(1.0 / self.rate_limit_hz, self._flush_pending)
+            t.daemon = True
+            self._flush_timer = t
+            t.start()
+
+    def _flush_pending(self) -> None:
+        with self._flush_lock:
+            self._flush_timer = None
+        if not self.is_connected or not self.osc_client:
+            return
+        try:
+            for address, value in self._send_limiter.poll_flush(time.time()):
+                self._send_raw(address, value)
+        except Exception:
+            pass
+        # Different addresses' windows expire at different times — re-arm
+        # until everything suppressed has gone out.
+        if self._send_limiter.has_pending():
+            self._arm_flush_timer()
 
     def send_parameter_bundle(self, parameters: Dict[str, Any]):
         if not self.is_connected or not self.osc_client: return
@@ -1374,6 +1454,14 @@ class VRChatOSCManager:
         """Unregister services and shut down."""
         # Wake the health-check loop so it exits promptly.
         self._shutdown.set()
+        # Cancel any pending trailing-flush send.
+        with self._flush_lock:
+            if self._flush_timer is not None:
+                try:
+                    self._flush_timer.cancel()
+                except Exception:
+                    pass
+                self._flush_timer = None
         # Cancel any pending debounced rebuild so we don't run after shutdown.
         with self._refetch_lock:
             if self._refetch_timer is not None:
