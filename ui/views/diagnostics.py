@@ -54,6 +54,22 @@ from ui.widgets import (
 )
 
 
+class _ReflowTable(QTableWidget):
+    """QTableWidget that fires a callback whenever its geometry changes, so
+    the OSC Inspector can re-pack its rows into more (or fewer) side-by-side
+    Parameter/Value column-groups as the window is resized."""
+
+    def __init__(self, *args, on_reflow: Optional[Callable[[], None]] = None,
+                 **kwargs):
+        super().__init__(*args, **kwargs)
+        self._on_reflow = on_reflow
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._on_reflow is not None:
+            self._on_reflow()
+
+
 class DiagnosticsMixin:
 
     # ----------------------------------------------------------
@@ -116,8 +132,13 @@ class DiagnosticsMixin:
         ))
         inspector_lay.addLayout(search_row)
 
-        self.debugger_table = QTableWidget(0, 2)
-        self.debugger_table.setHorizontalHeaderLabels(["Parameter", "Value"])
+        # Rows are re-packed into 1-3 side-by-side Parameter/Value
+        # column-groups depending on how much horizontal room the table
+        # has, so a wide window doesn't leave the Value column stretched
+        # across empty space. _ReflowTable calls back on resize.
+        self.debugger_table = _ReflowTable(
+            0, 2, on_reflow=self._reflow_debugger_table
+        )
         self.debugger_table.verticalHeader().setVisible(False)
         self.debugger_table.verticalHeader().setDefaultSectionSize(18)
         self.debugger_table.setShowGrid(False)
@@ -125,15 +146,17 @@ class DiagnosticsMixin:
         self.debugger_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.debugger_table.setSelectionMode(QAbstractItemView.NoSelection)
         self.debugger_table.setFocusPolicy(Qt.NoFocus)
-        hdr = self.debugger_table.horizontalHeader()
-        hdr.setSectionResizeMode(0, QHeaderView.Interactive)
-        hdr.setSectionResizeMode(1, QHeaderView.Stretch)
-        hdr.setCursor(Qt.SplitHCursor)
-        self.debugger_table.setColumnWidth(0, 280)
+        self.debugger_table.horizontalHeader().setCursor(Qt.SplitHCursor)
         font = QFont("Consolas")
         font.setStyleHint(QFont.Monospace)
         font.setPointSize(10)
         self.debugger_table.setFont(font)
+
+        # Live data + current group count, used by the resize/render path.
+        self._debugger_rows: List[tuple] = []
+        self._debugger_groups = 0
+        self._apply_debugger_columns(1)
+
         inspector_lay.addWidget(self.debugger_table, 1)
 
         parent_layout.addWidget(inspector_card, 1)
@@ -483,17 +506,77 @@ class DiagnosticsMixin:
     def update_debugger_display(self, data):
         self._update_debugger_table(data)
 
+    # --- multi-column layout helpers -------------------------------------
+    #
+    # The inspector packs its rows into one or more Parameter/Value
+    # column-groups laid out side by side. Parameters fill row-major
+    # (left-to-right, then wrap to the next row) so alphabetical order
+    # still reads naturally and scrolls continuously.
+
+    # A group needs ~280px for the parameter name plus room for the value;
+    # below this we'd rather have fewer, wider groups than cramped ones.
+    _DEBUGGER_GROUP_MIN_W = 440
+    _DEBUGGER_MAX_GROUPS = 3
+
+    def _compute_debugger_groups(self) -> int:
+        """How many Parameter/Value column-groups fit at the current width.
+
+        Uses the table's full width (not the viewport) so that the vertical
+        scrollbar appearing/disappearing can't make the count oscillate."""
+        tbl = self.debugger_table
+        if tbl is None:
+            return 1
+        w = tbl.width()
+        groups = max(1, w // self._DEBUGGER_GROUP_MIN_W)
+        return min(int(groups), self._DEBUGGER_MAX_GROUPS)
+
+    def _apply_debugger_columns(self, groups: int) -> None:
+        """Configure the table for `groups` Parameter/Value pairs."""
+        tbl = self.debugger_table
+        if tbl is None:
+            return
+        tbl.setColumnCount(groups * 2)
+        labels = []
+        for _ in range(groups):
+            labels.extend(["Parameter", "Value"])
+        tbl.setHorizontalHeaderLabels(labels)
+        hdr = tbl.horizontalHeader()
+        for g in range(groups):
+            pcol = g * 2
+            vcol = pcol + 1
+            hdr.setSectionResizeMode(pcol, QHeaderView.Interactive)
+            hdr.setSectionResizeMode(vcol, QHeaderView.Stretch)
+            tbl.setColumnWidth(pcol, 280)
+        self._debugger_groups = groups
+
+    def _reflow_debugger_table(self) -> None:
+        """Resize callback — re-pack the rows if the column-group count
+        changed. When it hasn't, the Stretch value columns resize on their
+        own and there's nothing to do."""
+        # resizeEvent can fire before the build method finishes wiring up
+        # these attributes; bail out until they exist.
+        if getattr(self, "debugger_table", None) is None:
+            return
+        if getattr(self, "_debugger_groups", None) is None:
+            return
+        if self._compute_debugger_groups() != self._debugger_groups:
+            self._render_debugger_table()
+
     def _update_debugger_table(self, data):
         tbl = self.debugger_table
         if tbl is None:
             return
 
         if not isinstance(data, list):
+            self._debugger_rows = []
+            if self._debugger_groups != 1:
+                self._apply_debugger_columns(1)
             tbl.setRowCount(1)
             placeholder = QTableWidgetItem(str(data))
             placeholder.setForeground(QColor(COLOR_TEXT_MUTED))
             tbl.setItem(0, 0, placeholder)
-            tbl.setItem(0, 1, QTableWidgetItem(""))
+            for c in range(1, tbl.columnCount()):
+                tbl.setItem(0, c, QTableWidgetItem(""))
             return
 
         rows = []
@@ -512,27 +595,58 @@ class DiagnosticsMixin:
                 addr_clean = addr_clean[:-1].rstrip()
             rows.append((addr_clean, val_str, color))
 
+        self._debugger_rows = rows
+        self._render_debugger_table()
+
+    def _render_debugger_table(self):
+        tbl = self.debugger_table
+        if tbl is None:
+            return
+
+        rows = self._debugger_rows
+        groups = self._compute_debugger_groups()
+        if groups != self._debugger_groups:
+            self._apply_debugger_columns(groups)
+
+        n = len(rows)
+        table_rows = (n + groups - 1) // groups if n else 0
+
+        # Preserve the vertical scroll position across a re-pack.
+        vbar = tbl.verticalScrollBar()
+        scroll_val = vbar.value()
+
         tbl.setUpdatesEnabled(False)
         # In-place update: resize row count, then overwrite text on existing
         # cells. We never call clear()/setHtml(), so the horizontal scrollbar
         # range and value are preserved by Qt itself.
-        if tbl.rowCount() != len(rows):
-            tbl.setRowCount(len(rows))
+        if tbl.rowCount() != table_rows:
+            tbl.setRowCount(table_rows)
         muted = QColor(COLOR_TEXT_MUTED)
-        for r, (addr, val_str, color) in enumerate(rows):
-            addr_item = tbl.item(r, 0)
-            if addr_item is None:
-                addr_item = QTableWidgetItem()
-                addr_item.setForeground(muted)
-                tbl.setItem(r, 0, addr_item)
-            if addr_item.text() != addr:
-                addr_item.setText(addr)
+        for r in range(table_rows):
+            for g in range(groups):
+                idx = r * groups + g  # row-major fill
+                pcol = g * 2
+                vcol = pcol + 1
+                if idx < n:
+                    addr, val_str, color = rows[idx]
+                else:
+                    addr, val_str, color = "", "", None
 
-            val_item = tbl.item(r, 1)
-            if val_item is None:
-                val_item = QTableWidgetItem()
-                tbl.setItem(r, 1, val_item)
-            if val_item.text() != val_str:
-                val_item.setText(val_str)
-            val_item.setForeground(QColor(color))
+                addr_item = tbl.item(r, pcol)
+                if addr_item is None:
+                    addr_item = QTableWidgetItem()
+                    addr_item.setForeground(muted)
+                    tbl.setItem(r, pcol, addr_item)
+                if addr_item.text() != addr:
+                    addr_item.setText(addr)
+
+                val_item = tbl.item(r, vcol)
+                if val_item is None:
+                    val_item = QTableWidgetItem()
+                    tbl.setItem(r, vcol, val_item)
+                if val_item.text() != val_str:
+                    val_item.setText(val_str)
+                if color is not None:
+                    val_item.setForeground(QColor(color))
         tbl.setUpdatesEnabled(True)
+        vbar.setValue(scroll_val)
