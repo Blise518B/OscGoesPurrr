@@ -16,10 +16,48 @@
 # loop isn't duplicated. motor_router stays separate entirely (it's driven from
 # the UI thread via force_recalculate, not a poll thread).
 
+import time
 from typing import Any, Callable, Dict
 
 from parameter_store import store
 from polling import PollingThread
+
+# No OSC traffic for this long => treat the parameter snapshot as stale and
+# pull every output to its zero level. parameter_store retains last values
+# forever, so without this a VRChat crash mid-contact would latch e-stim /
+# EMS / stroking at the last strength indefinitely. This is the shared
+# analogue of motor_router's anti-stuck fuse and SteamVR's no-data fallback.
+#
+# 10 s balances the two failure modes: VRChat only sends parameters on
+# CHANGE, so a fully-pinned, motionless held contact can be legitimately
+# silent for several seconds (a 5 s cutoff false-positived there, zeroing
+# output mid-scene); total silence for 10 s in a live session is almost
+# certainly a dead VRChat. Comparable to motor_router's 15 s peaked fuse.
+STALE_SIGNAL_CUTOFF_S = 10.0
+
+
+class StaleSignalMonitor:
+    """Tracks parameter_store's packet counter and reports stale once
+    `cutoff_s` seconds pass without a single OSC write. One locked counter
+    read per call — cheap enough for a 60 Hz router tick. Shared by
+    PollingRouter and the discrete-event PiShock router (whose sustain
+    re-fires would otherwise keep shocking off a frozen snapshot)."""
+
+    def __init__(self, cutoff_s: float = STALE_SIGNAL_CUTOFF_S):
+        self.cutoff_s = cutoff_s
+        self._count = -1
+        self._ts = time.monotonic()
+
+    def is_stale(self) -> bool:
+        if self.cutoff_s <= 0:
+            return False
+        count = store.get_packets_received()
+        now = time.monotonic()
+        if count != self._count:
+            self._count = count
+            self._ts = now
+            return False
+        return (now - self._ts) >= self.cutoff_s
 
 
 class PollingRouter(PollingThread):
@@ -36,15 +74,24 @@ class PollingRouter(PollingThread):
       * ``_wants_tick_when_idle()`` — keep ticking with an empty param store.
       * ``_on_cleared()`` — called once when the debounce cache is cleared on a
         disconnect, so a subclass can flush any mirrored snapshot state.
+
+    Stale-signal cutoff: when no OSC packet has arrived for
+    ``stale_signal_cutoff_s`` seconds (VRChat crashed / closed), the tick
+    computes over an EMPTY snapshot so every enabled output resolves to its
+    zero level, then goes idle. Costs one counter read per tick.
     """
 
-    def __init__(self, name: str, engine, poll_rate_s: float = 0.016):
+    def __init__(self, name: str, engine, poll_rate_s: float = 0.016,
+                 stale_signal_cutoff_s: float = STALE_SIGNAL_CUTOFF_S):
         super().__init__(name)
         self.engine = engine
         self.poll_rate_s = poll_rate_s
+        self.stale_signal_cutoff_s = stale_signal_cutoff_s
         # key -> last dispatched target; debounces so a held value adds no
         # traffic and the first change after idle is sent immediately.
         self._last_outputs: Dict[Any, Any] = {}
+        self._stale_monitor = StaleSignalMonitor(stale_signal_cutoff_s)
+        self._stale_zeroed = False
 
     def _run(self) -> None:
         print(f"[{self._thread_name}] thread started")
@@ -63,13 +110,49 @@ class PollingRouter(PollingThread):
                 self._on_cleared()
             return
         params = store.get_all_parameters() or {}
+        if self._signal_is_stale():
+            # OSC went silent while values may be latched non-zero: once,
+            # resolve every enabled output against an empty snapshot (-> its
+            # zero level), then go fully idle until the signal returns.
+            if not self._stale_zeroed:
+                self._pull_outputs_to_zero()
+                self._stale_zeroed = True
+            return
+        self._stale_zeroed = False
         if not params and not self._wants_tick_when_idle():
+            if self._last_outputs:
+                # The store emptied (e.g. an OSCQuery rebuild yielded no
+                # avatar params) while outputs were live — pull them to zero
+                # rather than latching (same recipe as the stale cutoff).
+                self._pull_outputs_to_zero()
             return
         targets = self.compute_targets(params)
         for key, target in targets.items():
             if self._last_outputs.get(key) != target:
                 self._last_outputs[key] = target
                 self.dispatch(key, target)
+
+    def _pull_outputs_to_zero(self) -> None:
+        """Dispatch every enabled output's zero level (computed over an empty
+        snapshot), then clear the debounce cache so the first tick after the
+        signal returns re-sends current values. One raising dispatch must not
+        skip the remaining outputs — each key is guarded individually."""
+        try:
+            for key, target in self.compute_targets({}).items():
+                if self._last_outputs.get(key) != target:
+                    try:
+                        self.dispatch(key, target)
+                    except Exception:
+                        continue
+        finally:
+            self._last_outputs.clear()
+            self._on_cleared()
+
+    def _signal_is_stale(self) -> bool:
+        """True when no OSC parameter write has arrived within the cutoff."""
+        # Kept in sync so tests / callers can tune the cutoff at runtime.
+        self._stale_monitor.cutoff_s = self.stale_signal_cutoff_s
+        return self._stale_monitor.is_stale()
 
     # ---- Hooks (override as needed) ----------------------------------
     def _engine_ready(self) -> bool:

@@ -47,9 +47,12 @@ class TestComputeTargets:
         r = _router({"T1": _cfg(addrs=("A", "B"))})
         assert r.compute_targets({"A": 0.3, "B": 0.8}) == {"T1": pytest.approx(0.8)}
 
-    def test_disabled_tracker_skipped(self):
+    def test_disabled_tracker_emits_explicit_zero(self):
+        # Disabling a tracker mid-vibration must actively silence it — an
+        # omitted key would leave the last strength latched in the engine
+        # until the anti-stuck fuse (PollingRouter latches omitted outputs).
         r = _router({"T1": _cfg(enabled=False)})
-        assert r.compute_targets({"P": 1.0}) == {}
+        assert r.compute_targets({"P": 1.0}) == {"T1": 0.0}
 
     def test_placeholder_and_blank_addresses_ignored(self):
         # "..." is the stored placeholder for "no addresses configured".

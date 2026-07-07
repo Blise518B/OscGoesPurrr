@@ -36,6 +36,10 @@ class SteamVRRouter(PollingRouter):
         out: Dict[str, float] = {}
         for serial, cfg in configs.items():
             if not cfg.enabled:
+                # Emit an explicit zero (debounce makes repeats free) so
+                # flipping a tracker off mid-vibration actively silences it
+                # instead of latching the last strength until the fuse.
+                out[serial] = 0.0
                 continue
             best = 0.0
             for addr in cfg.address_list:

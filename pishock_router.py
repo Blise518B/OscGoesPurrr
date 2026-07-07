@@ -16,6 +16,7 @@ from typing import Any, Callable, Dict, List, Optional
 from parameter_store import store
 from polling import PollingThread
 from pishock_connection import OP_SHOCK, VALID_OPS
+from router_base import StaleSignalMonitor
 from zone_strength import zone_filter_strength
 
 
@@ -141,6 +142,11 @@ class PiShockRouter(PollingThread):
         self._clock = clock
         self._states: Dict[str, ZoneState] = {}
         self._limiter = RateLimiter()
+        # parameter_store retains values forever: without this, a sustain
+        # zone would keep re-firing real shocks off a frozen snapshot after
+        # VRChat crashes mid-contact (same hazard the PollingRouter cutoff
+        # covers for the level backends).
+        self._stale_monitor = StaleSignalMonitor()
 
     def _run(self):
         print("[PiShock] Router thread started")
@@ -153,6 +159,12 @@ class PiShockRouter(PollingThread):
 
     def _tick(self):
         if not self.engine.is_connected:
+            return
+        if self._stale_monitor.is_stale():
+            # OSC went silent (VRChat crashed/closed): a latched non-zero
+            # strength must not keep sustain zones firing. Disarm all edge
+            # states so the return of traffic re-fires only on a fresh edge.
+            self._states.clear()
             return
         zones = self.get_zone_configs() or []
         if not zones:
