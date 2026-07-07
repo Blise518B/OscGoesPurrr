@@ -26,6 +26,25 @@ class TestCompileMotorConfig:
         assert compiled["literals"] == ["A/B", "P/Q"]
         assert compiled["globs"] == ["X/*/Y"]
 
+    def test_globs_precompile_to_one_regex(self, router):
+        # The hot loop matches params against ONE alternation regex instead
+        # of per-pattern fnmatch calls; semantics must stay fnmatch's
+        # (full-string, case-insensitive per Windows normcase).
+        cfg = self._config_with(osc_addresses={"0": ["foo/*", "*/Prox"]})
+        compiled = router._compile_motor_config({}, "dev", 0, cfg)
+        rx = compiled["glob_re"]
+        assert rx is not None
+        assert rx.match("foo/a")
+        assert rx.match("FOO/A")            # fnmatch normcase parity
+        assert rx.match("Zone/Prox")
+        assert not rx.match("bar/c")
+        assert not rx.match("prefix-foo/a")  # full-string, not substring
+
+    def test_no_globs_means_no_regex(self, router):
+        cfg = self._config_with(osc_addresses={"0": ["A/B"]})
+        compiled = router._compile_motor_config({}, "dev", 0, cfg)
+        assert compiled["glob_re"] is None
+
     def test_cleans_avatar_parameters_prefix(self, router):
         cfg = self._config_with(osc_addresses={"0": ["/avatar/parameters/Foo"]})
         compiled = router._compile_motor_config({}, "dev", 0, cfg)

@@ -1,5 +1,6 @@
 import fnmatch
 import math
+import re
 import time
 from typing import Callable, Dict, List, Tuple, Any, Optional, Set
 from utilities import normalize_osc_value, strip_param_prefix, classify_ogb_zone
@@ -530,9 +531,26 @@ class MotorRouter:
             allowed_zones = []
         allowed_zone_set = set(allowed_zones)
 
+        # Precompile the glob bucket into ONE alternation regex. The hot
+        # loop used to call fnmatch.fnmatch per pattern per parameter per
+        # tick (~1 µs each — with a 1000-param avatar and two globs that's
+        # ~1.7 ms/tick on the dispatch thread); a single C-level match()
+        # is an order of magnitude cheaper. IGNORECASE reproduces
+        # fnmatch's Windows normcase behavior.
+        glob_re = None
+        if globs:
+            try:
+                glob_re = re.compile(
+                    "|".join(fnmatch.translate(g) for g in globs),
+                    re.IGNORECASE,
+                )
+            except re.error:
+                glob_re = None  # pathological pattern: fall back to fnmatch
+
         compiled = {
             "literals": literals,
             "globs": globs,
+            "glob_re": glob_re,
             "allowed_zones": allowed_zone_set,
             "is_all_sps": "All SPS" in allowed_zone_set,
             "has_zone_filter": bool(allowed_zone_set),
@@ -947,8 +965,12 @@ class MotorRouter:
                 d_raw = cand
 
         if compiled["globs"]:
+            glob_re = compiled.get("glob_re")
             for param_name, param_val in all_params.items():
-                if not any(fnmatch.fnmatch(param_name, g) for g in compiled["globs"]):
+                if glob_re is not None:
+                    if glob_re.match(param_name) is None:
+                        continue
+                elif not any(fnmatch.fnmatch(param_name, g) for g in compiled["globs"]):
                     continue
                 cand = normalize_osc_value(param_val)
                 if cand > d_raw:
