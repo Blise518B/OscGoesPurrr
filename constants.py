@@ -71,6 +71,16 @@ HAPTIC_POLL_RATE = 0.01
 HAPTIC_MAX_SEND_HZ = 60
 
 # --- Linear actuator (stroker) send shaping ---
+# Linear features get their own, lower send cap. Since Buttplug Spec v4 the
+# server enforces a per-device message gap and COALESCES anything faster
+# (latest-wins): The Handy is flushed once per 50 ms (20 Hz, per the official
+# buttplug device config), other BLE strokers default to 75 ms. Pushing 60 Hz
+# at the server is pure waste — worse, the coalescing broke the duration math
+# below (durations sized for a ~17 ms send gap, but arriving 50 ms apart =
+# stepping). 20 Hz matches the tightest real flush rate; the stroke physics
+# still ticks every loop, and the first send after a quiet gap is never
+# delayed, so edge latency is unaffected.
+LINEAR_MAX_SEND_HZ = 20
 # A linear toy interpolates "move to position X over `duration` ms", then HOLDS at
 # X until the next command. If `duration` is shorter than the real gap until that
 # next command, the sleeve reaches X and freezes between every command — perceived
@@ -85,7 +95,9 @@ HAPTIC_MAX_SEND_HZ = 60
 LINEAR_DURATION_OVERLAP = 2.0
 # Ceiling (ms) on the gap estimate so the first command after an idle gap can't be
 # commanded over a sluggish duration; the floor is the per-feature send interval.
-LINEAR_MAX_SEND_INTERVAL_MS = 60.0
+# Sized to the 20 Hz linear cadence: a jittered/stalled gap is still covered
+# (clamped gap * overlap = up to 200 ms) without post-idle moves turning syrupy.
+LINEAR_MAX_SEND_INTERVAL_MS = 100.0
 # Don't re-transmit a position the actuator hasn't moved past (float-jitter floor);
 # lets a held/resting stroke go quiet instead of re-commanding the same spot.
 LINEAR_MIN_POSITION_DELTA = 1e-4

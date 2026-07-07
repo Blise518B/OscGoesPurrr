@@ -12,8 +12,9 @@ level has been 0 for `resting_time` seconds, the actuator returns to `resting_po
 """
 
 import asyncio
+import math
 import time
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from buttplug import ButtplugClient, DeviceOutputCommand, OutputType
 from constants import (
@@ -21,6 +22,7 @@ from constants import (
     HAPTIC_MAX_SEND_HZ,
     HAPTIC_POLL_RATE,
     LINEAR_DURATION_OVERLAP,
+    LINEAR_MAX_SEND_HZ,
     LINEAR_MAX_SEND_INTERVAL_MS,
     LINEAR_MIN_POSITION_DELTA,
 )
@@ -165,12 +167,15 @@ class HapticEngine:
         # the loop may tick at 100 Hz for low latency, but no single motor is
         # commanded faster than the cap — protecting real BLE toys from a flood on
         # fast-changing input. The first send after a quiet gap is never delayed, so
-        # step/edge latency is unaffected. Linear actuators are capped here too, and
-        # additionally use this timestamp to size their interpolation `duration`
-        # (= clamped gap * LINEAR_DURATION_OVERLAP) — see the linear branch of
-        # async_worker. Their physics still ticks every loop, independent of the cap.
+        # step/edge latency is unaffected. Linear actuators use their own, lower
+        # cap (LINEAR_MAX_SEND_HZ — Intiface coalesces strokers to ~one flush per
+        # 50 ms anyway), and additionally use this timestamp to size their
+        # interpolation `duration` (= clamped gap * LINEAR_DURATION_OVERLAP) —
+        # see the linear branch of async_worker. Their physics still ticks every
+        # loop, independent of the cap.
         self._last_send_ms: Dict[Tuple[str, int], float] = {}
         self._min_send_interval_ms = 1000.0 / max(1.0, float(HAPTIC_MAX_SEND_HZ))
+        self._min_linear_send_interval_ms = 1000.0 / max(1.0, float(LINEAR_MAX_SEND_HZ))
 
         # Hardware clients - these will be set when async_worker runs
         self.buttplug_client: Optional[ButtplugClient] = None
@@ -217,8 +222,18 @@ class HapticEngine:
         self._motor_features: Dict[str, List[Tuple[str, OutputType, object]]] = {}
 
     def update_target(self, device_name: str, motor_idx: int, target_val: float):
-        """Thread-safe entry point for the Main Thread to command hardware."""
-        self.device_targets[(device_name, motor_idx)] = target_val
+        """Thread-safe entry point for the Main Thread to command hardware.
+
+        The engine is the last line of defense: coerce and clamp to [0, 1]
+        here so no caller (router bug, UI test path) can push garbage, an
+        out-of-range value, or NaN into the device output command."""
+        try:
+            v = float(target_val)
+        except (TypeError, ValueError):
+            v = 0.0
+        if not math.isfinite(v):
+            v = 0.0
+        self.device_targets[(device_name, motor_idx)] = min(max(v, 0.0), 1.0)
 
     def _dispatch_output(self, device_name: str, motor_idx: int, coro) -> None:
         """Fire-and-forget a continuous-output command on the engine loop.
@@ -255,16 +270,20 @@ class HapticEngine:
         self._pending_tasks.add(task)
         task.add_done_callback(self._pending_tasks.discard)
 
-    def _can_send_now(self, key: Tuple[str, int], now_ms: float) -> bool:
+    def _can_send_now(self, key: Tuple[str, int], now_ms: float,
+                      min_interval_ms: Optional[float] = None) -> bool:
         """Gate a continuous-output send. True only when no send is already in
-        flight for this feature AND the per-feature rate cap (HAPTIC_MAX_SEND_HZ)
-        has elapsed since its last send. Otherwise the caller holds the newest
-        value for a later tick (latest-wins). This is what keeps the fast engine
-        loop from flooding a real BLE toy on a continuously-changing signal."""
+        flight for this feature AND the per-feature rate cap (HAPTIC_MAX_SEND_HZ,
+        or `min_interval_ms` when the caller has a feature-specific cadence —
+        the linear branch passes its 20 Hz interval) has elapsed since its last
+        send. Otherwise the caller holds the newest value for a later tick
+        (latest-wins). This is what keeps the fast engine loop from flooding a
+        real BLE toy on a continuously-changing signal."""
         if self._send_inflight.get(key):
             return False
+        gap = self._min_send_interval_ms if min_interval_ms is None else min_interval_ms
         last = self._last_send_ms.get(key, -1e18)
-        return (now_ms - last) >= self._min_send_interval_ms
+        return (now_ms - last) >= gap
 
     def mark_connected(self, connected: bool) -> None:
         """Thread-safe facade: external observers (the VRChat OSC link, the
@@ -332,11 +351,15 @@ class HapticEngine:
         if resting_time_s is not None:
             cfg["resting_time_s"] = float(resting_time_s)
         self.linear_configs[(device_name, motor_idx)] = cfg
-        # Push the per-motor overrides into a live actuator instance so
+        # Push the per-motor overrides into BOTH live actuator instances so
         # the change takes effect on the next tick without waiting for a
-        # disconnect/reconnect cycle.
-        actuator = self.linear_actuators.get((device_name, motor_idx))
-        if actuator is not None:
+        # disconnect/reconnect cycle. The stroke-speed actuator shares the
+        # same attribute names; skipping it left the "Stroke setup" knobs
+        # (range / resting) silently dead in Speed mode.
+        for actuator in (self.linear_actuators.get((device_name, motor_idx)),
+                         self.stroke_speed_actuators.get((device_name, motor_idx))):
+            if actuator is None:
+                continue
             if min_pos is not None:
                 actuator.min_pos = float(min_pos)
             if max_pos is not None:
@@ -345,6 +368,26 @@ class HapticEngine:
                 actuator.resting_pos = float(resting_pos)
             if resting_time_s is not None:
                 actuator.resting_time_ms = float(resting_time_s) * 1000.0
+
+    def _build_actuator(self, key: Tuple[str, int], cls):
+        """Construct a LinearActuator / StrokeSpeedActuator seeded from the
+        stored per-motor linear config, so user overrides (stroke range /
+        resting behavior) survive reconnects and device rediscovery instead
+        of resetting to the class defaults."""
+        actuator = cls()
+        cfg = self.linear_configs.get(key) or {}
+        try:
+            if "min_pos" in cfg:
+                actuator.min_pos = float(cfg["min_pos"])
+            if "max_pos" in cfg:
+                actuator.max_pos = float(cfg["max_pos"])
+            if "resting_pos" in cfg:
+                actuator.resting_pos = float(cfg["resting_pos"])
+            if "resting_time_s" in cfg:
+                actuator.resting_time_ms = float(cfg["resting_time_s"]) * 1000.0
+        except (TypeError, ValueError):
+            pass
+        return actuator
 
     # ------------------------------------------------------------------
     # Read-only introspection facades — return primitives only so callers
@@ -382,8 +425,14 @@ class HapticEngine:
 
     def snapshot_discovered_devices(self) -> Dict[int, Dict[str, object]]:
         """Snapshot every connected toy as `{device_index: {"name": str,
-        "motor_count": int}}`. Used by scan/refresh paths to push primitive
-        device records onto the main thread queue.
+        "motor_count": int, "motor_kinds": [str, ...]}}`. Used by scan/refresh
+        paths to push primitive device records onto the main thread queue.
+
+        Counts ALL controllable features via `get_motor_features_for_device`
+        — the same classification every other discovery path uses. Counting
+        only VIBRATE here used to shrink a multi-feature toy's persisted
+        motor_count when the periodic scan re-reported it (a Max's constrict
+        or a Nora's rotate motor silently dropped out of routing).
         """
         if not self.is_connected or self.buttplug_client is None:
             return {}
@@ -391,11 +440,16 @@ class HapticEngine:
         try:
             for device in self.buttplug_client.devices.values():
                 try:
-                    features = device.get_features_with_output(OutputType.VIBRATE)
-                    motor_count = len(features) if features else 1
+                    features = get_motor_features_for_device(device)
+                    motor_kinds = [kind for kind, _, _ in features]
+                    motor_count = len(features)
+                    if motor_count == 0:
+                        motor_count = 1
+                        motor_kinds = ["vibrate"]
                     out[device.index] = {
                         "name": device.name,
                         "motor_count": motor_count,
+                        "motor_kinds": motor_kinds,
                     }
                 except Exception:
                     pass
@@ -545,12 +599,13 @@ class HapticEngine:
                 motor_kinds = [kind for kind, _, _ in fresh]
                 for motor_idx, (kind, _ot, _f) in enumerate(fresh):
                     if kind in LINEAR_KINDS:
-                        self.linear_actuators.setdefault(
-                            (device.name, motor_idx), LinearActuator()
-                        )
-                        self.stroke_speed_actuators.setdefault(
-                            (device.name, motor_idx), StrokeSpeedActuator()
-                        )
+                        key = (device.name, motor_idx)
+                        if key not in self.linear_actuators:
+                            self.linear_actuators[key] = \
+                                self._build_actuator(key, LinearActuator)
+                        if key not in self.stroke_speed_actuators:
+                            self.stroke_speed_actuators[key] = \
+                                self._build_actuator(key, StrokeSpeedActuator)
                 self.push_ui_update(
                     f"Feature update: {device.name} now has {len(fresh)} motors"
                 )
@@ -619,8 +674,13 @@ class HapticEngine:
             motor_kinds = [kind for kind, _, _ in features]
             for motor_idx, (kind, _output_type, _feature) in enumerate(features):
                 if kind in LINEAR_KINDS:
-                    self.linear_actuators.setdefault((device_name, motor_idx), LinearActuator())
-                    self.stroke_speed_actuators.setdefault((device_name, motor_idx), StrokeSpeedActuator())
+                    key = (device_name, motor_idx)
+                    if key not in self.linear_actuators:
+                        self.linear_actuators[key] = \
+                            self._build_actuator(key, LinearActuator)
+                    if key not in self.stroke_speed_actuators:
+                        self.stroke_speed_actuators[key] = \
+                            self._build_actuator(key, StrokeSpeedActuator)
 
             motor_count = len(features) if features else 1
             if not features:
@@ -760,14 +820,23 @@ class HapticEngine:
         self.stroke_speed_actuators.clear()
         self._send_inflight.clear()
         self._last_send_ms.clear()
+        # Also forget what we last sent: after a reconnect the toy is
+        # physically at 0 (the server stops devices on disconnect), so a
+        # routed target that is unchanged across the outage must be re-sent
+        # — keeping the old cache left the `target == last` debounce
+        # suppressing it and the toy silent until the value next changed.
+        self.device_last_sent.clear()
         for device in self.buttplug_client.devices.values():
             features = get_motor_features_for_device(device)
             self._motor_features[device.name] = features
             for motor_idx, (kind, _output_type, _feature) in enumerate(features):
                 if kind in LINEAR_KINDS:
-                    # Pre-allocate both modes so a UI toggle is instant.
-                    self.linear_actuators[(device.name, motor_idx)] = LinearActuator()
-                    self.stroke_speed_actuators[(device.name, motor_idx)] = StrokeSpeedActuator()
+                    # Pre-allocate both modes so a UI toggle is instant,
+                    # seeded from the stored per-motor config so overrides
+                    # (stroke range / resting) survive a reconnect.
+                    key = (device.name, motor_idx)
+                    self.linear_actuators[key] = self._build_actuator(key, LinearActuator)
+                    self.stroke_speed_actuators[key] = self._build_actuator(key, StrokeSpeedActuator)
 
         # Construct dictionary of found devices: {index: {"name", "motor_count", "motor_kinds"}}
         found_devices = {}
@@ -844,6 +913,9 @@ class HapticEngine:
         self.stroke_speed_actuators.clear()
         self._send_inflight.clear()
         self._last_send_ms.clear()
+        # The devices are stopped by the server on disconnect — the next
+        # session must not believe pre-disconnect values were delivered.
+        self.device_last_sent.clear()
 
     async def async_worker(self, app_instance=None):
         """
@@ -953,12 +1025,17 @@ class HapticEngine:
                                 continue
                             position = actuator.tick(target, now_ms, idle_mode=idle)
 
-                            # Send policy: respect the per-feature cap + in-flight
-                            # guard (stroke positions must never arrive out of
-                            # order), and skip when the sleeve hasn't moved past the
-                            # last position we sent — so a held/resting stroke goes
-                            # quiet instead of re-commanding the same spot.
-                            if not self._can_send_now((device_name, motor_idx), now_ms):
+                            # Send policy: respect the linear per-feature cap
+                            # (20 Hz — Intiface flushes strokers at most once per
+                            # 50 ms and coalesces the rest, so sending faster is
+                            # spam) + in-flight guard (stroke positions must never
+                            # arrive out of order), and skip when the sleeve hasn't
+                            # moved past the last position we sent — so a
+                            # held/resting stroke goes quiet instead of
+                            # re-commanding the same spot.
+                            if not self._can_send_now(
+                                    (device_name, motor_idx), now_ms,
+                                    self._min_linear_send_interval_ms):
                                 continue
                             last_pos = self.device_last_sent.get((device_name, motor_idx))
                             if (last_pos is not None
@@ -974,11 +1051,11 @@ class HapticEngine:
                             last_send_ms = self._last_send_ms.get((device_name, motor_idx))
                             interval = (now_ms - last_send_ms
                                         if last_send_ms is not None
-                                        else self._min_send_interval_ms)
+                                        else self._min_linear_send_interval_ms)
                             duration_ms = compute_send_duration_ms(
                                 interval,
                                 LINEAR_DURATION_OVERLAP,
-                                self._min_send_interval_ms,
+                                self._min_linear_send_interval_ms,
                                 LINEAR_MAX_SEND_INTERVAL_MS,
                             )
 
