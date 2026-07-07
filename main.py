@@ -14,7 +14,7 @@ import threading
 import asyncio
 import queue
 import pystray
-from typing import Optional, Dict, List, Any
+from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 
 # ProfileManager from config manager module
 from config_manager import PROFILE_FILE, ProfileManager
@@ -63,6 +63,17 @@ from controllers import (
     SessionsFacade,
     SpsSourcesFacade,
 )
+
+
+class _BackendSpec(NamedTuple):
+    """One row of the controller's backend lifecycle registry: the feature
+    flag that gates the subsystem, a label for log lines, and the ordered
+    start / stop steps (bound methods on the engines/routers plus any
+    pre-start config hook)."""
+    key: str
+    label: str
+    start: Tuple[Callable[[], None], ...]
+    stop: Tuple[Callable[[], None], ...]
 
 
 class OscGoesPurrrApp(
@@ -281,6 +292,58 @@ class OscGoesPurrrApp(
             get_zone_config=self._handy_get_zone_config,
             get_sps_sources=self._get_sps_source_map,
         )
+
+        # Backend lifecycle registry: one row per feature-gated subsystem,
+        # consumed by _apply_feature_state, run() startup and quit_app so the
+        # start/stop choreography is written exactly ONCE per backend.
+        # `start` steps run in order inside one guarded attempt (a backend
+        # that half-starts logs and stays half-started, matching the old
+        # inline blocks); `stop` steps are each guarded individually so one
+        # failing sibling can't skip the rest. Adding backend #8 means
+        # adding one row here — the three consumers never change.
+        self._backend_specs: "Dict[str, _BackendSpec]" = {
+            spec.key: spec for spec in (
+                _BackendSpec(
+                    "feature_steamvr_haptics", "SteamVR haptics",
+                    start=(self.steamvr_router.start,),
+                    stop=(self.steamvr_router.stop,),
+                ),
+                _BackendSpec(
+                    "feature_steamvr_battery", "SteamVR battery",
+                    start=(self.steamvr_battery.start,),
+                    stop=(self.steamvr_battery.stop,),
+                ),
+                _BackendSpec(
+                    "feature_bhaptics", "bHaptics",
+                    start=(self.bhaptics_engine.start, self.bhaptics_router.start),
+                    stop=(self.bhaptics_router.stop, self.bhaptics_engine.stop),
+                ),
+                _BackendSpec(
+                    "feature_pishock", "PiShock",
+                    start=(self._pishock_apply_config,
+                           self.pishock_engine.start, self.pishock_router.start),
+                    stop=(self.pishock_router.stop, self.pishock_engine.stop),
+                ),
+                _BackendSpec(
+                    "feature_coyote", "Coyote",
+                    # Engine first: configure() pushes limits through the
+                    # engine's (started) asyncio loop.
+                    start=(self.coyote_engine.start,
+                           self._coyote_apply_config, self.coyote_router.start),
+                    stop=(self.coyote_router.stop, self.coyote_engine.stop),
+                ),
+                _BackendSpec(
+                    "feature_owo", "OWO",
+                    start=(self.owo_engine.start, self.owo_router.start),
+                    stop=(self.owo_router.stop, self.owo_engine.stop),
+                ),
+                _BackendSpec(
+                    "feature_handy", "Handy",
+                    start=(self.handy_engine.start, self.handy_router.start),
+                    stop=(self.handy_router.stop, self.handy_engine.stop),
+                ),
+            )
+        }
 
         # Instantiate VRChat OSC Manager
         bind_all = self.profile_manager.app_settings.settings.get("bind_all_interfaces", True)
@@ -651,98 +714,35 @@ class OscGoesPurrrApp(
             except Exception:
                 pass
 
+    def _start_backend(self, spec: "_BackendSpec") -> None:
+        """Run a spec's start steps in order. One guarded attempt for the
+        whole sequence — a half-started backend logs and stays as it is,
+        matching the old per-backend inline blocks."""
+        try:
+            for step in spec.start:
+                step()
+        except Exception as e:
+            self.log_message(f"{spec.label} start failed: {e}")
+
+    def _stop_backend(self, spec: "_BackendSpec") -> None:
+        """Run a spec's stop steps, each guarded individually so one failing
+        sibling can never skip the rest (the old grouped try blocks did)."""
+        for step in spec.stop:
+            try:
+                step()
+            except Exception:
+                pass
+
     def _apply_feature_state(self, key: str, enabled: bool) -> None:
         """Start or stop the background subsystem behind a feature toggle."""
-        if key == "feature_bhaptics":
+        spec = self._backend_specs.get(key)
+        if spec is not None:
             if enabled:
-                try:
-                    self.bhaptics_engine.start()
-                    self.bhaptics_router.start()
-                except Exception as e:
-                    self.log_message(f"bHaptics start failed: {e}")
+                self._start_backend(spec)
             else:
-                try:
-                    self.bhaptics_router.stop()
-                    self.bhaptics_engine.stop()
-                except Exception:
-                    pass
-        elif key == "feature_pishock":
-            if enabled:
-                try:
-                    self._pishock_apply_config()
-                    self.pishock_engine.start()
-                    self.pishock_router.start()
-                except Exception as e:
-                    self.log_message(f"PiShock start failed: {e}")
-            else:
-                try:
-                    self.pishock_router.stop()
-                    self.pishock_engine.stop()
-                except Exception:
-                    pass
-        elif key == "feature_coyote":
-            if enabled:
-                try:
-                    self.coyote_engine.start()
-                    self._coyote_apply_config()
-                    self.coyote_router.start()
-                except Exception as e:
-                    self.log_message(f"Coyote start failed: {e}")
-            else:
-                try:
-                    self.coyote_router.stop()
-                    self.coyote_engine.stop()
-                except Exception:
-                    pass
-        elif key == "feature_owo":
-            if enabled:
-                try:
-                    self.owo_engine.start()
-                    self.owo_router.start()
-                except Exception as e:
-                    self.log_message(f"OWO start failed: {e}")
-            else:
-                try:
-                    self.owo_router.stop()
-                    self.owo_engine.stop()
-                except Exception:
-                    pass
-        elif key == "feature_handy":
-            if enabled:
-                try:
-                    self.handy_engine.start()
-                    self.handy_router.start()
-                except Exception as e:
-                    self.log_message(f"Handy start failed: {e}")
-            else:
-                try:
-                    self.handy_router.stop()
-                    self.handy_engine.stop()
-                except Exception:
-                    pass
-        elif key == "feature_steamvr_haptics":
-            if enabled:
-                try:
-                    self.steamvr_router.start()
-                except Exception as e:
-                    self.log_message(f"SteamVR haptics start failed: {e}")
-            else:
-                try:
-                    self.steamvr_router.stop()
-                except Exception:
-                    pass
-        elif key == "feature_steamvr_battery":
-            if enabled:
-                try:
-                    self.steamvr_battery.start()
-                except Exception as e:
-                    self.log_message(f"SteamVR battery start failed: {e}")
-            else:
-                try:
-                    self.steamvr_battery.stop()
-                except Exception:
-                    pass
-        elif key == "feature_osc_inspector":
+                self._stop_backend(spec)
+            return
+        if key == "feature_osc_inspector":
             # Pure UI / debug feature — refresh loop checks the flag itself.
             pass
         elif key == "feature_intiface":
@@ -1109,40 +1109,14 @@ class OscGoesPurrrApp(
         except Exception:
             pass
 
+        # Stop every backend from the lifecycle registry (each stop step is
+        # individually guarded, so one wedged engine can't skip the rest),
+        # then free the OpenVR runtime — shutdown() is registry-external
+        # because it's a teardown of the shared handle, not a router stop.
+        for spec in self._backend_specs.values():
+            self._stop_backend(spec)
         try:
-            self.steamvr_router.stop()
-            self.steamvr_battery.stop()
             self.steamvr_engine.shutdown()
-        except Exception:
-            pass
-
-        try:
-            self.bhaptics_router.stop()
-            self.bhaptics_engine.stop()
-        except Exception:
-            pass
-
-        try:
-            self.pishock_router.stop()
-            self.pishock_engine.stop()
-        except Exception:
-            pass
-
-        try:
-            self.coyote_router.stop()
-            self.coyote_engine.stop()
-        except Exception:
-            pass
-
-        try:
-            self.owo_router.stop()
-            self.owo_engine.stop()
-        except Exception:
-            pass
-
-        try:
-            self.handy_router.stop()
-            self.handy_engine.stop()
         except Exception:
             pass
 
@@ -1303,70 +1277,14 @@ class OscGoesPurrrApp(
         except Exception as e:
             self.log_message(f"Session logger auto-start error: {e}")
 
-        # Start SteamVR Haptics router. Engine init is deferred to first refresh
-        # — the router itself is cheap and just polls the parameter store.
-        # Each half (haptics / battery) is gated by its own feature toggle so
-        # users who only want one side don't pay for the other.
-        if self.get_feature_enabled("feature_steamvr_haptics"):
-            try:
-                self.steamvr_router.start()
-            except Exception as e:
-                self.log_message(f"SteamVR haptics router failed to start: {e}")
-        if self.get_feature_enabled("feature_steamvr_battery"):
-            try:
-                self.steamvr_battery.start()
-            except Exception as e:
-                self.log_message(f"SteamVR battery broadcaster failed to start: {e}")
-
-        # Start bHaptics engine + router. Engine's reconnect thread sits
-        # idle when auto-connect is off.
-        if self.get_feature_enabled("feature_bhaptics"):
-            try:
-                self.bhaptics_engine.start()
-                self.bhaptics_router.start()
-            except Exception as e:
-                self.log_message(f"bHaptics startup failed: {e}")
-
-        # Start PiShock engine + router. Auto-connect defaults OFF (a shock
-        # device shouldn't dial out unprompted), so the reconnect thread idles
-        # until the user connects; the router no-ops while disconnected.
-        if self.get_feature_enabled("feature_pishock"):
-            try:
-                self._pishock_apply_config()
-                self.pishock_engine.start()
-                self.pishock_router.start()
-            except Exception as e:
-                self.log_message(f"PiShock startup failed: {e}")
-
-        # Start Coyote engine (owns its asyncio loop thread) + router. Like
-        # PiShock, e-stim auto-connect defaults OFF so it idles until connected.
-        if self.get_feature_enabled("feature_coyote"):
-            try:
-                self.coyote_engine.start()
-                self._coyote_apply_config()
-                self.coyote_router.start()
-            except Exception as e:
-                self.log_message(f"Coyote startup failed: {e}")
-
-        # Start OWO engine + router. Auto-connect defaults OFF; the engine's
-        # reconnect thread idles (and reports unavailable) until pythonnet +
-        # OWO.dll are present and the user connects.
-        if self.get_feature_enabled("feature_owo"):
-            try:
-                self.owo_engine.start()
-                self.owo_router.start()
-            except Exception as e:
-                self.log_message(f"OWO startup failed: {e}")
-
-        # Start Handy engine + router. Auto-connect defaults OFF (moving
-        # hardware); the reconnect thread idles until the user enters their
-        # connection key + API key and connects.
-        if self.get_feature_enabled("feature_handy"):
-            try:
-                self.handy_engine.start()
-                self.handy_router.start()
-            except Exception as e:
-                self.log_message(f"Handy startup failed: {e}")
+        # Start every enabled backend from the lifecycle registry (SteamVR
+        # engine init stays deferred to its first refresh; the reconnecting
+        # engines' supervisor threads idle while their auto-connect is off —
+        # which is the deliberate default for the e-stim / shock / moving
+        # hardware backends, so nothing dials out unprompted).
+        for spec in self._backend_specs.values():
+            if self.get_feature_enabled(spec.key):
+                self._start_backend(spec)
 
         # Apply saved SteamVR autostart on boot (no-op if SteamVR is offline).
         if self.profile_manager.steamvr_settings.get_autostart():
