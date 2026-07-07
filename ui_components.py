@@ -1052,6 +1052,66 @@ class OscGoesPurrrUI(
                     pass
 
     # ----------------------------------------------------------
+    # Sidebar backend status dots
+    # ----------------------------------------------------------
+
+    # (nav entry, controller status getter, truthy field). The user's core
+    # scenario runs 2-3 backends at once; these dots are the ambient "what
+    # is currently live?" signal without visiting each tab.
+    _BACKEND_NAV_STATUS = (
+        ("SteamVR Device Comms", "get_steamvr_status", "alive"),
+        ("bHaptics", "get_bhaptics_status", "connected"),
+        ("PiShock", "get_pishock_status", "connected"),
+        ("Coyote", "get_coyote_status", "connected"),
+        ("OWO", "get_owo_status", "connected"),
+        ("Handy", "get_handy_status", "connected"),
+    )
+
+    def update_backend_nav_dots(self) -> None:
+        """Paint a small connected/disconnected dot on each backend's nav
+        button. Piggybacks on the controller's existing 1 Hz heartbeat (no
+        new timer); the icon only changes when a backend's state flips, so
+        the steady-state cost is seven cheap facade reads."""
+        cache = getattr(self, "_nav_dot_state", None)
+        if cache is None:
+            cache = self._nav_dot_state = {}
+        for name, getter_name, field in self._BACKEND_NAV_STATUS:
+            btn = self.nav_buttons.get(name)
+            if btn is None or btn.isHidden():
+                continue  # feature off — no dot to maintain
+            getter = getattr(self.controller, getter_name, None)
+            ok = False
+            if callable(getter):
+                try:
+                    ok = bool((getter() or {}).get(field))
+                except Exception:
+                    ok = False
+            if cache.get(name) == ok:
+                continue
+            cache[name] = ok
+            try:
+                btn.setIcon(self._nav_dot_icon(ok))
+                btn.setIconSize(QSize(8, 8))
+            except RuntimeError:
+                pass
+
+    def _nav_dot_icon(self, ok: bool) -> QIcon:
+        icons = getattr(self, "_nav_dot_icons", None)
+        if icons is None:
+            icons = self._nav_dot_icons = {}
+        if ok not in icons:
+            pm = QPixmap(8, 8)
+            pm.fill(Qt.transparent)
+            p = QPainter(pm)
+            p.setRenderHint(QPainter.Antialiasing)
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(COLOR_SUCCESS) if ok else QColor(90, 90, 100))
+            p.drawEllipse(0, 0, 8, 8)
+            p.end()
+            icons[ok] = QIcon(pm)
+        return icons[ok]
+
+    # ----------------------------------------------------------
     # Logging
     # ----------------------------------------------------------
 

@@ -1245,6 +1245,9 @@ class OscGoesPurrrApp(
             try:
                 if self.ui is not None:
                     self.ui.update_stored_devices_ui()
+                    # Same heartbeat drives the sidebar's per-backend
+                    # status dots (change-gated, so this is ~free).
+                    self.ui.update_backend_nav_dots()
             except Exception:
                 pass
             self.ui.schedule_callback(1000, refresh_device_states)

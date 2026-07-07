@@ -776,6 +776,28 @@ class OverviewMixin:
         else:
             tile["sub"].setText("Global profile")
 
+    # Every backend gets a pill: (pill_key, label, feature_keys-any-of,
+    # status getter, status field). Hidden while its feature is off, warn
+    # while enabled-but-disconnected, ok while connected — the one place
+    # to see all seven backends' health at a glance.
+    _BACKEND_PILLS = (
+        ("intiface", "Intiface", ("feature_intiface",),
+         "get_intiface_status", "connected"),
+        ("bhaptics", "bHaptics", ("feature_bhaptics",),
+         "get_bhaptics_status", "connected"),
+        ("steamvr", "SteamVR",
+         ("feature_steamvr_haptics", "feature_steamvr_battery"),
+         "get_steamvr_status", "alive"),
+        ("pishock", "PiShock", ("feature_pishock",),
+         "get_pishock_status", "connected"),
+        ("coyote", "Coyote", ("feature_coyote",),
+         "get_coyote_status", "connected"),
+        ("owo", "OWO", ("feature_owo",),
+         "get_owo_status", "connected"),
+        ("handy", "Handy", ("feature_handy",),
+         "get_handy_status", "connected"),
+    )
+
     def _build_overview_backends_tile(self) -> Dict[str, Any]:
         frame = self._overview_make_tile(
             self._navigate_to("Settings"),
@@ -786,21 +808,22 @@ class OverviewMixin:
         tf = title.font(); tf.setBold(True)
         title.setFont(tf)
         lay.addWidget(title)
-        pills_row = QWidget()
-        pills_lay = _hbox(0, 4)
-        pills_row.setLayout(pills_lay)
         pills: Dict[str, QLabel] = {}
-        for key, label in (("intiface", "Intiface"),
-                           ("bhaptics", "bHaptics"),
-                           ("steamvr",  "SteamVR")):
-            pill = QLabel(label)
-            pill.setProperty("role", "pill")
-            pill.setProperty("tone", "warn")
-            self._repolish(pill)
-            pills_lay.addWidget(pill)
-            pills[key] = pill
-        pills_lay.addStretch(1)
-        lay.addWidget(pills_row)
+        # Two rows so all seven fit a 1×1 tile without overflowing.
+        specs = self._BACKEND_PILLS
+        for chunk in (specs[:4], specs[4:]):
+            pills_row = QWidget()
+            pills_lay = _hbox(0, 4)
+            pills_row.setLayout(pills_lay)
+            for pill_key, label, _feats, _getter, _field in chunk:
+                pill = QLabel(label)
+                pill.setProperty("role", "pill")
+                pill.setProperty("tone", "warn")
+                self._repolish(pill)
+                pills_lay.addWidget(pill)
+                pills[pill_key] = pill
+            pills_lay.addStretch(1)
+            lay.addWidget(pills_row)
         lay.addStretch(1)
         tile = {"frame": frame, "pills": pills}
         self._refresh_backends_tile(tile)
@@ -808,24 +831,26 @@ class OverviewMixin:
 
     def _refresh_backends_tile(self, tile: Dict[str, Any]) -> None:
         pills = tile.get("pills", {})
-        # Intiface
-        if "intiface" in pills:
-            ok = bool((self.controller.get_intiface_status() or {}).get("connected"))
-            self._overview_set_pill(pills["intiface"], ok)
-        # bHaptics
-        if "bhaptics" in pills:
-            if hasattr(self.controller, "get_bhaptics_status"):
-                ok = bool((self.controller.get_bhaptics_status() or {}).get("connected"))
-            else:
-                ok = False
-            self._overview_set_pill(pills["bhaptics"], ok)
-        # SteamVR
-        if "steamvr" in pills:
-            if hasattr(self.controller, "get_steamvr_status"):
-                ok = bool((self.controller.get_steamvr_status() or {}).get("alive"))
-            else:
-                ok = False
-            self._overview_set_pill(pills["steamvr"], ok)
+        for pill_key, _label, feature_keys, getter_name, field in self._BACKEND_PILLS:
+            pill = pills.get(pill_key)
+            if pill is None:
+                continue
+            try:
+                enabled = any(self.controller.get_feature_enabled(k)
+                              for k in feature_keys)
+            except Exception:
+                enabled = True
+            pill.setVisible(enabled)
+            if not enabled:
+                continue
+            getter = getattr(self.controller, getter_name, None)
+            ok = False
+            if callable(getter):
+                try:
+                    ok = bool((getter() or {}).get(field))
+                except Exception:
+                    ok = False
+            self._overview_set_pill(pill, ok)
 
     def _overview_set_pill(self, pill: QLabel, ok: bool) -> None:
         pill.setProperty("tone", "ok" if ok else "warn")

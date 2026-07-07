@@ -317,13 +317,29 @@ class SettingsMixin:
             "entry and stop their background threads to save resources."
         ))
 
-        feature_rows = (
-            ("feature_intiface",         "Intiface toy communication (Buttplug.io)"),
-            ("feature_bhaptics",         "bHaptics integration"),
-            ("feature_steamvr_haptics",  "SteamVR tracker haptics"),
-            ("feature_steamvr_battery",  "SteamVR battery → OSC broadcast"),
-            ("feature_osc_inspector",    "OSC Inspector (debug view)"),
-        )
+        # One row per controller feature flag — the flag map is the source
+        # of truth so a new backend can't be forgotten here (the four newer
+        # backends were missing from this card even though their toggles
+        # were fully plumbed). Labeled keys keep this curated order; any
+        # flag the controller grows later still gets a row (raw key label).
+        _feature_labels = {
+            "feature_intiface":         "Intiface toy communication (Buttplug.io)",
+            "feature_bhaptics":         "bHaptics integration",
+            "feature_steamvr_haptics":  "SteamVR tracker haptics",
+            "feature_steamvr_battery":  "SteamVR battery → OSC broadcast",
+            "feature_pishock":          "PiShock shock / vibrate events",
+            "feature_coyote":           "DG-Lab Coyote e-stim",
+            "feature_owo":              "OWO suit EMS",
+            "feature_handy":            "The Handy stroker (cloud)",
+            "feature_osc_inspector":    "OSC Inspector (debug view)",
+        }
+        try:
+            flag_keys = list(self.controller.get_feature_flags().keys())
+        except Exception:
+            flag_keys = list(_feature_labels.keys())
+        ordered = [k for k in _feature_labels if k in flag_keys]
+        ordered += [k for k in flag_keys if k not in _feature_labels]
+        feature_rows = tuple((k, _feature_labels.get(k, k)) for k in ordered)
 
         self.feature_toggles: Dict[str, ToggleSwitch] = {}
         for key, label in feature_rows:
