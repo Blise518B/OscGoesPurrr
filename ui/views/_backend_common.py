@@ -1,7 +1,7 @@
 """Shared scaffolding for the per-backend view mixins (PiShock / Coyote /
-OWO / Handy / bHaptics Cross-Routing): the zone-combo populate every
-Source fold needs, and the zone-TYPE-change behavior that must clear +
-repopulate the combo.
+OWO / Handy / bHaptics): the non-blocking "Connect Now" flow, the
+zone-combo populate every Source fold needs, and the zone-TYPE-change
+behavior that must clear + repopulate the combo.
 
 View-layer only — talks to controller facade methods, never to engines or
 routers (Law of Demeter). Extracted because the four per-view copies had
@@ -11,6 +11,34 @@ change (the stale zone name resolved against the wrong list).
 """
 
 from PySide6.QtWidgets import QComboBox
+
+
+def run_connect_now(view, label: str, worker, refresh_status_only,
+                    buttons, failed_hint: str = "") -> None:
+    """Shared "Connect Now" flow for the backend views: run the blocking
+    connect off the Qt thread (``run_ui_task`` disables `buttons` while
+    pending so a double-click or config flip can't race the in-flight
+    open), log the outcome, then refresh **status-only**.
+
+    Status-only is load-bearing: the done-callback fires seconds after
+    the click, when the user may be typing again — a full refresh here
+    would clobber their edits (the exact bug the full/status-only split
+    exists to prevent, and one the per-view copies of this handler had
+    already regressed once).
+
+    `view` is the composed UI object (provides ``run_ui_task`` /
+    ``log_message``); `worker` is the controller's ``*_connect_now``;
+    `failed_hint` is appended to the not-connected log line (e.g.
+    bHaptics' "is the Player running?")."""
+    def done(result):
+        if isinstance(result, Exception):
+            view.log_message(f"{label}: connect failed — {result}")
+        elif result:
+            view.log_message(f"{label}: connected")
+        else:
+            view.log_message(f"{label}: connect failed{failed_hint}")
+        refresh_status_only()
+    view.run_ui_task(worker, done, buttons=buttons)
 
 
 def populate_zone_combo(controller, combo: QComboBox, zone_type: str,

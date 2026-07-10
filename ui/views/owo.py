@@ -17,7 +17,8 @@ from constants import BTN_HEIGHT_SMALL
 from ui.fold_strip import FoldCard, FoldStrip
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
 from ui.views._backend_common import (
-    on_zone_type_changed, populate_zone_combo, zone_signature,
+    on_zone_type_changed, populate_zone_combo, run_connect_now,
+    zone_signature,
 )
 from ui.widgets import (
     ToggleSwitch, Card as _Card, install_rainbow_scrollbars as _install_rainbow_scrollbars,
@@ -387,20 +388,11 @@ class OwoMixin:
     def _on_owo_connect(self):
         # The SDK's AutoConnect LAN scan blocks for seconds — keep it off
         # the Qt thread (which also hosts the Buttplug routing tick).
-        self.run_ui_task(
-            self.controller.owo_connect_now,
-            self._on_owo_connect_done,
+        run_connect_now(
+            self, "OWO", self.controller.owo_connect_now,
+            self._refresh_owo_status_only,
             buttons=[self.owo_connect_btn],
         )
-
-    def _on_owo_connect_done(self, result):
-        if isinstance(result, Exception):
-            self.log_message(f"OWO: connect failed — {result}")
-        else:
-            self.log_message("OWO: connected" if result else "OWO: connect failed")
-        # Status-only: this fires seconds after the click — a full refresh
-        # here would rewrite fields the user may be editing by now.
-        self._refresh_owo_status_only()
 
     def _on_owo_conn_apply(self):
         self.controller.set_owo_connection(

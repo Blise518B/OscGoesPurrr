@@ -13,7 +13,9 @@ import pytest
 from PySide6.QtWidgets import QApplication, QComboBox
 
 from settings.pishock import PiShockSettingsManager
-from ui.views._backend_common import on_zone_type_changed, populate_zone_combo
+from ui.views._backend_common import (
+    on_zone_type_changed, populate_zone_combo, run_connect_now,
+)
 
 
 @pytest.fixture(scope="module")
@@ -89,6 +91,62 @@ class TestZoneTypeChanged:
         items = [combo.itemText(i) for i in range(combo.count())]
         assert items == ["Shaft"]                    # new type's list
         assert pushes == [""]                        # pushed once, blank zone
+
+
+class _FakeConnectView:
+    """Just enough of the composed UI object for run_connect_now: captures
+    the run_ui_task wiring and the log lines."""
+
+    def __init__(self):
+        self.logs = []
+        self.worker = None
+        self.done = None
+        self.buttons = None
+        self.status_refreshes = 0
+
+    def log_message(self, msg):
+        self.logs.append(msg)
+
+    def run_ui_task(self, work, on_done, buttons=()):
+        self.worker = work
+        self.done = on_done
+        self.buttons = list(buttons)
+
+    def refresh_status_only(self):
+        self.status_refreshes += 1
+
+
+class TestRunConnectNow:
+    def _start(self, **kw):
+        view = _FakeConnectView()
+        run_connect_now(view, "Toy", lambda: True,
+                        view.refresh_status_only,
+                        buttons=["btn"], **kw)
+        return view
+
+    def test_wires_worker_and_buttons_through_run_ui_task(self):
+        view = self._start()
+        assert view.worker() is True
+        assert view.buttons == ["btn"]
+        assert view.status_refreshes == 0   # nothing until done fires
+
+    def test_success_logs_connected_and_refreshes_status_only(self):
+        view = self._start()
+        view.done(True)
+        assert view.logs == ["Toy: connected"]
+        assert view.status_refreshes == 1
+
+    def test_failure_logs_with_hint(self):
+        view = self._start(failed_hint=" (is it running?)")
+        view.done(False)
+        assert view.logs == ["Toy: connect failed (is it running?)"]
+        assert view.status_refreshes == 1
+
+    def test_exception_result_logs_the_error(self):
+        view = self._start()
+        view.done(RuntimeError("no adapter"))
+        assert view.logs == ["Toy: connect failed — no adapter"]
+        assert view.status_refreshes == 1
 
 
 class TestPiShockApiKeyPreserved:

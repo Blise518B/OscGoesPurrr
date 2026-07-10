@@ -45,6 +45,7 @@ from ui.fold_strip import FoldCard as _FoldCard, FoldStrip as _FoldStrip
 from ui.views._backend_common import (
     on_zone_type_changed as _on_zone_type_changed,
     populate_zone_combo as _populate_zone_combo,
+    run_connect_now as _run_connect_now,
 )
 from ui.widgets import (
     ToggleSwitch,
@@ -337,21 +338,12 @@ class BHapticsMixin:
     def _on_bhaptics_connect_clicked(self):
         # The websocket connect has a 2 s timeout — keep it off the Qt
         # thread (which also hosts the Buttplug routing tick).
-        self.run_ui_task(
-            self.controller.bhaptics_connect_now,
-            self._on_bhaptics_connect_done,
+        _run_connect_now(
+            self, "bHaptics", self.controller.bhaptics_connect_now,
+            self._refresh_bhaptics_status_only,
             buttons=[self.bhaptics_connect_btn],
+            failed_hint=" (is the Player running?)",
         )
-
-    def _on_bhaptics_connect_done(self, result):
-        if isinstance(result, Exception):
-            self.log_message(f"bHaptics: connect failed — {result}")
-        else:
-            self.log_message("bHaptics: connected" if result
-                             else "bHaptics: connect failed (is the Player running?)")
-        # Status-only: this fires seconds after the click — a full refresh
-        # here would rewrite fields the user may be editing by now.
-        self._refresh_bhaptics_status_only()
 
     def _on_bhaptics_antistuck_changed(self, *_):
         if self._is_updating_bhaptics:

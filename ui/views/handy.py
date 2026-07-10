@@ -18,7 +18,8 @@ from constants import BTN_HEIGHT_SMALL
 from ui.fold_strip import FoldCard, FoldStrip
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
 from ui.views._backend_common import (
-    on_zone_type_changed, populate_zone_combo, zone_signature,
+    on_zone_type_changed, populate_zone_combo, run_connect_now,
+    zone_signature,
 )
 from ui.widgets import ToggleSwitch, Card as _Card
 
@@ -440,21 +441,11 @@ class HandyMixin:
     def _on_handy_connect(self):
         # Two cloud HTTPS round-trips (up to ~20 s on a bad network) — keep
         # them off the Qt thread (which also hosts the Buttplug routing tick).
-        self.run_ui_task(
-            self.controller.handy_connect_now,
-            self._on_handy_connect_done,
+        run_connect_now(
+            self, "Handy", self.controller.handy_connect_now,
+            self._refresh_handy_status_only,
             buttons=[self.handy_connect_btn],
         )
-
-    def _on_handy_connect_done(self, result):
-        if isinstance(result, Exception):
-            self.log_message(f"Handy: connect failed — {result}")
-        else:
-            self.log_message("Handy: connected" if result
-                             else "Handy: connect failed")
-        # Status-only: this fires seconds after the click — a full refresh
-        # here would rewrite fields the user may be editing by now.
-        self._refresh_handy_status_only()
 
     def _on_handy_conn_apply(self):
         self.controller.set_handy_connection(

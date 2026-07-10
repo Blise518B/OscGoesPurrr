@@ -17,7 +17,8 @@ from constants import BTN_HEIGHT_SMALL
 from ui.fold_strip import FoldCard, FoldStrip
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
 from ui.views._backend_common import (
-    on_zone_type_changed, populate_zone_combo, zone_signature,
+    on_zone_type_changed, populate_zone_combo, run_connect_now,
+    zone_signature,
 )
 from ui.widgets import ToggleSwitch, Card as _Card
 
@@ -417,21 +418,11 @@ class CoyoteMixin:
     def _on_coyote_connect(self):
         # A BLE connect blocks for seconds — keep it off the Qt thread
         # (which also hosts the Buttplug routing tick).
-        self.run_ui_task(
-            self.controller.coyote_connect_now,
-            self._on_coyote_connect_done,
+        run_connect_now(
+            self, "Coyote", self.controller.coyote_connect_now,
+            self._refresh_coyote_status_only,
             buttons=[self.coyote_connect_btn],
         )
-
-    def _on_coyote_connect_done(self, result):
-        if isinstance(result, Exception):
-            self.log_message(f"Coyote: connect failed — {result}")
-        else:
-            self.log_message("Coyote: connected" if result
-                             else "Coyote: connect failed")
-        # Status-only: this fires seconds after the click — a full refresh
-        # here would rewrite fields the user may be editing by now.
-        self._refresh_coyote_status_only()
 
     def _on_coyote_scan(self):
         # The 6 s BLE discover used to freeze the whole app (the 'scanning…'
