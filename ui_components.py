@@ -157,6 +157,9 @@ QFrame#overviewTile:hover {{
     background-color: {COLOR_SURFACE_HOVER};
     border-color: {COLOR_SUCCESS};
 }}
+QFrame#overviewTile:focus {{
+    border-color: {COLOR_INPUT_FOCUS};
+}}
 QFrame#speedCard {{
     background-color: {COLOR_SURFACE_HOVER};
     border-radius: 8px;

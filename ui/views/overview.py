@@ -901,6 +901,27 @@ class OverviewMixin:
                 QFrame.mousePressEvent(frame, ev)
         frame.mousePressEvent = on_press
 
+        # Keyboard access: tiles are navigation targets, so they must be
+        # reachable by Tab and activatable by Space/Return (the QSS
+        # :focus rule draws the indicator). hasFocus() is load-bearing —
+        # the ⤢ QToolButton ignore()s Return/Enter after handling focus,
+        # and a bubbled key must not navigate away. Same pattern as
+        # FoldCard.keyPressEvent.
+        frame.setFocusPolicy(Qt.TabFocus)
+
+        def on_key(ev):
+            if (frame.hasFocus() and not ev.isAutoRepeat()
+                    and ev.key() in (Qt.Key_Space, Qt.Key_Return,
+                                     Qt.Key_Enter)):
+                try:
+                    on_click()
+                except Exception:
+                    pass
+                ev.accept()
+            else:
+                QFrame.keyPressEvent(frame, ev)
+        frame.keyPressEvent = on_key
+
         # The expand button is created here so every tile (Toys,
         # Trackers, etc.) gets it without each builder needing to
         # remember. Sits in the top-right, sized small enough not to
