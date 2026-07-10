@@ -1,6 +1,7 @@
 """Shared scaffolding for the per-backend view mixins (PiShock / Coyote /
-OWO / Handy): the zone-combo populate every Source fold needs, and the
-zone-TYPE-change behavior that must clear + repopulate the combo.
+OWO / Handy / bHaptics Cross-Routing): the zone-combo populate every
+Source fold needs, and the zone-TYPE-change behavior that must clear +
+repopulate the combo.
 
 View-layer only — talks to controller facade methods, never to engines or
 routers (Law of Demeter). Extracted because the four per-view copies had
@@ -72,6 +73,6 @@ def on_zone_type_changed(controller, zone_combo: QComboBox, new_type: str,
     """Zone-TYPE switch (Orf <-> Pen): the previous type's zone name cannot
     be valid for the new type, so clear the selection, repopulate the
     dropdown with the new type's zones, then push the (now blank-zone)
-    config. Mirrors the bHaptics Cross-Routing handler."""
+    config."""
     populate_zone_combo(controller, zone_combo, new_type, keep_current=False)
     push()

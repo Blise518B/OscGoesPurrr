@@ -42,6 +42,10 @@ from ui.icons import (
     icon_cross as _icon_cross,
 )
 from ui.fold_strip import FoldCard as _FoldCard, FoldStrip as _FoldStrip
+from ui.views._backend_common import (
+    on_zone_type_changed as _on_zone_type_changed,
+    populate_zone_combo as _populate_zone_combo,
+)
 from ui.widgets import (
     ToggleSwitch,
     Invoker as _Invoker,
@@ -814,7 +818,8 @@ class BHapticsMixin:
         zone_combo = QComboBox()
         zone_combo.setEditable(True)
         zone_combo.setMinimumWidth(160)
-        self._populate_xroute_zone_combo(zone_combo, ztype_combo.currentText())
+        _populate_zone_combo(self.controller, zone_combo,
+                             ztype_combo.currentText())
         cur_zone = str(entry.get("ogb_zone", ""))
         if cur_zone and zone_combo.findText(cur_zone) < 0:
             zone_combo.addItem(cur_zone)
@@ -1019,37 +1024,6 @@ class BHapticsMixin:
         except RuntimeError:
             pass
 
-    def _populate_xroute_zone_combo(self, combo: QComboBox, zone_type: str):
-        """Fill the OGB-zone dropdown from the avatar's currently-detected
-        zones. Editable, so the user can still type a zone name we
-        haven't seen on the wire yet."""
-        combo.blockSignals(True)
-        try:
-            current = combo.currentText()
-            combo.clear()
-            try:
-                zones = self.controller.get_detected_zones() or {}
-            except Exception:
-                zones = {}
-            key = "Orifices" if zone_type == "Orf" else "Penetrators"
-            names = list(zones.get(key) or [])
-            # Synthetic SPS sources of this type appear alongside detected
-            # zones; bhaptics_router resolves the name against the source map.
-            try:
-                custom = self.controller.get_sps_source_names_by_type() or {}
-            except Exception:
-                custom = {}
-            for nm in (custom.get(key) or []):
-                if nm not in names:
-                    names.append(nm)
-            combo.addItems(names)
-            if current:
-                if combo.findText(current) < 0:
-                    combo.addItem(current)
-                combo.setEditText(current)
-        finally:
-            combo.blockSignals(False)
-
     @staticmethod
     def _fmt_dot_indices(values) -> str:
         try:
@@ -1167,22 +1141,18 @@ class BHapticsMixin:
         self._push_bhaptics_xroute_entry(idx)
 
     def _on_bhaptics_xroute_ztype_changed(self, idx: int):
-        """User flipped the entry's Orf/Pen toggle. Refresh that row's
-        zone-name dropdown to match (orifices vs penetrators come from
-        different OGB lists) and push the entry."""
+        """User flipped the entry's Orf/Pen toggle. The shared handler
+        clears the zone selection (the previous type's name can't be
+        valid for the new type), repopulates the dropdown from the new
+        type's lists, and pushes the now-blank-zone entry — same
+        convention as the PiShock / Coyote / OWO / Handy views. (The
+        old hand-rolled version meant to blank the zone too, but Qt's
+        addItems auto-selected the new list's first item into the edit
+        text, silently saving a zone the user never picked.)"""
         if idx < 0 or idx >= len(self._bhaptics_xroute_rows):
             return
         row = self._bhaptics_xroute_rows[idx]
-        # Clearing the editable text avoids leaving the previous-type
-        # zone name selected (e.g. switching Orf->Pen with "Boob" still
-        # showing in the box would re-create the entry as a Pen mapping
-        # against an orifice name).
-        row["ogb_zone"].blockSignals(True)
-        try:
-            row["ogb_zone"].setEditText("")
-        finally:
-            row["ogb_zone"].blockSignals(False)
-        self._populate_xroute_zone_combo(
-            row["ogb_zone"], row["zone_type"].currentText()
+        _on_zone_type_changed(
+            self.controller, row["ogb_zone"], row["zone_type"].currentText(),
+            lambda: self._push_bhaptics_xroute_entry(idx),
         )
-        self._push_bhaptics_xroute_entry(idx)
