@@ -64,11 +64,34 @@ class PiShockMixin:
         self.pishock_connect_btn.clicked.connect(self._on_pishock_connect)
         row.addWidget(self.pishock_connect_btn)
         row.addStretch(1)
+        self._pishock_test_btns: List[QPushButton] = []
         for op in _OPS:
-            tb = QPushButton(f"Test {op}")
+            if op == "shock":
+                # A real shock (even the capped test one) must never be one
+                # accidental click away: hold-to-fire, styled as the one
+                # dangerous button in the row. Vibrate/beep stay one-click —
+                # they're the recommended first tests.
+                tb = QPushButton("Test shock (hold)")
+                tb.setProperty("role", "danger")
+                tb.setToolTip(
+                    "Press and HOLD for 0.6 s to fire a capped test shock.\n"
+                    "Releasing earlier cancels. Try vibrate/beep first."
+                )
+                self._pishock_shock_hold = QTimer(self.window)
+                self._pishock_shock_hold.setSingleShot(True)
+                self._pishock_shock_hold.setInterval(600)
+                self._pishock_shock_hold.timeout.connect(
+                    lambda: self._on_pishock_test("shock"))
+                tb.pressed.connect(self._pishock_shock_hold.start)
+                tb.released.connect(self._pishock_shock_hold.stop)
+            else:
+                tb = QPushButton(f"Test {op}")
+                tb.setToolTip(f"Fire a short test {op}.")
+                tb.clicked.connect(lambda _=False, o=op: self._on_pishock_test(o))
             tb.setMinimumHeight(BTN_HEIGHT_SMALL)
-            tb.clicked.connect(lambda _=False, o=op: self._on_pishock_test(o))
+            tb.setEnabled(False)  # enabled once the status poll sees a link
             row.addWidget(tb)
+            self._pishock_test_btns.append(tb)
         slay.addLayout(row)
         parent_layout.addWidget(status_card)
 
@@ -298,6 +321,17 @@ class PiShockMixin:
         self.pishock_status_label.style().polish(self.pishock_status_label)
 
         self.pishock_auto_connect_check.setChecked(bool(status.get("auto_connect")))
+        # Test buttons only make sense against a live link; firing while
+        # disconnected silently no-ops, which reads as a broken button.
+        connected = bool(status.get("connected"))
+        for tb in getattr(self, "_pishock_test_btns", ()):
+            try:
+                tb.setEnabled(connected)
+            except RuntimeError:
+                pass
+        if not connected and hasattr(self, "_pishock_shock_hold"):
+            # A hold in progress when the link drops must not fire late.
+            self._pishock_shock_hold.stop()
         if not full:
             return
         mode = status.get("mode", "serial")
