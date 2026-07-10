@@ -373,7 +373,10 @@ an ack adds latency. Keep each stage tight.
   *only*). The engine loop (`HAPTIC_POLL_RATE`, ~100 Hz) sends
   **fire-and-forget** (never awaits Intiface's ack), bounded by a
   per-feature cap (`HAPTIC_MAX_SEND_HZ`, ~60 Hz) so a real BLE toy isn't
-  flooded. ≈27 ms end-to-end on the bench (was ≈60 ms).
+  flooded. ≈27 ms end-to-end on the bench (was ≈60 ms). The per-feature
+  send decisions (change gate, in-flight guard, caps, linear delta gate,
+  duration sizing) live in the pure `send_gate.FeatureSendGate` so the
+  invariants are unit-testable without a connection.
 * **Linear / strokers** — same engine loop; fire-and-forget, with an
   in-flight guard keeping position commands strictly in order. Sends are
   capped at `LINEAR_MAX_SEND_HZ` (20 Hz) — lower than the vibrate cap
