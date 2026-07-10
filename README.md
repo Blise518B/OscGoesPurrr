@@ -99,8 +99,10 @@ toys, SteamVR trackers, bHaptics suits, OWO suits, e-stim units
 1. Clone or download this repository.
 2. Open a terminal in the folder and install dependencies:
    ```bash
-   pip install -r requirements.txt
+   pip install -r requirements.txt -c constraints.txt
    ```
+   (`constraints.txt` pins the exact versions the release was tested
+   with; drop the `-c` flag if you deliberately want newer ones.)
 3. Launch with one of:
    ```bash
    python main.py
@@ -108,7 +110,9 @@ toys, SteamVR trackers, bHaptics suits, OWO suits, e-stim units
    ```bash
    run.bat
    ```
-   `run.bat` will install/update dependencies first.
+   `run.bat` installs dependencies on first launch and re-runs the
+   install automatically whenever `requirements.txt` or
+   `constraints.txt` change.
 
 ### Prebuilt Windows executable
 

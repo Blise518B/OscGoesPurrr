@@ -78,7 +78,7 @@ echo [1/4] Checking for PyInstaller...
 "%VENV_PY%" -m pip show pyinstaller >nul 2>&1
 if %errorlevel% neq 0 (
     echo PyInstaller not found. Installing...
-    "%VENV_PY%" -m pip install pyinstaller
+    "%VENV_PY%" -m pip install pyinstaller -c constraints.txt
     if %errorlevel% neq 0 (
         echo [ERROR] Failed to install PyInstaller.
         pause
@@ -90,7 +90,7 @@ if %errorlevel% neq 0 (
 echo.
 
 echo [2/4] Installing project dependencies...
-"%VENV_PY%" -m pip install -r requirements.txt
+"%VENV_PY%" -m pip install -r requirements.txt -c constraints.txt
 if %errorlevel% neq 0 (
     echo [WARNING] Some dependencies may have failed to install. Continuing anyway...
 )

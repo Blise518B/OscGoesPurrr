@@ -1,0 +1,68 @@
+# Known-good version pins for the whole dependency tree.
+#
+# requirements.txt keeps loose `>=` ranges (what the app is compatible
+# with); this file pins the exact versions a release was actually tested
+# against, so `run.bat` / `build_OGP.bat` installs are reproducible and a
+# surprise upstream release can't break users overnight. A pip constraints
+# file never installs anything by itself — it only pins a package IF it is
+# being installed — so platform-specific entries (the winrt-* stack bleak
+# pulls on Windows) are ignored elsewhere, and dev/build tool pins are
+# ignored for plain runtime installs.
+#
+# Usage:   pip install -r requirements.txt -c constraints.txt
+# Refresh: venv\Scripts\python.exe -m pip freeze  (drop pip/setuptools),
+#          then re-run the app + test suite before committing the bump.
+#
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+# ---- direct runtime dependencies ----
+PySide6==6.11.1
+buttplug==1.0.0
+python-osc==1.10.2
+zeroconf==0.149.16
+pystray==0.19.5
+pillow==12.2.0
+openvr==2.12.1401
+websocket-client==1.9.0
+bleak==3.0.2
+pyserial==3.5
+requests==2.34.2
+
+# ---- transitive runtime dependencies ----
+PySide6_Addons==6.11.1
+PySide6_Essentials==6.11.1
+shiboken6==6.11.1
+websockets==16.0
+pydantic==2.13.4
+pydantic_core==2.46.4
+annotated-types==0.7.0
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+certifi==2026.5.20
+charset-normalizer==3.4.7
+idna==3.18
+urllib3==2.7.0
+ifaddr==0.2.0
+six==1.17.0
+winrt-runtime==3.2.1
+winrt-Windows.Devices.Bluetooth==3.2.1
+winrt-Windows.Devices.Bluetooth.Advertisement==3.2.1
+winrt-Windows.Devices.Bluetooth.GenericAttributeProfile==3.2.1
+winrt-Windows.Devices.Enumeration==3.2.1
+winrt-Windows.Devices.Radios==3.2.1
+winrt-Windows.Foundation==3.2.1
+winrt-Windows.Foundation.Collections==3.2.1
+winrt-Windows.Storage.Streams==3.2.1
+
+# ---- dev / build tools (only pinned when actually installed) ----
+pytest==9.0.3
+pluggy==1.6.0
+iniconfig==2.3.0
+colorama==0.4.6
+packaging==26.2
+Pygments==2.20.0
+pyinstaller==6.20.0
+pyinstaller-hooks-contrib==2026.5
+altgraph==0.17.5
+pefile==2024.8.26
+pywin32-ctypes==0.2.3

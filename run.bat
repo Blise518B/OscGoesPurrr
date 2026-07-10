@@ -50,12 +50,36 @@ if not exist "%VENV_PY%" (
     )
 )
 
-:: Install/update dependencies into the venv (not system Python).
-echo Installing/updating dependencies...
-"%VENV_PY%" -m pip install -r requirements.txt
-if errorlevel 1 (
-    echo Warning: Could not install dependencies. Trying to continue anyway...
-    echo.
+:: ------------------------------------------------------------------
+:: Install dependencies into the venv (not system Python) — but only
+:: when the dependency set actually changed. After a successful install
+:: we stamp copies of requirements.txt + constraints.txt into the venv;
+:: if both stamps are byte-identical (fc returns 0) the last install
+:: already matches and the pip run (several seconds + a network touch
+:: on every launch) is skipped. Delete the venv to force a rebuild.
+:: ------------------------------------------------------------------
+set "NEED_PIP=1"
+if exist "venv\requirements.stamp" (
+    if exist "venv\constraints.stamp" (
+        fc /b requirements.txt "venv\requirements.stamp" >nul 2>&1
+        if not errorlevel 1 (
+            fc /b constraints.txt "venv\constraints.stamp" >nul 2>&1
+            if not errorlevel 1 set "NEED_PIP="
+        )
+    )
+)
+if defined NEED_PIP (
+    echo Installing/updating dependencies...
+    "%VENV_PY%" -m pip install -r requirements.txt -c constraints.txt
+    if errorlevel 1 (
+        echo Warning: Could not install dependencies. Trying to continue anyway...
+        echo.
+    ) else (
+        copy /y requirements.txt "venv\requirements.stamp" >nul
+        copy /y constraints.txt "venv\constraints.stamp" >nul
+    )
+) else (
+    echo Dependencies unchanged - skipping install.
 )
 
 :: Run the application from the venv.
