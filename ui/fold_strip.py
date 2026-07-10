@@ -42,7 +42,9 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QWidget
 
-from constants import COLOR_SURFACE, COLOR_SURFACE_HOVER, COLOR_TEXT_MUTED
+from constants import (
+    COLOR_INPUT_FOCUS, COLOR_SURFACE, COLOR_SURFACE_HOVER, COLOR_TEXT_MUTED,
+)
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
 
 # ---- Shared colour ramp (endpoints copied from motor_signal_chain) ----
@@ -153,6 +155,10 @@ class FoldCard(QFrame):
         self.setObjectName("tuneStageCard")
         if self._expandable:
             self.setCursor(Qt.PointingHandCursor)
+            # Keyboard access: these folds are the primary editing surface
+            # of the backend tabs — they must be reachable by Tab and
+            # toggleable by Space/Return, not mouse-only.
+            self.setFocusPolicy(Qt.TabFocus)
         self.setProperty("active", "false")
 
         root = _vbox(8, 4)
@@ -222,6 +228,28 @@ class FoldCard(QFrame):
             ev.accept()
         else:
             super().mousePressEvent(ev)
+
+    def keyPressEvent(self, ev) -> None:
+        # hasFocus() is load-bearing: editor children (spinboxes, combos,
+        # line edits) ignore() Return/Enter AFTER committing a value, so
+        # the event bubbles up here — without the check, committing an
+        # edit would collapse the fold out from under the user. The card
+        # itself only has focus when Tab landed on it.
+        if (self._expandable and self.hasFocus()
+                and ev.key() in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter)):
+            if not ev.isAutoRepeat():  # holding the key must not flap
+                self.clicked.emit(self._fold_id)
+            ev.accept()
+        else:
+            super().keyPressEvent(ev)
+
+    def focusInEvent(self, ev) -> None:
+        super().focusInEvent(ev)
+        self.update()  # repaint the focus indicator
+
+    def focusOutEvent(self, ev) -> None:
+        super().focusOutEvent(ev)
+        self.update()
 
     # ------------------------------------------------------------ state
     def is_expanded(self) -> bool:
@@ -322,15 +350,28 @@ class FoldCard(QFrame):
     def paintEvent(self, event) -> None:
         super().paintEvent(event)  # QSS background / radius / base border
         color = self._ring_color
-        if color is None or self.property("active") == "true":
-            # No signal seen yet, or the QSS active rule owns the border.
+        # Activity ring is skipped when no signal has been seen yet or
+        # while the QSS active rule owns the outer border.
+        draw_ring = color is not None and self.property("active") != "true"
+        # Keyboard focus indicator: only reachable via Tab (TabFocus),
+        # so this never flickers on mouse clicks.
+        draw_focus = self._expandable and self.hasFocus()
+        if not draw_ring and not draw_focus:
             return
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(QPen(color, 1.0))
         p.setBrush(Qt.NoBrush)
-        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        p.drawRoundedRect(r, 8.0, 8.0)
+        if draw_ring:
+            p.setPen(QPen(color, 1.0))
+            r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+            p.drawRoundedRect(r, 8.0, 8.0)
+        if draw_focus:
+            # Inset a second ring inside the border so it stays visible
+            # alongside the activity ring and the active-state border,
+            # in the same colour as the app-wide input focus rule.
+            p.setPen(QPen(QColor(COLOR_INPUT_FOCUS), 1.0))
+            r = QRectF(self.rect()).adjusted(2.5, 2.5, -2.5, -2.5)
+            p.drawRoundedRect(r, 6.0, 6.0)
         p.end()
 
     def set_value(self, value: float) -> None:
