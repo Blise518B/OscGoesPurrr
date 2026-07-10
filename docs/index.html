@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>OscGoesPurrr — Feel VRChat, everywhere</title>
-<meta name="description" content="OscGoesPurrr is a multi-backend haptic router for VRChat. It turns your avatar's OSC parameters into smooth, real-time haptics across Bluetooth toys, SteamVR trackers and bHaptics suits.">
+<meta name="description" content="OscGoesPurrr is a multi-backend haptic router for VRChat. It turns your avatar's OSC parameters into smooth, real-time haptics across Bluetooth toys, strokers, SteamVR trackers, e-stim and bHaptics suits.">
 <meta name="theme-color" content="#08070d">
 <link rel="icon" type="image/png" href="assets/favicon.png">
 <link rel="apple-touch-icon" href="assets/favicon.png">
@@ -13,7 +13,7 @@
      If your GitHub Pages URL differs, update the four absolute links below. -->
 <meta property="og:type" content="website">
 <meta property="og:title" content="OscGoesPurrr — Feel VRChat, everywhere">
-<meta property="og:description" content="A multi-backend haptic router for VRChat: OSC in, smooth haptics out — Bluetooth toys, SteamVR trackers, bHaptics suits.">
+<meta property="og:description" content="A multi-backend haptic router for VRChat: OSC in, smooth haptics out — Bluetooth toys, strokers, SteamVR trackers, e-stim, bHaptics suits.">
 <meta property="og:url" content="https://blise518b.github.io/OscGoesPurrr/">
 <meta property="og:image" content="https://blise518b.github.io/OscGoesPurrr/assets/og-cover.png">
 <meta name="twitter:card" content="summary_large_image">
@@ -269,7 +269,7 @@ body.reduced .marquee__row{animation:none!important}
     <a class="btn btn-ghost" href="#flow">See how it works</a>
   </div>
   <div class="badges">
-    <span class="badge"><b>6</b> haptic backends</span>
+    <span class="badge"><b>7</b> haptic backends</span>
     <span class="badge"><b>0</b> IP addresses to type</span>
     <span class="badge"><b>100%</b> local</span>
     <span class="badge">Python · PySide6</span>
@@ -280,8 +280,8 @@ body.reduced .marquee__row{animation:none!important}
 <!-- MARQUEE -->
 <div class="marquee" aria-hidden="true">
   <div class="marquee__row">
-    <span>Lush</span><span>Hush</span><span>Edge</span><span>Domi</span><span>Max</span><span>Nora</span><span>Gravity</span><span>Solace&nbsp;Pro</span><span>Osci</span><span>Ferri</span><span>Diamo</span><span>Gush</span><span>Calor</span><span>Tenera</span><span>Vulse</span><span>Ridge</span><span>Tundra&nbsp;tracker</span><span>Vive&nbsp;tracker</span><span>bHaptics&nbsp;vest</span><span>PiShock</span><span>DG-Lab&nbsp;Coyote</span><span>OWO&nbsp;suit</span><span>OSR2</span>
-    <span>Lush</span><span>Hush</span><span>Edge</span><span>Domi</span><span>Max</span><span>Nora</span><span>Gravity</span><span>Solace&nbsp;Pro</span><span>Osci</span><span>Ferri</span><span>Diamo</span><span>Gush</span><span>Calor</span><span>Tenera</span><span>Vulse</span><span>Ridge</span><span>Tundra&nbsp;tracker</span><span>Vive&nbsp;tracker</span><span>bHaptics&nbsp;vest</span><span>PiShock</span><span>DG-Lab&nbsp;Coyote</span><span>OWO&nbsp;suit</span><span>OSR2</span>
+    <span>Lush</span><span>Hush</span><span>Edge</span><span>Domi</span><span>Max</span><span>Nora</span><span>Gravity</span><span>Solace&nbsp;Pro</span><span>Osci</span><span>Ferri</span><span>Diamo</span><span>Gush</span><span>Calor</span><span>Tenera</span><span>Vulse</span><span>Ridge</span><span>Tundra&nbsp;tracker</span><span>Vive&nbsp;tracker</span><span>bHaptics&nbsp;vest</span><span>PiShock</span><span>DG-Lab&nbsp;Coyote</span><span>OWO&nbsp;suit</span><span>The&nbsp;Handy</span><span>OSR2</span>
+    <span>Lush</span><span>Hush</span><span>Edge</span><span>Domi</span><span>Max</span><span>Nora</span><span>Gravity</span><span>Solace&nbsp;Pro</span><span>Osci</span><span>Ferri</span><span>Diamo</span><span>Gush</span><span>Calor</span><span>Tenera</span><span>Vulse</span><span>Ridge</span><span>Tundra&nbsp;tracker</span><span>Vive&nbsp;tracker</span><span>bHaptics&nbsp;vest</span><span>PiShock</span><span>DG-Lab&nbsp;Coyote</span><span>OWO&nbsp;suit</span><span>The&nbsp;Handy</span><span>OSR2</span>
   </div>
 </div>
 
@@ -382,7 +382,7 @@ body.reduced .marquee__row{animation:none!important}
 <section class="section" id="backends">
   <div class="wrap">
     <div class="section-head reveal">
-      <div class="kicker">One app, six outputs</div>
+      <div class="kicker">One app, seven outputs</div>
       <h2>Route to anything that buzzes, zaps or taps</h2>
       <p>Mix and match. Bind one avatar zone to many devices, or many zones to one motor — toys, e-stim and suits side by side.</p>
     </div>
@@ -435,6 +435,14 @@ body.reduced .marquee__row{animation:none!important}
           <div><h3>OWO suit</h3><div class="sub">10 muscle groups · EMS</div></div>
         </div>
         <p>Maps avatar contacts onto OWO's ten muscle-group sensations for full-torso feedback. Pairs with the My OWO phone app over Wi-Fi through the OWO SDK.</p>
+        <div class="meter-row"><div class="meter" data-meter><div class="meter__fill"></div></div><span class="meter__val">0%</span></div>
+      </div>
+      <div class="card backend reveal">
+        <div class="backend__top">
+          <span class="backend__ico"><svg viewBox="0 0 24 24" fill="none" stroke="url(#g1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="20" rx="3"/><path d="M9 8h6M9 15h6"/><path d="M4 9v6M20 9v6"/></svg></span>
+          <div><h3>The Handy</h3><div class="sub">Handy 2 · Pro 2 · cloud API</div></div>
+        </div>
+        <p>Drives the stroker through the official handyfeeling.com API — contact strength sets the stroke speed, or steers the slider position directly, with request pacing sized to the cloud budget and a live round-trip readout.</p>
         <div class="meter-row"><div class="meter" data-meter><div class="meter__fill"></div></div><span class="meter__val">0%</span></div>
       </div>
     </div>

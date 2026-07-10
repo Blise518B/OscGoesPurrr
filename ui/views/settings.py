@@ -455,11 +455,15 @@ class SettingsMixin:
             inner_lay.addWidget(card)
 
         section("Overview — what this app does", """
-OscGoesPurrr listens to VRChat OSC parameters once, then fans them out to four independent output pipelines:
+OscGoesPurrr listens to VRChat OSC parameters once, then fans them out to independent output pipelines:
 
   • Device Routing — Bluetooth toys via Intiface / Buttplug.io
   • SteamVR Device Communication — haptic pulses on Vive / Tundra trackers and Index controllers, plus outgoing battery OSC
   • bHaptics — vest / arms / head / hands / feet via the bHaptics Player
+  • PiShock — discrete shock / vibrate / beep events, USB-serial or cloud
+  • DG-Lab Coyote — e-stim channels over Bluetooth LE
+  • OWO Suit — muscle-group sensations via the OWO SDK
+  • The Handy — cloud-connected stroker via handyfeeling.com
   • OSC Inspector — live read-out of every parameter your avatar broadcasts
 
 Each section is self-contained: a failure in one (e.g. bHaptics Player not running) never affects the others.
@@ -604,6 +608,23 @@ Per-muscle routing (Source → Shaping → Output folds):
 Sensation frequency (Connection card) sets the texture suit-wide — low feels like slow thumps, high like a dense buzz; per-muscle intensity stays separate.
 """)
 
+        section("The Handy", """
+Drives a Handy 2 / Handy Pro 2 stroker from avatar contacts through the official handyfeeling.com cloud API (v3). The device must be on Wi-Fi and linked to your Handy account — every command crosses the internet, so expect more latency than the local backends. While connected, the status card shows the measured cloud round-trip and the request-budget usage live.
+
+Connection: the connection key identifies your device (shown in the Handyverse app / onboarding); the API key is the Application ID from your account at user.handyfeeling.com. Enter both and Apply, then Connect Now (or leave Auto Connect on).
+
+Motion:
+  • Stroke speed mode (HAMP) — the device strokes on its own; contact strength sets how fast. When contact idles at zero the stroker stops.
+  • Position mode (HDSP) — contact strength steers the slider position directly ("Invert position" flips the direction).
+  • Stroke zone limits how far the slider travels (0 = bottom, 1 = top) and is enforced by the device itself in every mode.
+  • Commands/s caps outgoing cloud requests — the official API budget is about 240 per minute (4/s).
+
+Routing (Source → Shaping → Output folds, same language as the other backends):
+  • Source: an OGB zone or synthetic SPS source plus interaction filters, with a live strength ring.
+  • Shaping: threshold + gain, same math as the Coyote and OWO chains.
+  • Output: Max speed caps the stroke speed in speed mode no matter how strong the contact gets; in position mode the shaped level steers the slider within the stroke zone instead.
+""")
+
         section("Real-Time OSC Inspector", """
 OSC Inspector shows every OSC parameter your avatar is broadcasting. It starts automatically when you open the page and stops when you leave — useful for finding the exact name of a parameter before mapping it to a motor / tracker / bHaptics zone.
 
@@ -628,6 +649,7 @@ Flip the "Help Mode" toggle in the sidebar (or in the Device Routing header) and
   • pishock_settings.json    — transport, credentials, safety caps, zone rules
   • coyote_settings.json     — device address, hardware soft limits, channel configs
   • owo_settings.json        — connection, sensation frequency, per-muscle configs
+  • handy_settings.json      — connection/API keys, motion mode, routing rule
   • sessions_settings.json   — session-logger preferences
 """)
 

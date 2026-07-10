@@ -188,16 +188,6 @@ Order within a group is rough priority, not a hard sequence.
 
 ## Reliability & Lifecycle
 
-- **Stateless router test suite — finish the remaining routers.**
-  `motor_router.py` (plus the mixer, the new backends' routers, and
-  the shared engine/router bases) now has deep pytest coverage, but
-  `steamvr_router.py` and `bhaptics_router.py` still don't have
-  dedicated suites. Each is a near-pure function over (config,
-  `parameter_store` snapshot) → output, which is exactly what pytest
-  is best at — pin down pattern shaping, anti-stuck timing, and the
-  v1/cross-routing dot merging so refactors can be verified to
-  preserve behaviour.
-
 - **SteamVR-aware shutdown.**
   Detect when SteamVR exits and either auto-quit OscGoesPurrr or at
   minimum send 0 to every connected device and stop output. User
