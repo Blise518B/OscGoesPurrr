@@ -26,6 +26,7 @@
 
 import threading
 import time
+from collections import deque
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from engine_base import ReconnectingEngine
@@ -194,6 +195,13 @@ class HandyEngine(ReconnectingEngine):
         self._wake_evt = threading.Event()
         self._send_thread: Optional[threading.Thread] = None
         self._send_gen = 0  # bumped per connection; stale send loops exit
+        # Cloud health telemetry for the status card: last HTTP round-trip
+        # and requests in the last 60 s (vs the documented ~240/min budget).
+        # RTT dominates this backend's end-to-end feel, so the user needs
+        # to see it to tell "slow cloud path" apart from "wrong thresholds".
+        self._rtt_lock = threading.Lock()
+        self._last_rtt_ms: Optional[float] = None
+        self._send_times: deque = deque()
         self._session = None
         self._device_info: Dict[str, Any] = {}
         self._stroke_dirty = False
@@ -229,6 +237,15 @@ class HandyEngine(ReconnectingEngine):
     def get_status_extras(self) -> Dict[str, Any]:
         with self._state_lock:
             level = self._level
+        with self._rtt_lock:
+            cutoff = time.monotonic() - 60.0
+            while self._send_times and self._send_times[0] < cutoff:
+                self._send_times.popleft()
+            sends_per_min = len(self._send_times)
+            # An idle link says nothing about the cloud path *now*: once
+            # no request has flowed for the whole window, stop reporting
+            # the last sample as current health.
+            rtt_ms = self._last_rtt_ms if self._send_times else None
         return {
             "fw_version": self._device_info.get("fw_version"),
             "hw_model_name": self._device_info.get("hw_model_name"),
@@ -236,6 +253,8 @@ class HandyEngine(ReconnectingEngine):
             "playing": self._speed.playing,
             "mode": self._active_mode,
             "level": level,
+            "rtt_ms": rtt_ms,
+            "sends_per_min": sends_per_min,
         }
 
     # ---- ReconnectingEngine transport hooks --------------------------
@@ -432,7 +451,15 @@ class HandyEngine(ReconnectingEngine):
     # ---- HTTP ----------------------------------------------------------
     def _request(self, session, method: str, path: str,
                  body: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        t0 = time.monotonic()
         r = session.request(method, API_BASE + path, json=body, timeout=HTTP_TIMEOUT_S)
+        now = time.monotonic()
+        with self._rtt_lock:
+            self._last_rtt_ms = (now - t0) * 1000.0
+            self._send_times.append(now)
+            cutoff = now - 60.0
+            while self._send_times and self._send_times[0] < cutoff:
+                self._send_times.popleft()
         if r.status_code == 429:
             raise HandyRateLimited()
         if r.status_code in (401, 403):

@@ -380,6 +380,15 @@ class HandyMixin:
         elif status.get("connected"):
             fw = extras.get("fw_version")
             suffix = f" — fw {fw}" if fw else ""
+            # Cloud RTT dominates this backend's feel: surface it (and the
+            # request budget) so "it feels laggy" is diagnosable at a glance.
+            # The engine reports rtt_ms only while requests are actually
+            # flowing, so the whole segment vanishes on an idle link rather
+            # than freezing a stale sample on screen.
+            rtt = extras.get("rtt_ms")
+            if rtt is not None:
+                spm = extras.get("sends_per_min") or 0
+                suffix += f" · cloud RTT ~{int(rtt)} ms · {int(spm)}/240 req/min"
             if extras.get("fw_update_required"):
                 suffix += " (firmware update required!)"
             self.handy_status_label.setText(f"Handy: connected{suffix}")
