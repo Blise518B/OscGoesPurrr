@@ -733,6 +733,43 @@ class DashboardMixin:
         title.setAlignment(Qt.AlignHCenter)
         parent_layout.addWidget(title)
 
+        # ===== Getting-started checklist =====
+        # Simple Mode is the de-facto onboarding flow, but its three cards
+        # each only explain their own gap — a first-time user had to infer
+        # the OSC -> zones -> toy dependency chain themselves. This card
+        # ticks the chain off live and disappears once everything lines up.
+        gs_card = _Card()
+        gs_lay = _vbox(14, 6)
+        gs_card.setLayout(gs_lay)
+        gs_hdr = QLabel("Getting started")
+        f = gs_hdr.font(); f.setBold(True); f.setPointSize(12)
+        gs_hdr.setFont(f)
+        gs_lay.addWidget(gs_hdr)
+        gs_lay.addWidget(self._muted_label(
+            "Three things have to line up before you feel anything — each "
+            "row ticks green on its own as you get there."
+        ))
+        self._simple_mode_step_text = {
+            "osc": "VRChat OSC connected — use the sidebar's "
+                   "\"Connect to VRChat\" button (VRChat must be running "
+                   "with OSC enabled)",
+            "zones": "SPS zones detected — load an avatar with OGB / SPS "
+                     "contacts",
+            "toy": "A toy is connected — power it on; it's discovered "
+                   "automatically",
+        }
+        self._simple_mode_steps: Dict[str, QLabel] = {}
+        for key in ("osc", "zones", "toy"):
+            row_lbl = QLabel("")
+            row_lbl.setWordWrap(True)
+            gs_lay.addWidget(row_lbl)
+            self._simple_mode_steps[key] = row_lbl
+        gs_lay.addWidget(self._muted_label(
+            "Then press ▶ Test on a toy below — if you feel it, you're set."
+        ))
+        self._simple_mode_gs_card = gs_card
+        parent_layout.addWidget(gs_card)
+
         # ===== Toggle card =====
         toggle_card = _Card()
         tlay = _vbox(14, 8)
@@ -930,12 +967,53 @@ class DashboardMixin:
         lbl.setText(f"🔋 {pct}%")
         lbl.setStyleSheet(f"color: {color};")
 
+    def _refresh_simple_mode_checklist(self, sources, toys) -> None:
+        """Tick the getting-started rows off live; hide the card once the
+        whole OSC -> zones -> toy chain is green. ``sources``/``toys`` are
+        passed in by refresh_simple_mode_view so the parameter-store copy
+        behind them happens once per tick, not twice. Change-gated — this
+        rides the periodic UI tick, so identical states must cost nothing."""
+        card = getattr(self, "_simple_mode_gs_card", None)
+        steps = getattr(self, "_simple_mode_steps", None)
+        if card is None or not steps:
+            return
+        try:
+            osc_ok = bool((self.controller.get_osc_status_snapshot() or {})
+                          .get("connected"))
+        except Exception:
+            osc_ok = False
+        src = sources or {}
+        zones_ok = bool(src.get("Orifices") or src.get("Penetrators"))
+        toy_ok = bool(toys)
+        state = {"osc": osc_ok, "zones": zones_ok, "toy": toy_ok}
+        if state == getattr(self, "_simple_mode_gs_state", None):
+            return
+        self._simple_mode_gs_state = state
+        for key, lbl in steps.items():
+            ok = state[key]
+            try:
+                lbl.setText(("✓  " if ok else "○  ")
+                            + self._simple_mode_step_text[key])
+                lbl.setStyleSheet(f"color: {COLOR_SUCCESS};" if ok
+                                  else f"color: {COLOR_TEXT_MUTED};")
+            except RuntimeError:
+                return
+        card.setVisible(not all(state.values()))
+
     def refresh_simple_mode_view(self, force: bool = False):
         """Rebuild source + toy lists when the underlying data has changed.
         Called from the periodic UI tick and after key controller events."""
         if self.simple_mode_sources_layout is None or self.simple_mode_toys_layout is None:
             return
         ctl = self.controller
+
+        # Fetched once and shared with the checklist below — the sources
+        # getter copies the whole parameter store under the lock the OSC
+        # ingest thread contends on, so it must not run twice per tick.
+        sources = ctl.get_simple_mode_sources() if hasattr(ctl, "get_simple_mode_sources") else {}
+        toys = ctl.get_simple_mode_toys() if hasattr(ctl, "get_simple_mode_toys") else []
+
+        self._refresh_simple_mode_checklist(sources, toys)
 
         # Keep both mirror toggles in sync with the persisted flag.
         desired = bool(getattr(ctl, "get_simple_mode", lambda: False)())
@@ -959,7 +1037,6 @@ class DashboardMixin:
                 self.simple_mode_status_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
 
         # ---- Sources ----
-        sources = ctl.get_simple_mode_sources() if hasattr(ctl, "get_simple_mode_sources") else {}
         orifices = tuple(sources.get("Orifices", []))
         penetrators = tuple(sources.get("Penetrators", []))
         sources_key = (orifices, penetrators)
@@ -986,7 +1063,6 @@ class DashboardMixin:
                         self.simple_mode_sources_layout.addWidget(QLabel(f"  • {name}"))
 
         # ---- Toys ----
-        toys = ctl.get_simple_mode_toys() if hasattr(ctl, "get_simple_mode_toys") else []
         toys_key = tuple((t["name"], t.get("motor_count", 0), t.get("connected", False)) for t in toys)
         if force or toys_key != self._simple_mode_last_toys:
             self._simple_mode_last_toys = toys_key
