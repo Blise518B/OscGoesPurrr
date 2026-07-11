@@ -79,6 +79,22 @@ class TestProfiles:
         # near-black text on primary fills (readability, ~14.7:1).
         assert p["TEXT_ON_PRIMARY"] != p["TEXT"]
 
+    def test_purrple_gradient_derives_from_purrple(self):
+        # The gradient twin is the SAME palette (every flat key equal) —
+        # only the brushes and the window frame differ, so the two can
+        # never drift apart.
+        flat = constants.COLOR_PROFILES["purrple"]
+        grad = constants.COLOR_PROFILES["purrple_gradient"]
+        for key in REQUIRED_KEYS:
+            assert grad[key] == flat[key], key
+        for key in ("BG_BRUSH", "SURFACE_BRUSH", "PRIMARY_BRUSH"):
+            assert grad[key].startswith("qlineargradient("), key
+        # Buttons run the brand pair; the background sweep starts on the
+        # flat BG so painted widgets blend in.
+        assert "#7C4DFF" in grad["PRIMARY_BRUSH"]
+        assert "#FF3D7F" in grad["PRIMARY_BRUSH"]
+        assert flat["BG"] in grad["BG_BRUSH"]
+
     def test_aurora_gradients(self):
         # Aurora: GitHub-inspired full-background gradient + hero-pair
         # gradient highlights. Brush keys are QSS brush expressions.

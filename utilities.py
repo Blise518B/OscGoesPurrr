@@ -2,6 +2,8 @@ import ctypes
 import json
 import math
 import os
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Union
 
@@ -124,6 +126,26 @@ def value_to_hex_color(value: Any) -> str:
         b = int(c0[2] + (c1[2] - c0[2]) * f)
         return f"#{r:02x}{g:02x}{b:02x}"
     return "#ffffff"
+
+
+def relaunch_self() -> None:
+    """Spawn a fresh copy of the running app — the frozen exe when
+    bundled, `python main.py` in dev — with the same arguments and
+    working directory.
+
+    Must be called only AFTER the Qt event loop has exited and the
+    clean shutdown has run, so the new instance never races this one
+    for the OSC/UDP ports or the mDNS advertisement. Best-effort: a
+    failed spawn just leaves the app closed, exactly like a normal
+    quit."""
+    try:
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable] + sys.argv[1:]
+        else:
+            cmd = [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:]
+        subprocess.Popen(cmd, cwd=os.getcwd(), close_fds=True)
+    except Exception:
+        pass
 
 
 def apply_window_frame_colors(hwnd: int,

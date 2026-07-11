@@ -18,9 +18,10 @@ from pathlib import Path as _Path
 # module copies these values at import time, so switching profiles in
 # Settings applies on the next launch.
 
-COLOR_PROFILES = {
-    "purrple": {
-        "label": "Purrple (default)",
+# The original identity, defined once — "purrple" ships it verbatim and
+# "purrple_gradient" derives from it (same palette, gradient brushes).
+_PURRPLE = {
+    "label": "Purrple (default)",
         # Primary brand — punchier than the prior #6B4EFF so it reads
         # against the deeper indigo canvas.
         "PRIMARY": "#7C4DFF",        # Main brand accent (Electric Purple)
@@ -56,6 +57,33 @@ COLOR_PROFILES = {
         # OSC-inspector value ramp (0 → 1 tint for numeric params).
         "VALUE_LO": "#7C4DFF",
         "VALUE_HI": "#FF3D7F",
+}
+
+COLOR_PROFILES = {
+    "purrple": _PURRPLE,
+    "purrple_gradient": {
+        **_PURRPLE,
+        "label": "Purrple (gradient)",
+        # The default identity with its brand pair as real gradients:
+        # indigo → violet → wine sweeping the whole background, a subtle
+        # card sheen, and purple → pink primary buttons (same pair the
+        # seg controls / scrollbars already paint).
+        "BG_BRUSH": (
+            "qlineargradient(x1:0, y1:0, x2:1, y2:1,"
+            " stop:0 #0D0924, stop:0.35 #120C33,"
+            " stop:0.65 #1A0D38, stop:1 #260B2E)"
+        ),
+        "SURFACE_BRUSH": (
+            "qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            " stop:0 #221A5E, stop:1 #181048)"
+        ),
+        "PRIMARY_BRUSH": (
+            "qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+            " stop:0 #7C4DFF, stop:1 #FF3D7F)"
+        ),
+        "WINDOW_BORDER": "#7C4DFF",
+        "WINDOW_CAPTION": "#0D0924",
+        "WINDOW_CAPTION_TEXT": "#FFFFFF",
     },
     "noir": {
         "label": "Noir (black & green)",

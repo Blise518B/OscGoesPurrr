@@ -318,10 +318,12 @@ class SettingsMixin:
             "Color profiles",
             "Switches the app-wide palette — surfaces, accents and the "
             "signal-chain activity colors. <b>Purrple</b> is the original "
-            "indigo/purple identity; <b>Noir</b> is black &amp; gray with "
-            "green highlights; <b>Aurora</b> sweeps a smooth navy→teal "
-            "gradient across the whole background with green→blue "
-            "gradient highlights. Applies on the next launch."
+            "indigo/purple identity (flat or with gradient background and "
+            "buttons); <b>Noir</b> is black &amp; gray with green "
+            "highlights; <b>Aurora</b> is its gradient sibling — a smooth "
+            "navy→teal sweep across the whole background with green→blue "
+            "gradient highlights. Switching applies immediately: the app "
+            "restarts itself."
         ))
         ap_hdr_row.addStretch(1)
         ap_lay.addLayout(ap_hdr_row)
@@ -338,22 +340,25 @@ class SettingsMixin:
                 cp_combo.setCurrentIndex(i)
                 break
         self._appearance_note = self._muted_label(
-            "The palette is applied at startup — restart OscGoesPurrr "
-            "to see the new profile."
+            "Picking a different profile restarts OscGoesPurrr "
+            "automatically so every widget repaints — takes a second."
         )
 
         def on_profile_changed(idx: int) -> None:
             key = cp_combo.itemData(idx)
             self.controller.set_app_setting("color_profile", str(key))
-            if key != COLOR_PROFILE:
-                self._appearance_note.setText(
-                    "Saved — restart OscGoesPurrr to apply the "
-                    f"{cp_combo.itemText(idx)} profile."
-                )
-            else:
+            if key == COLOR_PROFILE:
                 self._appearance_note.setText(
                     "This profile is already active."
                 )
+                return
+            self._appearance_note.setText(
+                f"Applying {cp_combo.itemText(idx)} — restarting…"
+            )
+            # Let the combo close and the note paint before teardown
+            # begins; the relaunch itself happens after the event loop
+            # exits (see request_restart).
+            QTimer.singleShot(200, self.controller.request_restart)
 
         cp_combo.currentIndexChanged.connect(on_profile_changed)
         cp_row.addWidget(cp_combo)

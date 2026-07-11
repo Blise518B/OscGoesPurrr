@@ -46,7 +46,7 @@ from queue_drain import drain_and_coalesce
 from constants import *
 from utilities import (
     classify_ogb_zone, value_to_hex_color, toggle_windows_console,
-    create_default_icon,
+    create_default_icon, relaunch_self,
 )
 from version import __version__
 import debug_log
@@ -1060,6 +1060,17 @@ class OscGoesPurrrApp(
         icon.stop()
         self.ui.schedule_on_main_thread(self.quit_app)
 
+    def request_restart(self):
+        """UI facade: run the normal clean shutdown, then relaunch the
+        app. Used by Settings → Appearance so a color-profile switch
+        repaints everything without the user manually restarting — the
+        palette is baked into every module at import time, so a fresh
+        process is the reliable way to apply it. The spawn happens in
+        run() only after the Qt loop has fully exited (see
+        utilities.relaunch_self)."""
+        self._relaunch_requested = True
+        self.quit_app()
+
     def quit_app(self):
         """Executes the final, clean shutdown sequence."""
         try:
@@ -1310,6 +1321,13 @@ class OscGoesPurrrApp(
 
         # Run GUI event loop on main thread
         self.ui.run()
+
+        # Deferred self-relaunch (Settings → Appearance profile switch).
+        # Runs only after the event loop has exited and quit_app's clean
+        # shutdown released the OSC/UDP sockets and mDNS advertisement,
+        # so the new instance never races this one.
+        if getattr(self, "_relaunch_requested", False):
+            relaunch_self()
 
 
 if __name__ == "__main__":
