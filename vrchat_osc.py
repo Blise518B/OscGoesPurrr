@@ -119,6 +119,41 @@ class OSCQueryHandler(BaseHTTPRequestHandler):
         pass  # Suppress HTTP request spam in console
 
 
+# OGB-parity presence heartbeat. OscGoesBrrr sets this avatar parameter
+# to true every 5 s so avatars can gate their haptic senders / "app
+# connected" visuals on a haptics app actually listening; avatars built
+# against that convention should light up for OscGoesPurrr too. Sent
+# from the health-check loop, which already ticks at the same 5 s
+# cadence OGB uses (OscConnection.OGB_ENABLED_INTERVAL_MS).
+OGB_ENABLED_ADDRESS = "/avatar/parameters/OGB_ENABLED"
+
+
+def coerce_outgoing_value(value: Any, expected_type: Optional[str]) -> Any:
+    """Type-coerce an outgoing avatar-parameter value.
+
+    When OSCQuery declared a type for the address, honor it. Otherwise:
+    bools pass through unchanged so python-osc emits OSC True/False tags
+    (OGB sends its bool params typed — and ``isinstance(True, int)`` is
+    True in Python, so the bare int→float fallback used to silently
+    degrade an undeclared bool to a 1.0 float); bare ints become floats
+    (VRChat's float params reject int-typed args).
+
+    Pure — unit-tested in tests/test_vrchat_osc_out.py."""
+    if expected_type:
+        if expected_type == 'f':
+            return float(value)
+        if expected_type == 'i':
+            return int(value)
+        if expected_type in ('T', 'F'):
+            return bool(value)
+        return value
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return float(value)
+    return value
+
+
 class SendRateLimiter:
     """Per-address outbound rate limiter with a trailing-edge flush.
 
@@ -730,6 +765,16 @@ class VRChatOSCManager:
                 # Sleep first so we don't immediately race the initial connect.
                 if self._shutdown.wait(5.0):
                     return
+                if self.is_connected:
+                    # OGB-parity presence heartbeat (see OGB_ENABLED_ADDRESS).
+                    # Rides this loop's 5 s cadence — same interval OGB uses —
+                    # instead of owning a thread. Fire-and-forget UDP; a send
+                    # error must never break the health check.
+                    try:
+                        self.send_parameter(OGB_ENABLED_ADDRESS, True,
+                                            ignore_rate_limit=True)
+                    except Exception:
+                        pass
                 if not self.is_connected or not self.http_port:
                     consecutive_failures = 0
                     continue
@@ -1334,14 +1379,7 @@ class VRChatOSCManager:
         self._send_raw(address, value)
 
     def _send_raw(self, address: str, value: Any) -> None:
-        expected_type = self._param_types.get(address)
-        if expected_type:
-            if expected_type == 'f': value = float(value)
-            elif expected_type == 'i': value = int(value)
-            elif expected_type in ['T', 'F']: value = bool(value)
-        elif isinstance(value, int):
-            value = float(value)
-
+        value = coerce_outgoing_value(value, self._param_types.get(address))
         self.osc_client.send_message(address, value)
 
     def _arm_flush_timer(self) -> None:
@@ -1372,13 +1410,7 @@ class VRChatOSCManager:
         if not self.is_connected or not self.osc_client: return
         bundle = OscBundleBuilder(0)
         for address, value in parameters.items():
-            expected_type = self._param_types.get(address)
-            if expected_type:
-                if expected_type == 'f': value = float(value)
-                elif expected_type == 'i': value = int(value)
-                elif expected_type in ['T', 'F']: value = bool(value)
-            elif isinstance(value, int):
-                value = float(value)
+            value = coerce_outgoing_value(value, self._param_types.get(address))
             msg = OscMessageBuilder(address=address)
             msg.add_arg(value)
             bundle.add_content(msg.build())
