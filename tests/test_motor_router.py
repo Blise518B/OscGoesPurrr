@@ -11,6 +11,8 @@ import math
 
 import pytest
 
+from motor_router import MotorRouter
+
 
 # ============================================================ Tier 1: compile
 
@@ -632,6 +634,140 @@ class TestMixerIntegration:
         self._chain(cfg)["combine"] = "multiply"
         out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.9}, zones=set())
         assert out == 0.0
+
+
+# ============================================================ Tier 3.35: zero cut
+
+class TestZeroCut:
+    """The chain's final override: while the raw input reads at/below
+    the zero threshold (plug removed), the output snaps to 0 instantly
+    instead of riding the smoothing fall tail / speed ring down."""
+
+    def _cfg(self, enabled=True, threshold=0.0, **smoothing):
+        cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
+        chain = cfg["mix"]["0"]["chains"][0]
+        chain["smoothing"] = {
+            "rise_ms": smoothing.get("rise_ms", 0.0),
+            "fall_ms": smoothing.get("fall_ms", 500.0),
+        }
+        chain["zerocut"] = {"enabled": enabled, "threshold": threshold}
+        return cfg
+
+    def test_default_chain_config_has_zerocut_disabled(self):
+        zc = MotorRouter.DEFAULT_MIX_CONFIG["chains"][0]["zerocut"]
+        assert zc == {"enabled": False, "threshold": 0.0}
+
+    def test_disabled_removal_leaves_a_fall_tail(self, router, clock):
+        # Baseline: with the cut off, pulling out rides the 500 ms fall.
+        cfg = self._cfg(enabled=False)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
+        clock.advance(0.05)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        assert out > 0.5, f"expected a decaying tail, got {out}"
+
+    def test_enabled_removal_cuts_to_zero_instantly(self, router, clock):
+        cfg = self._cfg(enabled=True)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
+        clock.advance(0.05)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        assert out == 0.0
+
+    def test_enabled_does_not_touch_live_signal(self, router, clock):
+        # Input above the threshold: the cut is a bystander.
+        cfg = self._cfg(enabled=True)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.8}, zones=set())
+        clock.advance(0.05)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.8}, zones=set())
+        assert out == pytest.approx(0.8)
+
+    def test_threshold_treats_near_zero_as_removed(self, router, clock):
+        # A contact idling at 0.05 with threshold 0.1 counts as "out".
+        cfg = self._cfg(enabled=True, threshold=0.1)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
+        clock.advance(0.05)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.05}, zones=set())
+        assert out == 0.0
+
+    def test_cut_kills_the_speed_ring_too(self, router, clock):
+        # The speed channel keeps ringing after movement stops (decay_ms);
+        # the cut must override that as well, not just the smoothing tail.
+        cfg = self._cfg(enabled=True, fall_ms=0.0)
+        chain = cfg["mix"]["0"]["chains"][0]
+        chain["speed"] = {"gain": 1.0, "curve": "linear", "curve_param": 1.0,
+                          "decay_ms": 2000.0}
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        clock.advance(0.05)
+        # Vigorous stroke charges the speed channel to saturation…
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.8}, zones=set())
+        clock.advance(0.05)
+        # …then the plug comes out. The removal itself is a huge |d/dt|
+        # spike, so without the cut the ring would drive the motor hard.
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        assert out == 0.0
+
+    def test_reinsert_attacks_from_silence_not_the_old_tail(self, router, clock):
+        # The cut resets the envelope: a quick re-insert must rise from 0
+        # (fresh attack), not resume near the pre-removal level.
+        cfg = self._cfg(enabled=True, rise_ms=100.0, fall_ms=2000.0)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
+        clock.advance(0.05)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        assert out == 0.0
+        clock.advance(0.05)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
+        # 50 ms into a 100 ms rise from zero ≈ 0.39; resuming the
+        # near-full 2 s tail would put it above 0.9.
+        assert 0.0 < out < 0.5, f"expected a fresh attack from 0, got {out}"
+
+    def test_non_dict_zerocut_is_treated_as_disabled(self, router, clock):
+        # Hand-edited profile: `"zerocut": true`. Must not crash the hot
+        # loop; behaves as if the stage were absent (tail persists).
+        cfg = self._cfg(enabled=False)
+        cfg["mix"]["0"]["chains"][0]["zerocut"] = True
+        router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
+        clock.advance(0.05)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        assert out > 0.5
+
+    def test_nan_threshold_falls_back_to_default_and_still_cuts(self, router, clock):
+        # json round-trips bare NaN; a NaN threshold must not silently
+        # disable an enabled cut (NaN comparisons are always False).
+        cfg = self._cfg(enabled=True, threshold=float("nan"))
+        router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
+        clock.advance(0.05)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        assert out == 0.0
+
+    def test_cut_zeroes_only_its_own_chain_in_a_merge(self, router, clock):
+        # Two chains, max-merge: chain 0 has the cut and rides the live
+        # input; chain 1 is simulator-driven (provider) and stays hot.
+        # Cutting chain 0 must not silence chain 1's contribution.
+        cfg = self._cfg(enabled=True)
+        import copy as _copy
+        chain1 = _copy.deepcopy(cfg["mix"]["0"]["chains"][0])
+        chain1["zerocut"] = {"enabled": False, "threshold": 0.0}
+        cfg["mix"]["0"]["chains"].append(chain1)
+        cfg["mix"]["0"]["merge"] = "max"
+        router.set_chain_value_provider("dev", 0, 1, lambda: 0.6)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
+        clock.advance(0.05)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        # Chain 0 cut to 0; chain 1 still driven at 0.6 by its provider.
+        assert out == pytest.approx(0.6)
+
+    def test_emits_pre_cut_smoothed_and_final_out(self, router, clock):
+        # The Smoothing card graphs the tail it computed ("smoothed");
+        # the Zero cut card shows that tail being cut to "out".
+        cfg = self._cfg(enabled=True)
+        captured = []
+        router.subscribe_intermediates("dev", 0, 0, captured.append)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
+        clock.advance(0.05)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        assert captured, "intermediates subscriber never fired"
+        last = captured[-1]
+        assert last["smoothed"] > 0.5   # the tail the smoother produced
+        assert last["out"] == 0.0       # …cut to silence
 
 
 # ============================================================ Tier 3.4: speed fall-off

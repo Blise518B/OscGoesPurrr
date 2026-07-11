@@ -202,6 +202,11 @@ class MotorRouter:
                     "release_s": 0.5,
                 },
                 "smoothing": {"rise_ms": 50.0, "fall_ms": 20.0},
+                # Zero cut — the chain's final stage. When the chain's raw
+                # input sits at/below `threshold` (plug removed → contact
+                # proximity 0), the output snaps to 0 instantly instead of
+                # riding the smoothing fall tail / speed-ring decay down.
+                "zerocut": {"enabled": False, "threshold": 0.0},
             },
         ],
         # Only meaningful when len(chains) > 1; harmless otherwise.
@@ -922,10 +927,16 @@ class MotorRouter:
                       lo: float = -1e9, hi: float = 1e9) -> float:
         """Defensive numeric coercion — bad values silently fall back to
         the default. Used for every mix-config field read so a malformed
-        profile can't crash the router."""
+        profile can't crash the router. Non-finite values take the
+        default too: NaN passes both range checks unclamped, and a NaN
+        threshold/gain would silently poison every comparison downstream
+        (json round-trips bare NaN, so a corrupted profile can carry
+        one)."""
         try:
             v = float(value)
         except (TypeError, ValueError):
+            return default
+        if not math.isfinite(v):
             return default
         if v < lo:
             return lo
@@ -1170,6 +1181,29 @@ class MotorRouter:
             smoothed_chain = smooth(
                 chain_state["smoothed_output"], gated, dt * 1000.0, rise_ms, fall_ms
             )
+
+            # Zero cut — the chain's final stage. While the chain's own raw
+            # input reads at/below the threshold (plug removed → proximity
+            # 0), the output is forced to 0 *now*: the smoothing fall tail
+            # and the speed channel's decay ring must not keep the motor
+            # running against a contact that is no longer there. The
+            # envelope is reset (not left to decay) so a re-insert attacks
+            # from silence instead of resuming a half-decayed tail. Speed
+            # state is deliberately untouched — its history is real input
+            # physics, and while the cut holds, its ring is inaudible
+            # anyway.
+            smoothed_emit = smoothed_chain  # pre-cut, for the Smoothing trace
+            zerocut = chain.get("zerocut", {}) if isinstance(chain, dict) else {}
+            if not isinstance(zerocut, dict):
+                # Hand-edited profile with e.g. `"zerocut": true` — treat
+                # as disabled rather than crashing the hot loop.
+                zerocut = {}
+            if bool(zerocut.get("enabled", False)):
+                zc_threshold = self._coerce_float(
+                    zerocut.get("threshold", 0.0), 0.0, 0.0, 0.5
+                )
+                if chain_d_raw <= zc_threshold:
+                    smoothed_chain = 0.0
             chain_state["smoothed_output"] = smoothed_chain
 
             chain_outputs.append(smoothed_chain)
@@ -1182,6 +1216,7 @@ class MotorRouter:
                 "activity":  activity_emit,
                 "gate_open": gate_open_emit,
                 "gated":     gated,
+                "smoothed":  smoothed_emit,
                 "out":       smoothed_chain,
             })
 
@@ -1230,6 +1265,7 @@ class MotorRouter:
                     "activity":  emit["activity"],
                     "gate_open": emit["gate_open"],
                     "gated":     emit["gated"],
+                    "smoothed":  emit["smoothed"],
                     "out":       emit["out"],
                     "final_out": final_out,
                 }

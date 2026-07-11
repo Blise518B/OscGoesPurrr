@@ -41,11 +41,13 @@ def test_stage_constants_are_unique_and_ordered():
     from ui.motor_signal_chain import (
         _STAGE_ORDER, _STAGE_LABELS,
         STAGE_INPUT, STAGE_DEPTH, STAGE_SPEED,
-        STAGE_COMBINE, STAGE_GATE, STAGE_SMOOTHING, STAGE_OUTPUT,
+        STAGE_COMBINE, STAGE_GATE, STAGE_SMOOTHING, STAGE_ZEROCUT,
+        STAGE_OUTPUT,
     )
     expected = (
         STAGE_INPUT, STAGE_DEPTH, STAGE_SPEED,
-        STAGE_COMBINE, STAGE_GATE, STAGE_SMOOTHING, STAGE_OUTPUT,
+        STAGE_COMBINE, STAGE_GATE, STAGE_SMOOTHING, STAGE_ZEROCUT,
+        STAGE_OUTPUT,
     )
     assert _STAGE_ORDER == expected
     # Every stage has a human-readable label.
@@ -599,15 +601,17 @@ def test_widget_build_expand_intermediates_collapse():
     ui = _SmokeUI(_SmokeController())
     w = MotorSignalChainWidget(ui, "DevX", 0, "vibrate")
 
-    # Built collapsed: 6 horizontal slots, 7 stage cards, nothing expanded.
-    assert len(w._slots) == 6
-    assert len(w._stage_cards) == 7
+    # Built collapsed: 7 horizontal slots, 8 stage cards (Depth+Speed
+    # share a slot; Zero cut sits between Smoothing and Output), nothing
+    # expanded.
+    assert len(w._slots) == 7
+    assert len(w._stage_cards) == 8
     assert w._active_stage is None
     # Small mode by default → cards/arrows centred.
     assert w._strip_host._centered is True
-    # 6 slots interleaved with 5 flexible connector cells (no trailing
+    # 7 slots interleaved with 6 flexible connector cells (no trailing
     # stretch) — the cells are what the stretching arrows are drawn across.
-    assert w._strip_lay.count() == 11
+    assert w._strip_lay.count() == 13
     # Input forks into Depth+Speed and they join into Combine: the parallel
     # ds slot (index 1) is registered with its two inner cards.
     assert w._strip_host._branch_index == 1

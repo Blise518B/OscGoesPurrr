@@ -393,6 +393,10 @@ is purely additive with no schema migration:
                 "release_s": 0.5,
             },
             "smoothing": {"rise_ms": 50.0, "fall_ms": 20.0},
+            # Final override: input at/below threshold (plug removed)
+            # snaps the chain output to 0 instantly instead of riding
+            # the smoothing fall tail / speed ring down.
+            "zerocut": {"enabled": False, "threshold": 0.0},
         },
     ],
     "merge": "max",  # only meaningful when len(chains) > 1
@@ -497,7 +501,7 @@ which is real but rarer than it first sounds.
   realistic main+override use case; three becomes a configuration
   maze and the diagram stops fitting on a card.
 * Chains are structurally identical — both have the full Input →
-  Depth/Speed → Combine → Gate → Smoothing pipeline. There is no
+  Depth/Speed → Combine → Gate → Smoothing → Zero cut pipeline. There is no
   "primary" vs "secondary" template; the second chain just gets
   configured differently if the user wants passthrough behavior.
 * Merge at output: configurable op (`add` / `max` / `multiply`),

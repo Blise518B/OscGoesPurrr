@@ -1,5 +1,6 @@
 """Per-motor signal-chain widget — the user-facing surface for the
-Input → Depth/Speed → Combine → Gate → Smoothing → Output pipeline.
+Input → Depth/Speed → Combine → Gate → Smoothing → Zero cut → Output
+pipeline.
 
 Embedded in two contexts (intentionally — see docs/MOTOR_SIGNAL_CHAIN.md
 § "Tune view, 1:1 with Device Routing"):
@@ -331,11 +332,13 @@ STAGE_SPEED = "speed"
 STAGE_COMBINE = "combine"
 STAGE_GATE = "gate"
 STAGE_SMOOTHING = "smoothing"
+STAGE_ZEROCUT = "zerocut"
 STAGE_OUTPUT = "output"
 
 _STAGE_ORDER = (
     STAGE_INPUT, STAGE_DEPTH, STAGE_SPEED,
-    STAGE_COMBINE, STAGE_GATE, STAGE_SMOOTHING, STAGE_OUTPUT,
+    STAGE_COMBINE, STAGE_GATE, STAGE_SMOOTHING, STAGE_ZEROCUT,
+    STAGE_OUTPUT,
 )
 
 _STAGE_LABELS = {
@@ -345,6 +348,7 @@ _STAGE_LABELS = {
     STAGE_COMBINE:   "Combine",
     STAGE_GATE:      "Gate",
     STAGE_SMOOTHING: "Smoothing",
+    STAGE_ZEROCUT:   "Zero cut",
     STAGE_OUTPUT:    "Output",
 }
 
@@ -358,6 +362,7 @@ _STAGE_SHORT = {
     STAGE_COMBINE:   "Cmb",
     STAGE_GATE:      "Gate",
     STAGE_SMOOTHING: "Smth",
+    STAGE_ZEROCUT:   "Cut",
     STAGE_OUTPUT:    "Out",
 }
 
@@ -384,6 +389,9 @@ _TRACE_STYLE = {
     "s_shaped": ("#FF7733", {"width": 1.8, "dash": "dash"}),
     "mixed":    ("#C040FF", {"width": 1.6, "dash": "dot"}),
     "gated":    ("#FFCC00", {"width": 1.6}),
+    # Post-smoothing, PRE zero cut — a lighter dashed green so the Zero
+    # cut card can show the tail it is cutting against the final `out`.
+    "smoothed": ("#7FD9A8", {"width": 1.6, "dash": "dash"}),
     "out":      (COLOR_SUCCESS, {"width": 2.0}),
 }
 
@@ -393,7 +401,8 @@ _STAGE_TRACES: Dict[str, Tuple[str, ...]] = {
     STAGE_SPEED:     ("s_raw", "s_shaped"),
     STAGE_COMBINE:   ("d_shaped", "s_shaped", "mixed"),
     STAGE_GATE:      ("mixed", "gated"),
-    STAGE_SMOOTHING: ("gated", "out"),
+    STAGE_SMOOTHING: ("gated", "smoothed"),
+    STAGE_ZEROCUT:   ("smoothed", "out"),
     STAGE_OUTPUT:    ("out",),
 }
 
@@ -409,7 +418,8 @@ _STAGE_LEVEL_TRACE: Dict[str, str] = {
     STAGE_SPEED:     "s_shaped",
     STAGE_COMBINE:   "mixed",
     STAGE_GATE:      "gated",
-    STAGE_SMOOTHING: "out",
+    STAGE_SMOOTHING: "smoothed",
+    STAGE_ZEROCUT:   "out",
     STAGE_OUTPUT:    "out",
 }
 
@@ -1338,8 +1348,8 @@ class MotorSignalChainWidget(QFrame):
         reset_btn.setFixedHeight(BTN_HEIGHT_SMALL)
         reset_btn.setToolTip(
             "Wipe every setting in THIS chain (channels, curves, "
-            "combine, gate, smoothing) back to the built-in defaults. "
-            "Other chains on the same motor are untouched."
+            "combine, gate, smoothing, zero cut) back to the built-in "
+            "defaults. Other chains on the same motor are untouched."
         )
         reset_btn.clicked.connect(self._on_reset_clicked)
         header_row.addWidget(reset_btn)
@@ -1519,7 +1529,8 @@ class MotorSignalChainWidget(QFrame):
         self._slot_for_stage[STAGE_SPEED] = ds
         self._ds_slot = ds
 
-        for sid in (STAGE_COMBINE, STAGE_GATE, STAGE_SMOOTHING, STAGE_OUTPUT):
+        for sid in (STAGE_COMBINE, STAGE_GATE, STAGE_SMOOTHING,
+                    STAGE_ZEROCUT, STAGE_OUTPUT):
             card = add_card(sid)
             add_slot(card)
             self._slot_for_stage[sid] = card
@@ -1627,6 +1638,15 @@ class MotorSignalChainWidget(QFrame):
             rise = float(sm.get("rise_ms", 50))
             fall = float(sm.get("fall_ms", 20))
             return f"↑{rise:.0f}/↓{fall:.0f}ms"
+        if stage_id == STAGE_ZEROCUT:
+            zc = chain.get("zerocut", {}) if isinstance(chain, dict) else {}
+            if not isinstance(zc, dict) or not zc.get("enabled", False):
+                return "off"
+            try:
+                thr = float(zc.get("threshold", 0.0))
+            except (TypeError, ValueError):
+                thr = 0.0
+            return f"≤{thr:.2g}→0"
         if stage_id == STAGE_OUTPUT:
             # 3-char subtitle. Linear is special-cased; everything
             # else reads from the shared _KIND_DISPLAY table, with
@@ -2022,6 +2042,7 @@ class MotorSignalChainWidget(QFrame):
             g(STAGE_COMBINE),
             g(STAGE_GATE),
             g(STAGE_SMOOTHING),
+            g(STAGE_ZEROCUT),
         ]
         # Per-channel levels tint the two join arrows (Depth→Combine,
         # Speed→Combine) independently.
@@ -2054,6 +2075,8 @@ class MotorSignalChainWidget(QFrame):
             inner = self._build_gate_editor()
         elif stage_id == STAGE_SMOOTHING:
             inner = self._build_smoothing_editor()
+        elif stage_id == STAGE_ZEROCUT:
+            inner = self._build_zerocut_editor()
         elif stage_id == STAGE_OUTPUT:
             inner = self._build_output_editor()
         else:
@@ -2432,6 +2455,73 @@ class MotorSignalChainWidget(QFrame):
         for btn in buttons.values():
             btn.clicked.connect(on_clicked)
         lay.addLayout(row)
+
+        return host
+
+    def _build_zerocut_editor(self) -> QWidget:
+        """Zero cut — enable toggle + zero threshold."""
+        host = QFrame()
+        host.setObjectName("stageEditor")
+        lay = _vbox(10, 8)
+        host.setLayout(lay)
+
+        hdr_row = _hbox(0, 6)
+        header = QLabel("Zero cut")
+        hf = header.font(); hf.setBold(True)
+        header.setFont(hf)
+        hdr_row.addWidget(header)
+        hdr_row.addWidget(self._ui._make_help_badge(
+            "Zero cut",
+            "The chain's final override. While the raw input reads at or "
+            "below <b>Zero threshold</b> (plug removed, contact gone), the "
+            "output snaps to 0 <i>instantly</i> — cutting the Smoothing "
+            "fall tail and the Speed channel's ring instead of letting "
+            "them fade out against a contact that is no longer there. "
+            "Re-inserting starts the chain fresh from silence. Off by "
+            "default; leave the threshold at 0.00 unless your contact "
+            "idles slightly above zero."
+        ))
+        hdr_row.addStretch(1)
+        lay.addLayout(hdr_row)
+
+        chain = _read_chain(self._controller, self._device_name,
+                            self._motor_idx, self._chain_idx)
+        zc_cfg = chain.get("zerocut", {}) if isinstance(chain, dict) else {}
+        if not isinstance(zc_cfg, dict):
+            zc_cfg = {}  # hand-edited profile — build from defaults
+        try:
+            zc_threshold = float(zc_cfg.get("threshold", 0.0))
+        except (TypeError, ValueError):
+            zc_threshold = 0.0
+
+        # Enable toggle.
+        enable_cb = ToggleSwitch("Enable")
+        enable_cb.setChecked(bool(zc_cfg.get("enabled", False)))
+        enable_cb.toggled.connect(
+            lambda v: _update_chain_field(
+                self._controller, self._device_name, self._motor_idx, self._chain_idx,
+                ("zerocut", "enabled"), bool(v),
+            )
+        )
+        lay.addWidget(enable_cb)
+
+        # Zero threshold: input at/below this counts as "not inserted".
+        zt_row = _hbox(0, 8)
+        zt_row.addWidget(QLabel("Zero threshold:"))
+        zt_spin = _NoTrackSpin()
+        zt_spin.setRange(0.0, 0.5)
+        zt_spin.setSingleStep(0.01)
+        zt_spin.setDecimals(2)
+        zt_spin.setValue(zc_threshold)
+        zt_spin.valueChanged.connect(
+            lambda v: _update_chain_field(
+                self._controller, self._device_name, self._motor_idx, self._chain_idx,
+                ("zerocut", "threshold"), float(v),
+            )
+        )
+        zt_row.addWidget(zt_spin)
+        zt_row.addStretch(1)
+        lay.addLayout(zt_row)
 
         return host
 

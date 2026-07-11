@@ -70,8 +70,8 @@ Single-chain motor:
 │ ▸ Simulated input                                              │
 │                                                                │
 │ [Input] → [Depth] ↘                                            │
-│                    [Combine] → [Gate] → [Smoothing] → [Output] │
-│         [Speed] ↗                                              │
+│                    [Combine] → [Gate] → [Smoothing]            │
+│         [Speed] ↗               → [Zero cut] → [Output]        │
 │                                                                │
 │  ▾ Depth                              ←  active stage          │
 │    Gain: [1.00]   Curve: [linear ▾]   Param: [—]               │
@@ -244,11 +244,15 @@ final).
 | Combine   | `d_shaped`, `s_shaped`, `mixed`  | Both channels and their merge.      |
 | Gate      | `mixed`, `gated`                 | What the gate let through.          |
 |           | (activity meter visual stays)    |                                     |
-| Smoothing | `gated`, `out`                   | Envelope's effect on the gate step. |
-| Output    | `out`                            | Final post-smoothing chain output.  |
+| Smoothing | `gated`, `smoothed`              | Envelope's effect on the gate step. |
+| Zero cut  | `smoothed`, `out`                | The tail being cut to silence.      |
+| Output    | `out`                            | Final chain output.                 |
 
-For single-chain motors, `out` = the motor target. For two-chain
-motors, `out` = this chain's per-chain smoothed output (pre-merge).
+`smoothed` is the post-smoothing, pre-zero-cut value; `out` is the
+chain's final output (identical while the zero cut is disabled or
+the input is live). For single-chain motors, `out` = the motor
+target. For two-chain motors, `out` = this chain's per-chain output
+(pre-merge).
 The merged-final is available in the wrapper-level overview graph
 and as the vibe-meter value at the bottom of each chain.
 
