@@ -50,8 +50,8 @@ def zone_filter_strength(zone_name: Any,
 
     Args:
       zone_name:   the OGB zone / source name (e.g. "Booty"). Blank -> 0.0.
-      zone_type:   "Orf" | "Pen" — selects the OGB address prefix. Defaults
-                   to "Orf" when blank.
+      zone_type:   "Orf" | "Pen" | "Touch" — selects the OGB address
+                   prefix. Defaults to "Orf" when blank.
       filters:     filter names to OR over (e.g. ["TouchSelf", "PenOthers"]).
                    Empty -> 0.0 (unless the name resolves to a synthetic source).
       params:      a parameter_store snapshot ({bare_address: value}).
@@ -82,6 +82,32 @@ def zone_filter_strength(zone_name: Any,
         return 0.0
 
     zone_type = str(zone_type or "Orf").strip() or "Orf"
+
+    if zone_type == "Touch":
+        # Touch zones carry two proximity floats, Self and Others, with no
+        # Close gates. OGB parity: they respond to the HANDS interaction
+        # toggles only (GameDevice maps ownHands→Self, otherHands→Others;
+        # plugs/sockets never drive a touch zone), so the configured
+        # Touch* filters select which of the two keys count and Pen*
+        # filters contribute nothing.
+        keys = set()
+        for fname in filters:
+            if fname == "TouchSelf":
+                keys.add("Self")
+            elif fname == "TouchOthers":
+                keys.add("Others")
+        if not keys:
+            return 0.0
+        # Two wire forms (see utilities.classify_ogb_zone); max wins.
+        prefixes = (f"OGB/Touch/{zone_name}", f"VFH/Zone/Touch/{zone_name}")
+        best = 0.0
+        for prefix in prefixes:
+            for key in keys:
+                f = _finite_unit(params.get(f"{prefix}/{key}"))
+                if f > best:
+                    best = f
+        return best
+
     prefix = f"OGB/{zone_type}/{zone_name}"
     best = 0.0
     for fname in filters:
@@ -89,18 +115,23 @@ def zone_filter_strength(zone_name: Any,
         close_key = f"{prefix}/{fname}Close"
         if close_key in params and not truthy(params.get(close_key)):
             continue
-        val = params.get(f"{prefix}/{fname}")
-        if val is None:
-            continue
-        try:
-            f = float(val)
-        except (TypeError, ValueError):
-            continue
-        # NaN must not survive: min(1.0, nan) returns 1.0 in CPython, which
-        # would drive an e-stim/EMS backend to FULL power off one bad packet.
-        if not math.isfinite(f):
-            continue
-        f = min(max(f, 0.0), 1.0)
+        f = _finite_unit(params.get(f"{prefix}/{fname}"))
         if f > best:
             best = f
     return best
+
+
+def _finite_unit(val: Any) -> float:
+    """Coerce a raw param value to a finite float clamped to [0, 1];
+    anything malformed is 0.0. NaN must not survive: min(1.0, nan)
+    returns 1.0 in CPython, which would drive an e-stim/EMS backend to
+    FULL power off one bad packet."""
+    if val is None:
+        return 0.0
+    try:
+        f = float(val)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(f):
+        return 0.0
+    return min(max(f, 0.0), 1.0)

@@ -238,7 +238,7 @@ class BHapticsSettingsManager(JsonSettingsManager):
         """Coerce + clamp every field of a mirror entry so a bad
         user input or hand-edited file can't crash the router."""
         valid_filters = ("TouchSelf", "TouchOthers", "PenSelf", "PenOthers")
-        valid_zone_types = ("Orf", "Pen")
+        valid_zone_types = ("Orf", "Pen", "Touch")
         try:
             gain = float(entry.get("gain", 1.0))
         except (TypeError, ValueError):

@@ -983,7 +983,8 @@ class DashboardMixin:
         except Exception:
             osc_ok = False
         src = sources or {}
-        zones_ok = bool(src.get("Orifices") or src.get("Penetrators"))
+        zones_ok = bool(src.get("Orifices") or src.get("Penetrators")
+                        or src.get("Touch"))
         toy_ok = bool(toys)
         state = {"osc": osc_ok, "zones": zones_ok, "toy": toy_ok}
         if state == getattr(self, "_simple_mode_gs_state", None):
@@ -1039,27 +1040,26 @@ class DashboardMixin:
         # ---- Sources ----
         orifices = tuple(sources.get("Orifices", []))
         penetrators = tuple(sources.get("Penetrators", []))
-        sources_key = (orifices, penetrators)
+        touch = tuple(sources.get("Touch", []))
+        sources_key = (orifices, penetrators, touch)
         if force or sources_key != self._simple_mode_last_sources:
             self._simple_mode_last_sources = sources_key
             _clear_layout(self.simple_mode_sources_layout)
-            if not orifices and not penetrators:
+            if not orifices and not penetrators and not touch:
                 lbl = QLabel("No SPS sources detected. Load an avatar with OGB zones.")
                 lbl.setProperty("muted", "true")
                 self._repolish(lbl)
                 self.simple_mode_sources_layout.addWidget(lbl)
             else:
-                if orifices:
-                    h = QLabel("Orifices")
+                for heading, names in (("Orifices", orifices),
+                                       ("Penetrators", penetrators),
+                                       ("Touch zones", touch)):
+                    if not names:
+                        continue
+                    h = QLabel(heading)
                     fh = h.font(); fh.setBold(True); h.setFont(fh)
                     self.simple_mode_sources_layout.addWidget(h)
-                    for name in orifices:
-                        self.simple_mode_sources_layout.addWidget(QLabel(f"  • {name}"))
-                if penetrators:
-                    h = QLabel("Penetrators")
-                    fh = h.font(); fh.setBold(True); h.setFont(fh)
-                    self.simple_mode_sources_layout.addWidget(h)
-                    for name in penetrators:
+                    for name in names:
                         self.simple_mode_sources_layout.addWidget(QLabel(f"  • {name}"))
 
         # ---- Toys ----

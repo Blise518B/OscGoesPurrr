@@ -795,9 +795,10 @@ class BHapticsMixin:
         st_row = _hbox(0, 8)
         st_row.addWidget(QLabel("Type"))
         ztype_combo = QComboBox()
-        ztype_combo.addItems(["Orf", "Pen"])
+        ztype_combo.addItems(["Orf", "Pen", "Touch"])
         cur_ztype = str(entry.get("zone_type", "Orf"))
-        ztype_combo.setCurrentText(cur_ztype if cur_ztype in ("Orf", "Pen") else "Orf")
+        ztype_combo.setCurrentText(
+            cur_ztype if cur_ztype in ("Orf", "Pen", "Touch") else "Orf")
         ztype_combo.currentTextChanged.connect(
             lambda _t, i=idx: self._on_bhaptics_xroute_ztype_changed(i)
         )

@@ -402,6 +402,25 @@ class MotorRouter:
         prefix = f"OGB/{zone_type}/{zone_name}"
         contributions: List[float] = []
 
+        # --- Touch zones (VRCFury touch zones — Self/Others proximity) ---------
+        # Two proximity floats, no Close gates, no penetration semantics.
+        # OGB parity: touch zones respond to the hands toggles only
+        # (GameDevice maps ownHands→Self, otherHands→Others), so the pen
+        # filter never contributes here. Both wire forms are read; max wins.
+        if zone_type == "Touch":
+            for p in (prefix, f"VFH/Zone/Touch/{zone_name}"):
+                if allow_touch and allow_self:
+                    v = self._get_param(all_params, f"{p}/Self")
+                    if v is not None:
+                        contributions.append(v)
+                if allow_touch and allow_others:
+                    v = self._get_param(all_params, f"{p}/Others")
+                    if v is not None:
+                        contributions.append(v)
+            if not contributions:
+                return 0.0
+            return max(normalize_osc_value(v) for v in contributions)
+
         # --- Touch (gated by TouchSelfClose / TouchOthersClose) ----------------
         if allow_touch and allow_self:
             if self._get_bool(all_params, f"{prefix}/TouchSelfClose"):

@@ -12,7 +12,7 @@ from ._paths import PISHOCK_SETTINGS_FILE
 
 _VALID_OPS = ("shock", "vibrate", "beep")
 _VALID_FILTERS = ("TouchSelf", "TouchOthers", "PenSelf", "PenOthers")
-_VALID_ZONE_TYPES = ("Orf", "Pen")
+_VALID_ZONE_TYPES = ("Orf", "Pen", "Touch")
 
 
 class PiShockSettingsManager(JsonSettingsManager):

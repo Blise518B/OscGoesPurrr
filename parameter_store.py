@@ -11,7 +11,9 @@ class ParameterStore:
     """
     def __init__(self):
         self.all_parameters: Dict[str, Any] = {}
-        self.detected_zones: Dict[str, List[str]] = {"Orifices": [], "Penetrators": []}
+        self.detected_zones: Dict[str, List[str]] = {
+            "Orifices": [], "Penetrators": [], "Touch": [],
+        }
         # Incrementally maintained zone tuple set the router consumes directly,
         # so per-tick recalc never re-walks all parameter keys (see motor_router).
         self._zone_tuples: Set[Tuple[str, str]] = set()
@@ -34,11 +36,28 @@ class ParameterStore:
     # the Inspector shows stale duplicates that never refresh.
     _AVATAR_PARAM_PREFIX = "avatar/parameters/"
 
+    # VRCFury Haptics zone params (`VFH/Zone/<cat>/<name>/<contact>`) carry
+    # the same wire contract as `OGB/<cat>/<name>/<contact>` — OscGoesBrrr's
+    # bridge parses the two forms into identical GameDevices. Normalizing on
+    # ingest keeps ONE canonical key shape, so every zone evaluator (the
+    # motor router's hot tick, the shared zone_filter_strength) reads only
+    # OGB/ prefixes instead of paying a dual-prefix lookup per filter.
+    _VFH_ZONE_PREFIX = "VFH/Zone/"
+
+    @classmethod
+    def _canon_param_key(cls, address: str) -> str:
+        if address.startswith(cls._VFH_ZONE_PREFIX):
+            return "OGB/" + address[len(cls._VFH_ZONE_PREFIX):]
+        return address
+
     def _refresh_zone_lists(self) -> None:
-        """Rebuild the public Orifices/Penetrators name lists from `_zone_tuples`."""
+        """Rebuild the public zone name lists from `_zone_tuples`."""
         orifices = sorted({n for t, n in self._zone_tuples if t == "Orf"})
         penetrators = sorted({n for t, n in self._zone_tuples if t == "Pen"})
-        self.detected_zones = {"Orifices": orifices, "Penetrators": penetrators}
+        touch = sorted({n for t, n in self._zone_tuples if t == "Touch"})
+        self.detected_zones = {
+            "Orifices": orifices, "Penetrators": penetrators, "Touch": touch,
+        }
 
     def _ensure_zone_tuples_locked(self) -> None:
         """Belt-and-suspenders: if `_zone_tuples` is empty but `all_parameters`
@@ -85,7 +104,7 @@ class ParameterStore:
             key = prefix
             if key.startswith(self._AVATAR_PARAM_PREFIX):
                 key = key[len(self._AVATAR_PARAM_PREFIX):]
-            self.all_parameters[key] = val
+            self.all_parameters[self._canon_param_key(key)] = val
 
     def rebuild_from_json(self, data: dict) -> int:
         """
@@ -113,6 +132,7 @@ class ParameterStore:
         for a brand-new zone path rebuilds the public name lists, so the
         steady-state cost is one dict write plus one tuple-set membership check.
         """
+        address = self._canon_param_key(address)
         with self.lock:
             is_new_key = address not in self.all_parameters
             self.all_parameters[address] = value
@@ -169,7 +189,8 @@ class ParameterStore:
             self._ensure_zone_tuples_locked()
             return {
                 "Orifices": list(self.detected_zones["Orifices"]),
-                "Penetrators": list(self.detected_zones["Penetrators"])
+                "Penetrators": list(self.detected_zones["Penetrators"]),
+                "Touch": list(self.detected_zones.get("Touch", [])),
             }
 
 

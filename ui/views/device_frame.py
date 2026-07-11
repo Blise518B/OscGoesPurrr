@@ -524,7 +524,7 @@ class DeviceFrameMixin:
             "Zone selector",
             "Which OGB zones drive this motor. <b>All SPS</b> matches "
             "any detected zone; individual toggles bind to specific "
-            "orifices or penetrators."
+            "orifices, penetrators or touch zones."
         ))
         col_lay.addWidget(zone_row)
 
@@ -539,10 +539,17 @@ class DeviceFrameMixin:
                              btn=zone_btn, panel=zone_panel, panel_lay=zone_panel_lay):
             _clear_layout(panel_lay)
 
-            fresh_zones = []
             detected = self.controller.get_detected_zones()
-            fresh_zones.extend(detected.get("Orifices", []))
-            fresh_zones.extend(detected.get("Penetrators", []))
+            # Dedupe across the type buckets: the picker stores bare names,
+            # so one name detected as two types must render ONE toggle (two
+            # would desync — both write the same motor_N_zones entry).
+            seen = set()
+            fresh_zones = []
+            for bucket in ("Orifices", "Penetrators", "Touch"):
+                for name in detected.get(bucket, []):
+                    if name not in seen:
+                        seen.add(name)
+                        fresh_zones.append(name)
 
             try:
                 custom_sources = list(self.controller.get_sps_source_names_flat() or [])

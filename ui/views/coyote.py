@@ -185,7 +185,7 @@ class CoyoteMixin:
         se = src_fold.editor_layout
         st_row = _hbox(0, 8)
         st_row.addWidget(QLabel("Type"))
-        ztype = QComboBox(); ztype.addItems(["Orf", "Pen"])
+        ztype = QComboBox(); ztype.addItems(["Orf", "Pen", "Touch"])
         ztype.currentTextChanged.connect(
             lambda t, c=ch: self._on_coyote_ztype_changed(c, t))
         st_row.addWidget(ztype)

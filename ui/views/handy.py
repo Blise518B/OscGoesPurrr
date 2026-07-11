@@ -215,7 +215,7 @@ class HandyMixin:
         se = src_fold.editor_layout
         st_row = _hbox(0, 8)
         st_row.addWidget(QLabel("Type"))
-        ztype = QComboBox(); ztype.addItems(["Orf", "Pen"])
+        ztype = QComboBox(); ztype.addItems(["Orf", "Pen", "Touch"])
         ztype.currentTextChanged.connect(self._on_handy_ztype_changed)
         st_row.addWidget(ztype)
         st_row.addStretch(1)

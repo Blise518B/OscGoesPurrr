@@ -111,6 +111,32 @@ class TestUpdateParameter:
         s.update_parameter("Volume", 1.0)
         assert s.get_zone_tuples() == set()
 
+    def test_touch_zone_detected_from_both_wire_forms(self):
+        s = ParameterStore()
+        s.update_parameter("OGB/Touch/Head/Others", 0.4)
+        s.update_parameter("VFH/Zone/Touch/Ears/Self", 0.2)
+        assert ("Touch", "Head") in s.get_zone_tuples()
+        assert ("Touch", "Ears") in s.get_zone_tuples()
+        assert s.get_detected_zones()["Touch"] == ["Ears", "Head"]
+        # The Orf/Pen lists stay untouched.
+        assert s.get_detected_zones()["Orifices"] == []
+
+    def test_vfh_keys_normalize_to_ogb_on_ingest(self):
+        # VFH/Zone/<cat>/<name>/<contact> is the same wire contract as
+        # OGB/<cat>/<name>/<contact>; the store keeps ONE canonical form
+        # so every zone evaluator (which reads OGB/ prefixes on the hot
+        # tick) can route VFH-form zones. A VFH-detected zone that no
+        # evaluator could read would be a silent dead zone.
+        s = ParameterStore()
+        s.update_parameter("VFH/Zone/Orf/Boob/PenOthers", 0.8)
+        params = s.get_all_parameters()
+        assert params["OGB/Orf/Boob/PenOthers"] == 0.8
+        assert "VFH/Zone/Orf/Boob/PenOthers" not in params
+        assert ("Orf", "Boob") in s.get_zone_tuples()
+        # Both forms land on the same key — latest write wins.
+        s.update_parameter("OGB/Orf/Boob/PenOthers", 0.3)
+        assert s.get_all_parameters()["OGB/Orf/Boob/PenOthers"] == 0.3
+
 
 class TestSnapshotSemantics:
     def test_snapshot_returns_coherent_triple(self):

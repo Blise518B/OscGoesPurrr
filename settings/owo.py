@@ -16,7 +16,7 @@ MUSCLE_NAMES = [
 ]
 
 _VALID_FILTERS = ("TouchSelf", "TouchOthers", "PenSelf", "PenOthers")
-_VALID_ZONE_TYPES = ("Orf", "Pen")
+_VALID_ZONE_TYPES = ("Orf", "Pen", "Touch")
 
 
 def _default_muscle() -> Dict[str, Any]:

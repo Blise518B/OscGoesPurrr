@@ -65,19 +65,38 @@ def strip_param_prefix(addr: Any) -> str:
     return s.lstrip("/")
 
 
+def _canon_zone_category(category: str):
+    """Map an OGB/VFH category segment to the canonical zone type, or
+    None when it isn't one. Long and short forms are both accepted
+    (`Orifice`/`Orf`, `Penetrator`/`Pen`, `Touch`)."""
+    if category in ("Orifice", "Orf"):
+        return "Orf"
+    if category in ("Penetrator", "Pen"):
+        return "Pen"
+    if category == "Touch":
+        return "Touch"
+    return None
+
+
 def classify_ogb_zone(path: str):
     """Return `(zone_type, zone_name)` for an OGB-shaped path or None.
-    Zone types are 'Orf' (orifice) or 'Pen' (penetrator). Long and short
-    category forms are both accepted (`Orifice`/`Orf`, `Penetrator`/`Pen`).
+    Zone types are 'Orf' (orifice), 'Pen' (penetrator) or 'Touch'
+    (VRCFury touch zone). Two wire forms are accepted, mirroring
+    OscGoesBrrr's bridge parser:
+
+      * ``OGB/<category>/<name>/<contact>`` — the standard form.
+      * ``VFH/Zone/<category>/<name>/<contact>`` — the VRCFury Haptics
+        zone form (touch zones ship this way on newer avatars).
     """
-    parts = path.split("/", 3)
+    parts = path.split("/", 4)
     if len(parts) >= 3 and parts[0] == "OGB":
-        category = parts[1]
-        zone_name = parts[2]
-        if category in ("Orifice", "Orf"):
-            return ("Orf", zone_name)
-        if category in ("Penetrator", "Pen"):
-            return ("Pen", zone_name)
+        zone_type = _canon_zone_category(parts[1])
+        if zone_type is not None and parts[2]:
+            return (zone_type, parts[2])
+    if len(parts) >= 4 and parts[0] == "VFH" and parts[1] == "Zone":
+        zone_type = _canon_zone_category(parts[2])
+        if zone_type is not None and parts[3]:
+            return (zone_type, parts[3])
     return None
 
 def value_to_hex_color(value: Any) -> str:

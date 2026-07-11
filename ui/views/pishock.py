@@ -493,7 +493,7 @@ class PiShockMixin:
         se = src_fold.editor_layout
         st_row = _hbox(0, 8)
         st_row.addWidget(QLabel("Type"))
-        ztype = QComboBox(); ztype.addItems(["Orf", "Pen"])
+        ztype = QComboBox(); ztype.addItems(["Orf", "Pen", "Touch"])
         ztype.setCurrentText(zone.get("zone_type", "Orf"))
         ztype.currentTextChanged.connect(
             lambda t, i=idx: self._on_pishock_ztype_changed(i, t))

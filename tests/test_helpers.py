@@ -70,6 +70,20 @@ class TestClassifyZonePath:
         # Need at least three segments: OGB / category / name
         assert _classify_zone_path("OGB/Orifice") is None
 
+    def test_touch_zone(self):
+        assert _classify_zone_path("OGB/Touch/Head/Others") == ("Touch", "Head")
+
+    def test_vfh_zone_form(self):
+        # VRCFury Haptics zone form (see OGB's bridge parser).
+        assert _classify_zone_path("VFH/Zone/Touch/Head/Others") == ("Touch", "Head")
+        assert _classify_zone_path("VFH/Zone/Orf/Boob/TouchOthers") == ("Orf", "Boob")
+
+    def test_vfh_unknown_category_returns_none(self):
+        assert _classify_zone_path("VFH/Zone/Wibble/X/Y") is None
+
+    def test_vfh_too_short_returns_none(self):
+        assert _classify_zone_path("VFH/Zone/Touch") is None
+
 
 # --------------------------------------------------------------- _clean_custom_addr
 

@@ -93,6 +93,51 @@ class TestZoneFilterStrength:
         assert zone_filter_strength("Boob", "", ["TouchSelf"], params) == pytest.approx(0.4)
 
 
+class TestTouchZones:
+    """Touch zones: two proximity floats (Self/Others), no Close gates,
+    hands-only filter mapping (OGB parity — plugs never drive them)."""
+
+    def test_touchothers_filter_reads_others(self):
+        params = {"OGB/Touch/Head/Others": 0.6}
+        out = zone_filter_strength("Head", "Touch", ["TouchOthers"], params)
+        assert out == pytest.approx(0.6)
+
+    def test_touchself_filter_reads_self(self):
+        params = {"OGB/Touch/Head/Self": 0.4}
+        out = zone_filter_strength("Head", "Touch", ["TouchSelf"], params)
+        assert out == pytest.approx(0.4)
+
+    def test_self_filter_does_not_read_others(self):
+        params = {"OGB/Touch/Head/Others": 0.9}
+        assert zone_filter_strength("Head", "Touch", ["TouchSelf"], params) == 0.0
+
+    def test_pen_filters_never_drive_touch_zones(self):
+        # OGB parity: GameDevice maps ownHands/otherHands only.
+        params = {"OGB/Touch/Head/Self": 0.9, "OGB/Touch/Head/Others": 0.9}
+        out = zone_filter_strength("Head", "Touch",
+                                   ["PenSelf", "PenOthers"], params)
+        assert out == 0.0
+
+    def test_vfh_zone_wire_form_is_read(self):
+        params = {"VFH/Zone/Touch/Head/Others": 0.7}
+        out = zone_filter_strength("Head", "Touch", ["TouchOthers"], params)
+        assert out == pytest.approx(0.7)
+
+    def test_both_wire_forms_max_wins(self):
+        params = {"OGB/Touch/Head/Others": 0.3,
+                  "VFH/Zone/Touch/Head/Others": 0.8}
+        out = zone_filter_strength("Head", "Touch", ["TouchOthers"], params)
+        assert out == pytest.approx(0.8)
+
+    def test_non_finite_touch_value_is_zero(self):
+        params = {"OGB/Touch/Head/Others": float("nan")}
+        assert zone_filter_strength("Head", "Touch", ["TouchOthers"], params) == 0.0
+
+    def test_value_clamped_to_unit(self):
+        params = {"OGB/Touch/Head/Others": 3.5}
+        assert zone_filter_strength("Head", "Touch", ["TouchOthers"], params) == 1.0
+
+
 class TestSyntheticSourceDelegation:
     def test_matching_source_uses_evaluator(self):
         # A source-named zone resolves through evaluate_sps_source, ignoring

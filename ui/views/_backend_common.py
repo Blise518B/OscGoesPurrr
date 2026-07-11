@@ -58,7 +58,8 @@ def populate_zone_combo(controller, combo: QComboBox, zone_type: str,
             zones = controller.get_detected_zones() or {}
         except Exception:
             zones = {}
-        key = "Orifices" if zone_type == "Orf" else "Penetrators"
+        key = {"Orf": "Orifices", "Pen": "Penetrators",
+               "Touch": "Touch"}.get(zone_type, "Orifices")
         names = list(zones.get(key) or [])
         try:
             custom = controller.get_sps_source_names_by_type() or {}
@@ -91,6 +92,7 @@ def zone_signature(controller):
     return (
         tuple(zones.get("Orifices") or ()),
         tuple(zones.get("Penetrators") or ()),
+        tuple(zones.get("Touch") or ()),
         tuple(custom.get("Orifices") or ()),
         tuple(custom.get("Penetrators") or ()),
     )

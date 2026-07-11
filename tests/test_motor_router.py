@@ -298,6 +298,37 @@ class TestCalculateMotorTarget:
         out = router._calculate_motor_target("dev", 0, cfg, params, zones=zones)
         assert out == pytest.approx(0.7)
 
+    def test_touch_zone_drives_motor(self, router):
+        cfg = _basic_motor_cfg(motor_0_zones="Head")
+        params = {"OGB/Touch/Head/Others": 0.5}
+        zones = {("Touch", "Head")}
+        out = router._calculate_motor_target("dev", 0, cfg, params, zones=zones)
+        assert out == pytest.approx(0.5)
+
+    def test_touch_zone_vfh_wire_form(self, router):
+        cfg = _basic_motor_cfg(motor_0_zones="Head")
+        params = {"VFH/Zone/Touch/Head/Others": 0.4}
+        zones = {("Touch", "Head")}
+        out = router._calculate_motor_target("dev", 0, cfg, params, zones=zones)
+        assert out == pytest.approx(0.4)
+
+    def test_touch_zone_honors_self_filter(self, router):
+        # Default profile disables self-contact; a Self-only touch reads 0.
+        cfg = _basic_motor_cfg(motor_0_zones="Head")
+        params = {"OGB/Touch/Head/Self": 0.9}
+        zones = {("Touch", "Head")}
+        out = router._calculate_motor_target("dev", 0, cfg, params, zones=zones)
+        assert out == 0.0
+
+    def test_touch_zone_ignored_when_touch_filter_off(self, router):
+        # OGB parity: touch zones ride the hands toggle only, so turning
+        # Touch off silences them even with pen enabled.
+        cfg = _basic_motor_cfg(motor_0_zones="Head", motor_0_touch=False)
+        params = {"OGB/Touch/Head/Others": 0.9}
+        zones = {("Touch", "Head")}
+        out = router._calculate_motor_target("dev", 0, cfg, params, zones=zones)
+        assert out == 0.0
+
 
 class TestReevaluateState:
     def test_empty_profile_returns_empty(self, router):
@@ -383,6 +414,18 @@ class TestReevaluateSimpleMode:
         router.reevaluate_simple_mode({"dev": 1}, params, zones=zones)
         second = router.reevaluate_simple_mode({"dev": 1}, params, zones=zones)
         assert second == []
+
+    def test_touch_zone_contributes_others_only(self, router):
+        # Simple Mode's synthetic config allows others but never self;
+        # a touch zone flows through _zone_contribution like any other.
+        params = {
+            "OGB/Touch/Head/Others": 0.6,
+            "OGB/Touch/Head/Self": 0.9,   # excluded: self disabled
+        }
+        zones = {("Touch", "Head")}
+        out = router.reevaluate_simple_mode({"dev": 1}, params, zones=zones)
+        assert len(out) == 1
+        assert out[0][1] == pytest.approx(0.6)
 
     # ---- Simple Mode anti-stuck: flat, non-adjustable 2 s cutoff ----
 

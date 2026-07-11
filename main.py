@@ -44,7 +44,10 @@ from handy_router import HandyRouter
 from motor_param_out import resolve_param_out
 from queue_drain import drain_and_coalesce
 from constants import *
-from utilities import value_to_hex_color, toggle_windows_console, create_default_icon
+from utilities import (
+    classify_ogb_zone, value_to_hex_color, toggle_windows_console,
+    create_default_icon,
+)
 from version import __version__
 import debug_log
 
@@ -868,16 +871,23 @@ class OscGoesPurrrApp(
             fresh_zones = store.get_detected_zones()
             orifices = fresh_zones.get("Orifices", [])
             penetrators = fresh_zones.get("Penetrators", [])
+            touch = fresh_zones.get("Touch", [])
 
-            # Create a simple state tracker
-            current_state = orifices + penetrators
+            # Change tracker — per-bucket tuples, not a flat concatenation,
+            # so a name moving between zone types still registers as a change.
+            current_state = (tuple(orifices), tuple(penetrators), tuple(touch))
 
             # Only update UI if the zones have actually changed to avoid flickering
             if not hasattr(self, '_last_detected_zones') or self._last_detected_zones != current_state:
                 self._last_detected_zones = current_state
 
                 # Update text with proper newlines
-                sps_text = f"Orifices: {', '.join(orifices) if orifices else 'None'}\n\nPenetrators: {', '.join(penetrators) if penetrators else 'None'}"
+                sps_text = (
+                    f"Orifices: {', '.join(orifices) if orifices else 'None'}\n\n"
+                    f"Penetrators: {', '.join(penetrators) if penetrators else 'None'}"
+                )
+                if touch:
+                    sps_text += f"\n\nTouch zones: {', '.join(touch)}"
                 self.ui.update_sps_status(sps_text)
 
         if getattr(self, 'is_debugging_osc', False) and hasattr(self, 'osc_manager'):
@@ -967,22 +977,19 @@ class OscGoesPurrrApp(
 
     def get_simple_mode_sources(self) -> Dict[str, List[str]]:
         """Live snapshot of detected SPS zones — {'Orifices': [...],
-        'Penetrators': [...]}. Returns empty lists when no avatar is loaded."""
+        'Penetrators': [...], 'Touch': [...]}. Returns empty lists when
+        no avatar is loaded. Uses the shared classifier so both wire
+        forms (OGB/... and VFH/Zone/...) are recognized."""
         params = store.get_all_parameters()
-        orifices: set = set()
-        penetrators: set = set()
+        buckets: Dict[str, set] = {"Orf": set(), "Pen": set(), "Touch": set()}
         for path in params.keys():
-            parts = path.split("/")
-            if len(parts) >= 3 and parts[0] == "OGB":
-                category = parts[1]
-                zone_name = parts[2]
-                if category in ("Orifice", "Orf"):
-                    orifices.add(zone_name)
-                elif category in ("Penetrator", "Pen"):
-                    penetrators.add(zone_name)
+            zone = classify_ogb_zone(path)
+            if zone is not None:
+                buckets[zone[0]].add(zone[1])
         return {
-            "Orifices": sorted(orifices),
-            "Penetrators": sorted(penetrators),
+            "Orifices": sorted(buckets["Orf"]),
+            "Penetrators": sorted(buckets["Pen"]),
+            "Touch": sorted(buckets["Touch"]),
         }
 
     def get_simple_mode_toys(self) -> List[Dict[str, Any]]:
