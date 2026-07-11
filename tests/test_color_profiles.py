@@ -10,14 +10,20 @@ import constants
 
 HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
-# Palette keys every profile must define ("label" is UI metadata).
+# Palette keys every profile must define ("label" is UI metadata; the
+# WINDOW_* frame keys are optional — None/absent = leave the system
+# frame untouched).
 REQUIRED_KEYS = {
     "PRIMARY", "PRIMARY_HOVER", "ALERT", "ALERT_HOVER", "SUCCESS",
     "LIVE", "LIVE_DIM", "WARNING", "WARNING_DIM", "SUCCESS_DIM",
     "ALERT_DIM", "BG", "SURFACE", "SURFACE_HOVER", "BUTTON",
     "BUTTON_HOVER", "INPUT_BG", "INPUT_BORDER", "INPUT_FOCUS",
-    "TEXT", "TEXT_MUTED", "CHAIN_IDLE", "CHAIN_LIVE",
+    "TEXT", "TEXT_ON_PRIMARY", "TEXT_MUTED", "CHAIN_IDLE", "CHAIN_LIVE",
+    "VALUE_LO", "VALUE_HI",
 }
+
+OPTIONAL_HEX_KEYS = ("WINDOW_BORDER", "WINDOW_CAPTION",
+                     "WINDOW_CAPTION_TEXT")
 
 
 class TestProfiles:
@@ -35,6 +41,10 @@ class TestProfiles:
             for key in REQUIRED_KEYS:
                 v = palette[key]
                 assert HEX_RE.match(v), f"{name}.{key} = {v!r} is not #RRGGBB"
+            for key in OPTIONAL_HEX_KEYS:
+                v = palette.get(key)
+                if v is not None:
+                    assert HEX_RE.match(v), f"{name}.{key} = {v!r} is not #RRGGBB"
 
     def test_purrple_palette_is_the_original_identity(self):
         # The default look must never drift when new profiles are added.
@@ -43,6 +53,36 @@ class TestProfiles:
         assert p["BG"] == "#0D0924"
         assert p["CHAIN_IDLE"] == "#5030A0"
         assert p["CHAIN_LIVE"] == "#FF40A0"
+        # The inspector ramp keeps the original hardcoded gradient…
+        assert p["VALUE_LO"] == "#7C4DFF"
+        assert p["VALUE_HI"] == "#FF3D7F"
+        # …button text on primary fills stays white…
+        assert p["TEXT_ON_PRIMARY"] == "#FFFFFF"
+        # …and purrple never claims the native window frame.
+        assert p.get("WINDOW_BORDER") is None
+
+    def test_noir_uses_one_green_highlight(self):
+        # The noir identity: neutral base, a single vibrant green carrying
+        # every highlight (no gradient of green hues).
+        p = constants.COLOR_PROFILES["noir"]
+        green = p["PRIMARY"]
+        assert p["SUCCESS"] == green
+        assert p["INPUT_BORDER"] == green
+        assert p["CHAIN_LIVE"] == green
+        assert p["VALUE_HI"] == green
+        assert p["WINDOW_BORDER"] == green
+        # Vibrant green is far too light for white labels — noir carries
+        # near-black text on primary fills (readability, ~14.7:1).
+        assert p["TEXT_ON_PRIMARY"] != p["TEXT"]
+
+    def test_value_ramp_drives_inspector_colors(self):
+        from utilities import value_to_hex_color
+        # Profile-agnostic: the 0.0 end of the ramp equals VALUE_LO and
+        # bools map to success/lo, whatever the active profile is.
+        assert value_to_hex_color(0.0) == constants.COLOR_VALUE_LO.lower()
+        assert value_to_hex_color(True) == constants.COLOR_SUCCESS
+        assert value_to_hex_color(False) == constants.COLOR_VALUE_LO
+        assert value_to_hex_color("weird") == "#ffffff"
 
     def test_active_profile_resolved_and_exported(self):
         assert constants.COLOR_PROFILE in constants.COLOR_PROFILES

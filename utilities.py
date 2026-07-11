@@ -99,24 +99,64 @@ def classify_ogb_zone(path: str):
             return (zone_type, parts[3])
     return None
 
+def _hex_rgb(hex_color: str):
+    h = hex_color.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
 def value_to_hex_color(value: Any) -> str:
     """Convert a value to a hex color string for the OSC inspector.
 
-    Numeric values interpolate across the 2-stop brand gradient
-    (purple → hot pink), matching the slider groove and intensity meters.
-    Booleans map to neon green (on) and purple (off).
+    Numeric values interpolate across the active color profile's 2-stop
+    value ramp (purple → hot pink on the default palette; gray → green
+    on noir), matching the slider groove and intensity meters. Booleans
+    map to the success accent (on) and the ramp's low end (off).
     """
+    from constants import COLOR_SUCCESS, COLOR_VALUE_HI, COLOR_VALUE_LO
     if isinstance(value, bool):
-        return "#07FF77" if value else "#7C4DFF"
+        return COLOR_SUCCESS if value else COLOR_VALUE_LO
     if isinstance(value, (int, float)):
         f = max(0.0, min(1.0, float(value)))
-        c0 = (0x7C, 0x4D, 0xFF)  # COLOR_PRIMARY
-        c1 = (0xFF, 0x3D, 0x7F)  # COLOR_LIVE
+        c0 = _hex_rgb(COLOR_VALUE_LO)
+        c1 = _hex_rgb(COLOR_VALUE_HI)
         r = int(c0[0] + (c1[0] - c0[0]) * f)
         g = int(c0[1] + (c1[1] - c0[1]) * f)
         b = int(c0[2] + (c1[2] - c0[2]) * f)
         return f"#{r:02x}{g:02x}{b:02x}"
     return "#ffffff"
+
+
+def apply_window_frame_colors(hwnd: int,
+                              border_hex: Any = None,
+                              caption_hex: Any = None,
+                              caption_text_hex: Any = None) -> None:
+    """Tint the native window frame via Windows 11 DWM attributes.
+
+    Any argument left None is not touched, so the purrple profile (all
+    None) leaves the system frame exactly as it always was. Silently a
+    no-op on Windows 10 and non-Windows — the attributes simply don't
+    exist there and the call fails harmlessly.
+    """
+    if os.name != "nt" or not hwnd:
+        return
+
+    def _colorref(hex_color: str) -> int:
+        r, g, b = _hex_rgb(hex_color)
+        return (b << 16) | (g << 8) | r
+
+    # DWMWA_BORDER_COLOR / DWMWA_CAPTION_COLOR / DWMWA_TEXT_COLOR
+    for attr, hex_color in ((34, border_hex), (35, caption_hex),
+                            (36, caption_text_hex)):
+        if not hex_color:
+            continue
+        try:
+            value = ctypes.c_int(_colorref(str(hex_color)))
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                ctypes.c_void_p(int(hwnd)), ctypes.c_uint(attr),
+                ctypes.byref(value), ctypes.sizeof(value),
+            )
+        except Exception:
+            return  # older Windows — leave the default frame
 
 def toggle_windows_console(show: bool):
     """Hides or shows the Windows terminal console (Windows only)."""

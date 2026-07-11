@@ -47,39 +47,62 @@ COLOR_PROFILES = {
         "INPUT_BORDER": "#3A2C8C",
         "INPUT_FOCUS": "#9A7BFF",    # Focus border (lighter purple)
         "TEXT": "#FFFFFF",
+        "TEXT_ON_PRIMARY": "#FFFFFF",  # Label text sitting on a PRIMARY fill
         "TEXT_MUTED": "#9A9AB8",     # Secondary labels — slight purple tint
         # Signal-chain activity ramp (fold cards / stage cards / arrows):
         # idle end matches the canvas, live end pulls attention.
         "CHAIN_IDLE": "#5030A0",     # dark purple
         "CHAIN_LIVE": "#FF40A0",     # vivid pink
+        # OSC-inspector value ramp (0 → 1 tint for numeric params).
+        "VALUE_LO": "#7C4DFF",
+        "VALUE_HI": "#FF3D7F",
     },
     "noir": {
         "label": "Noir (black & green)",
-        "PRIMARY": "#00C853",        # Main brand accent (Vivid Green)
-        "PRIMARY_HOVER": "#00A046",
+        # ONE green. Neutral black/gray base everywhere; the single
+        # vibrant green (#07FF77) carries every highlight — outlines,
+        # focus, selection, chain activity, window border. No tinted
+        # surfaces, no gradient of green hues. Red stays for errors,
+        # orange for warnings, and a selective blue marks live/
+        # significant numbers so they don't drown in the green.
+        "PRIMARY": "#07FF77",        # THE highlight green
+        "PRIMARY_HOVER": "#00D95C",  # pressed/hover shade of the same green
         "ALERT": "#FF1150",          # Error stays red — semantics over style
         "ALERT_HOVER": "#DD0E45",
-        "SUCCESS": "#07FF77",        # Connected / Good (Neon Green)
-        "LIVE": "#B2FF2E",           # Live data, "now firing" (Lime)
-        "LIVE_DIM": "#3D5210",
+        "SUCCESS": "#07FF77",        # Connected / Good — same green
+        "LIVE": "#4DB8FF",           # Live data numbers (selective blue)
+        "LIVE_DIM": "#123246",
         "WARNING": "#FF7300",        # Warning stays orange
         "WARNING_DIM": "#7A3700",
         "SUCCESS_DIM": "#073D24",
         "ALERT_DIM": "#5A0820",
-        # Surfaces — near-black with a faint green tint so it reads as a
-        # deliberate identity, not a dead grey theme.
-        "BG": "#090D0A",             # App background (green-black)
-        "SURFACE": "#131A15",        # Cards, active tabs, separators
-        "SURFACE_HOVER": "#1B241D",  # Hover state for tabs
-        "BUTTON": "#20362A",
-        "BUTTON_HOVER": "#2C4839",
-        "INPUT_BG": "#101711",
-        "INPUT_BORDER": "#2E4A38",
-        "INPUT_FOCUS": "#4DFFA0",    # Focus border (light green)
+        # Surfaces — neutral black and gray, no hue tint.
+        "BG": "#0A0A0A",             # App background (near-black)
+        "SURFACE": "#161616",        # Cards, active tabs, separators
+        "SURFACE_HOVER": "#202020",  # Hover state for tabs
+        "BUTTON": "#242424",
+        "BUTTON_HOVER": "#303030",
+        "INPUT_BG": "#101010",       # Fields: black…
+        "INPUT_BORDER": "#07FF77",   # …with the vibrant green outline
+        "INPUT_FOCUS": "#B3FFD1",    # Focused field pops brighter
         "TEXT": "#FFFFFF",
-        "TEXT_MUTED": "#94AC9C",     # Secondary labels — slight green tint
-        "CHAIN_IDLE": "#1E5C38",     # dark green
-        "CHAIN_LIVE": "#3DFF8C",     # vivid green
+        # Vibrant green is far too light for white labels (~1.35:1) —
+        # buttons/selections carry near-black text on the green fill.
+        "TEXT_ON_PRIMARY": "#0A0A0A",
+        "TEXT_MUTED": "#9A9A9A",     # Secondary labels — neutral gray
+        "CHAIN_IDLE": "#3A3A3A",     # idle = gray, part of the base
+        "CHAIN_LIVE": "#07FF77",     # live = the highlight green
+        # OSC-inspector value ramp: gray base → green highlight. The low
+        # end doubles as TEXT (the inspector paints values with it), so
+        # it must stay legible on the near-black background — mid-gray,
+        # not the surface gray.
+        "VALUE_LO": "#9A9A9A",
+        "VALUE_HI": "#07FF77",
+        # Native window frame (Windows 11 DWM). Purrple leaves the
+        # system frame untouched; noir claims it for the identity.
+        "WINDOW_BORDER": "#07FF77",
+        "WINDOW_CAPTION": "#0A0A0A",
+        "WINDOW_CAPTION_TEXT": "#FFFFFF",
     },
 }
 
@@ -125,9 +148,17 @@ COLOR_INPUT_BG = _PALETTE["INPUT_BG"]
 COLOR_INPUT_BORDER = _PALETTE["INPUT_BORDER"]
 COLOR_INPUT_FOCUS = _PALETTE["INPUT_FOCUS"]
 COLOR_TEXT = _PALETTE["TEXT"]
+COLOR_TEXT_ON_PRIMARY = _PALETTE["TEXT_ON_PRIMARY"]
 COLOR_TEXT_MUTED = _PALETTE["TEXT_MUTED"]
 COLOR_CHAIN_IDLE = _PALETTE["CHAIN_IDLE"]
 COLOR_CHAIN_LIVE = _PALETTE["CHAIN_LIVE"]
+COLOR_VALUE_LO = _PALETTE["VALUE_LO"]
+COLOR_VALUE_HI = _PALETTE["VALUE_HI"]
+# Native window frame (Windows 11 DWM attributes). None = leave the
+# system default exactly as-is (the purrple profile does this).
+COLOR_WINDOW_BORDER = _PALETTE.get("WINDOW_BORDER")
+COLOR_WINDOW_CAPTION = _PALETTE.get("WINDOW_CAPTION")
+COLOR_WINDOW_CAPTION_TEXT = _PALETTE.get("WINDOW_CAPTION_TEXT")
 
 # --- UI Dimensions ---
 WINDOW_GEOMETRY = "1100x700"

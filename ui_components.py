@@ -28,7 +28,10 @@ from ui import lovense_icons as _lovense_icons
 
 from constants import *
 from parameter_store import store
-from utilities import strip_param_prefix
+from utilities import (
+    apply_window_frame_colors as _apply_window_frame_colors,
+    strip_param_prefix,
+)
 
 # Helper widgets, icons, layout utilities, text/geometry helpers extracted
 # into the `ui` package. Aliased here to keep the old private names the
@@ -238,7 +241,7 @@ QLabel[role="pill"][tone="info"] {{ background-color: {COLOR_SURFACE_HOVER}; col
 
 QPushButton {{
     background-color: {COLOR_PRIMARY};
-    color: {COLOR_TEXT};
+    color: {COLOR_TEXT_ON_PRIMARY};
     border: none;
     padding: 6px 14px;
     border-radius: 6px;
@@ -293,7 +296,7 @@ QPushButton[role="nav"][active="true"] {{
 }}
 QPushButton[role="profileActive"] {{
     background-color: {COLOR_PRIMARY};
-    color: {COLOR_TEXT};
+    color: {COLOR_TEXT_ON_PRIMARY};
 }}
 QPushButton[role="profileActive"]:hover {{
     background-color: {COLOR_PRIMARY_HOVER};
@@ -320,7 +323,7 @@ QPushButton[role="segActive"] {{
         x1:0, y1:0, x2:1, y2:0,
         stop:0 {COLOR_PRIMARY}, stop:1 {COLOR_LIVE}
     );
-    color: {COLOR_TEXT};
+    color: {COLOR_TEXT_ON_PRIMARY};
     font-weight: bold;
 }}
 QPushButton[role="segIdle"] {{
@@ -354,6 +357,7 @@ QLineEdit, QTextEdit, QPlainTextEdit {{
     border-radius: 4px;
     padding: 4px 6px;
     selection-background-color: {COLOR_PRIMARY};
+    selection-color: {COLOR_TEXT_ON_PRIMARY};
 }}
 QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus {{
     border: 1px solid {COLOR_INPUT_FOCUS};
@@ -368,6 +372,7 @@ QComboBox, QSpinBox, QDoubleSpinBox, QAbstractSpinBox {{
     border-radius: 4px;
     padding: 4px 6px;
     selection-background-color: {COLOR_PRIMARY};
+    selection-color: {COLOR_TEXT_ON_PRIMARY};
 }}
 QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover, QAbstractSpinBox:hover {{
     border-color: {COLOR_INPUT_FOCUS};
@@ -428,7 +433,7 @@ QComboBox QAbstractItemView {{
     color: {COLOR_TEXT};
     border: 1px solid {COLOR_INPUT_BORDER};
     selection-background-color: {COLOR_PRIMARY};
-    selection-color: {COLOR_TEXT};
+    selection-color: {COLOR_TEXT_ON_PRIMARY};
     outline: 0;
 }}
 
@@ -572,7 +577,7 @@ QTreeWidget::item {{
 }}
 QTreeWidget::item:selected {{
     background-color: {COLOR_PRIMARY};
-    color: white;
+    color: {COLOR_TEXT_ON_PRIMARY};
 }}
 QHeaderView::section {{
     background-color: {COLOR_SURFACE};
@@ -647,6 +652,19 @@ class OscGoesPurrrUI(
         # bit of breathing room for the scrollable content area.
         self.window.setMinimumSize(SIDEBAR_WIDTH + 200, 360)
         self.window.resize(1100, 700)
+
+        # Native frame tint (Windows 11 DWM). The purrple profile defines
+        # no frame colors, so this block is skipped entirely and the system
+        # frame stays exactly as before — the winId() call is inside the
+        # guard on purpose, because it forces early native window creation
+        # as a side effect. Noir claims the border/caption for its
+        # green-on-black identity.
+        if COLOR_WINDOW_BORDER or COLOR_WINDOW_CAPTION or COLOR_WINDOW_CAPTION_TEXT:
+            _apply_window_frame_colors(
+                int(self.window.winId()),
+                COLOR_WINDOW_BORDER, COLOR_WINDOW_CAPTION,
+                COLOR_WINDOW_CAPTION_TEXT,
+            )
 
         # Set application icon for window title bar and taskbar.
         # Resolves correctly in development and when frozen by PyInstaller.
