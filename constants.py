@@ -58,55 +58,108 @@ COLOR_PROFILES = {
         "VALUE_HI": "#FF3D7F",
     },
     "noir": {
-        "label": "Noir (green & blue)",
-        # The original design language, hue-swapped: every purple-family
-        # color re-hued to the hero green (#07FF77, H147°) and every
-        # pink-family color to the hero light blue (#4DB8FF, H204°),
-        # keeping each color's saturation/brightness — so the deep tinted
-        # surfaces, the input borders, the muted-text tint and the chain
-        # ramp all relate to each other exactly like purrple's do. The
-        # green→blue gradient (scrollbars, meters, sliders — PRIMARY →
-        # LIVE) is the identity's centrepiece. Red stays for errors,
-        # orange for warnings.
-        "PRIMARY": "#07FF77",        # Main brand accent (Neon Green)
-        "PRIMARY_HOVER": "#00D95C",
+        "label": "Noir (black & green)",
+        # ONE green. Neutral black/gray base everywhere; the single
+        # vibrant green (#07FF77) carries every highlight — outlines,
+        # focus, selection, chain activity, window border. No tinted
+        # surfaces, no gradient of green hues. Red stays for errors,
+        # orange for warnings, and a selective blue marks live/
+        # significant numbers — which also makes the gradient elements
+        # (scrollbars, meters, seg controls: PRIMARY → LIVE) run the
+        # green → light-blue sweep.
+        "PRIMARY": "#07FF77",        # THE highlight green
+        "PRIMARY_HOVER": "#00D95C",  # pressed/hover shade of the same green
         "ALERT": "#FF1150",          # Error stays red — semantics over style
         "ALERT_HOVER": "#DD0E45",
-        "SUCCESS": "#07FF77",        # Connected / Good — the same green
-        "LIVE": "#4DB8FF",           # Live data, "now firing" (Light Blue)
-        "LIVE_DIM": "#1E557A",       # Pill background tint for LIVE text
+        "SUCCESS": "#07FF77",        # Connected / Good — same green
+        "LIVE": "#4DB8FF",           # Live data numbers (selective blue)
+        "LIVE_DIM": "#123246",
         "WARNING": "#FF7300",        # Warning stays orange
         "WARNING_DIM": "#7A3700",
         "SUCCESS_DIM": "#073D24",
         "ALERT_DIM": "#5A0820",
-        # Surfaces — tinted deep green, mirroring purrple's deep indigo
-        # (same S/V, hue swapped). The tint is what separates the look
-        # from a generic dark theme.
-        "BG": "#092415",             # Deep app background (green-black)
-        "SURFACE": "#155331",        # Cards, active tabs, separators
-        "SURFACE_HOVER": "#207044",  # Hover state for tabs
-        "BUTTON": "#2C8C57",
-        "BUTTON_HOVER": "#3CB372",
-        "INPUT_BG": "#124027",       # Text inputs, combo boxes, pickers
-        "INPUT_BORDER": "#2C8C57",   # Resting border for interactive widgets
-        "INPUT_FOCUS": "#7BFFB7",    # Focus border (lighter green)
+        # Surfaces — neutral black and gray, no hue tint.
+        "BG": "#0A0A0A",             # App background (near-black)
+        "SURFACE": "#161616",        # Cards, active tabs, separators
+        "SURFACE_HOVER": "#202020",  # Hover state for tabs
+        "BUTTON": "#242424",
+        "BUTTON_HOVER": "#303030",
+        "INPUT_BG": "#101010",       # Fields: black…
+        "INPUT_BORDER": "#07FF77",   # …with the vibrant green outline
+        "INPUT_FOCUS": "#B3FFD1",    # Focused field pops brighter
         "TEXT": "#FFFFFF",
-        # The neon green is far too light for white labels (~1.35:1) —
+        # Vibrant green is far too light for white labels (~1.35:1) —
         # buttons/selections carry near-black text on the green fill.
         "TEXT_ON_PRIMARY": "#0A0A0A",
-        "TEXT_MUTED": "#9AB8A8",     # Secondary labels — slight green tint
-        # Signal-chain activity ramp: idle dark green → vivid light blue
-        # (purrple: dark purple → vivid pink).
-        "CHAIN_IDLE": "#30A063",
-        "CHAIN_LIVE": "#40B3FF",
-        # OSC-inspector value ramp: green → light blue, the same pair as
-        # the scrollbar gradient.
-        "VALUE_LO": "#07FF77",
-        "VALUE_HI": "#4DB8FF",
+        "TEXT_MUTED": "#9A9A9A",     # Secondary labels — neutral gray
+        "CHAIN_IDLE": "#3A3A3A",     # idle = gray, part of the base
+        "CHAIN_LIVE": "#07FF77",     # live = the highlight green
+        # OSC-inspector value ramp: gray base → green highlight. The low
+        # end doubles as TEXT (the inspector paints values with it), so
+        # it must stay legible on the near-black background — mid-gray,
+        # not the surface gray.
+        "VALUE_LO": "#9A9A9A",
+        "VALUE_HI": "#07FF77",
         # Native window frame (Windows 11 DWM). Purrple leaves the
         # system frame untouched; noir claims it for the identity.
         "WINDOW_BORDER": "#07FF77",
-        "WINDOW_CAPTION": "#092415",
+        "WINDOW_CAPTION": "#0A0A0A",
+        "WINDOW_CAPTION_TEXT": "#FFFFFF",
+    },
+    "aurora": {
+        "label": "Aurora (gradient)",
+        # GitHub-website-inspired: a deep navy→teal gradient sweeping the
+        # ENTIRE app background, subtle card sheen, and the hero pair
+        # (green #07FF77 → light blue #4DB8FF) as smooth gradients on the
+        # highlights — primary buttons, scrollbars, meters. Base tones
+        # follow GitHub dark (#0D1117 family). The optional *_BRUSH keys
+        # are full QSS brush expressions; profiles without them (purrple,
+        # noir) render the flat color and their stylesheets stay
+        # byte-identical.
+        "PRIMARY": "#07FF77",
+        "PRIMARY_HOVER": "#00D95C",
+        "PRIMARY_BRUSH": (
+            "qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+            " stop:0 #07FF77, stop:1 #4DB8FF)"
+        ),
+        "ALERT": "#FF1150",
+        "ALERT_HOVER": "#DD0E45",
+        "SUCCESS": "#07FF77",
+        "LIVE": "#4DB8FF",
+        "LIVE_DIM": "#123246",
+        "WARNING": "#FF7300",
+        "WARNING_DIM": "#7A3700",
+        "SUCCESS_DIM": "#073D24",
+        "ALERT_DIM": "#5A0820",
+        "BG": "#0D1117",             # flat fallback (painted widgets, masks)
+        "BG_BRUSH": (
+            "qlineargradient(x1:0, y1:0, x2:1, y2:1,"
+            " stop:0 #0D1117, stop:0.35 #101C2C,"
+            " stop:0.65 #0F2431, stop:1 #0C2B20)"
+        ),
+        "SURFACE": "#161C23",
+        "SURFACE_BRUSH": (
+            "qlineargradient(x1:0, y1:0, x2:0, y2:1,"
+            " stop:0 #1A2129, stop:1 #141A21)"
+        ),
+        "SURFACE_HOVER": "#1F2833",
+        "BUTTON": "#21262D",
+        "BUTTON_HOVER": "#30363D",
+        "INPUT_BG": "#0D1117",
+        "INPUT_BORDER": "#30363D",
+        "INPUT_FOCUS": "#58A6FF",
+        "TEXT": "#FFFFFF",
+        "TEXT_ON_PRIMARY": "#0A0A0A",
+        "TEXT_MUTED": "#8B949E",
+        # Chain activity: idle slate-blue → live green, so the arrows and
+        # rings sweep across the aurora spectrum as signal flows.
+        "CHAIN_IDLE": "#2D4A66",
+        "CHAIN_LIVE": "#07FF77",
+        # Inspector value ramp: calm blue → hot green.
+        "VALUE_LO": "#4DB8FF",
+        "VALUE_HI": "#07FF77",
+        "WINDOW_BORDER": "#4DB8FF",
+        "WINDOW_CAPTION": "#0D1117",
         "WINDOW_CAPTION_TEXT": "#FFFFFF",
     },
 }
@@ -159,6 +212,12 @@ COLOR_CHAIN_IDLE = _PALETTE["CHAIN_IDLE"]
 COLOR_CHAIN_LIVE = _PALETTE["CHAIN_LIVE"]
 COLOR_VALUE_LO = _PALETTE["VALUE_LO"]
 COLOR_VALUE_HI = _PALETTE["VALUE_HI"]
+# QSS brush expressions for the big fills. Profiles may override these
+# with gradient brushes (aurora); everywhere else they resolve to the
+# flat color so the generated stylesheet is unchanged.
+COLOR_BG_BRUSH = _PALETTE.get("BG_BRUSH", COLOR_BG)
+COLOR_SURFACE_BRUSH = _PALETTE.get("SURFACE_BRUSH", COLOR_SURFACE)
+COLOR_PRIMARY_BRUSH = _PALETTE.get("PRIMARY_BRUSH", COLOR_PRIMARY)
 # Native window frame (Windows 11 DWM attributes). None = leave the
 # system default exactly as-is (the purrple profile does this).
 COLOR_WINDOW_BORDER = _PALETTE.get("WINDOW_BORDER")

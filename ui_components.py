@@ -102,14 +102,14 @@ GLOBAL_QSS = f"""
     font-size: 13px;
 }}
 QMainWindow, QDialog, QWidget#root {{
-    background-color: {COLOR_BG};
+    background-color: {COLOR_BG_BRUSH};
 }}
 QFrame#sidebar {{
     background-color: {COLOR_SURFACE};
     border: none;
 }}
 QFrame#card {{
-    background-color: {COLOR_SURFACE};
+    background-color: {COLOR_SURFACE_BRUSH};
     border-radius: 12px;
 }}
 QFrame#cardDark {{
@@ -240,7 +240,7 @@ QLabel[role="pill"][tone="live"] {{ background-color: {COLOR_LIVE_DIM};    color
 QLabel[role="pill"][tone="info"] {{ background-color: {COLOR_SURFACE_HOVER}; color: {COLOR_INPUT_FOCUS}; }}
 
 QPushButton {{
-    background-color: {COLOR_PRIMARY};
+    background-color: {COLOR_PRIMARY_BRUSH};
     color: {COLOR_TEXT_ON_PRIMARY};
     border: none;
     padding: 6px 14px;
@@ -295,7 +295,7 @@ QPushButton[role="nav"][active="true"] {{
     font-weight: bold;
 }}
 QPushButton[role="profileActive"] {{
-    background-color: {COLOR_PRIMARY};
+    background-color: {COLOR_PRIMARY_BRUSH};
     color: {COLOR_TEXT_ON_PRIMARY};
 }}
 QPushButton[role="profileActive"]:hover {{

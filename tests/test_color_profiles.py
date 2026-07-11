@@ -61,22 +61,55 @@ class TestProfiles:
         # …and purrple never claims the native window frame.
         assert p.get("WINDOW_BORDER") is None
 
-    def test_noir_is_the_green_blue_hue_swap(self):
-        # The noir identity: the original design language with purple
-        # re-hued to the hero green and pink to the hero light blue.
-        # The green→blue gradient (scrollbars/meters draw PRIMARY→LIVE)
-        # is the centrepiece — pin its exact endpoints.
+    def test_noir_uses_one_green_highlight_on_a_neutral_base(self):
+        # The noir identity: neutral black/gray base, a single vibrant
+        # green carrying the highlights, and the blue LIVE accent making
+        # the gradient elements (scrollbars/meters: PRIMARY→LIVE) sweep
+        # green → light blue.
         p = constants.COLOR_PROFILES["noir"]
-        assert p["PRIMARY"] == "#07FF77"
+        green = p["PRIMARY"]
+        assert green == "#07FF77"
         assert p["LIVE"] == "#4DB8FF"
-        assert p["SUCCESS"] == p["PRIMARY"]
-        # The inspector ramp rides the same hero pair.
-        assert p["VALUE_LO"] == p["PRIMARY"]
-        assert p["VALUE_HI"] == p["LIVE"]
-        assert p["WINDOW_BORDER"] == p["PRIMARY"]
+        assert p["SUCCESS"] == green
+        assert p["INPUT_BORDER"] == green
+        assert p["CHAIN_LIVE"] == green
+        assert p["WINDOW_BORDER"] == green
+        assert p["BG"] == "#0A0A0A"          # neutral, no hue tint
         # Neon green is far too light for white labels — noir carries
         # near-black text on primary fills (readability, ~14.7:1).
         assert p["TEXT_ON_PRIMARY"] != p["TEXT"]
+
+    def test_aurora_gradients(self):
+        # Aurora: GitHub-inspired full-background gradient + hero-pair
+        # gradient highlights. Brush keys are QSS brush expressions.
+        p = constants.COLOR_PROFILES["aurora"]
+        for key in ("BG_BRUSH", "SURFACE_BRUSH", "PRIMARY_BRUSH"):
+            assert p[key].startswith("qlineargradient("), key
+        # The primary-button gradient runs the hero pair.
+        assert "#07FF77" in p["PRIMARY_BRUSH"]
+        assert "#4DB8FF" in p["PRIMARY_BRUSH"]
+        # The background sweep starts on the flat BG so painted widgets
+        # that fall back to it blend in.
+        assert p["BG"] in p["BG_BRUSH"]
+
+    def test_flat_profiles_define_no_brushes(self):
+        # Purrple and noir must not define brush overrides — the QSS uses
+        # COLOR_*_BRUSH, which falls back to the flat colors, keeping
+        # both stylesheets byte-identical to the pre-brush era.
+        for name in ("purrple", "noir"):
+            p = constants.COLOR_PROFILES[name]
+            for key in ("BG_BRUSH", "SURFACE_BRUSH", "PRIMARY_BRUSH"):
+                assert key not in p, f"{name} must stay flat ({key})"
+
+    def test_brush_constants_resolve(self):
+        # Whatever the active profile, the brush constants exist and are
+        # either the flat color or a gradient expression.
+        for brush, flat in (
+            (constants.COLOR_BG_BRUSH, constants.COLOR_BG),
+            (constants.COLOR_SURFACE_BRUSH, constants.COLOR_SURFACE),
+            (constants.COLOR_PRIMARY_BRUSH, constants.COLOR_PRIMARY),
+        ):
+            assert brush == flat or brush.startswith("qlineargradient(")
 
     def test_value_ramp_drives_inspector_colors(self):
         from utilities import value_to_hex_color
