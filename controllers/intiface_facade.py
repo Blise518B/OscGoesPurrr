@@ -13,8 +13,8 @@ Host attributes assumed (provided by OscGoesPurrrApp):
   * ``async_loop`` / ``async_thread`` / ``_loop_ready`` — the engine's
     asyncio loop thread (bootstrapped here via ``start_async_loop``)
   * ``thread_queue`` — cross-thread event queue drained by main
-  * ``profile_manager`` + ``save_profiles()`` /
-    ``_refresh_avatar_profile_motor_facts()``
+  * ``mode_manager`` + ``save_profiles()`` / ``_seed_known_devices()``
+    and the mode facade's ``get_master_scale()`` / ``is_ogp_test_active()``
   * ``ui`` (OscGoesPurrrUI) and ``log_message()``
   * ``auto_connect_enabled`` / ``auto_refresh_enabled`` flags and the
     ``_auto_connect_task`` / ``_auto_refresh_task`` future slots
@@ -139,7 +139,7 @@ class IntifaceFacade:
         if not self.ui.get_auto_connect_enabled():
             # Checkbox unchecked - disable auto connect
             self.auto_connect_enabled = False
-            self.profile_manager.app_settings.set("auto_connect", False)
+            self.mode_manager.app_settings.set("auto_connect", False)
             self.log_message("Auto connect disabled")
             if self._auto_connect_task:
                 try:
@@ -150,7 +150,7 @@ class IntifaceFacade:
         else:
             # Checkbox checked - enable auto connect
             self.auto_connect_enabled = True
-            self.profile_manager.app_settings.set("auto_connect", True)
+            self.mode_manager.app_settings.set("auto_connect", True)
             self.log_message("Auto connect enabled")
             # If not connected, start the retry loop (idempotent guard).
             self._ensure_auto_connect_running()
@@ -336,7 +336,7 @@ class IntifaceFacade:
         if not self.ui.get_auto_refresh_enabled():
             # Checkbox unchecked - disable auto refresh
             self.auto_refresh_enabled = False
-            self.profile_manager.app_settings.set("auto_refresh", False)
+            self.mode_manager.app_settings.set("auto_refresh", False)
             self.log_message("Auto refresh disabled")
             if self._auto_refresh_task:
                 # Cancel any pending scan task
@@ -345,7 +345,7 @@ class IntifaceFacade:
         else:
             # Checkbox checked - enable auto refresh
             self.auto_refresh_enabled = True
-            self.profile_manager.app_settings.set("auto_refresh", True)
+            self.mode_manager.app_settings.set("auto_refresh", True)
             self.log_message("Auto refresh enabled")
             # If already connected, start the periodic scanning loop
             if self.haptic_engine and self.haptic_engine.is_connected and self.async_loop:
@@ -456,15 +456,15 @@ class IntifaceFacade:
         if not self.haptic_engine:
             return
         kwargs: Dict[str, Any] = {
-            "mode": self.profile_manager.get_profile_config(
+            "mode": self.mode_manager.get_profile_config(
                 device_name, f"motor_{motor_idx}_linear_mode", "position"
             ),
-            "idle": self.profile_manager.get_profile_config(
+            "idle": self.mode_manager.get_profile_config(
                 device_name, f"motor_{motor_idx}_linear_idle", "rest"
             ),
         }
         for key in ("min_pos", "max_pos", "resting_pos", "resting_time_s"):
-            raw = self.profile_manager.get_profile_config(
+            raw = self.mode_manager.get_profile_config(
                 device_name, f"motor_{motor_idx}_{key}", None
             )
             if raw is None:
@@ -505,7 +505,7 @@ class IntifaceFacade:
             # first incomplete hot-plug detection (e.g. Lovense Gravity reporting
             # only its vibrate motor before BLE negotiation finishes).
             if motor_count > 0:
-                self.profile_manager.update_device_config(device_name, "motor_count", motor_count)
+                self.mode_manager.update_device_config(device_name, "motor_count", motor_count)
             kinds = info.get("motor_kinds")
             if kinds is not None:
                 # Only flag a device as changed when its entry already
@@ -513,23 +513,22 @@ class IntifaceFacade:
                 # populates from None and is handled by
                 # build_device_list_ui's fresh-frame construction
                 # path; no rebuild needed.
-                existing = self.profile_manager.get_profile_config(
+                existing = self.mode_manager.get_profile_config(
                     device_name, "motor_kinds", None
                 )
                 fresh = list(kinds)
                 if existing is not None and existing != fresh:
                     changed_devices.add(device_name)
-                self.profile_manager.update_device_config(
+                self.mode_manager.update_device_config(
                     device_name, "motor_kinds", fresh
                 )
             for motor_idx in range(motor_count):
                 self.update_linear_motor_config(device_name, motor_idx)
         if changed_devices:
-            # Propagate the engine's fresh classification to every
-            # avatar profile that holds these devices, so switching to
-            # an avatar profile mid-session (or on next startup)
-            # doesn't surface the old labels again.
-            self._refresh_avatar_profile_motor_facts()
+            # Re-run the seeder so every mode's feel layer gains mix blocks
+            # for any motors that just appeared (e.g. a second motor
+            # finishing BLE negotiation after an incomplete first report).
+            self._seed_known_devices()
         return changed_devices
 
     # ------------------------------------------------------------------
@@ -574,7 +573,14 @@ class IntifaceFacade:
                 )):
             engine_value = 0.0
         else:
-            engine_value = real_value
+            # The active mode's master scale is the last multiply before
+            # the engine — Off (scale 0) silences every toy here. The
+            # OGP/Test floor rides on top so the menu's connectivity pulse
+            # works even in Off mode (mute still wins: a muted toy stays
+            # silent through the test).
+            engine_value = real_value * self.get_master_scale()
+            if self.is_ogp_test_active():
+                engine_value = max(engine_value, self.get_ogp_test_level())
 
         # Send the command safely to the Haptic Engine
         self.haptic_engine.update_target(device_name, motor_index, engine_value)

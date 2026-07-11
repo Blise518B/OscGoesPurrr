@@ -5,7 +5,7 @@ Sections (Cut 1 + Cut 2):
 - Toys      — per Buttplug device tile (Cut 1)
 - Trackers  — per SteamVR tracker tile (Cut 2)
 - Suit      — per bHaptics position tile (Cut 2)
-- System    — OSC link + active profile + backend health (Cut 2)
+- System    — OSC link + active mode + backend health (Cut 2)
 
 A chip-filter row at the top toggles section visibility; the chosen
 set persists in app_settings['overview_visible_sections'].
@@ -13,7 +13,7 @@ set persists in app_settings['overview_visible_sections'].
 Strictly read-only. Clicking a tile jumps to the appropriate editor
 view (Device Routing / SteamVR Device Comms / bHaptics / OSC
 Inspector / Dashboard / Settings). The tile itself
-never mutates profile or engine state — read-only is load-bearing
+never mutates mode or engine state — read-only is load-bearing
 for the Demeter rule.
 
 Live updates:
@@ -197,7 +197,7 @@ class OverviewMixin:
 
     def rebuild_overview(self) -> None:
         """Rebuild every section from the current controller state.
-        Called on view build, profile switch, and device-list changes."""
+        Called on view build, mode switch, and device-list changes."""
         self._build_toys_section()
         self._build_trackers_section()
         self._build_suit_section()
@@ -663,7 +663,7 @@ class OverviewMixin:
                 self._apply_connect_dot(dot, live)
 
     # ----------------------------------------------------------
-    # System section (OSC + profile + backend health)
+    # System section (OSC + mode + backend health)
     # ----------------------------------------------------------
 
     def _build_system_section(self) -> None:
@@ -678,7 +678,7 @@ class OverviewMixin:
             self._overview_grid_add(refs, tile["frame"], idx)
             refs["tiles"]["osc"] = tile
             idx += 1
-        if hasattr(self.controller, "get_active_profile_info"):
+        if hasattr(self.controller, "get_active_mode_info"):
             tile = self._build_overview_profile_tile()
             self._overview_grid_add(refs, tile["frame"], idx)
             refs["tiles"]["profile"] = tile
@@ -736,12 +736,15 @@ class OverviewMixin:
         tile["_last_packets"] = packets
 
     def _build_overview_profile_tile(self) -> Dict[str, Any]:
+        # "Active Mode" tile. The internal ids keep the historical
+        # "profile" name so persisted tile sizes (dashboard_tile_sizes)
+        # survive the profiles → modes migration.
         frame = self._overview_make_tile(
             self._navigate_to("Dashboard"),
             section="system", tile_id="profile",
         )
         lay = frame.layout()
-        title = QLabel("Active Profile")
+        title = QLabel("Active Mode")
         tf = title.font(); tf.setBold(True)
         title.setFont(tf)
         lay.addWidget(title)
@@ -759,22 +762,16 @@ class OverviewMixin:
         return tile
 
     def _refresh_profile_tile(self, tile: Dict[str, Any]) -> None:
-        info = self.controller.get_active_profile_info() or {}
+        info = self.controller.get_active_mode_info() or {}
         name = str(info.get("name") or "—")
-        kind = str(info.get("kind") or "")
-        tile["name"].setText(self._overview_truncate(name, 22))
+        icon = str(info.get("icon") or "")
+        tile["name"].setText(
+            self._overview_truncate(f"{icon} {name}".strip(), 22)
+        )
         tile["name"].setToolTip(name)
-        if kind == "avatar":
-            avid = ""
-            try:
-                avid = str(self.controller.get_current_avatar_id() or "")
-            except Exception:
-                pass
-            tile["sub"].setText(
-                f"Avatar profile — {self._overview_truncate(avid, 24) if avid else 'unbound'}"
-            )
-        else:
-            tile["sub"].setText("Global profile")
+        tile["sub"].setText(
+            f"Mode {int(info.get('index', 0))} — click to manage"
+        )
 
     # Every backend gets a pill: (pill_key, label, feature_keys-any-of,
     # status getter, status field). Hidden while its feature is off, warn

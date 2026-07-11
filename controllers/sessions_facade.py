@@ -291,15 +291,17 @@ class SessionsFacade:
         a null or an empty list rather than a crash."""
         meta: Dict[str, Any] = {}
 
-        # Profile
+        # Active mode (the "profile" key name is kept so existing session
+        # files and their readers stay parseable).
         try:
-            meta["profile"] = self.profile_manager.current_profile or ""
+            info = self.mode_manager.get_active_profile_info()
+            meta["profile"] = info.get("name", "") or ""
         except Exception:
             meta["profile"] = ""
 
         # Avatar id (no name available without OSCQuery lookup; leave null)
         try:
-            meta["avatar_id"] = self.profile_manager.current_avatar_id or None
+            meta["avatar_id"] = self.mode_manager.current_avatar_id or None
         except Exception:
             meta["avatar_id"] = None
 

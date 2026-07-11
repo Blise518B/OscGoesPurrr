@@ -1,13 +1,17 @@
-# Config Manager - ProfileManager + re-exports of the settings/ package.
+# Config Manager - ModeManager + re-exports of the settings/ package.
 #
 # The individual settings managers (AppSettingsManager, SteamVRSettingsManager,
 # etc.) and their file-path constants live in the `settings/` package. They are
 # re-exported here so existing callers `from config_manager import X` keep
 # working.
 
+import copy
 import json
+import math
 import os
-from typing import Any, Dict, Optional
+import shutil
+import time
+from typing import Any, Dict, List, Optional
 
 from utilities import atomic_write_json, strip_param_prefix
 
@@ -36,44 +40,113 @@ from settings import (
 )
 
 
-class ProfileManager:
-    """Manages profile loading, saving, and device configuration.
+# ---------------------------------------------------------------------------
+# Mode presets — the "feel" each slot ships with. Every value is user-editable
+# afterwards; these only decide what a fresh install (or a newly-seen motor)
+# starts from. Slot meanings: 0 Off, 1 Low, 2 Medium, 3 High, 4 Sleep,
+# 5 Custom. Gains stay inside the router's accepted [0, 2] range.
+# ---------------------------------------------------------------------------
 
-    Profiles come in two flavors:
-      * Global profiles (`profiles`) — manually selected via the Dashboard.
-      * Avatar profiles (`avatar_profiles`) — bound to a specific VRChat
-        avatar ID. When VRChat reports an avatar change via /avatar/change
-        and the new ID is bound, that avatar profile becomes the *active*
-        profile until the user switches avatars again.
+_SLOT_FEEL: Dict[int, Dict[str, Any]] = {
+    # Low — teasing: subdued depth, barely speed-reactive, slow envelopes.
+    1: {"depth_gain": 0.55, "speed_gain": 0.35, "speed_decay_ms": 500.0,
+        "rise_ms": 350.0, "fall_ms": 600.0},
+    # Medium — between Low and High: most of the depth, moderate speed.
+    2: {"depth_gain": 0.85, "speed_gain": 0.70, "speed_decay_ms": 350.0,
+        "rise_ms": 120.0, "fall_ms": 200.0},
+    # High — reacts hard to speed: full depth, speed dominates, snappy.
+    3: {"depth_gain": 1.0, "speed_gain": 1.6, "speed_decay_ms": 220.0,
+        "rise_ms": 40.0, "fall_ms": 80.0},
+    # Sleep — hard to wake: the gate needs sustained strong contact before
+    # anything plays, and everything ramps gently. (A true thrust-count
+    # arming gate is planned; until then the gate threshold carries it.)
+    4: {"depth_gain": 0.70, "speed_gain": 0.40, "speed_decay_ms": 500.0,
+        "rise_ms": 600.0, "fall_ms": 900.0,
+        "gate": {"enabled": True, "wake_threshold": 0.45,
+                 "sleep_delay_s": 8.0, "attack_s": 2.5, "release_s": 3.0}},
+}
 
-    Get/set methods (`get_profile_config`, `update_device_config`) operate
-    on the *active* profile so the controller and router transparently
-    follow the auto-switch without needing to know which flavor is live.
+
+def preset_motor_mix(slot: int) -> Dict[str, Any]:
+    """A fresh per-motor mix block ({"chains": [...], "merge": ...})
+    expressing the given mode slot's default feel. Slots without an entry in
+    _SLOT_FEEL (Off, Custom) get the router's plain defaults."""
+    from motor_router import MotorRouter  # local import to avoid cycle
+    mix = copy.deepcopy(MotorRouter.DEFAULT_MIX_CONFIG)
+    feel = _SLOT_FEEL.get(int(slot))
+    if not feel:
+        return mix
+    chain = mix["chains"][0]
+    chain["depth"]["gain"] = feel["depth_gain"]
+    chain["speed"]["gain"] = feel["speed_gain"]
+    chain["speed"]["decay_ms"] = feel["speed_decay_ms"]
+    chain["smoothing"]["rise_ms"] = feel["rise_ms"]
+    chain["smoothing"]["fall_ms"] = feel["fall_ms"]
+    if "gate" in feel:
+        chain["gate"].update(feel["gate"])
+    return mix
+
+
+class ModeManager:
+    """Six fixed haptic modes over one shared device-wiring store.
+
+    Replaces the old ProfileManager (global + avatar profiles). The split:
+
+      * WIRING (`self.wiring`) — one dict per device holding everything that
+        describes the rig: motor_count, motor_kinds, osc_addresses, zone
+        assignments, interaction filters, param-out mapping, linear actuator
+        envelope, icon override. Shared by every mode — edit once.
+      * FEEL (per mode) — each of the six modes carries its own per-device
+        per-motor "mix" layer (the signal-chain config) plus a master
+        intensity scale, a name, and an icon.
+
+    The active mode's per-device mix dict is INSTALLED into the wiring dicts
+    under the "mix" key (by reference), so `get_active_profile_dict()` keeps
+    returning one merged per-device dict per device — the exact shape
+    motor_router.reevaluate_state() and the whole UI already consume. The
+    top-level dict and every per-device dict keep a stable identity across
+    mode switches (only the "mix" value is swapped), which the router's
+    compiled-config cache relies on (it keys on id()).
+
+    Mode slot 0 defaults to "Off" (master scale 0 — the panic mode); slots
+    1-3 Low/Medium/High, 4 Sleep, 5 Custom. Every slot stays fully
+    user-editable (name, icon, scale, feel).
+
+    The settings managers ride on this object exactly as they did on
+    ProfileManager (self.app_settings, self.steamvr_settings, ...) — many
+    call sites reach them through the manager.
     """
 
-    SCHEMA_VERSION = 2
+    SCHEMA_VERSION = 3
+    MODE_COUNT = 6
+    OFF_SLOT = 0
+    CUSTOM_SLOT = 5
+    DEFAULT_ACTIVE_MODE = 2  # Medium on a fresh install
+
+    #: Shipped slot metadata. `mix` is added per instance.
+    DEFAULT_MODES: List[Dict[str, Any]] = [
+        {"name": "Off", "icon": "\U0001F507", "master_scale": 0.0},
+        {"name": "Low", "icon": "\U0001F508", "master_scale": 0.6},
+        {"name": "Medium", "icon": "\U0001F509", "master_scale": 0.85},
+        {"name": "High", "icon": "\U0001F50A", "master_scale": 1.0},
+        {"name": "Sleep", "icon": "\U0001F319", "master_scale": 0.7},
+        {"name": "Custom", "icon": "\U0001F0CF", "master_scale": 1.0},
+    ]
 
     def __init__(self):
-        self.profiles: Dict[str, Any] = {}
-        self.avatar_profiles: Dict[str, Any] = {}
-        # profile_name -> avtr_xxxx id. Many profiles may bind to the same
-        # avatar id; `avatar_active` picks which of them is the one that
-        # actually drives haptics when that avatar loads.
-        self.avatar_bindings: Dict[str, str] = {}
-        # avtr_xxxx id -> profile_name (the user's preferred profile for that
-        # avatar). When unset for an avatar id, the first binding match wins.
-        self.avatar_active: Dict[str, str] = {}
-        self.current_profile = "Default"
-        # Transient: latest avatar id reported by VRChat /avatar/change. Not persisted.
+        # device_name -> merged per-device config dict (wiring keys + the
+        # active mode's "mix" installed by _install_active_mix). This is THE
+        # object graph the router and UI read; it is never rebuilt, only
+        # mutated in place.
+        self.wiring: Dict[str, Dict[str, Any]] = {}
+        self.modes: List[Dict[str, Any]] = self._fresh_modes()
+        self.active_mode: int = self.DEFAULT_ACTIVE_MODE
+        # avtr_xxx id -> last active mode index. Always recorded; only
+        # APPLIED on avatar change when the "remember mode per avatar" app
+        # setting is on (the facade checks it).
+        self.avatar_last_mode: Dict[str, int] = {}
+        # Transient: latest avatar id reported by VRChat. Not persisted.
         self.current_avatar_id: Optional[str] = None
-        # Persisted per-avatar memory of the user's last profile choice:
-        #   {avatar_id: {"kind": "avatar"|"global", "name": profile_name}}
-        # When the avatar loads, the resolver applies this choice. Updated
-        # every time the user clicks a profile while that avatar is loaded.
-        self.avatar_last_choice: Dict[str, Dict[str, str]] = {}
-        # In-memory clipboard for copy/paste between profile sections.
-        # Stored as {"name": str, "config": dict} or None.
-        self._clipboard: Optional[Dict[str, Any]] = None
 
         self.app_settings = AppSettingsManager()
         self.steamvr_settings = SteamVRSettingsManager()
@@ -87,42 +160,52 @@ class ProfileManager:
         self._load_or_create_default()
 
     # ------------------------------------------------------------------
+    # Construction helpers
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def _fresh_modes(cls) -> List[Dict[str, Any]]:
+        return [dict(meta, mix={}) for meta in cls.DEFAULT_MODES]
+
+    # ------------------------------------------------------------------
     # Load / save with schema migration
     # ------------------------------------------------------------------
 
+    # True when this session loaded on in-memory defaults because the
+    # (possibly healthy) file could not be READ — the first save must
+    # preserve the on-disk file before overwriting it.
+    _degraded_load = False
+
     def _load_or_create_default(self) -> None:
-        """Load profiles from JSON file or create default if not exists.
+        """Load modes + wiring from profiles.json, migrating older schemas.
 
         A file that EXISTS but can't be used is never silently clobbered:
         transient read errors run this session on defaults without touching
-        the file, and a corrupt/mis-shaped one is renamed aside to
-        profiles.json.bak before defaults are persisted — profiles are the
-        user's tuning work, losing them to a disk hiccup is not acceptable.
+        the file; a corrupt/mis-shaped one is renamed aside before defaults
+        are persisted; and a v1/v2 profile file is backed up to
+        profiles.json.v2.bak before the one-shot migration rewrites it —
+        modes are the user's tuning work, losing them to a disk hiccup is
+        not acceptable.
         """
         raw: Any = None
+        self._degraded_load = False  # reset on every (re)load attempt
         exists = os.path.exists(PROFILE_FILE)
         if exists:
             try:
-                # utf-8 explicitly: the atomic writer emits utf-8; the locale
-                # codec (cp1252) only worked while values stayed ASCII.
                 with open(PROFILE_FILE, 'r', encoding='utf-8') as f:
                     raw = json.load(f)
-                    print(f"Loaded profiles from {PROFILE_FILE}")
+                    print(f"Loaded config from {PROFILE_FILE}")
             except ValueError as e:
-                # JSONDecodeError / UnicodeDecodeError: corrupt content.
-                print(f"Profile load error: {e}, creating default profile")
+                print(f"Config load error: {e}, creating defaults")
                 raw = None
             except OSError as e:
-                # Transient read failure — the file may be healthy. Run on
-                # an in-memory default and leave the file alone; the
-                # degraded flag makes any later save (a UI edit, the
-                # quit-time save) back the file up before overwriting it.
-                print(f"Profile read error: {e}, running on an in-memory "
-                      "default without overwriting profiles.json")
+                print(f"Config read error: {e}, running on in-memory "
+                      "defaults without overwriting profiles.json")
                 self._degraded_load = True
-                self.profiles = {"Default": {}}
-                self.avatar_profiles = {}
-                self.avatar_bindings = {}
+                self.wiring = {}
+                self.modes = self._fresh_modes()
+                self.active_mode = self.DEFAULT_ACTIVE_MODE
+                self._install_active_mix()
                 return
 
         if not isinstance(raw, dict):
@@ -130,420 +213,426 @@ class ProfileManager:
                 backup = str(PROFILE_FILE) + ".bak"
                 try:
                     os.replace(PROFILE_FILE, backup)
-                    print(f"[profiles] unreadable profiles.json backed up to {backup}")
+                    print(f"[modes] unreadable profiles.json backed up to {backup}")
                 except OSError as e:
-                    print(f"[profiles] could not back up profiles.json: {e}")
-            # Brand-new install (or corrupt file, now backed up): start fresh.
-            self.profiles = {"Default": {}}
-            self.avatar_profiles = {}
-            self.avatar_bindings = {}
+                    print(f"[modes] could not back up profiles.json: {e}")
+            # Brand-new install (or corrupt file, now backed up).
+            self.wiring = {}
+            self.modes = self._fresh_modes()
+            self.active_mode = self.DEFAULT_ACTIVE_MODE
             self.save_profiles()
         elif raw.get("schema") == self.SCHEMA_VERSION:
-            # New format
-            self.profiles = raw.get("global_profiles", {}) or {}
-            self.avatar_profiles = raw.get("avatar_profiles", {}) or {}
-            self.avatar_bindings = raw.get("avatar_bindings", {}) or {}
-            self.avatar_last_choice = raw.get("avatar_last_choice", {}) or {}
-            # Backwards compat: prior schema stored `avatar_active[id]=name`
-            # (avatar-only). Promote those into last_choice entries.
-            legacy_active = raw.get("avatar_active", {}) or {}
-            for avtr, name in legacy_active.items():
-                self.avatar_last_choice.setdefault(
-                    avtr, {"kind": "avatar", "name": name}
-                )
-            if not self.profiles:
-                self.profiles = {"Default": {}}
+            self._load_v3(raw)
         else:
-            # Legacy format: top-level dict is {profile_name: {device: settings}}.
-            # Promote it to the new schema in place and re-save so the migration
-            # is one-shot.
-            self.profiles = raw
-            self.avatar_profiles = {}
-            self.avatar_bindings = {}
-            self.avatar_last_choice = {}
-            print("[profiles] migrating profiles.json to schema v2 (added avatar profiles)")
+            # v1 (bare {profile: {device: cfg}}) or v2 (global/avatar
+            # profiles envelope): keep a full backup, then migrate.
+            try:
+                shutil.copyfile(PROFILE_FILE, str(PROFILE_FILE) + ".v2.bak")
+                print(f"[modes] pre-migration backup written to "
+                      f"{PROFILE_FILE}.v2.bak")
+            except OSError as e:
+                print(f"[modes] could not write pre-migration backup: {e}")
+            self._migrate_legacy(raw)
             self.save_profiles()
 
-        # Backfill last_choice from one-to-one bindings so existing avatars
-        # remember their previously-bound profile even after a fresh install.
-        for name, avtr in self.avatar_bindings.items():
-            self.avatar_last_choice.setdefault(
-                avtr, {"kind": "avatar", "name": name}
-            )
-
-        # Migrate legacy OSC addresses (strip /avatar/parameters/ prefix)
-        # Always runs after load so existing profiles get cleaned up
-        self._migrate_osc_addresses()
-
-        # Backfill the global known-toys registry from whatever toys appear
-        # in existing profiles, so users upgrading from an older build don't
-        # lose their toy list before reconnecting each one.
+        self._normalize_wiring_addresses()
         self._backfill_known_devices()
+        self._install_active_mix()
 
-    def _backfill_known_devices(self) -> None:
-        # Recovery path: when known_devices.json is empty (fresh
-        # install, deleted cache) but profiles already have device
-        # entries, seed known_devices from those entries so the
-        # registry isn't empty until each toy reconnects.
-        #
-        # Defensive: skip entries already present in known_devices.
-        # A profile snapshot can hold stale structural facts
-        # (motor_count, motor_kinds) when the engine's classification
-        # table grew between sessions — overwriting a freshly-
-        # classified known_devices entry with stale profile data
-        # silently regresses the kind labels. The engine's last
-        # report wins; backfill only fills gaps.
-        added = 0
-        for source in (self.profiles, self.avatar_profiles):
-            for profile in source.values():
-                if not isinstance(profile, dict):
+    def _load_v3(self, raw: Dict[str, Any]) -> None:
+        # A present-but-mis-shaped section (hand edit gone wrong) is
+        # salvaged by dropping it — but the next save would then persist
+        # the emptied sections over the original with no copy. Preserve
+        # the original first, like the corrupt-JSON path does.
+        if (("wiring" in raw and not isinstance(raw.get("wiring"), dict))
+                or ("modes" in raw
+                    and not isinstance(raw.get("modes"), list))):
+            backup = f"{PROFILE_FILE}.{int(time.time())}.bak"
+            try:
+                shutil.copyfile(PROFILE_FILE, backup)
+                print(f"[modes] mis-shaped sections in profiles.json — "
+                      f"original preserved at {backup}")
+            except OSError as e:
+                print(f"[modes] could not back up mis-shaped "
+                      f"profiles.json: {e}")
+        wiring = raw.get("wiring")
+        self.wiring = {}
+        if isinstance(wiring, dict):
+            for name, cfg in wiring.items():
+                if isinstance(cfg, dict):
+                    # "mix" never belongs in the wiring store on disk;
+                    # strip it defensively in case of a hand edit.
+                    self.wiring[name] = {k: v for k, v in cfg.items()
+                                         if k != "mix"}
+        self.modes = self._fresh_modes()
+        loaded_modes = raw.get("modes")
+        if isinstance(loaded_modes, list):
+            for i, mode in enumerate(loaded_modes[:self.MODE_COUNT]):
+                if not isinstance(mode, dict):
                     continue
-                for name, cfg in profile.items():
-                    if not isinstance(cfg, dict):
-                        continue
-                    if name in self.known_devices.devices:
-                        continue
-                    if self.known_devices.register(
-                        name,
-                        int(cfg.get("motor_count", 1)),
-                        cfg.get("motor_kinds"),
-                    ):
-                        added += 1
-        if added:
-            print(f"[profiles] backfilled {added} toy entries into the global known-devices registry")
+                slot = self.modes[i]
+                if isinstance(mode.get("name"), str) and mode["name"].strip():
+                    slot["name"] = mode["name"].strip()
+                if isinstance(mode.get("icon"), str) and mode["icon"]:
+                    slot["icon"] = mode["icon"]
+                slot["master_scale"] = _clamp_scale(
+                    mode.get("master_scale"), slot["master_scale"])
+                mix = mode.get("mix")
+                if isinstance(mix, dict):
+                    slot["mix"] = {dev: per_motor
+                                   for dev, per_motor in mix.items()
+                                   if isinstance(per_motor, dict)}
+        idx = raw.get("active_mode")
+        self.active_mode = idx if (isinstance(idx, int)
+                                   and 0 <= idx < self.MODE_COUNT) \
+            else self.DEFAULT_ACTIVE_MODE
+        last = raw.get("avatar_last_mode")
+        self.avatar_last_mode = {
+            k: v for k, v in (last or {}).items()
+            if isinstance(k, str) and isinstance(v, int)
+            and 0 <= v < self.MODE_COUNT
+        } if isinstance(last, dict) else {}
 
-    def _migrate_osc_addresses(self) -> None:
-        """Normalizes saved OSC addresses: strips /avatar/parameters/ prefix and
-        upgrades the old string-per-motor format to a list-per-motor.
+    def _migrate_legacy(self, raw: Dict[str, Any]) -> None:
+        """One-shot v1/v2 → v3. The old 'Default' (or first) global profile
+        becomes the shared wiring; its exact mix lands unchanged in the
+        Custom slot so nothing the user tuned is lost; Low/Medium/High/Sleep
+        seed from the presets. Other global profiles and all avatar profiles
+        live on only in the .v2.bak backup."""
+        if raw.get("schema") == 2 or "global_profiles" in raw:
+            globals_ = raw.get("global_profiles")
+            if not isinstance(globals_, dict):
+                globals_ = {}
+        else:
+            globals_ = raw  # v1: top-level {profile_name: {device: cfg}}
+        source, source_label = self._pick_migration_source(raw, globals_)
 
-        Safe to run multiple times (idempotent).
-        """
+        dropped = [n for n in globals_ if globals_.get(n) is not source]
+
+        self.wiring = {}
+        custom_mix: Dict[str, Any] = {}
+        for dev, cfg in source.items():
+            if not isinstance(cfg, dict):
+                continue
+            entry = {k: copy.deepcopy(v) for k, v in cfg.items()
+                     if k not in ("mix", "osc_address")}
+            # Legacy singular address → the list-per-motor form.
+            if not entry.get("osc_addresses") and cfg.get("osc_address"):
+                legacy = strip_param_prefix(cfg["osc_address"])
+                if legacy:
+                    entry["osc_addresses"] = {"0": [legacy]}
+            self.wiring[dev] = entry
+            mix = cfg.get("mix")
+            if isinstance(mix, dict):
+                custom_mix[dev] = copy.deepcopy(mix)
+
+        self.modes = self._fresh_modes()
+        self.modes[self.CUSTOM_SLOT]["mix"] = custom_mix
+        for slot in range(self.MODE_COUNT):
+            if slot == self.CUSTOM_SLOT:
+                continue
+            mode_mix = self.modes[slot]["mix"]
+            for dev, entry in self.wiring.items():
+                per_motor: Dict[str, Any] = {}
+                for i in range(int(entry.get("motor_count", 1) or 1)):
+                    per_motor[str(i)] = preset_motor_mix(slot)
+                mode_mix[dev] = per_motor
+        # Land on Custom: the app must feel exactly as it did before the
+        # migration until the user picks a different mode.
+        self.active_mode = self.CUSTOM_SLOT
+        if dropped:
+            print(f"[modes] migrated {source_label} to the six-mode config; "
+                  f"old profiles {dropped} were not carried over "
+                  "(see profiles.json.v2.bak)")
+        else:
+            print(f"[modes] migrated {source_label} to the six-mode "
+                  "schema v3")
+
+    @staticmethod
+    def _pick_migration_source(raw: Dict[str, Any],
+                               globals_: Dict[str, Any]):
+        """Choose which old profile becomes the wiring + Custom-slot feel.
+
+        The v2 schema never persisted `current_profile` — the persisted
+        record of what the user actually played on is `avatar_last_choice`
+        ({avatar_id: {kind, name}}), which the old resolver applied on
+        every avatar load. So: the most-chosen last-choice profile (global
+        or avatar-bound) wins; only users who never picked anything fall
+        back to 'Default' / the first profile. Returns (profile_dict,
+        human_label)."""
+        avatar_profiles = raw.get("avatar_profiles")
+        if not isinstance(avatar_profiles, dict):
+            avatar_profiles = {}
+        counts: Dict[tuple, int] = {}
+        for choice in (raw.get("avatar_last_choice") or {}).values():
+            if not isinstance(choice, dict):
+                continue
+            kind = choice.get("kind")
+            name = choice.get("name")
+            pool = globals_ if kind == "global" else (
+                avatar_profiles if kind == "avatar" else None)
+            if pool is not None and isinstance(pool.get(name), dict):
+                counts[(kind, name)] = counts.get((kind, name), 0) + 1
+        if counts:
+            kind, name = max(counts.items(), key=lambda kv: kv[1])[0]
+            pool = globals_ if kind == "global" else avatar_profiles
+            return pool[name], f"{kind} profile '{name}'"
+        default = globals_.get("Default")
+        if isinstance(default, dict):
+            return default, "profile 'Default'"
+        first = next(((n, p) for n, p in globals_.items()
+                      if isinstance(p, dict)), None)
+        if first is not None:
+            return first[1], f"profile '{first[0]}'"
+        return {}, "an empty config"
+
+    def _normalize_wiring_addresses(self) -> None:
+        """Normalizes saved OSC addresses: strips /avatar/parameters/ prefixes
+        and upgrades the old string-per-motor format to a list-per-motor.
+        Idempotent."""
         migrated = False
-
-        for source in (self.profiles, self.avatar_profiles):
-            for profile in source.values():
-                if not isinstance(profile, dict):
-                    continue  # hand-edited / shape-corrupted entry
-                for device in profile.values():
-                    if not isinstance(device, dict):
-                        continue
-                    osc_addresses = device.get("osc_addresses", {})
-                    if isinstance(osc_addresses, dict):
-                        for key, val in list(osc_addresses.items()):
-                            if isinstance(val, str):
-                                cleaned = strip_param_prefix(val)
-                                new_list = [cleaned] if cleaned else []
-                                osc_addresses[key] = new_list
-                                migrated = True
-                            elif isinstance(val, list):
-                                new_list = [strip_param_prefix(a) for a in val if isinstance(a, str) and a.strip()]
-                                if new_list != val:
-                                    osc_addresses[key] = new_list
-                                    migrated = True
-
-                    # Legacy single osc_address key
-                    legacy_addr = device.get("osc_address", "")
-                    if isinstance(legacy_addr, str) and (
-                        legacy_addr.startswith("/avatar/parameters/") or legacy_addr.startswith("/")
-                    ):
-                        device["osc_address"] = strip_param_prefix(legacy_addr)
+        for device in self.wiring.values():
+            osc_addresses = device.get("osc_addresses", {})
+            if isinstance(osc_addresses, dict):
+                for key, val in list(osc_addresses.items()):
+                    if isinstance(val, str):
+                        cleaned = strip_param_prefix(val)
+                        osc_addresses[key] = [cleaned] if cleaned else []
                         migrated = True
-
+                    elif isinstance(val, list):
+                        new_list = [strip_param_prefix(a) for a in val
+                                    if isinstance(a, str) and a.strip()]
+                        if new_list != val:
+                            osc_addresses[key] = new_list
+                            migrated = True
+            legacy_addr = device.get("osc_address", "")
+            if isinstance(legacy_addr, str) and legacy_addr.startswith("/"):
+                device["osc_address"] = strip_param_prefix(legacy_addr)
+                migrated = True
         if migrated:
             self.save_profiles()
 
-    def load_profiles(self) -> Dict[str, Any]:
-        """Load profiles from JSON file or create default if not exists
+    def _backfill_known_devices(self) -> None:
+        # Recovery path: when known_devices.json is empty (fresh install,
+        # deleted cache) but the wiring already has device entries, seed
+        # known_devices from those entries. Backfill only fills gaps — the
+        # engine's last report wins over stale wiring snapshots.
+        added = 0
+        for name, cfg in self.wiring.items():
+            if not isinstance(cfg, dict) or name in self.known_devices.devices:
+                continue
+            if self.known_devices.register(
+                name,
+                int(cfg.get("motor_count", 1)),
+                cfg.get("motor_kinds"),
+            ):
+                added += 1
+        if added:
+            print(f"[modes] backfilled {added} toy entries into the global "
+                  "known-devices registry")
 
-        Returns:
-            Dictionary containing all loaded profiles
-        """
+    def load_profiles(self) -> None:
+        """Reload from disk (legacy-named facade; kept for callers)."""
         return self._load_or_create_default()
 
-    # True when this session loaded on an in-memory default because the
-    # (possibly healthy) profiles.json could not be READ — the first save
-    # must preserve the on-disk file before overwriting it.
-    _degraded_load = False
-
     def save_profiles(self) -> None:
-        """Save current profiles to JSON file in the v2 schema."""
+        """Persist wiring + modes to profiles.json in the v3 schema.
+
+        Degraded sessions (the file existed but could not be READ at load
+        time) must never trade the user's real config for this session's
+        in-memory defaults: before the first save we retry the read, and if
+        the file is healthy again — a transient AV/backup lock is the
+        classic cause — the save is SKIPPED so the boot-time reload (or the
+        next launch) can recover the real data. Only a genuinely corrupt
+        file is moved aside and overwritten."""
         if self._degraded_load:
-            backup = str(PROFILE_FILE) + ".bak"
+            try:
+                with open(PROFILE_FILE, 'r', encoding='utf-8') as f:
+                    if isinstance(json.load(f), dict):
+                        print("[modes] profiles.json is readable again — "
+                              "skipping save so the real config isn't "
+                              "overwritten by this session's defaults")
+                        return
+            except ValueError:
+                pass  # unreadable JSON: genuinely corrupt, back up below
+            except OSError as e:
+                print(f"[modes] profiles.json still unreadable ({e}) — "
+                      "skipping save to protect it")
+                return
+            backup = f"{PROFILE_FILE}.{int(time.time())}.bak"
             try:
                 os.replace(PROFILE_FILE, backup)
-                print(f"[profiles] unreadable-at-boot profiles.json backed "
-                      f"up to {backup} before first save")
+                print(f"[modes] corrupt profiles.json backed up to {backup} "
+                      "before first save")
             except OSError as e:
-                print(f"[profiles] could not back up profiles.json: {e}")
+                if os.path.exists(PROFILE_FILE):
+                    print(f"[modes] could not back up profiles.json ({e}) — "
+                          "refusing to overwrite it")
+                    return
             self._degraded_load = False
         payload = {
             "schema": self.SCHEMA_VERSION,
-            "global_profiles": self.profiles,
-            "avatar_profiles": self.avatar_profiles,
-            "avatar_bindings": self.avatar_bindings,
-            "avatar_last_choice": self.avatar_last_choice,
+            # The active mode's mix is installed into the wiring dicts by
+            # reference; it belongs to the mode, so strip it here.
+            "wiring": {name: {k: v for k, v in cfg.items() if k != "mix"}
+                       for name, cfg in self.wiring.items()},
+            "modes": self.modes,
+            "active_mode": self.active_mode,
+            "avatar_last_mode": self.avatar_last_mode,
         }
         try:
             atomic_write_json(PROFILE_FILE, payload, indent=2)
-            print(f"Profiles saved to {PROFILE_FILE}")
         except OSError as e:
-            print(f"Profile save error: {e}")
+            print(f"Config save error: {e}")
 
     # ------------------------------------------------------------------
-    # Active-profile resolution (avatar binding takes precedence)
+    # Active mode + master scale
     # ------------------------------------------------------------------
 
-    DEFAULT_FALLBACK_PROFILE = "Default"
+    def _active_mode_dict(self) -> Dict[str, Any]:
+        return self.modes[self.active_mode]
 
-    def get_active_profile_info(self) -> Dict[str, str]:
-        """Returns metadata about the currently-active profile:
-            {"kind": "avatar"|"global", "name": str}
+    def _install_active_mix(self) -> None:
+        """Point every wiring dict's "mix" key at the active mode's
+        per-device mix (by reference). Keeps dict identities stable — only
+        the "mix" value changes — so the router's id()-keyed compile cache
+        stays valid across mode switches."""
+        mix_store = self._active_mode_dict().setdefault("mix", {})
+        for dev, cfg in self.wiring.items():
+            cfg["mix"] = mix_store.setdefault(dev, {})
 
-        Resolution order:
-          1. If we have a current avatar id with a remembered last choice
-             that's still valid (the profile exists; for an avatar choice,
-             still bound to this avatar), apply it.
-          2. Otherwise, if any avatar profile is bound to this avatar,
-             activate the first such binding (legacy fallback).
-          3. Otherwise default to the global "Default" profile when it
-             exists, else the selected global profile.
-        """
-        avtr = self.current_avatar_id
-        if avtr:
-            choice = self.avatar_last_choice.get(avtr)
-            if choice:
-                kind = choice.get("kind")
-                name = choice.get("name", "")
-                if kind == "avatar" and name in self.avatar_profiles \
-                        and self.avatar_bindings.get(name) == avtr:
-                    return {"kind": "avatar", "name": name}
-                if kind == "global" and name in self.profiles:
-                    return {"kind": "global", "name": name}
-                # Stale entry — fall through and pick something sensible.
-            for n, bound in self.avatar_bindings.items():
-                if bound == avtr and n in self.avatar_profiles:
-                    return {"kind": "avatar", "name": n}
-            if self.DEFAULT_FALLBACK_PROFILE in self.profiles:
-                return {"kind": "global", "name": self.DEFAULT_FALLBACK_PROFILE}
-        return {"kind": "global", "name": self.current_profile}
+    def set_active_mode(self, index: int) -> bool:
+        """Switch the active mode. Returns True when the index changed.
+        Records the choice for the current avatar (applied on avatar change
+        only when the per-avatar setting is enabled)."""
+        try:
+            idx = int(index)
+        except (TypeError, ValueError):
+            return False
+        if not 0 <= idx < self.MODE_COUNT:
+            return False
+        changed = idx != self.active_mode
+        self.active_mode = idx
+        self._install_active_mix()
+        if self.current_avatar_id:
+            self.avatar_last_mode[self.current_avatar_id] = idx
+        if changed:
+            self.save_profiles()
+        return changed
 
-    def record_choice(self, kind: str, name: str) -> None:
-        """Persist `(kind, name)` as the user's choice for the current avatar.
-        No-op when no avatar is currently loaded."""
+    def get_active_mode_index(self) -> int:
+        return self.active_mode
+
+    def get_mode(self, index: int) -> Dict[str, Any]:
+        idx = max(0, min(self.MODE_COUNT - 1, int(index)))
+        return self.modes[idx]
+
+    def get_mode_infos(self) -> List[Dict[str, Any]]:
+        """UI-friendly snapshot: one {index, name, icon, master_scale,
+        active} per slot."""
+        return [
+            {"index": i, "name": m.get("name", f"Mode {i}"),
+             "icon": m.get("icon", ""),
+             "master_scale": _clamp_scale(m.get("master_scale"), 1.0),
+             "active": i == self.active_mode}
+            for i, m in enumerate(self.modes)
+        ]
+
+    def set_mode_name(self, index: int, name: str) -> None:
+        name = (name or "").strip()
+        if name:
+            self.get_mode(index)["name"] = name
+            self.save_profiles()
+
+    def set_mode_icon(self, index: int, icon: str) -> None:
+        if isinstance(icon, str) and icon:
+            self.get_mode(index)["icon"] = icon
+            self.save_profiles()
+
+    def set_mode_master_scale(self, index: int, scale: float,
+                              save: bool = True) -> None:
+        """`save=False` lets the caller coalesce disk writes (a held
+        spinbox arrow fires many changes per second — see the facade's
+        debounced save)."""
+        self.get_mode(index)["master_scale"] = _clamp_scale(scale, 1.0)
+        if save:
+            self.save_profiles()
+
+    def get_master_scale(self) -> float:
+        """The active mode's output multiplier, always a finite 0..1 float.
+        Read from backend dispatch paths (any thread) — must stay a plain
+        dict read with no locking or I/O."""
+        return _clamp_scale(self._active_mode_dict().get("master_scale"), 1.0)
+
+    # ------------------------------------------------------------------
+    # Avatar memory
+    # ------------------------------------------------------------------
+
+    def set_current_avatar(self, avatar_id: Optional[str]) -> Optional[int]:
+        """Update `current_avatar_id`. Returns this avatar's remembered mode
+        index (or None). The caller decides whether to apply it — the
+        per-avatar option lives in app settings."""
+        self.current_avatar_id = (avatar_id or None)
         if not self.current_avatar_id:
-            return
-        self.avatar_last_choice[self.current_avatar_id] = {
-            "kind": kind,
-            "name": name,
-        }
-        self.save_profiles()
+            return None
+        idx = self.avatar_last_mode.get(self.current_avatar_id)
+        if isinstance(idx, int) and 0 <= idx < self.MODE_COUNT:
+            return idx
+        return None
+
+    # ------------------------------------------------------------------
+    # Device-config get/set (the stable accessor family the UI + router
+    # use; names kept from the profile era)
+    # ------------------------------------------------------------------
 
     def get_active_profile_dict(self) -> Dict[str, Any]:
-        """Return the actual settings dict the router/UI should read & write."""
-        info = self.get_active_profile_info()
-        if info["kind"] == "avatar":
-            return self.avatar_profiles.setdefault(info["name"], {})
-        return self.profiles.setdefault(info["name"], {})
+        """The live {device: merged config} map the router/UI read & write.
+        Identity-stable: always the same top-level dict object."""
+        return self.wiring
 
-    def get_bound_avatar_profile(self, avatar_id: Optional[str]) -> Optional[str]:
-        """Return the avatar-profile name currently active for `avatar_id`,
-        or None. Delegates to `get_active_profile_info` so callers see the
-        same resolution as the rest of the app."""
-        if not avatar_id:
-            return None
-        # Temporarily swap current_avatar_id so the resolver runs against the
-        # caller's id (lets external callers query arbitrary avatars).
-        prev = self.current_avatar_id
-        self.current_avatar_id = avatar_id
-        try:
-            info = self.get_active_profile_info()
-        finally:
-            self.current_avatar_id = prev
-        return info["name"] if info["kind"] == "avatar" else None
-
-    def set_current_avatar(self, avatar_id: Optional[str]) -> Optional[str]:
-        """Update `current_avatar_id`. Returns the bound avatar-profile name
-        if the resolver would activate one for this avatar, else None.
-
-        No transient flags to clear — `avatar_last_choice` is the single
-        source of truth for "what should be active when this avatar loads".
-        """
-        self.current_avatar_id = (avatar_id or None)
-        return self.get_bound_avatar_profile(self.current_avatar_id)
-
-    # ------------------------------------------------------------------
-    # Device-config get/set (route through the active profile)
-    # ------------------------------------------------------------------
+    def get_active_profile_info(self) -> Dict[str, Any]:
+        """Metadata about the active mode (kind kept for legacy callers)."""
+        mode = self._active_mode_dict()
+        return {"kind": "mode", "index": self.active_mode,
+                "name": mode.get("name", ""), "icon": mode.get("icon", "")}
 
     def get_profile_config(self, device_name: str, key: str, default=None) -> Optional[Any]:
-        """Get a specific config value for a device from the active profile."""
-        profile = self.get_active_profile_dict()
-        if device_name in profile:
-            return profile[device_name].get(key, default)
+        """Get one config value for a device (wiring keys, or "mix" which
+        resolves to the active mode's feel layer)."""
+        cfg = self.wiring.get(device_name)
+        if cfg is not None:
+            return cfg.get(key, default)
         return default
 
     def update_device_config(self, device_name: str, key: str, value) -> None:
-        """Update a config value for a device in the active profile."""
-        profile = self.get_active_profile_dict()
-        if device_name not in profile:
-            profile[device_name] = {}
-        profile[device_name][key] = value
+        """Set one config value for a device. Wiring keys land in the shared
+        store; "mix" writes go to the active mode's feel layer (and the
+        installed reference in the device dict stays in sync)."""
+        dev = self.wiring.get(device_name)
+        if dev is None:
+            dev = self.wiring[device_name] = {}
+            dev["mix"] = (self._active_mode_dict().setdefault("mix", {})
+                          .setdefault(device_name, {}))
+        if key == "mix":
+            self._active_mode_dict().setdefault("mix", {})[device_name] = value
+        dev[key] = value
 
-    # ------------------------------------------------------------------
-    # Avatar-profile CRUD + binding
-    # ------------------------------------------------------------------
-
-    def create_avatar_profile(self, base_name: str, avatar_id: Optional[str],
-                              copy_from: Optional[Dict[str, Any]] = None) -> str:
-        """Create a new avatar profile and bind it to `avatar_id` (when given).
-
-        Multiple profiles may bind to the same avatar id — the new profile
-        becomes the *active* pick for that avatar without removing any other
-        bindings, so prior profiles for the same avatar remain visible and
-        switchable.
-        """
-        name = self._unique_name(base_name, set(self.avatar_profiles.keys()))
-        self.avatar_profiles[name] = _deep_copy_profile(copy_from) if copy_from else {}
-        if avatar_id:
-            self.avatar_bindings[name] = avatar_id
-            # Make the new profile the remembered choice for this avatar.
-            self.avatar_last_choice[avatar_id] = {"kind": "avatar", "name": name}
-        self.save_profiles()
-        return name
-
-    def delete_avatar_profile(self, name: str) -> None:
-        self.avatar_profiles.pop(name, None)
-        bound_id = self.avatar_bindings.pop(name, None)
-        # Drop any remembered choice that pointed at this profile, regardless
-        # of which avatar it was bound to.
-        for avtr, choice in list(self.avatar_last_choice.items()):
-            if choice.get("kind") == "avatar" and choice.get("name") == name:
-                del self.avatar_last_choice[avtr]
+    def delete_device(self, device_name: str) -> None:
+        """Forget a device everywhere: shared wiring + every mode's feel."""
+        self.wiring.pop(device_name, None)
+        for mode in self.modes:
+            mix = mode.get("mix")
+            if isinstance(mix, dict):
+                mix.pop(device_name, None)
         self.save_profiles()
 
-    def rename_avatar_profile(self, old: str, new: str) -> bool:
-        new = (new or "").strip()
-        if not new or old not in self.avatar_profiles:
-            return False
-        if new in self.avatar_profiles and new != old:
-            return False
-        self.avatar_profiles[new] = self.avatar_profiles.pop(old)
-        if old in self.avatar_bindings:
-            self.avatar_bindings[new] = self.avatar_bindings.pop(old)
-        # Update last_choice entries that referenced the old name.
-        for avtr, choice in self.avatar_last_choice.items():
-            if choice.get("kind") == "avatar" and choice.get("name") == old:
-                choice["name"] = new
-        self.save_profiles()
-        return True
 
-    def bind_avatar_profile(self, name: str, avatar_id: Optional[str]) -> None:
-        """Bind `name` to `avatar_id` (or unbind when `avatar_id` is falsy).
-
-        When binding, also records the profile as the remembered choice for
-        that avatar. Other profiles bound to the same avatar are left intact
-        so the user can switch back.
-        """
-        if name not in self.avatar_profiles:
-            return
-        if not avatar_id:
-            self.avatar_bindings.pop(name, None)
-            for avtr, choice in list(self.avatar_last_choice.items()):
-                if choice.get("kind") == "avatar" and choice.get("name") == name:
-                    del self.avatar_last_choice[avtr]
-        else:
-            self.avatar_bindings[name] = avatar_id
-            self.avatar_last_choice[avatar_id] = {"kind": "avatar", "name": name}
-        self.save_profiles()
-
-    # ------------------------------------------------------------------
-    # Clipboard (copy / paste between profiles)
-    # ------------------------------------------------------------------
-
-    def copy_profile_to_clipboard(self, kind: str, name: str) -> bool:
-        """Capture a deep copy of the named profile into the clipboard.
-        `kind` is "global" or "avatar". Returns True on success."""
-        src = self.profiles if kind == "global" else self.avatar_profiles
-        if name not in src:
-            return False
-        self._clipboard = {
-            "kind": kind,
-            "name": name,
-            "config": _deep_copy_profile(src[name]),
-        }
-        return True
-
-    def has_clipboard(self) -> bool:
-        return self._clipboard is not None
-
-    def get_clipboard_source_name(self) -> Optional[str]:
-        return self._clipboard.get("name") if self._clipboard else None
-
-    def get_clipboard_source_kind(self) -> Optional[str]:
-        return self._clipboard.get("kind") if self._clipboard else None
-
-    def paste_into_profile(self, target_kind: str, target_name: str) -> bool:
-        """Overwrite an existing profile's contents with the clipboard.
-
-        Preserves the target profile's name (and, for avatar profiles, its
-        binding). Returns True on success, False if the clipboard is empty
-        or the target doesn't exist.
-        """
-        if self._clipboard is None:
-            return False
-        src = self.profiles if target_kind == "global" else self.avatar_profiles
-        if target_name not in src:
-            return False
-        src[target_name] = _deep_copy_profile(self._clipboard["config"])
-        self.save_profiles()
-        return True
-
-    def clear_clipboard(self) -> None:
-        self._clipboard = None
-
-    def paste_profile(self, target_kind: str,
-                      avatar_id: Optional[str] = None) -> Optional[str]:
-        """Create a new profile in the target section from the clipboard.
-        `target_kind` is "global" or "avatar". If avatar, `avatar_id` may
-        be supplied to immediately bind the new profile. Returns the new
-        profile name, or None if the clipboard is empty."""
-        if self._clipboard is None:
-            return None
-        base = f"{self._clipboard['name']} (paste)"
-        config = _deep_copy_profile(self._clipboard["config"])
-        if target_kind == "avatar":
-            name = self._unique_name(base, set(self.avatar_profiles.keys()))
-            self.avatar_profiles[name] = config
-            if avatar_id:
-                self.bind_avatar_profile(name, avatar_id)
-            else:
-                self.save_profiles()
-            return name
-        else:
-            name = self._unique_name(base, set(self.profiles.keys()))
-            self.profiles[name] = config
-            self.save_profiles()
-            return name
-
-    # ------------------------------------------------------------------
-    # Helpers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _unique_name(base: str, taken: set) -> str:
-        if base not in taken:
-            return base
-        i = 2
-        while f"{base} {i}" in taken:
-            i += 1
-        return f"{base} {i}"
-
-
-def _deep_copy_profile(profile: Dict[str, Any]) -> Dict[str, Any]:
-    """Deep-copy a profile-shaped dict using JSON round-trip (profiles only
-    contain JSON-safe values, so this is correct and avoids importing copy)."""
+def _clamp_scale(value: Any, default: float) -> float:
+    """Coerce a master scale to a finite float clamped to [0, 1]."""
     try:
-        return json.loads(json.dumps(profile))
+        f = float(value)
     except (TypeError, ValueError):
-        # Fallback: shallow copy if something weird is in there.
-        return dict(profile)
+        return default
+    if not math.isfinite(f):
+        return default
+    return max(0.0, min(1.0, f))

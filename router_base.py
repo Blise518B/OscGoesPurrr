@@ -154,6 +154,17 @@ class PollingRouter(PollingThread):
         self._stale_monitor.cutoff_s = self.stale_signal_cutoff_s
         return self._stale_monitor.is_stale()
 
+    def reset_dispatch_cache(self) -> None:
+        """Drop the debounce cache so the next tick re-dispatches every output.
+
+        Called from the GUI thread on mode / master-scale changes: the scale
+        factor lives outside the router's inputs, so without this a tick would
+        see identical targets and debounce away the change. Same recipe as the
+        disconnect-clear in ``_tick`` — a plain dict mutation under the GIL,
+        matching the existing cross-thread pattern."""
+        self._last_outputs.clear()
+        self._on_cleared()
+
     # ---- Hooks (override as needed) ----------------------------------
     def _engine_ready(self) -> bool:
         return True

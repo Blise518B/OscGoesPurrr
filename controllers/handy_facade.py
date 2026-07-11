@@ -2,7 +2,7 @@
 
 The UI talks to the Handy engine, router, and persisted settings only
 through these methods. Assumes the host controller has
-`self.profile_manager.handy_settings`, `self.handy_engine`,
+`self.mode_manager.handy_settings`, `self.handy_engine`,
 `self.handy_router`, `self._get_sps_source_map`, and `self.log_message`."""
 
 from typing import Any, Dict
@@ -14,7 +14,7 @@ class HandyFacade:
     # ---- private getters for the engine/router ----
 
     def _handy_settings(self):
-        return self.profile_manager.handy_settings
+        return self.mode_manager.handy_settings
 
     def _handy_get_auto_connect(self) -> bool:
         return self._handy_settings().get_auto_connect()

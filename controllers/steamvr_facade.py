@@ -2,7 +2,7 @@
 
 The UI and other backend services must go through these methods — they
 MUST NOT touch `self.steamvr_engine`, `self.steamvr_router`, or
-`self.profile_manager.steamvr_settings` directly.
+`self.mode_manager.steamvr_settings` directly.
 """
 
 from typing import Any, Dict, List
@@ -19,7 +19,7 @@ class SteamVRFacade:
     # ------------------------------------------------------------------
 
     def _steamvr_settings(self):
-        return self.profile_manager.steamvr_settings
+        return self.mode_manager.steamvr_settings
 
     def _steamvr_get_tracker_config(self, serial: str) -> SteamVRTrackerConfig:
         return SteamVRTrackerConfig.from_dict(self._steamvr_settings().get_tracker(serial))

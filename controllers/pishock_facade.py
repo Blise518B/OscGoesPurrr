@@ -2,7 +2,7 @@
 
 The UI talks to the PiShock engine, router, and persisted settings only
 through these methods. Assumes the host controller (OscGoesPurrrApp) has
-`self.profile_manager.pishock_settings`, `self.pishock_engine`,
+`self.mode_manager.pishock_settings`, `self.pishock_engine`,
 `self.pishock_router`, `self._get_sps_source_map`, and `self.log_message`."""
 
 from typing import Any, Dict, List
@@ -14,7 +14,7 @@ class PiShockFacade:
     # ---- private getters consumed by the engine/router callbacks ----
 
     def _pishock_settings(self):
-        return self.profile_manager.pishock_settings
+        return self.mode_manager.pishock_settings
 
     def _pishock_get_auto_connect(self) -> bool:
         return self._pishock_settings().get_auto_connect()

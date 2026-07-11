@@ -1,7 +1,7 @@
 # OscGoesPurrr - Main Orchestrator (The Traffic Cop)
 #
 # This file is the Controller. It boots the threads, holds the
-# profile_manager, drains the cross-thread queue, and routes data
+# mode_manager, drains the cross-thread queue, and routes data
 # between layers. Per-engine UI-facing methods live as mixins under
 # `controllers/` and are composed into OscGoesPurrrApp via multiple
 # inheritance below.
@@ -16,8 +16,8 @@ import queue
 import pystray
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple
 
-# ProfileManager from config manager module
-from config_manager import PROFILE_FILE, ProfileManager
+# ModeManager from config manager module
+from config_manager import PROFILE_FILE, ModeManager
 
 # UI Components for the Visual Shell (The Face / View)
 from ui_components import OscGoesPurrrUI
@@ -63,7 +63,7 @@ from controllers import (
     OwoFacade,
     HandyFacade,
     OscFacade,
-    ProfilesFacade,
+    ModesFacade,
     SessionsFacade,
     SpsSourcesFacade,
 )
@@ -90,7 +90,7 @@ class OscGoesPurrrApp(
     OwoFacade,
     HandyFacade,
     OscFacade,
-    ProfilesFacade,
+    ModesFacade,
     SessionsFacade,
     SpsSourcesFacade,
 ):
@@ -100,26 +100,16 @@ class OscGoesPurrrApp(
         # Thread-safe communication queue (standard library, not asyncio)
         self.thread_queue: queue.Queue = queue.Queue()
         
-        # Profile manager instance
-        self.profile_manager = ProfileManager()
+        # Mode manager instance (modes + wiring + all settings managers)
+        self.mode_manager = ModeManager()
 
-        # Seed *every* profile with every known toy on startup. Toys are
-        # global; profiles are settings overlays. Running this for all
-        # profiles means a stale config from before the global registry
-        # existed gets unified the first time you launch the new build.
-        for _pname in list(self.profile_manager.profiles.keys()):
-            self._seed_profile_with_known_devices(_pname)
-        # Avatar profiles aren't iterated by the seed loop above, so
-        # any stale motor_count / motor_kinds in them (e.g. seeded
-        # before the engine's kind table grew) need their own
-        # structural-facts refresh against known_devices.
-        self._refresh_avatar_profile_motor_facts()
-        print(f"[profiles] known toys: {list(self.profile_manager.known_devices.all().keys())}")
+        # Seed the shared wiring store AND every mode's feel layer with
+        # every known toy on startup, so a stale config from before the
+        # global registry existed gets unified the first time you launch
+        # the new build.
+        self._seed_known_devices()
+        print(f"[modes] known toys: {list(self.mode_manager.known_devices.all().keys())}")
 
-        # Keep aliases for backward compatibility during refactoring
-        self.profiles = self.profile_manager.profiles
-        self.current_profile = self.profile_manager.current_profile
-        
         # UI Component - handles all GUI rendering and updates
         self.ui: OscGoesPurrrUI = None
         
@@ -155,7 +145,9 @@ class OscGoesPurrrApp(
 
         # Per-toy soft-mute set. Session-only, never persisted: cleared on
         # app start (trivially, by being an empty set here) and on every
-        # profile switch (see ProfilesFacade.switch_profile). Mute forces
+        # app start. Mode switches deliberately KEEP mutes (see
+        # ModesFacade.switch_mode — a safety toggle must not lift because
+        # the user tapped Low → Medium from the VR menu). Mute forces
         # the engine target to 0 while the mixer keeps computing real
         # values so the meter still shows what would be playing.
         self._muted_devices: set = set()
@@ -177,7 +169,7 @@ class OscGoesPurrrApp(
         # setting; the live toggle goes through set_intiface_integrated().
         self.haptic_engine.set_connection_mode(
             "integrated"
-            if self.profile_manager.app_settings.get("use_integrated_intiface", True)
+            if self.mode_manager.app_settings.get("use_integrated_intiface", True)
             else "external"
         )
 
@@ -209,6 +201,8 @@ class OscGoesPurrrApp(
         self.steamvr_router = SteamVRRouter(
             engine=self.steamvr_engine,
             get_all_configs=self._steamvr_get_all_tracker_configs,
+            get_master_scale=self.get_master_scale,
+            get_test_level=self.get_ogp_test_level,
         )
         self.steamvr_battery = SteamVRBatteryBroadcaster(
             engine=self.steamvr_engine,
@@ -221,7 +215,7 @@ class OscGoesPurrrApp(
         # bHaptics integration — independent pipeline that shares the
         # parameter_store and translates v1 bHapticsOSC bool params into
         # dot-mode frames sent to the bHaptics Player over WebSocket.
-        bs = self.profile_manager.bhaptics_settings
+        bs = self.mode_manager.bhaptics_settings
         self.bhaptics_engine = BHapticsEngine(host=bs.get_host(), port=bs.get_port())
         self.bhaptics_engine.set_auto_connect_getter(self._bhaptics_get_auto_connect)
         # Re-publish bhaptics devices into the SteamVR strip whenever the
@@ -237,12 +231,14 @@ class OscGoesPurrrApp(
             get_antistuck=self._bhaptics_get_antistuck,
             get_sps_mirror_config=self.get_bhaptics_sps_mirror,
             get_sps_sources=self._get_sps_source_map,
+            get_master_scale=self.get_master_scale,
+            get_test_level=self.get_ogp_test_level,
         )
 
         # PiShock integration — discrete-event shock/vibrate/beep router with
         # hard safety caps enforced in the engine. Shares the parameter_store
         # and resolves zones via the same zone_strength path as bHaptics.
-        ps = self.profile_manager.pishock_settings
+        ps = self.mode_manager.pishock_settings
         self.pishock_engine = PiShockEngine(mode=ps.get_mode(), log=self.log_message)
         self.pishock_engine.set_auto_connect_getter(self._pishock_get_auto_connect)
         self.pishock_engine.configure(ps.get_engine_config())
@@ -251,6 +247,7 @@ class OscGoesPurrrApp(
             get_zone_configs=self._pishock_get_zones,
             get_sps_sources=self._get_sps_source_map,
             get_global_rate=self._pishock_get_global_rate,
+            get_master_scale=self.get_master_scale,
         )
 
         # DG-Lab Coyote integration — direct-BLE A/B e-stim. The engine owns
@@ -262,6 +259,7 @@ class OscGoesPurrrApp(
             engine=self.coyote_engine,
             get_channel_configs=self._coyote_get_channel_configs,
             get_sps_sources=self._get_sps_source_map,
+            get_master_scale=self.get_master_scale,
         )
 
         # OWO suit integration — muscle e-stim via the OWO .NET SDK (loaded
@@ -278,6 +276,7 @@ class OscGoesPurrrApp(
             get_muscle_configs=self._owo_get_muscle_configs,
             get_frequency=self._owo_get_frequency,
             get_sps_sources=self._get_sps_source_map,
+            get_master_scale=self.get_master_scale,
         )
 
         # The Handy integration — official handyfeeling.com REST API v3
@@ -295,6 +294,8 @@ class OscGoesPurrrApp(
             engine=self.handy_engine,
             get_zone_config=self._handy_get_zone_config,
             get_sps_sources=self._get_sps_source_map,
+            get_master_scale=self.get_master_scale,
+            get_test_level=self.get_ogp_test_level,
         )
 
         # Backend lifecycle registry: one row per feature-gated subsystem,
@@ -350,7 +351,7 @@ class OscGoesPurrrApp(
         }
 
         # Instantiate VRChat OSC Manager
-        bind_all = self.profile_manager.app_settings.settings.get("bind_all_interfaces", True)
+        bind_all = self.mode_manager.app_settings.settings.get("bind_all_interfaces", True)
         self.osc_manager = VRChatOSCManager(local_listen_port=0, bind_all_interfaces=bind_all)
 
         # Link our router to the global OSC callback
@@ -367,11 +368,11 @@ class OscGoesPurrrApp(
         )
         
         # Load profiles using profile manager (also initializes app_settings)
-        self.profile_manager.load_profiles()
+        self.mode_manager.load_profiles()
         
         # Load app settings (auto_connect, auto_refresh)
-        self.auto_refresh_enabled = self.profile_manager.app_settings.get("auto_refresh", True)
-        self.auto_connect_enabled = self.profile_manager.app_settings.get("auto_connect", True)
+        self.auto_refresh_enabled = self.mode_manager.app_settings.get("auto_refresh", True)
+        self.auto_connect_enabled = self.mode_manager.app_settings.get("auto_connect", True)
         
         # SteamVR virtual-toy-device feature — must be initialised BEFORE
         # the UI is constructed, because the Settings tab queries
@@ -395,7 +396,7 @@ class OscGoesPurrrApp(
 
         # Push window-chrome settings through the UI facade.
         self.ui.set_title(f"{APP_NAME} - v{__version__}")
-        saved_geometry = self.profile_manager.app_settings.settings.get(
+        saved_geometry = self.mode_manager.app_settings.settings.get(
             "window_geometry", WINDOW_GEOMETRY
         )
         self.ui.set_geometry(saved_geometry)
@@ -445,14 +446,23 @@ class OscGoesPurrrApp(
                 self.update_connection_status(connected, server)
             elif msg_type == "devices_found":
                 # Update the global known-toys registry so future
-                # empty profiles still see these toys.
+                # sessions still see these toys.
+                _any_new = False
                 for _info in (data.values() if isinstance(data, dict) else []):
                     if isinstance(_info, dict):
-                        self.profile_manager.known_devices.register(
+                        if self.mode_manager.known_devices.register(
                             _info.get("name", ""),
                             int(_info.get("motor_count", 1)),
                             _info.get("motor_kinds"),
-                        )
+                        ):
+                            _any_new = True
+                if _any_new:
+                    # A never-before-seen toy: seed its wiring AND every
+                    # mode's feel presets NOW, not at next boot — otherwise
+                    # it plays with flat defaults in whatever mode is
+                    # active (Sleep's wake gate wouldn't exist for it) and
+                    # its feel silently changes after a restart.
+                    self._seed_known_devices()
                 self.ui.build_device_list_ui(data)
                 changed_devices = self._sync_linear_configs(data)
                 if changed_devices and hasattr(self.ui, "remove_device_frame"):
@@ -554,8 +564,21 @@ class OscGoesPurrrApp(
                         self._bhaptics_send_connected_bool()
                     except Exception:
                         pass
+                    # Same for the mode index: the expression-menu highlight
+                    # should match the app after every reconnect.
+                    try:
+                        self._send_ogp_mode_out()
+                    except Exception:
+                        pass
                 else:
                     self.ui.log_message("VRChat OSC Disconnected. Waiting for VRChat to come back...")
+                    # The OGP/Test release edge can never arrive on a dead
+                    # link — drop the test floor so nothing stays latched
+                    # at the pulse level.
+                    try:
+                        self.set_ogp_test_active(False)
+                    except Exception:
+                        pass
                     # Dump diagnostics so we can see whether packets ever
                     # arrived this session.
                     try:
@@ -578,6 +601,12 @@ class OscGoesPurrrApp(
                     self._is_updating_ui = False  # Unlock
             elif msg_type == "avatar_change":
                 self._on_avatar_change(data)
+            elif msg_type == "ogp_mode":
+                # Expression-menu mode switch (OGP/Mode int from VRChat).
+                self._on_ogp_mode_osc(data)
+            elif msg_type == "ogp_test":
+                # Menu Test button held/released (OGP/Test bool).
+                self.set_ogp_test_active(bool(data))
 
         # Dispatch the coalesced haptic targets last — one command per motor
         # carrying the freshest value.
@@ -627,16 +656,11 @@ class OscGoesPurrrApp(
             self.log_message(f"Open logs folder failed: {type(e).__name__}: {e}")
 
     def delete_stored_device(self, device_name: str):
-        """Forget a toy entirely — removes it from every profile and the
-        global known-toys registry. The card will not reappear on profile
-        switch. To use this toy again, reconnect it."""
-        for source in (self.profile_manager.profiles,
-                       self.profile_manager.avatar_profiles):
-            for profile in source.values():
-                if isinstance(profile, dict) and device_name in profile:
-                    del profile[device_name]
-        self.save_profiles()
-        self.profile_manager.known_devices.forget(device_name)
+        """Forget a toy entirely — removes its shared wiring, its feel entry
+        in every mode, and its row in the global known-toys registry. To use
+        this toy again, reconnect it."""
+        self.mode_manager.delete_device(device_name)
+        self.mode_manager.known_devices.forget(device_name)
 
         # Remove from UI via the framework-agnostic facade
         self.ui.remove_device_frame(device_name)
@@ -644,18 +668,18 @@ class OscGoesPurrrApp(
         self.log_message(f"Deleted stored toy: {device_name}")
     
     def get_profile_config(self, device_name: str, key: str, default=None):
-        """Get a specific config value for a device from current profile using profile_manager"""
-        return self.profile_manager.get_profile_config(device_name, key, default)
+        """Get a specific config value for a device from current profile using mode_manager"""
+        return self.mode_manager.get_profile_config(device_name, key, default)
     
     def get_app_setting(self, key: str, default: Any = None):
         """Facade method for UI to safely read app settings."""
-        if hasattr(self.profile_manager.app_settings, 'get'):
-            return self.profile_manager.app_settings.get(key, default)
-        return self.profile_manager.app_settings.settings.get(key, default)
+        if hasattr(self.mode_manager.app_settings, 'get'):
+            return self.mode_manager.app_settings.get(key, default)
+        return self.mode_manager.app_settings.settings.get(key, default)
     
     def set_app_setting(self, key: str, value: Any):
         """Facade method for UI to safely update app settings."""
-        self.profile_manager.app_settings.set(key, value)
+        self.mode_manager.app_settings.set(key, value)
 
     def _get_toy_antistuck(self) -> Dict[str, Any]:
         """Anti-stuck config for the toy (Device Routing) path, read from app
@@ -761,8 +785,8 @@ class OscGoesPurrrApp(
         return store.get_detected_zones()
     
     def update_device_config(self, device_name: str, key: str, value):
-        """Update a config value for a device in current profile using profile_manager"""
-        self.profile_manager.update_device_config(device_name, key, value)
+        """Update a config value for a device in current profile using mode_manager"""
+        self.mode_manager.update_device_config(device_name, key, value)
 
     def force_recalculate(self, dispatch_direct: bool = False):
         """Forces the router to recalculate output based on current state and new UI configs.
@@ -794,7 +818,7 @@ class OscGoesPurrrApp(
             # is inactive here. None signals "skip param-out" below.
             active = None
         else:
-            active = self.profile_manager.get_active_profile_dict()
+            active = self.mode_manager.get_active_profile_dict()
             if active is None:
                 return
             updates = self.motor_router.reevaluate_state(
@@ -1011,16 +1035,16 @@ class OscGoesPurrrApp(
     
     def toggle_network_bind(self, value: bool):
         """Handle network bind toggle from Settings UI."""
-        self.profile_manager.app_settings.update_setting("bind_all_interfaces", value)
+        self.mode_manager.app_settings.update_setting("bind_all_interfaces", value)
         self.ui.log_message("Network bind changed. PLEASE RESTART APP to apply.")
 
     # ---- Haptic engine facades ----
 
-    def save_profiles(self):  # Facade -> profile_manager.save_profiles()
-        self.profile_manager.save_profiles()
+    def save_profiles(self):  # Facade -> mode_manager.save_profiles()
+        self.mode_manager.save_profiles()
 
-    def load_profiles(self) -> Dict[str, Any]:  # Facade -> profile_manager.load_profiles()
-        return self.profile_manager.load_profiles()
+    def load_profiles(self) -> Dict[str, Any]:  # Facade -> mode_manager.load_profiles()
+        return self.mode_manager.load_profiles()
     
     def _on_closing(self):
         """Handle window close event: either minimize to tray or fully quit."""
@@ -1080,7 +1104,7 @@ class OscGoesPurrrApp(
         self.log_message("Shutting down...")
         current_geometry = self.ui.get_geometry()
         if current_geometry:
-            self.profile_manager.app_settings.update_setting("window_geometry", current_geometry)
+            self.mode_manager.app_settings.update_setting("window_geometry", current_geometry)
 
         self.save_profiles()
 
@@ -1151,7 +1175,7 @@ class OscGoesPurrrApp(
     # Engine-specific facade methods live in `controllers/` mixin modules:
     #   - SteamVRFacade            (SteamVR haptics + battery)
     #   - BHapticsFacade           (bHaptics player dot grid)
-    # The mixins assume `self.profile_manager`, the engine attributes, and
+    # The mixins assume `self.mode_manager`, the engine attributes, and
     # `self.osc_manager` exist on the host controller.
 
     def run(self):
@@ -1298,7 +1322,7 @@ class OscGoesPurrrApp(
                 self._start_backend(spec)
 
         # Apply saved SteamVR autostart on boot (no-op if SteamVR is offline).
-        if self.profile_manager.steamvr_settings.get_autostart():
+        if self.mode_manager.steamvr_settings.get_autostart():
             try:
                 self.steamvr_engine.setup_autostart(True)
             except Exception:
@@ -1306,14 +1330,14 @@ class OscGoesPurrrApp(
 
         # If auto-connect is enabled, try an immediate refresh so the device
         # list populates without waiting for the first broadcaster tick.
-        if self.profile_manager.steamvr_settings.get_auto_connect():
+        if self.mode_manager.steamvr_settings.get_auto_connect():
             try:
                 self.steamvr_engine.refresh_devices(quiet=True)
             except Exception:
                 pass
 
         # Boot OSC server 500ms after UI launches to prevent freezing
-        if self.profile_manager.app_settings.settings.get("auto_connect_osc", True):
+        if self.mode_manager.app_settings.settings.get("auto_connect_osc", True):
             self.ui.schedule_callback(OSC_BOOT_DELAY_MS, self.toggle_osc_connection)
 
         # Start the OSC debugger UI refresh loop

@@ -535,43 +535,45 @@ OscGoesPurrr listens to VRChat OSC parameters once, then fans them out to indepe
 Each section is self-contained: a failure in one (e.g. bHaptics Player not running) never affects the others.
 """)
 
-        section("Profiles — what they are", """
-A profile is a complete bundle of toy settings, selectable on the Dashboard. The currently-selected profile is the one the haptic engine uses for routing OSC parameters to motor outputs.
+        section("Modes — what they are", """
+There are six fixed modes — Off, Low, Medium, High, Sleep and Custom by default, all renameable. Exactly one is active at a time; the mode buttons live in the sidebar grid and on the Dashboard.
 
-  • Click a profile tile to switch to it.
-  • Click the pencil (✎) to rename it.
-  • Click the trash (🗑) to delete it (disabled when only one profile remains).
-  • Click "+ New Profile" to add another. There is no fixed cap.
+A mode stores the FEEL: every motor's signal-chain settings (the ones you edit in Device Routing always apply to the active mode) plus a master intensity multiplier that scales every backend's output.
 
-Profiles only affect the Device Routing (Buttplug) pipeline. SteamVR and bHaptics settings are global — they're about hardware, not avatars.
+  • Click a mode button to switch to it.
+  • The Off mode is the panic switch — instant silence everywhere.
+  • Per-toy mutes survive mode switches.
+
+Device wiring — which toys exist, their OSC addresses, SPS zones and interaction filters — is shared by all modes, so you set it up once.
 """)
 
-        section("What is saved per profile vs. globally", """
-Per profile (each profile keeps its own copy):
-  • SPS zones selected for each motor (Pussy, Ass, Dick, etc., or "All SPS")
-  • Custom OSC parameter addresses mapped to each motor
-  • Interaction filters: Touch, Penetration, Self, Others
-  • Linear-actuator mode (Position / Speed) and idle behaviour (Hold / Rest)
+        section("What is saved per mode vs. shared", """
+Per mode (each of the six modes keeps its own copy):
+  • Per-motor signal-chain settings (Depth/Speed mix, gates, smoothing, curves)
+  • The master intensity multiplier (the % spinbox on the Dashboard)
 
-Global (shared by all profiles):
-  • The list of known toys (every toy you've ever connected). New or empty profiles automatically inherit this list with default settings.
+Shared by all modes (edit once, applies everywhere):
+  • Device wiring: SPS zones per motor, custom OSC parameter addresses, interaction filters (Touch, Penetration, Self, Others), linear-actuator mode and idle behaviour
+  • The list of known toys (every toy you've ever connected)
   • App settings: OSC network bind, auto-connect, auto-refresh, minimize-to-tray, hide-console, etc.
   • SteamVR tracker config, vibration patterns, autostart, battery-poll interval
   • bHaptics endpoint, per-device enable + intensity, anti-stuck timings
 """)
 
-        section("Switching profiles", """
-Switching profiles instantly swaps the active routing rules. Every motor re-evaluates against the new profile's zones, filters and custom OSC addresses. The set of toys you see does not change — only their settings do.
+        section("Switching modes", """
+Switch from the sidebar's mode grid, the Dashboard's Modes card, or in VR via a VRChat expression menu bound to the OGP/Mode Int parameter (0-5) — setup guide in docs/VRCHAT_MENU.md. Switching instantly swaps every motor's feel settings and the master intensity; the set of toys and their wiring do not change.
+
+The optional "Remember mode per avatar" setting (Dashboard) restores the mode each avatar last used when it loads. The Off mode is the panic switch, and per-toy mutes survive mode switches.
 """)
 
         section("Deleting a toy", """
-The red "Delete" button on a toy card forgets that toy entirely — it is removed from every profile and from the global known-toys list. To use the toy again, simply reconnect it; it will be re-registered automatically.
+The red "Delete" button on a toy card forgets that toy entirely — it is removed from the wiring and every mode, and from the global known-toys list. To use the toy again, simply reconnect it; it will be re-registered automatically.
 """)
 
         section("Custom OSC addresses on a motor", """
 Under each motor, the "+ Add Variable" button lets you map any number of OSC parameters to that motor. The motor's output is the maximum of all mapped parameters' normalized values (plus any contribution from selected SPS zones).
 
-The picker shows live avatar parameters captured by the OSC inspector. Double-click a row to add it, or use the manual entry field. The × on each chip removes that mapping for the current profile only.
+The picker shows live avatar parameters captured by the OSC inspector. Double-click a row to add it, or use the manual entry field. The × on each chip removes that mapping from the shared wiring — it applies in every mode.
 """)
 
         section("SPS Sources — synthetic contact zones", """
@@ -582,7 +584,7 @@ The SPS Sources tab lets you build a "virtual" SPS zone out of raw VRChat contac
   • Velocity — binary on-enter contacts. While any of them fires, the output is multiplied by the "Velocity ×" amount (a thrust/speed boost).
   • Max value — caps the raw proximity before the multiplier is applied.
 
-Type all the contact parameter names comma-separated (the /avatar/parameters/ prefix is optional). Each source you define then appears — by its name — in the Device Routing zone picker (under "Custom Sources") and in the bHaptics Cross-Routing picker, where it routes exactly like an auto-detected zone. The sources are global (shared by every profile).
+Type all the contact parameter names comma-separated (the /avatar/parameters/ prefix is optional). Each source you define then appears — by its name — in the Device Routing zone picker (under "Custom Sources") and in the bHaptics Cross-Routing picker, where it routes exactly like an auto-detected zone. The sources are global (shared by every mode).
 """)
 
         section("SteamVR Device Communication", """
@@ -707,7 +709,7 @@ Flip the "Help Mode" toggle in the sidebar (or in the Device Routing header) and
 
         section("Where settings live on disk", """
 %APPDATA%\\OscGoesPurrr\\
-  • profiles.json            — per-profile device settings
+  • profiles.json            — the six modes + shared device wiring (schema v3)
   • known_devices.json       — global toy list (name, motor count, motor kinds)
   • app_settings.json        — global app preferences
   • steamvr_settings.json    — autostart, patterns, per-tracker config, battery interval

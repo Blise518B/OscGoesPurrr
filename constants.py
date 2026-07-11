@@ -312,6 +312,35 @@ UI_REFRESH_RATE_MS = 250
 OSC_BOOT_DELAY_MS = 500
 AUTO_REFRESH_RATE_S = 30.0
 
+# --- OGP avatar parameters (VRChat expression-menu control) ---
+# Stored/compared in the bare parameter_store form (the OSC prefix is
+# stripped on ingest and re-added on send).
+OGP_MODE_PARAMETER = "OGP/Mode"    # Int 0-5: switches the active mode
+OGP_TEST_PARAMETER = "OGP/Test"    # Bool: hold to run the connectivity pulse
+# Level the test pulse drives vibration-type backends at (toys, SteamVR,
+# bHaptics). E-stim/EMS backends (PiShock, Coyote, OWO) are deliberately
+# excluded from the test pulse — a surprise shock is not a connectivity check.
+OGP_TEST_LEVEL = 0.2
+# Safety bound on the test pulse: the release edge is a single OSC bool,
+# and a VRChat crash mid-hold would otherwise latch every vibration
+# backend at the test level forever. The hold auto-releases after this
+# many seconds; tap again to keep testing.
+OGP_TEST_MAX_HOLD_S = 10.0
+# After an avatar swap VRChat replays the (possibly stale or reset) saved
+# parameter values; incoming OGP/Mode inside this window is ignored and the
+# app's current mode is re-asserted instead, so an avatar load can never
+# yank the mode out from under the user.
+OGP_MODE_SYNC_GUARD_S = 2.0
+
+# Icon choices offered by the mode editor (any emoji works; this is just
+# the picker's palette).
+MODE_ICON_CHOICES = [
+    "\U0001F507", "\U0001F508", "\U0001F509", "\U0001F50A",   # volume family
+    "\U0001F319", "\U0001F0CF", "⭐", "\U0001F525",       # moon joker star fire
+    "\U0001F49C", "\U0001F499", "\U0001F43E", "\U0001F4A4",   # hearts paws zzz
+    "⚡", "\U0001F3B2", "\U0001F9CA", "\U0001F30A",       # bolt dice ice wave
+]
+
 # --- Network ---
 INTIFACE_WS_URL = "ws://127.0.0.1:12345"
 VRC_DEFAULT_PORT = 9000

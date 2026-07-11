@@ -390,6 +390,27 @@ class TestRouterTick:
         r._tick()
         assert eng.frames[-1][1][0] == 100
 
+    def test_master_scale_not_clobbered_by_antistuck_ramp(self, monkeypatch):
+        # Regression: the anti-stuck ramp factor briefly shared a local
+        # name with the mode master scale, so every position processed
+        # AFTER a ramping one was scaled by the ramp factor instead of
+        # the master — overdriving the suit past the mode's intensity.
+        antistuck = {"enabled": True, "hold_s": 1.0, "ramp_s": 2.0}
+        r, eng, st, clock = _mk(
+            monkeypatch,
+            {"Head": _dev(intensity=100), "VestFront": _dev(intensity=100)},
+            antistuck=antistuck)
+        r.get_master_scale = lambda: 0.6
+        st.params["bHaptics_Head_1_bool"] = True
+        r._tick()
+        # Head latched long enough to be mid-ramp (factor 0.5), then a
+        # fresh contact drives VestFront — which is processed after Head.
+        clock.advance(2.0)
+        st.params["bOSC_v1_VestFront_5"] = 1.0
+        r._tick()
+        vest = [f for f in eng.frames if f[0] == "VestFront"][-1]
+        assert vest[1][4] == 60   # 100 * 0.6 master — not 100 * 0.5 ramp
+
     def test_manual_override_wins_even_on_disabled_device(self, monkeypatch):
         r, eng, st, _ = _mk(monkeypatch, {"VestFront": _dev(enabled=False)})
         r.set_manual_override("VestFront", 4, 100)

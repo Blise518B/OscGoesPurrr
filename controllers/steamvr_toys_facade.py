@@ -88,7 +88,7 @@ class SteamVRToysFacade:
     # ------------------------------------------------------------------
 
     def _steamvr_toys_is_enabled(self) -> bool:
-        return bool(self.profile_manager.steamvr_settings.get_show_toys())
+        return bool(self.mode_manager.steamvr_settings.get_show_toys())
 
     def get_steamvr_toys_status(self) -> Dict[str, Any]:
         # Status must be safe to call before `_steamvr_toys_init()` has run,
@@ -114,7 +114,7 @@ class SteamVRToysFacade:
         if installer is None or bridge is None:
             return self.get_steamvr_toys_status()
 
-        self.profile_manager.steamvr_settings.set_show_toys(bool(enabled))
+        self.mode_manager.steamvr_settings.set_show_toys(bool(enabled))
 
         first_install = False
         install_failed = False
@@ -238,7 +238,7 @@ class SteamVRToysFacade:
         Returns (None, None) when the icon catalog has no match.
         """
         try:
-            override = self.profile_manager.get_profile_config(device_name, "icon_override", None)
+            override = self.mode_manager.get_profile_config(device_name, "icon_override", None)
         except Exception:
             override = None
         key = lovense_icons.resolve_key(device_name, override)

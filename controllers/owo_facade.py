@@ -2,7 +2,7 @@
 
 The UI talks to the OWO engine, router, and persisted settings only through
 these methods. Assumes the host controller has
-`self.profile_manager.owo_settings`, `self.owo_engine`, `self.owo_router`,
+`self.mode_manager.owo_settings`, `self.owo_engine`, `self.owo_router`,
 `self._get_sps_source_map`, and `self.log_message`."""
 
 from typing import Any, Dict
@@ -14,7 +14,7 @@ class OwoFacade:
     # ---- private getters for the engine/router ----
 
     def _owo_settings(self):
-        return self.profile_manager.owo_settings
+        return self.mode_manager.owo_settings
 
     def _owo_get_auto_connect(self) -> bool:
         return self._owo_settings().get_auto_connect()

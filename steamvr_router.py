@@ -25,20 +25,37 @@ class SteamVRRouter(PollingRouter):
     def __init__(self,
                  engine: SteamVREngine,
                  get_all_configs: Callable[[], Dict[str, TrackerConfig]],
-                 poll_rate_s: float = 0.016):  # ~60 Hz: low-latency change detection (debounced)
+                 poll_rate_s: float = 0.016,  # ~60 Hz: low-latency change detection (debounced)
+                 get_master_scale: Optional[Callable[[], float]] = None,
+                 get_test_level: Optional[Callable[[], float]] = None):
         super().__init__("SteamVRRouter", engine, poll_rate_s=poll_rate_s)
         self.get_all_configs = get_all_configs
+        # Mode master scale (0..1) and VR-menu test floor: cheap thread-safe
+        # reads supplied by ModesFacade. Scaling happens before the debounce
+        # compare, so a scale change re-dispatches naturally once the
+        # controller calls reset_dispatch_cache().
+        self.get_master_scale = get_master_scale or (lambda: 1.0)
+        self.get_test_level = get_test_level or (lambda: 0.0)
 
     def compute_targets(self, params: Dict[str, Any]) -> Dict[str, float]:
         configs = self.get_all_configs()
         if not configs:
             return {}
+        try:
+            scale = float(self.get_master_scale())
+        except Exception:
+            scale = 1.0
+        try:
+            test = float(self.get_test_level())
+        except Exception:
+            test = 0.0
         out: Dict[str, float] = {}
         for serial, cfg in configs.items():
             if not cfg.enabled:
                 # Emit an explicit zero (debounce makes repeats free) so
                 # flipping a tracker off mid-vibration actively silences it
                 # instead of latching the last strength until the fuse.
+                # Disabled trackers are also never test-driven.
                 out[serial] = 0.0
                 continue
             best = 0.0
@@ -57,7 +74,9 @@ class SteamVRRouter(PollingRouter):
                         continue
                     if v > best:
                         best = v
-            out[serial] = best
+            # Master scale attenuates the routed value; the test floor wins
+            # over it (max) so the connectivity pulse works even in Off mode.
+            out[serial] = max(best * scale, test)
         return out
 
     def dispatch(self, serial: str, target: float) -> None:

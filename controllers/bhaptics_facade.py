@@ -24,7 +24,7 @@ class BHapticsFacade:
     # ------------------------------------------------------------------
 
     def _bhaptics_settings(self):
-        return self.profile_manager.bhaptics_settings
+        return self.mode_manager.bhaptics_settings
 
     def _bhaptics_get_auto_connect(self) -> bool:
         return self._bhaptics_settings().get_auto_connect()

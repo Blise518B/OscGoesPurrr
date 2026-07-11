@@ -4,7 +4,7 @@ controller in `main.py` inherits from all of them so the call surface for
 the UI is unchanged — only the file boundaries move.
 
 Each mixin assumes the host controller has these attributes/methods:
-  - `self.profile_manager` (for `*_settings` getters)
+  - `self.mode_manager` (modes + all `*_settings` managers)
   - the relevant engine attribute (`self.steamvr_engine`, etc.)
   - `self.osc_manager` (for OSC send helpers)
   - `self.log_message(str)`
@@ -19,7 +19,7 @@ from .coyote_facade import CoyoteFacade
 from .owo_facade import OwoFacade
 from .handy_facade import HandyFacade
 from .osc_facade import OscFacade
-from .profiles_facade import ProfilesFacade
+from .modes_facade import ModesFacade
 from .sessions_facade import SessionsFacade
 from .sps_sources_facade import SpsSourcesFacade
 
@@ -33,7 +33,7 @@ __all__ = [
     "OwoFacade",
     "HandyFacade",
     "OscFacade",
-    "ProfilesFacade",
+    "ModesFacade",
     "SessionsFacade",
     "SpsSourcesFacade",
 ]

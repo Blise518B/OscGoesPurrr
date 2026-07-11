@@ -12,13 +12,13 @@ following anti-tangling rules:
 
 1. **The Law of Demeter.** The UI (`ui_components.py` and the `ui/`
    package) MUST NOT access backend services directly (e.g.
-   `controller.profile_manager`, `controller.haptic_engine`,
+   `controller.mode_manager`, `controller.haptic_engine`,
    `controller.bhaptics_engine`, `controller.steamvr_engine`,
    `controller.osc_manager`, or any `*_router`). It MUST go through
    facade methods on the Controller
    (e.g. `controller.get_app_setting()`, `controller.update_device_target()`,
-   `controller.copy_profile()`, `controller.paste_profile_into()`,
-   `controller.get_global_profile_names()`, `controller.get_active_profile_dict()`,
+   `controller.switch_mode()`, `controller.get_modes_info()`,
+   `controller.get_active_profile_dict()`,
    `controller.set_haptic_connected()`, `controller.get_steamvr_status()`,
    `controller.get_bhaptics_status()`,
    `controller.get_steamvr_toys_status()`).
@@ -187,7 +187,7 @@ what to do.
 
 * **`motor_router.py` — Buttplug routing.** Owns the speed-blend
   tuning math, the touch/pen/self/other filter, and the per-motor
-  `last_outputs` debouncer. Reads `profile_manager.get_active_profile_dict()`
+  `last_outputs` debouncer. Reads `mode_manager.get_active_profile_dict()`
   against `ParameterStore.snapshot()` each tick; only fires a queue
   event when the target value actually changes.
 * **`steamvr_router.py` — SteamVR tracker routing.** Same pattern,
@@ -291,10 +291,10 @@ zone — detected OGB or synthetic SPS source — identically.
 
 * **Role:** The Orchestrator / Controller.
 * **Mechanism:** `OscGoesPurrrApp` in `main.py` boots the threads,
-  holds the `profile_manager`, and routes data between layers. Its
+  holds the `mode_manager`, and routes data between layers. Its
   call surface is intentionally split:
   * `main.py` itself holds the core API — boot, queue draining, the
-    routing tick, profile / device config plumbing, feature flags,
+    routing tick, device config plumbing, feature flags,
     simple-mode, and OSC diagnostics.
   * Per-engine and per-subsystem facade mixins live under `controllers/`
     and are composed into `OscGoesPurrrApp` via multiple inheritance:
@@ -311,8 +311,9 @@ zone — detected OGB or synthetic SPS source — identically.
     * `controllers/handy_facade.py` — `HandyFacade`
     * `controllers/osc_facade.py` — `OscFacade` (VRChat OSC connection
       lifecycle + diagnostics)
-    * `controllers/profiles_facade.py` — `ProfilesFacade` (global +
-      avatar profile CRUD and clipboard copy/paste)
+    * `controllers/modes_facade.py` — `ModesFacade` (the six haptic
+      modes: switching, metadata editing, device seeding, per-avatar
+      memory, and the VRChat `OGP/Mode` / `OGP/Test` integration)
     * `controllers/sps_sources_facade.py` — `SpsSourcesFacade`
       (synthetic SPS source CRUD; the routers read the live source map)
     * `controllers/sessions_facade.py` — `SessionsFacade` (session-logger
@@ -394,7 +395,7 @@ an ack adds latency. Keep each stage tight.
   no ack), bounded by `send_parameter`'s per-address rate limit. The pure
   config→(address, value) mapping lives in `motor_param_out.py`; the
   controller owns the actual send. Active in full routing mode only (Simple
-  Mode bypasses per-toy profile config); independent of toy connection and
+  Mode bypasses per-toy device config); independent of toy connection and
   per-toy mute, since it reflects the contact, not the device.
 * **bHaptics** (`bhaptics_router` → `bhaptics_engine`). Router polls
   `parameter_store` at ~60 Hz (debounced — held contacts don't resubmit);
@@ -467,24 +468,37 @@ router poll rates are constructor defaults (~16 ms).
 
 ---
 
-## Profile model (`config_manager.py`)
+## Mode model (`config_manager.py`)
 
-The on-disk config file is `profiles.json` (v2 schema). The individual
-settings managers and their file-path constants live in the `settings/`
-package (one module per concern: `app.py`, `bhaptics.py`, `steamvr.py`,
-`pishock.py`, `coyote.py`, `owo.py`, `handy.py`, `known_devices.py`,
-`sps_sources.py`, `sessions.py`; paths in `_paths.py`). Most concerns share the
+The on-disk config file is `profiles.json` (v3 schema — the name stays
+for continuity; v1/v2 profile files are migrated one-shot with a
+`profiles.json.v2.bak` backup). The individual settings managers and
+their file-path constants live in the `settings/` package (one module
+per concern: `app.py`, `bhaptics.py`, `steamvr.py`, `pishock.py`,
+`coyote.py`, `owo.py`, `handy.py`, `known_devices.py`, `sps_sources.py`,
+`sessions.py`; paths in `_paths.py`). Most concerns share the
 load-or-create-defaults / merge / atomic-save plumbing in
 `settings/_base.py`'s `JsonSettingsManager` — a subclass declares only
 `DEFAULTS` + `FILE_PATH` and (for nested structure) `_post_load()`. The
 managers are re-exported from `config_manager.py` so existing `from
-config_manager import X` callers keep working. `ProfileManager` (in
-`config_manager.py`) composes the profile-related stores below (the
-session-settings manager is owned by `SessionsFacade` instead):
+config_manager import X` callers keep working. `ModeManager` (in
+`config_manager.py`) composes the stores below (the session-settings
+manager is owned by `SessionsFacade` instead):
 
-* **`profiles`** — global profiles, always available.
-* **`avatar_profiles`** — profiles bound to a specific VRChat avatar id
-  via `avatar_bindings` (`profile_name -> avtr_xxxx`).
+* **`wiring`** — one shared dict per device describing the rig:
+  `motor_count`, `motor_kinds`, `osc_addresses`, zone assignments,
+  interaction filters, param-out mapping, linear actuator envelope,
+  icon override. Shared by every mode — edit once.
+* **`modes`** — exactly six fixed slots (defaults: 🔇 Off, 🔈 Low,
+  🔉 Medium, 🔊 High, 🌙 Sleep, 🃏 Custom; all renameable). Each mode
+  carries its own per-device per-motor `mix` layer (the signal-chain
+  *feel*), a `master_scale` (0–1 multiplier applied at every backend's
+  final dispatch; Off ships 0.0 — the panic mode), a name, and an icon.
+  Switchable from the sidebar grid, the Dashboard, or VRChat's
+  expression menu (`OGP/Mode` Int; see `docs/VRCHAT_MENU.md`).
+* **`avatar_last_mode`** — per-avatar memory of the last active mode;
+  applied on avatar change only when the `avatar_modes_enabled` app
+  setting is on.
 * **`app_settings`** (`AppSettingsManager`) — UI-level toggles
   (`auto_refresh`, `auto_connect`, `bind_all_interfaces`, window
   geometry, console visibility, speed-tuning, feature flags…).
@@ -508,38 +522,39 @@ session-settings manager is owned by `SessionsFacade` instead):
   (control mode, slider stroke zone, speed cap, command-rate cap), and the
   single zone routing.
 * **`known_devices`** (`KnownDevicesRegistry`) — global registry of
-  every toy ever seen; profiles inherit from it on first creation.
+  every toy ever seen; the wiring store (and each mode's feel presets)
+  are seeded from it.
 * **`sps_sources`** (`SpsSourceManager`) — global registry of
   user-defined *synthetic SPS sources*: virtual contact zones assembled
   from raw VRChat receivers (proximity + activation gate + velocity
   multiplier + max-value clamp). Global, like `known_devices`, so a
-  source is selectable from any profile. The pure evaluation math lives
+  source is selectable in any mode. The pure evaluation math lives
   in `sps_source.py`; both `motor_router` and `bhaptics_router` resolve a
   selected source name against the map the controller passes in each
   tick, so a synthetic source routes exactly like a detected OGB zone.
 
-### Active-profile resolution
+### The merged active view (wiring + feel)
 
-When an avatar loads, `ProfileManager.get_active_profile_info()` picks
-the right profile using (in order) `avatar_last_choice` → first
-matching binding → the global `Default` fallback. The active profile
-dict is the live config the router reads and the UI writes to.
-Mutating it in place is fine; just call `save_profiles()` afterwards.
+`get_active_profile_dict()` (name kept from the profile era) returns the
+live `{device: merged config}` map: the wiring dicts with the active
+mode's per-device `mix` installed **by reference** under the `"mix"`
+key. Two identity guarantees are load-bearing:
 
-### Copy / paste
+* The top-level dict and every per-device dict are **never rebuilt** —
+  a mode switch swaps only each device's `"mix"` value. The router's
+  compiled-config cache keys on `id()`, so rebuilding the view per tick
+  would recompile every motor at 60–90 Hz.
+* Wiring keys may be mutated in place (call `save_profiles()`
+  afterwards, as before); `"mix"` writes must go through
+  `update_device_config(device, "mix", value)` so the active mode's
+  store and the installed reference stay the same object.
 
-All handled in `ProfileManager`:
-
-* `copy_profile_to_clipboard(kind, name)` snapshots a deep copy into
-  an in-memory clipboard tagged with `{kind, name, config}`.
-* `paste_into_profile(target_kind, target_name)` overwrites an
-  *existing* profile's contents with the clipboard, preserving the
-  target's name and (for avatar profiles) its binding.
-* `paste_profile(target_kind, avatar_id?)` creates a *new* profile
-  from the clipboard with an auto-uniqued name.
-* `clear_clipboard()` resets the clipboard without touching profiles.
-* All mutations call `save_profiles()` so the v2 schema on disk stays
-  in sync.
+`master_scale` is applied as one inline multiply at each backend's final
+dispatch (toys: `update_device_target`; the polling routers take a
+`get_master_scale` getter) — zero added latency. Any change that alters
+output without changing router inputs (mode switch, scale edit, test
+pulse) must call `ModesFacade._reset_output_caches()` so every router's
+change-debounce re-dispatches on the next tick.
 
 ---
 
@@ -567,7 +582,7 @@ All handled in `ProfileManager`:
   `toggle_windows_console`, `create_default_icon`).
 * `version.py` — single source of truth for `__version__`.
 * `settings/` — per-user settings managers, one JSON file per concern
-  (see the Profile model section above).
+  (see the Mode model section above).
 * `tools/` — developer scripts, not loaded at runtime
   (`flatten_lovense_icons.py`, `generate_bhaptics_icons.py`,
   `generate_handy_icon.py`, `generate_sim_icon.py`).
@@ -576,7 +591,7 @@ All handled in `ProfileManager`:
 
 ## Session logging
 
-VR sessions can be recorded to disk for offline analysis and profile
+VR sessions can be recorded to disk for offline analysis and feel
 tuning. `session_logger.py` is the sealed-box `SessionLogger` engine;
 `controllers/sessions_facade.py` (`SessionsFacade`) owns its lifecycle
 plus its `SessionSettingsManager` (`settings/sessions.py`) and adapts the
@@ -642,7 +657,7 @@ Run with `testbench/run_testbench.bat` (`python -m testbench`); build with
    (subclass `JsonSettingsManager` from `settings/_base.py`: declare
    `DEFAULTS` + `FILE_PATH`, override `_post_load()` for nested backfills),
    register its path in `settings/_paths.py`, re-export it from
-   `config_manager.py`, and instantiate it on `ProfileManager`.
+   `config_manager.py`, and instantiate it on `ModeManager`.
 6. **UI** — add a card / tab in `ui_components.py` that calls *only*
    the new facade methods. **Do not** import the engine or router from
    the UI.

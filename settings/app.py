@@ -23,6 +23,10 @@ DEFAULT_APP_SETTINGS = {
     # Help Mode toggle for the Device Routing view header. Persisted so
     # the user doesn't have to re-enable it every session.
     "help_mode_enabled": False,
+    # When ON, each avatar remembers the mode that was active the last time
+    # it was worn and restores it on avatar change. OFF (default) = the
+    # active mode simply carries across avatars.
+    "avatar_modes_enabled": False,
     # Anti-stuck safety cutoff for the toy (Device Routing / Buttplug) path.
     # VRChat OSC only fires on parameter change, so a frozen SPS proximity
     # (avatar swap, partner leaves, OSC routing loss) would otherwise drive a

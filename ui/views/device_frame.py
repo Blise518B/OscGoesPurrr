@@ -869,9 +869,9 @@ class DeviceFrameMixin:
         controller = self.controller
 
         connected_names = controller.get_connected_device_names()
-        # The "active" profile is whichever ProfileManager resolves right
-        # now — an avatar profile bound to the current VRChat avatar, or
-        # the selected global profile as a fallback.
+        # The controller returns the merged per-device map: the shared
+        # wiring (toys, OSC addresses, zones, filters) overlaid with the
+        # active mode's per-motor mix.
         active_profile = controller.get_active_profile_dict() or {}
         has_saved_devices = bool(active_profile)
 
@@ -881,25 +881,22 @@ class DeviceFrameMixin:
             self.update_stored_devices_ui()
             return
 
-        # Clear existing device cards from the layout (preserve the trailing stretch).
+        # Clear EVERYTHING from the layout — widgets AND spacers — then add
+        # back exactly one trailing stretch. Skipping spacers here leaked
+        # one stretch per rebuild (mode switches rebuild constantly from
+        # the VR menu), and since cards insert before the LAST spacer, the
+        # leaked ones accumulated ABOVE the cards, sinking them toward the
+        # bottom of the scroll area.
         if self.unified_devices_layout is not None:
-            # Remove every widget item; rebuild stretch at the end.
-            i = 0
-            while i < self.unified_devices_layout.count():
-                item = self.unified_devices_layout.itemAt(i)
-                if item is None:
-                    i += 1
-                    continue
-                w = item.widget()
+            while self.unified_devices_layout.count():
+                item = self.unified_devices_layout.takeAt(0)
+                w = item.widget() if item is not None else None
                 if w is not None:
-                    self.unified_devices_layout.takeAt(i)
                     # Hide before detaching: a still-visible child reparented
                     # to None briefly realises as a top-level window (a flash).
                     w.hide()
                     w.setParent(None)
                     w.deleteLater()
-                else:
-                    i += 1
             self.unified_devices_layout.addStretch(1)
 
         self.stored_device_frames.clear()

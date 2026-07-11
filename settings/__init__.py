@@ -2,7 +2,7 @@
 same AppData directory.
 
 Each manager is a thin wrapper around its JSON file with defaults,
-validation, and migration helpers. ProfileManager (in config_manager.py)
+validation, and migration helpers. ModeManager (in config_manager.py)
 composes these for the parts of state that belong to a profile.
 """
 

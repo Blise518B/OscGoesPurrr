@@ -1364,8 +1364,17 @@ class VRChatOSCManager:
                 results.update(self._flatten_oscquery_node(child))
         return results
 
-    def send_parameter(self, address: str, value: Any, ignore_rate_limit: bool = False):
+    def send_parameter(self, address: str, value: Any,
+                       ignore_rate_limit: bool = False,
+                       force_type: Optional[str] = None):
         if not self.is_connected or not self.osc_client: return
+        if force_type:
+            # Pin the declared type for this address so every send —
+            # including a later trailing flush — coerces the same way,
+            # independent of whether OSCQuery listed the parameter. Used by
+            # OGP/Mode ('i'): a bare Python int would otherwise degrade to
+            # float and VRChat would ignore it on an Int parameter.
+            self._param_types[address] = force_type
         if not ignore_rate_limit and not self._send_limiter.allow(
                 address, value, time.time()):
             # Suppressed — the limiter remembered the value; a one-shot

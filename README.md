@@ -50,9 +50,16 @@ toys, SteamVR trackers, bHaptics suits, OWO suits, e-stim units
   list at connect time for flawless, debounced routing.
 * **Multi-zone.** Bind a single motor to multiple OGB zones (Head,
   Tail, etc.) with simple checkbox menus.
-* **Avatar-bound profiles.** Profiles can be pinned to a specific
-  `avtr_*` id so loading an avatar auto-selects the right config; plus
-  a global Default fallback.
+* **Six haptic modes.** 🔇 Off · 🔈 Low · 🔉 Medium · 🔊 High ·
+  🌙 Sleep · 🃏 Custom — each mode is a full *feel* preset (per-motor
+  signal-chain settings + a master intensity), all renameable and
+  editable. Off is the instant panic switch. Device wiring (toys,
+  zones, OSC addresses) is shared, so you configure the rig once.
+* **Switch modes from inside VRChat.** One local `OGP/Mode` Int on the
+  expression menu drives the whole app, plus an `OGP/Test` button that
+  pulses your gear at a low level to confirm everything's connected —
+  see [`docs/VRCHAT_MENU.md`](docs/VRCHAT_MENU.md). Optionally, each
+  avatar can remember its own last mode.
 * **Real-time OSC debugger.** Inspector tab shows live parameter
   values and an OSC diagnostics view exposes packets handled,
   phonebook GETs, handler exceptions, etc.
@@ -170,8 +177,8 @@ Sidebar views (toggle from the left rail):
 * **OSC Diagnostics** — packets-handled counter, phonebook GET log,
   handler exceptions, port info — for debugging silent-drop bugs.
 * **System Log** — scrollback of everything logged this session.
-* **Settings** — feature toggles, window/console behaviour, profile
-  copy/paste, speed-blend tuning, SteamVR Toy Driver
+* **Settings** — feature toggles, window/console behaviour, color
+  profiles, speed-blend tuning, SteamVR Toy Driver
   install/uninstall.
 * **Help** — short docs for each feature.
 
@@ -201,7 +208,8 @@ SteamVR's device strip with their own icons and battery indicators.
 
 All user state is stored under `%APPDATA%\OscGoesPurrr\`:
 
-* `profiles.json` — toy routing profiles + avatar bindings.
+* `profiles.json` — the six modes + shared device wiring (schema v3;
+  older profile files are migrated with a `.v2.bak` backup).
 * `app_settings.json` — UI toggles, window geometry, speed-blend
   tuning, feature flags.
 * `steamvr_settings.json` — per-tracker config + patterns.

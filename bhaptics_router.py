@@ -165,9 +165,17 @@ class BHapticsRouter(PollingRouter):
                  poll_rate_s: float = 0.016,  # ~60 Hz: low-latency change detection (debounced, so holds don't spam the Player)
                  get_antistuck: Callable[[], Dict[str, float]] | None = None,
                  get_sps_mirror_config: Callable[[], Dict[str, Any]] | None = None,
-                 get_sps_sources: Callable[[], Dict[str, Any]] | None = None):
+                 get_sps_sources: Callable[[], Dict[str, Any]] | None = None,
+                 get_master_scale: Callable[[], float] | None = None,
+                 get_test_level: Callable[[], float] | None = None):
         super().__init__("bHapticsRouter", engine, poll_rate_s=poll_rate_s)
         self.get_device_configs = get_device_configs
+        # Mode master scale (0..1) and VR-menu test floor, supplied by
+        # ModesFacade. Read on every tick so mode switches apply live; the
+        # scale attenuates the routed layers only (manual debug overrides
+        # stay unscaled).
+        self.get_master_scale = get_master_scale or (lambda: 1.0)
+        self.get_test_level = get_test_level or (lambda: 0.0)
         # Returns {"enabled": bool, "hold_s": float, "ramp_s": float}.
         # Read on every tick so config changes apply live.
         self.get_antistuck = get_antistuck or (lambda: {"enabled": False, "hold_s": 2.0, "ramp_s": 2.0})
@@ -213,6 +221,16 @@ class BHapticsRouter(PollingRouter):
         with self._snapshot_lock:
             return {pos: list(raw) for pos, raw in self._last_raw.items()}
 
+    def reset_dispatch_cache(self) -> None:
+        """Drop the per-device frame debounce so the next tick re-submits
+        every frame. Called from the GUI thread on mode / master-scale
+        changes: the scale lives outside the param snapshot, so an unchanged
+        snapshot would otherwise debounce the new levels away. Mirrors the
+        disconnect-clear at the top of `_tick` (same lock, same recipe);
+        raw / anti-stuck state is kept — the inputs themselves didn't change."""
+        with self._snapshot_lock:
+            self._last_dots.clear()
+
     def set_manual_override(self, position: str, index: int, intensity) -> None:
         """Force a single dot to a fixed intensity (0..100), or pass None to
         clear. Used by the debug UI's click-to-test feature. Max-merges with
@@ -249,6 +267,17 @@ class BHapticsRouter(PollingRouter):
         as_enabled = bool(antistuck.get("enabled", False))
         as_hold = max(0.0, float(antistuck.get("hold_s", 2.0)))
         as_ramp = max(0.01, float(antistuck.get("ramp_s", 2.0)))
+        # Mode master scale + VR-menu test floor, read once per tick (cheap
+        # dict reads on the facade side, safe from this thread).
+        try:
+            scale = float(self.get_master_scale())
+        except Exception:
+            scale = 1.0
+        try:
+            test = float(self.get_test_level())
+        except Exception:
+            test = 0.0
+        test_floor = max(0, min(100, int(round(test * 100))))
         # Compute the SPS-mirror per-dot contribution once per tick;
         # the per-position loop folds it into `raw` alongside the v1
         # OSC bool/float values via max-wins. Empty dict when the
@@ -301,6 +330,11 @@ class BHapticsRouter(PollingRouter):
                 continue
 
             intensity = max(0, min(100, int(cfg.intensity)))
+            # Mode master scale attenuates the whole routed layer here:
+            # from_bool / from_float / from_sps all derive from `intensity`,
+            # so one multiply scales all three. Manual debug overrides and
+            # the test floor stay unscaled.
+            intensity = int(round(intensity * scale))
 
             # Lazily allocate per-device tracking arrays. Re-allocate if the
             # device's node_count somehow changes between ticks.
@@ -361,8 +395,12 @@ class BHapticsRouter(PollingRouter):
                         if ramp_t >= as_ramp:
                             out = 0
                         else:
-                            scale = 1.0 - (ramp_t / as_ramp)
-                            out = max(0, int(round(raw * scale)))
+                            # Distinct name: `scale` is the tick-level mode
+                            # master scale — shadowing it here would leak
+                            # the ramp factor into every later position's
+                            # intensity for the rest of the tick.
+                            ramp_scale = 1.0 - (ramp_t / as_ramp)
+                            out = max(0, int(round(raw * ramp_scale)))
                 else:
                     out = raw
 
@@ -370,6 +408,13 @@ class BHapticsRouter(PollingRouter):
                 ov = pos_overrides.get(idx)
                 if ov is not None and ov > out:
                     out = ov
+
+                # VR-menu test floor: max-wins like the manual override,
+                # enabled devices only (disabled ones took the early branch
+                # above). Deliberately bypasses anti-stuck — the floor is a
+                # live user-held button, not a latched OSC value.
+                if test_floor > out:
+                    out = test_floor
 
                 dots.append(out)
 

@@ -308,6 +308,23 @@ QPushButton[role="profileIdle"] {{
 QPushButton[role="profileIdle"]:hover {{
     background-color: {COLOR_BUTTON_HOVER};
 }}
+/* Sidebar mode-grid buttons (two-line: name over icon). */
+QPushButton[role="modeBtn"] {{
+    background-color: {COLOR_BUTTON};
+    color: {COLOR_TEXT};
+    border: 1px solid {COLOR_INPUT_BORDER};
+    border-radius: 6px;
+    font-size: 11px;
+    padding: 3px;
+}}
+QPushButton[role="modeBtn"]:hover {{
+    background-color: {COLOR_BUTTON_HOVER};
+}}
+QPushButton[role="modeBtn"][active="true"] {{
+    background-color: {COLOR_PRIMARY_BRUSH};
+    color: {COLOR_TEXT_ON_PRIMARY};
+    font-weight: bold;
+}}
 QPushButton[role="chipClose"] {{
     background-color: transparent;
     color: {COLOR_ALERT};
@@ -731,18 +748,14 @@ class OscGoesPurrrUI(
         # Dashboard
         self.testing_frame: Optional[QFrame] = None
         self.purr_check_button: Optional[QPushButton] = None
-        # Profile-manager UI (built by _build_dashboard_view, rebuilt by
-        # _refresh_profile_buttons whenever profiles/clipboard/avatar change).
-        self.profile_active_label: Optional[QLabel] = None
+        # Modes UI (dashboard rows + sidebar grid, built by
+        # _build_dashboard_view / _build_mode_grid, repainted by
+        # _refresh_mode_buttons whenever the active mode or its metadata
+        # change).
         self.current_avatar_label: Optional[QLabel] = None
-        self.global_profile_list_layout: Optional[QVBoxLayout] = None
-        self.global_profile_list_host: Optional[QWidget] = None
-        self.avatar_profile_list_layout: Optional[QVBoxLayout] = None
-        self.avatar_profile_list_host: Optional[QWidget] = None
-        self.global_paste_btn: Optional[QPushButton] = None
-        self.avatar_paste_btn: Optional[QPushButton] = None
-        self.avatar_new_btn: Optional[QPushButton] = None
-        self.avatar_manage_btn: Optional[QPushButton] = None
+        self.mode_list_host: Optional[QWidget] = None
+        self.mode_list_layout: Optional[QVBoxLayout] = None
+        self.mode_grid_buttons: Optional[list] = None
 
         # Simple Mode view widgets
         self.simple_mode_toggle: Optional[QCheckBox] = None
@@ -770,12 +783,23 @@ class OscGoesPurrrUI(
         root_layout = _hbox(0, 0)
         root.setLayout(root_layout)
 
-        # Sidebar (fixed width). No scroll area by design — the nav spacing and
-        # button padding are kept tight (see _build_sidebar and the nav QSS) so
-        # the whole column fits without ever needing to scroll.
+        # Sidebar (fixed width). The nav spacing and button padding are kept
+        # tight (see _build_sidebar and the nav QSS) so the whole column fits
+        # without scrolling at normal window heights — but the column is
+        # wrapped in an as-needed scroll area so a short window (snapped
+        # half-height, small laptop) clips nothing: without it, the
+        # connect buttons at the bottom would be unreachable because the
+        # window minimum height is far below the sidebar's natural height.
         self.sidebar_frame = self._build_sidebar()
-        self.sidebar_frame.setFixedWidth(SIDEBAR_WIDTH)
-        root_layout.addWidget(self.sidebar_frame)
+        sidebar_scroll = QScrollArea()
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setFrameShape(QFrame.NoFrame)
+        sidebar_scroll.setFixedWidth(SIDEBAR_WIDTH)
+        sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        sidebar_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        _install_rainbow_scrollbars(sidebar_scroll)
+        sidebar_scroll.setWidget(self.sidebar_frame)
+        root_layout.addWidget(sidebar_scroll)
 
         # Main content area (stacked views). Each page sits inside its own
         # QScrollArea so the window can shrink below the page's natural size
@@ -881,6 +905,12 @@ class OscGoesPurrrUI(
         lay.addSpacing(6)
         lay.addWidget(title)
         lay.addSpacing(12)
+
+        # Mode grid — the six haptic modes, one tap from anywhere. Kept
+        # compact (2×3, ~44px buttons, 4px gaps) on purpose: the sidebar
+        # has no scroll area, so every extra pixel here squeezes the nav.
+        lay.addWidget(self._build_mode_grid())
+        lay.addSpacing(8)
 
         nav_buttons = ["Dashboard", "Overview", "Simple Mode",
                        "Device Routing", "SPS Sources",

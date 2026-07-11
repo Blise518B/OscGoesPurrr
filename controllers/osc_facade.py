@@ -2,11 +2,12 @@
 
 Mixin: VRChat OSC connection lifecycle + diagnostics. Composed into
 OscGoesPurrrApp. Relies on `self.osc_manager`, `self.log_message`,
-`self.ui`, `self.profile_manager`, `self.thread_queue`."""
+`self.ui`, `self.mode_manager`, `self.thread_queue`."""
 
 import threading
 from typing import Any, Dict, List
 
+from constants import OGP_MODE_PARAMETER, OGP_TEST_PARAMETER
 from vrchat_osc import VRChatOSCManager
 
 
@@ -113,12 +114,19 @@ class OscFacade:
             self.log_message(f"Open log folder failed: {type(e).__name__}: {e}")
     
     def on_osc_message(self, address: str, value):
-        """Acts as a trigger ping when new UDP data arrives. Sets a flag to batch rapid updates."""
+        """Acts as a trigger ping when new UDP data arrives. Sets a flag to
+        batch rapid updates. Runs on the OSC UDP server thread — anything
+        beyond a flag/queue-put belongs on the GUI side of thread_queue."""
         self._needs_recalculation = True
         # VRChat reports the freshly-loaded avatar's ID via /avatar/change.
         # The OSC layer strips the leading slash, so we see "avatar/change".
         if address == "avatar/change":
             self.thread_queue.put(("avatar_change", str(value) if value is not None else ""))
+        # Expression-menu control parameters (see constants OGP_*).
+        elif address == OGP_MODE_PARAMETER:
+            self.thread_queue.put(("ogp_mode", value))
+        elif address == OGP_TEST_PARAMETER:
+            self.thread_queue.put(("ogp_test", bool(value)))
 
     def toggle_osc_connection(self):
         """Toggles the VRChat OSC connection on and off safely (non-blocking)."""
@@ -137,7 +145,7 @@ class OscFacade:
             self.ui.update_osc_status(False)  # Reset UI to waiting state
             
             # Rebuild manager for a clean socket state
-            bind_all = self.profile_manager.app_settings.settings.get("bind_all_interfaces", True)
+            bind_all = self.mode_manager.app_settings.settings.get("bind_all_interfaces", True)
             self.osc_manager = VRChatOSCManager(local_listen_port=0, bind_all_interfaces=bind_all)
             self.osc_manager.global_osc_callback = self.on_osc_message
             self.osc_manager.on_connected = lambda ports: self.thread_queue.put(
@@ -155,11 +163,11 @@ class OscFacade:
         """Handle OSC auto-connect checkbox toggle from UI"""
         if not self.ui.get_osc_auto_connect_enabled():
             # Checkbox unchecked - disable OSC auto connect
-            self.profile_manager.app_settings.set("auto_connect_osc", False)
+            self.mode_manager.app_settings.set("auto_connect_osc", False)
             self.log_message("VRChat OSC Auto connect disabled")
         else:
             # Checkbox checked - enable OSC auto connect
-            self.profile_manager.app_settings.set("auto_connect_osc", True)
+            self.mode_manager.app_settings.set("auto_connect_osc", True)
             self.log_message("VRChat OSC Auto connect enabled")
             # If OSC server is not running, start it
             if self.osc_manager:

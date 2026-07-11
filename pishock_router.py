@@ -132,12 +132,18 @@ class PiShockRouter(PollingThread):
                  get_sps_sources: Optional[Callable[[], Dict[str, Any]]] = None,
                  get_global_rate: Optional[Callable[[], Dict[str, Any]]] = None,
                  poll_rate_s: float = 0.016,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic,
+                 get_master_scale: Optional[Callable[[], float]] = None):
         super().__init__("PiShockRouter")
         self.engine = engine
         self.get_zone_configs = get_zone_configs
         self.get_sps_sources = get_sps_sources or (lambda: None)
         self.get_global_rate = get_global_rate or (lambda: {"max_events": 6, "window_s": 10.0})
+        # Mode master scale (0..1): 0 suppresses firing entirely, fractions
+        # attenuate fired intensity. No test-level hook — e-stim is
+        # deliberately excluded from the connectivity pulse (see constants.py
+        # OGP_TEST_LEVEL).
+        self.get_master_scale = get_master_scale or (lambda: 1.0)
         self.poll_rate_s = poll_rate_s
         self._clock = clock
         self._states: Dict[str, ZoneState] = {}
@@ -158,13 +164,28 @@ class PiShockRouter(PollingThread):
             self._interruptible_sleep(self.poll_rate_s)
 
     def _tick(self):
-        if not self.engine.is_connected:
-            return
+        # Staleness FIRST — even while disconnected or in Off mode. The
+        # monitor only advances its packet baseline when polled, so an
+        # early-out that skips it would starve it, and the first tick after
+        # reconnect / leaving Off would read the changed packet count as
+        # "fresh", letting sustain zones fire real shocks off a snapshot
+        # VRChat may have abandoned minutes ago.
         if self._stale_monitor.is_stale():
             # OSC went silent (VRChat crashed/closed): a latched non-zero
             # strength must not keep sustain zones firing. Disarm all edge
             # states so the return of traffic re-fires only on a fresh edge.
             self._states.clear()
+            return
+        if not self.engine.is_connected:
+            return
+        try:
+            scale = float(self.get_master_scale())
+        except Exception:
+            scale = 1.0
+        if scale <= 0.0:
+            # Off mode: no shocks, period. Bail before any zone evaluation
+            # so nothing can fire — same early-out shape as the
+            # disconnected check above.
             return
         zones = self.get_zone_configs() or []
         if not zones:
@@ -193,7 +214,11 @@ class PiShockRouter(PollingThread):
             # Global backstop across all zones, then the engine's own caps.
             if not self._limiter.try_acquire(now):
                 continue
-            self.engine.fire(event.op, event.intensity, event.duration_ms)
+            # Mode master scale attenuates the fired intensity (floored at
+            # the 1-unit API minimum); the engine's hard safety clamps still
+            # apply downstream, untouched.
+            intensity = max(1, int(round(event.intensity * scale)))
+            self.engine.fire(event.op, intensity, event.duration_ms)
 
     def _sync_limiter(self):
         try:

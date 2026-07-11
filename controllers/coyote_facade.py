@@ -2,7 +2,7 @@
 
 The UI talks to the Coyote engine, router, and persisted settings only through
 these methods. Assumes the host controller has
-`self.profile_manager.coyote_settings`, `self.coyote_engine`,
+`self.mode_manager.coyote_settings`, `self.coyote_engine`,
 `self.coyote_router`, `self._get_sps_source_map`, and `self.log_message`."""
 
 from typing import Any, Dict, List, Tuple
@@ -14,7 +14,7 @@ class CoyoteFacade:
     # ---- private getters for the engine/router ----
 
     def _coyote_settings(self):
-        return self.profile_manager.coyote_settings
+        return self.mode_manager.coyote_settings
 
     def _coyote_get_auto_connect(self) -> bool:
         return self._coyote_settings().get_auto_connect()

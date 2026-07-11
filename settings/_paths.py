@@ -1,7 +1,7 @@
 """Filesystem paths for all per-user settings files.
 
 Kept in one module so the individual settings managers and the
-ProfileManager all agree on AppData layout. Importing this module
+ModeManager all agree on AppData layout. Importing this module
 ensures the AppData directory exists.
 """
 
@@ -14,7 +14,7 @@ from constants import APP_NAME
 # AppData directory for persistent storage
 APPDATA_DIR = Path.home() / "AppData" / "Roaming" / APP_NAME
 
-# Profile file path (managed by ProfileManager in config_manager.py)
+# Profile file path (managed by ModeManager in config_manager.py)
 PROFILE_FILE = APPDATA_DIR / "profiles.json"
 
 # App settings file path

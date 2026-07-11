@@ -1,4 +1,4 @@
-"""Dashboard, profile slots, simple-mode panel, and device-routing view.
+"""Dashboard, mode switcher, simple-mode panel, and device-routing view.
 
 Mixin for ui_components.OscGoesPurrrUI. Relies on attributes initialised
 by OscGoesPurrrUI.__init__ (self.controller, self.invoker, etc.)."""
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QDialog, QMessageBox, QTreeWidget, QTreeWidgetItem, QHeaderView,
     QButtonGroup, QStackedWidget, QTableWidget, QTableWidgetItem,
     QAbstractItemView, QComboBox, QSpinBox, QDoubleSpinBox, QToolButton,
+    QMenu, QInputDialog,
 )
 from ui import lovense_icons as _lovense_icons
 
@@ -66,121 +67,71 @@ class DashboardMixin:
         title.setAlignment(Qt.AlignHCenter)
         parent_layout.addWidget(title)
 
-        # ===== Profile manager card =====
-        prof_card = _Card()
-        prof_lay = _vbox(16, 10)
-        prof_card.setLayout(prof_lay)
+        # ===== Modes card =====
+        modes_card = _Card()
+        modes_lay = _vbox(16, 10)
+        modes_card.setLayout(modes_lay)
 
-        # Active-profile banner (kind + name)
-        self.profile_active_label = QLabel("Active profile: —")
-        f = self.profile_active_label.font(); f.setBold(True); f.setPointSize(13)
-        self.profile_active_label.setFont(f)
-        prof_lay.addWidget(self.profile_active_label)
+        modes_header_row = QWidget()
+        mhlay = _hbox(0, 6)
+        modes_header_row.setLayout(mhlay)
+        modes_header = QLabel("Modes")
+        modes_header.setObjectName("sectionTitle")
+        mhlay.addWidget(modes_header)
+        mhlay.addWidget(self._make_help_badge(
+            "Modes",
+            "Six fixed modes. A mode is the <b>feel</b> — the signal-chain "
+            "settings you edit in Device Routing always apply to the "
+            "<b>active</b> mode — plus a master intensity multiplier. "
+            "<b>Off</b> is the panic mode: instant silence everywhere. "
+            "Modes can also be switched from inside VRChat via the "
+            "<b>OGP/Mode</b> Int parameter (menu setup guide: "
+            "docs/VRCHAT_MENU.md). The menu's Test button "
+            "(<b>OGP/Test</b>) pulses toys, SteamVR and bHaptics at a "
+            "low level to confirm the link — e-stim backends are "
+            "deliberately excluded from the test pulse."
+        ))
+        mhlay.addStretch(1)
+        modes_lay.addWidget(modes_header_row)
 
-        prof_lay.addWidget(self._muted_label(
-            "Profiles hold per-toy settings: SPS zones, OSC mappings, filters. "
-            "Avatar profiles auto-activate when their bound avatar loads."
+        modes_lay.addWidget(self._muted_label(
+            "Click a mode to make it live — Device Routing edits and the "
+            "master intensity always target the active mode."
         ))
 
-        # ---- Global section ----
-        global_header = QLabel("Global Profiles")
-        global_header.setObjectName("sectionTitle")
-        prof_lay.addWidget(global_header)
-        prof_lay.addWidget(self._muted_label(
-            "Manually selected. Active when no avatar profile is bound."
+        # One row per mode, rebuilt by _refresh_mode_buttons whenever the
+        # active mode or its metadata change.
+        self.mode_list_host = QWidget()
+        self.mode_list_layout = _vbox(0, 4)
+        self.mode_list_host.setLayout(self.mode_list_layout)
+        modes_lay.addWidget(self.mode_list_host)
+
+        # ---- Footer: per-avatar memory + current avatar id ----
+        footer = QWidget()
+        flay = _hbox(0, 6)
+        footer.setLayout(flay)
+        self.avatar_modes_toggle = ToggleSwitch("Remember mode per avatar")
+        self.avatar_modes_toggle.setChecked(
+            bool(self.controller.get_app_setting("avatar_modes_enabled", False))
+        )
+        self.avatar_modes_toggle.toggled.connect(
+            lambda checked: self.controller.set_app_setting(
+                "avatar_modes_enabled", bool(checked))
+        )
+        flay.addWidget(self.avatar_modes_toggle)
+        flay.addWidget(self._make_help_badge(
+            "Remember mode per avatar",
+            "When ON, each avatar restores the mode it last used as it "
+            "loads. When OFF, the current mode simply carries across "
+            "avatar changes."
         ))
-
-        self.global_profile_list_host = QWidget()
-        self.global_profile_list_layout = _vbox(0, 4)
-        self.global_profile_list_host.setLayout(self.global_profile_list_layout)
-        prof_lay.addWidget(self.global_profile_list_host)
-
-        gfooter = QWidget()
-        gflay = _hbox(0, 6)
-        gfooter.setLayout(gflay)
-        new_global = QPushButton("+ New Global Profile")
-        new_global.setMinimumHeight(34)
-        new_global.setProperty("role", "secondary")
-        new_global.clicked.connect(self._add_new_profile)
-        gflay.addWidget(new_global, 1)
-        self.global_paste_btn = QPushButton("📥 Paste")
-        self.global_paste_btn.setMinimumHeight(34)
-        self.global_paste_btn.setProperty("role", "secondary")
-        self.global_paste_btn.clicked.connect(lambda _=False: self.controller.paste_profile("global"))
-        gflay.addWidget(self.global_paste_btn)
-        gflay.addWidget(self._make_help_badge(
-            "Paste profile",
-            "Creates a new global profile from the profile most recently "
-            "copied with a row's 📋 Copy button. Use Copy + Paste to "
-            "duplicate a setup before experimenting, or to turn an avatar "
-            "profile into a global one."
-        ))
-        prof_lay.addWidget(gfooter)
-
-        # ---- Divider ----
-        divider = QFrame()
-        divider.setObjectName("separator")
-        prof_lay.addSpacing(4)
-        prof_lay.addWidget(divider)
-        prof_lay.addSpacing(4)
-
-        # ---- Avatar section ----
-        avatar_header_row = QWidget()
-        ahlay = _hbox(0, 8)
-        avatar_header_row.setLayout(ahlay)
-        avatar_header = QLabel("Avatar Profiles")
-        avatar_header.setObjectName("sectionTitle")
-        ahlay.addWidget(avatar_header)
-        ahlay.addStretch(1)
+        flay.addStretch(1)
         self.current_avatar_label = QLabel("Current avatar: (not detected)")
         self.current_avatar_label.setProperty("muted", "true")
-        ahlay.addWidget(self.current_avatar_label)
-        prof_lay.addWidget(avatar_header_row)
+        flay.addWidget(self.current_avatar_label)
+        modes_lay.addWidget(footer)
 
-        prof_lay.addWidget(self._muted_label(
-            "Bound to a VRChat avatar ID. The bound profile auto-activates "
-            "when that avatar loads, taking precedence over the global selection."
-        ))
-
-        self.avatar_profile_list_host = QWidget()
-        self.avatar_profile_list_layout = _vbox(0, 4)
-        self.avatar_profile_list_host.setLayout(self.avatar_profile_list_layout)
-        prof_lay.addWidget(self.avatar_profile_list_host)
-
-        afooter = QWidget()
-        aflay = _hbox(0, 6)
-        afooter.setLayout(aflay)
-        self.avatar_new_btn = QPushButton("+ New Avatar Profile (bind to current)")
-        self.avatar_new_btn.setMinimumHeight(34)
-        self.avatar_new_btn.setProperty("role", "secondary")
-        self.avatar_new_btn.clicked.connect(lambda _=False: self.controller.create_avatar_profile())
-        aflay.addWidget(self.avatar_new_btn, 1)
-        self.avatar_paste_btn = QPushButton("📥 Paste")
-        self.avatar_paste_btn.setMinimumHeight(34)
-        self.avatar_paste_btn.setProperty("role", "secondary")
-        self.avatar_paste_btn.clicked.connect(lambda _=False: self.controller.paste_profile("avatar"))
-        aflay.addWidget(self.avatar_paste_btn)
-        aflay.addWidget(self._make_help_badge(
-            "Paste profile",
-            "Creates a new avatar profile (bound to the current avatar) "
-            "from the profile most recently copied with a row's 📋 Copy "
-            "button — handy for carrying a tuned setup over to a new "
-            "avatar."
-        ))
-        prof_lay.addWidget(afooter)
-
-        # Manage-all button lives below the "+ New / Paste" row so the
-        # Dashboard list can stay short (only profiles bound to the current
-        # avatar) while still offering a single click to browse the full set.
-        self.avatar_manage_btn = QPushButton("📂 Manage all avatar profiles")
-        self.avatar_manage_btn.setMinimumHeight(30)
-        self.avatar_manage_btn.setProperty("role", "secondary")
-        self.avatar_manage_btn.clicked.connect(
-            lambda _=False: self._open_avatar_profile_manager()
-        )
-        prof_lay.addWidget(self.avatar_manage_btn)
-
-        parent_layout.addWidget(prof_card)
+        parent_layout.addWidget(modes_card)
 
         # ===== Purr-check card =====
         self.testing_frame = _Card()
@@ -193,535 +144,189 @@ class DashboardMixin:
         parent_layout.addWidget(self.testing_frame)
         parent_layout.addStretch(1)
 
-        # Initial render of both lists.
-        self._refresh_profile_buttons()
+        # Initial render of the mode rows (and the sidebar grid, which is
+        # built before this view).
+        self._refresh_mode_buttons()
 
     # ------------------------------------------------------------------
-    # Profile section helpers
+    # Modes section helpers
     # ------------------------------------------------------------------
 
-    def _refresh_profile_buttons(self):
-        """Rebuild both profile sections + update the active banner."""
+    def _refresh_mode_buttons(self):
+        """Repaint every mode surface from controller.get_modes_info():
+        the sidebar grid buttons (restyled in place) and the Dashboard
+        mode rows (rebuilt). The controller calls this after every mode
+        change — including during early startup before the widgets
+        exist, so every widget access is getattr-guarded."""
         ctl = self.controller
-        active = ctl.get_active_profile_info() \
-            if hasattr(ctl, "get_active_profile_info") \
-            else {"kind": "global", "name": ctl.get_current_global_profile_name()}
+        if not hasattr(ctl, "get_modes_info"):
+            return
+        infos = ctl.get_modes_info()
 
-        # ---- Active banner ----
-        if self.profile_active_label is not None:
-            kind_label = "Avatar" if active["kind"] == "avatar" else "Global"
-            self.profile_active_label.setText(
-                f"Active profile: {kind_label} · {active['name']}"
-            )
+        # ---- Sidebar grid: text + active highlight, updated in place ----
+        for info, btn in zip(infos, getattr(self, "mode_grid_buttons", None) or []):
+            try:
+                btn.setText(f"{info.get('name', '')}\n{info.get('icon', '')}")
+                btn.setProperty("active", "true" if info.get("active") else "false")
+                self._repolish(btn)
+            except RuntimeError:
+                pass  # widget destroyed during a rebuild
 
-        # ---- Current avatar label ----
-        if self.current_avatar_label is not None:
+        # ---- Current-avatar label (modes-card footer) ----
+        lbl = getattr(self, "current_avatar_label", None)
+        if lbl is not None:
             avatar_id = ctl.get_current_avatar_id() or ""
             if avatar_id:
-                self.current_avatar_label.setText(f"Current avatar: {_truncate(avatar_id, 28)}")
+                lbl.setText(f"Current avatar: {_truncate(avatar_id, 28)}")
             else:
-                self.current_avatar_label.setText("Current avatar: (not detected)")
+                lbl.setText("Current avatar: (not detected)")
 
-        # ---- Clipboard-aware paste buttons ----
-        has_clip = ctl.has_clipboard()
-        src = ctl.get_clipboard_source_name() or ""
-        for btn in (self.global_paste_btn, self.avatar_paste_btn):
-            if btn is None:
-                continue
-            btn.setEnabled(has_clip)
-            btn.setText(f"📥 Paste (from '{_truncate(src, 18)}')" if has_clip else "📥 Paste")
-
-        # ---- Avatar 'New' button availability ----
-        if self.avatar_new_btn is not None:
-            avatar_id = ctl.get_current_avatar_id() or ""
-            if avatar_id:
-                self.avatar_new_btn.setEnabled(True)
-                self.avatar_new_btn.setText(
-                    f"+ New Avatar Profile (binds to {_truncate(avatar_id, 16)})"
-                )
-                self.avatar_new_btn.setToolTip("")
-            else:
-                self.avatar_new_btn.setEnabled(False)
-                self.avatar_new_btn.setText("+ New Avatar Profile (no avatar detected)")
-                self.avatar_new_btn.setToolTip(
-                    "Load any avatar in VRChat first so the profile knows which avatar to bind to."
-                )
-
-        # ---- Manage-all button ----
-        if self.avatar_manage_btn is not None:
-            total = len(ctl.get_avatar_profile_names())
-            self.avatar_manage_btn.setText(
-                f"📂 Manage all avatar profiles ({total})"
-            )
-            self.avatar_manage_btn.setEnabled(total > 0)
-
-        # ---- Rebuild rows ----
-        self._build_global_profile_rows(active)
-        self._build_avatar_profile_rows(active)
-
-    # Backwards-compat alias for older internal callers.
-    def _build_profile_slots(self):
-        self._refresh_profile_buttons()
-
-    def _build_global_profile_rows(self, active: dict):
-        if self.global_profile_list_layout is None:
+        # ---- Dashboard rows: rebuilt from scratch ----
+        # Skipped while one of our own intensity spinboxes is mid-edit:
+        # the controller echoes set_mode_master_scale straight back here,
+        # and rebuilding the rows would destroy the very spinbox emitting
+        # the change (killing arrow-repeat and keyboard focus).
+        layout = getattr(self, "mode_list_layout", None)
+        if layout is None or getattr(self, "_mode_scale_updating", False):
             return
-        _clear_layout(self.global_profile_list_layout)
+        _clear_layout(layout)
+        for info in infos:
+            layout.addWidget(self._make_mode_row(info))
 
-        names = self.controller.get_global_profile_names()
-        can_delete = len(names) > 1
-        for name in names:
-            # Exactly one profile across both sections shows the highlight:
-            # whichever the resolver currently considers active. Clicking
-            # any global flips the override on, so the highlight follows.
-            is_active = (active["kind"] == "global" and name == active["name"])
-            row = self._make_profile_row(
-                name=name,
-                is_selected=is_active,
-                is_active=is_active,
-                on_activate=lambda n=name: self.controller.switch_profile(n),
-                on_rename=lambda n=name: self._start_profile_rename("global", n),
-                on_copy=lambda n=name: self.controller.copy_profile("global", n),
-                on_delete=lambda n=name: self._confirm_profile_delete("global", n),
-                can_delete=can_delete,
-                kind="global",
-            )
-            self.global_profile_list_layout.addWidget(row)
-
-    def _build_avatar_profile_rows(self, active: dict):
-        """Show only profiles bound to the *current* avatar (typically 0–1
-        rows). The rest live in the Avatar Profile Manager dialog so the
-        Dashboard stays uncluttered when you have many avatars."""
-        if self.avatar_profile_list_layout is None:
-            return
-        _clear_layout(self.avatar_profile_list_layout)
-
-        ctl = self.controller
-        current_avatar = ctl.get_current_avatar_id() or ""
-        all_names = ctl.get_avatar_profile_names()
-        relevant = [
-            n for n in all_names
-            if ctl.get_avatar_binding(n) == current_avatar and current_avatar
-        ]
-
-        if not relevant:
-            if not current_avatar:
-                msg = "No avatar detected — load any avatar in VRChat first."
-            elif not all_names:
-                msg = "No avatar profiles yet. Click '+ New Avatar Profile' above."
-            else:
-                msg = ("No profile bound to the current avatar. Create one above, "
-                       "or open the manager below to bind an existing profile.")
-            empty = QLabel(msg)
-            empty.setProperty("muted", "true")
-            empty.setWordWrap(True)
-            self._repolish(empty)
-            self.avatar_profile_list_layout.addWidget(empty)
-        else:
-            for name in relevant:
-                bound_id = ctl.get_avatar_binding(name)
-                is_active = (active["kind"] == "avatar" and name == active["name"])
-                row = self._make_profile_row(
-                    name=name,
-                    is_selected=is_active,
-                    is_active=is_active,
-                    bound_avatar_id=bound_id,
-                    bound_is_current=True,
-                    on_activate=lambda n=name: self.controller.bind_avatar_profile_to_current(n),
-                    on_rename=lambda n=name: self._start_profile_rename("avatar", n),
-                    on_copy=lambda n=name: self.controller.copy_profile("avatar", n),
-                    on_delete=lambda n=name: self._confirm_profile_delete("avatar", n),
-                    can_delete=True,
-                    show_bind=True,
-                    kind="avatar",
-                )
-                self.avatar_profile_list_layout.addWidget(row)
-
-
-    def _make_profile_row(self, name: str, on_activate, on_rename,
-                          on_copy, on_delete, can_delete: bool = True,
-                          is_active: bool = False, is_selected: bool = False,
-                          meta_text: str = "",
-                          bound_avatar_id: str = "", bound_is_current: bool = False,
-                          show_bind: bool = False,
-                          extra_actions: Optional[list] = None,
-                          kind: str = "global",
-                          on_after_paste: Optional[Callable] = None) -> QWidget:
-        """Build a single profile row.
-
-        Visual states:
-          * `is_selected` controls the button highlight (purple). This is what
-            the user clicked most recently — i.e. their *intent*.
-          * `is_active` controls the leading dot (filled green vs hollow).
-            This is what's actually driving haptics right now. For the global
-            section these can diverge when an avatar profile overrides.
-
-        `extra_actions` is a list of (label, tooltip, callback) appended to
-        the end of the row — used by the manager dialog for the "Bind to
-        current avatar" button.
-        """
+    def _make_mode_row(self, info: Dict[str, Any]) -> QWidget:
+        """One Dashboard mode row: active dot · icon picker · name button
+        (switches to the mode) · rename · master-intensity spinbox."""
+        index = int(info.get("index", 0))
+        is_active = bool(info.get("active"))
         row = QWidget()
-        row.setProperty("profileName", name)
         rlay = _hbox(0, 6)
         row.setLayout(rlay)
 
+        # Leading dot: what's actually driving haptics right now.
         dot = QLabel("●" if is_active else "○")
         dot.setProperty("role", "success" if is_active else "muted")
         self._repolish(dot)
         rlay.addWidget(dot)
 
-        name_btn = QPushButton(name)
+        icon_btn = QPushButton(info.get("icon", ""))
+        icon_btn.setFixedSize(34, 34)
+        icon_btn.setProperty("role", "secondary")
+        icon_btn.setToolTip("Change icon")
+        icon_btn.clicked.connect(
+            lambda _=False, i=index, b=icon_btn: self._open_mode_icon_menu(i, b)
+        )
+        rlay.addWidget(icon_btn)
+
+        name_btn = QPushButton(info.get("name", f"Mode {index}"))
         name_btn.setMinimumHeight(34)
         name_btn.setProperty(
-            "role", "profileActive" if is_selected else "profileIdle"
+            "role", "profileActive" if is_active else "profileIdle"
         )
-        name_btn.clicked.connect(lambda _=False: on_activate())
+        name_btn.clicked.connect(
+            lambda _=False, i=index: self.controller.switch_mode(i)
+        )
         rlay.addWidget(name_btn, 1)
 
-        if meta_text:
-            note = QLabel(meta_text)
-            note.setProperty("muted", "true")
-            self._repolish(note)
-            rlay.addWidget(note)
-
-        # Avatar-binding label (avatar section only)
-        if show_bind:
-            if bound_avatar_id:
-                bind_text = f"🔗 {_truncate(bound_avatar_id, 18)}"
-                if bound_is_current:
-                    bind_text += "  (current)"
-            else:
-                bind_text = "(unbound)"
-            meta = QLabel(bind_text)
-            meta.setProperty("role", "success" if bound_is_current else "muted")
-            meta.setMinimumWidth(150)
-            self._repolish(meta)
-            rlay.addWidget(meta)
-
-        def make_action(text, tooltip, cb, role="secondary", enabled=True,
-                        width: int = 34, icon: Optional[QIcon] = None):
-            b = QPushButton(text if icon is None else "")
-            b.setFixedSize(width, 34)
-            b.setProperty("role", role)
-            b.setToolTip(tooltip)
-            b.setEnabled(enabled)
-            if icon is not None:
-                b.setIcon(icon)
-                b.setIconSize(QSize(18, 18))
-            b.clicked.connect(lambda _=False: cb())
-            return b
-
-        rlay.addWidget(make_action("", "Rename", on_rename, icon=_icon_pencil()))
-
-        # Middle button is context-sensitive based on clipboard state:
-        #   * empty clipboard  -> "Copy" (purple-secondary, two-sheets icon)
-        #   * this row is the clipboard source -> green "Copied — click to
-        #     cancel" using the same two-sheets icon on a success background
-        #   * a different row is the source -> "Paste here" (clipboard+arrow
-        #     icon) which overwrites this row with the clipboard contents
-        ctl = self.controller
-        has_clip = ctl.has_clipboard()
-        clip_src_name = ctl.get_clipboard_source_name() if has_clip else None
-        clip_src_kind = ctl.get_clipboard_source_kind() if has_clip else None
-        is_clip_source = (
-            clip_src_name == name and clip_src_kind == kind
+        rename_btn = QPushButton("")
+        rename_btn.setFixedSize(34, 34)
+        rename_btn.setProperty("role", "secondary")
+        rename_btn.setToolTip("Rename")
+        rename_btn.setIcon(_icon_pencil())
+        rename_btn.setIconSize(QSize(18, 18))
+        rename_btn.clicked.connect(
+            lambda _=False, i=index: self._dialog_rename_mode(i)
         )
+        rlay.addWidget(rename_btn)
 
-        def _paste_here(_n=name, _k=kind):
-            self.controller.paste_profile_into(_k, _n)
-            if on_after_paste is not None:
-                on_after_paste()
-
-        def _cancel_copy():
-            self.controller.clear_clipboard()
-            if on_after_paste is not None:
-                on_after_paste()
-
-        if not has_clip:
-            rlay.addWidget(make_action(
-                "", "Copy to clipboard", on_copy, icon=_icon_copy()
-            ))
-        elif is_clip_source:
-            # Source row: not a paste target (pasting onto itself is a no-op).
-            # Show a green "Copied" badge plus a small × to cancel.
-            badge = QLabel("✓ Copied")
-            badge.setProperty("role", "success")
-            badge.setAlignment(Qt.AlignCenter)
-            badge.setFixedHeight(34)
-            badge.setStyleSheet(
-                f"color: {COLOR_SUCCESS}; font-weight: bold; padding: 0 6px;"
-            )
-            badge.setToolTip(
-                "This profile is on the clipboard — click paste on another "
-                "row to overwrite it, or × to cancel."
-            )
-            self._repolish(badge)
-            rlay.addWidget(badge)
-            rlay.addWidget(make_action(
-                "", "Cancel copy", _cancel_copy,
-                role="secondary", icon=_icon_cross(COLOR_TEXT_MUTED),
-            ))
-        else:
-            rlay.addWidget(make_action(
-                "", f"Paste over '{name}' (overwrite with clipboard)",
-                _paste_here, role="confirm", icon=_icon_paste(),
-            ))
-        trash_color = COLOR_TEXT if can_delete else COLOR_TEXT_MUTED
-        rlay.addWidget(make_action(
-            "", "Delete", on_delete,
-            role="danger" if can_delete else "secondary",
-            enabled=can_delete,
-            icon=_icon_trash(trash_color),
-        ))
-        for (label, tooltip, cb) in (extra_actions or []):
-            rlay.addWidget(make_action(label, tooltip, cb, width=110))
+        scale_spin = QSpinBox()
+        scale_spin.setRange(0, 100)
+        scale_spin.setSuffix("%")
+        # Commit on Enter/focus-out, not per typed digit — typing "100"
+        # must not drive the hardware at 1% then 10% on the way there.
+        # (Held-arrow auto-repeat is coalesced by the facade's debounced
+        # save; the live value still applies per step, which is fine.)
+        scale_spin.setKeyboardTracking(False)
+        scale_spin.setToolTip(
+            "Master intensity — multiplies every backend's output in this mode"
+        )
+        # Seed while signals are blocked, and connect only afterwards, so
+        # the programmatic setValue can't echo into the controller.
+        scale_spin.blockSignals(True)
+        scale_spin.setValue(int(round(float(info.get("master_scale", 1.0)) * 100)))
+        scale_spin.blockSignals(False)
+        scale_spin.valueChanged.connect(
+            lambda v, i=index: self._on_mode_scale_changed(i, v)
+        )
+        rlay.addWidget(scale_spin)
         return row
 
-    def _open_avatar_profile_manager(self):
-        """Modal viewer + editor for every avatar profile, regardless of which
-        avatar is currently loaded. Shows binding info and offers rename /
-        copy / delete plus a 'Bind to current avatar' shortcut."""
-        ctl = self.controller
-        dlg = QDialog(self.window)
-        dlg.setWindowTitle("Avatar Profile Manager")
-        dlg.resize(720, 520)
-        dlg.setModal(True)
+    def _on_mode_scale_changed(self, index: int, value: int):
+        """Push a master-intensity spinbox edit to the controller. The
+        re-entrancy flag makes the controller's synchronous refresh
+        callback skip the row rebuild (see _refresh_mode_buttons)."""
+        self._mode_scale_updating = True
+        try:
+            self.controller.set_mode_master_scale(int(index), float(value) / 100.0)
+        finally:
+            self._mode_scale_updating = False
 
-        lay = _vbox(14, 8)
-        dlg.setLayout(lay)
+    def _open_mode_icon_menu(self, index: int, anchor: QWidget):
+        """Emoji picker for a mode's icon — a plain QMenu of
+        MODE_ICON_CHOICES anchored under the row's icon button."""
+        menu = QMenu(anchor)
+        for icon in MODE_ICON_CHOICES:
+            act = menu.addAction(icon)
+            act.triggered.connect(
+                lambda _=False, i=index, ic=icon:
+                self.controller.set_mode_icon(i, ic)
+            )
+        menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
 
-        title = QLabel("Avatar Profile Manager")
-        title.setObjectName("sectionTitle")
-        lay.addWidget(title)
-
-        cur_id = ctl.get_current_avatar_id() or "(not detected)"
-        lay.addWidget(self._muted_label(
-            f"Current avatar: {cur_id} — use ↻ to rebind a profile to it."
-        ))
-
-        # Scrollable rows
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        _install_rainbow_scrollbars(scroll)
-        host = QWidget()
-        host_lay = _vbox(0, 6)
-        host.setLayout(host_lay)
-        scroll.setWidget(host)
-        lay.addWidget(scroll, 1)
-
-        # Bottom: Close button
-        btn_row = QWidget()
-        btn_row_lay = _hbox(0, 6)
-        btn_row.setLayout(btn_row_lay)
-        btn_row_lay.addStretch(1)
-        close = QPushButton("Close")
-        close.clicked.connect(dlg.accept)
-        btn_row_lay.addWidget(close)
-        lay.addWidget(btn_row)
-
-        # The manager mirrors the Dashboard's row helper. After any edit we
-        # have to rebuild both the dialog list AND the Dashboard list, so
-        # wrap the build step in a closure that reuses both.
-        def rebuild():
-            _clear_layout(host_lay)
-            active = ctl.get_active_profile_info()
-            names = ctl.get_avatar_profile_names()
-            current_avatar = ctl.get_current_avatar_id() or ""
-            if not names:
-                empty = QLabel("No avatar profiles. Close this dialog and create one from the Dashboard.")
-                empty.setProperty("muted", "true")
-                self._repolish(empty)
-                host_lay.addWidget(empty)
-                return
-            for name in names:
-                bound_id = ctl.get_avatar_binding(name)
-                is_active = (active["kind"] == "avatar" and name == active["name"])
-                # "Activating" from this dialog rebinds the profile to the
-                # current avatar (the only way to make an avatar profile go
-                # live without changing avatars).
-                row = self._make_profile_row(
-                    name=name,
-                    is_selected=is_active,
-                    is_active=is_active,
-                    bound_avatar_id=bound_id,
-                    bound_is_current=bool(bound_id and bound_id == current_avatar),
-                    on_activate=lambda n=name: (
-                        ctl.bind_avatar_profile_to_current(n),
-                        rebuild(),
-                    ),
-                    on_rename=lambda n=name: self._dialog_rename_avatar(dlg, n, rebuild),
-                    on_copy=lambda n=name: (
-                        ctl.copy_profile("avatar", n),
-                        rebuild(),
-                    ),
-                    on_delete=lambda n=name: self._dialog_delete_avatar(dlg, n, rebuild),
-                    can_delete=True,
-                    show_bind=True,
-                    kind="avatar",
-                    on_after_paste=rebuild,
-                    extra_actions=[(
-                        "↻ Bind to current",
-                        "Rebind this profile to the currently-loaded avatar",
-                        lambda n=name: (
-                            ctl.bind_avatar_profile_to_current(n),
-                            rebuild(),
-                        ),
-                    )] if current_avatar else [],
-                )
-                host_lay.addWidget(row)
-            host_lay.addStretch(1)
-
-        rebuild()
-        dlg.exec()
-
-    def _dialog_rename_avatar(self, dlg: QDialog, current_name: str, rebuild):
-        """Tiny rename prompt for use inside the manager dialog. Avoids
-        inline-editing inside the scroll area for simplicity."""
-        from PySide6.QtWidgets import QInputDialog
+    def _dialog_rename_mode(self, index: int):
+        """Tiny modal rename prompt. Modes are renamed rarely; a dialog
+        beats rebuilding the row around an inline editor."""
+        infos = self.controller.get_modes_info()
+        current = ""
+        if 0 <= index < len(infos):
+            current = str(infos[index].get("name", ""))
         new_name, ok = QInputDialog.getText(
-            dlg, "Rename Avatar Profile",
-            f"New name for '{current_name}':",
-            text=current_name,
+            self.window, "Rename Mode",
+            f"New name for '{current}':",
+            text=current,
         )
         if ok:
             new_name = (new_name or "").strip()
-            if new_name and new_name != current_name:
-                self.controller.rename_avatar_profile(current_name, new_name)
-        rebuild()
+            if new_name and new_name != current:
+                self.controller.rename_mode(index, new_name)
 
-    def _dialog_delete_avatar(self, dlg: QDialog, name: str, rebuild):
-        box = QMessageBox(dlg)
-        box.setWindowTitle("Delete Avatar Profile")
-        box.setText(f"Delete avatar profile '{name}'?")
-        box.setInformativeText(
-            "This removes the profile's saved per-toy settings.\n"
-            "Your toys themselves remain."
-        )
-        box.setIcon(QMessageBox.Warning)
-        del_btn = box.addButton("Delete", QMessageBox.DestructiveRole)
-        box.addButton("Cancel", QMessageBox.RejectRole)
-        box.exec()
-        if box.clickedButton() is del_btn:
-            self.controller.delete_avatar_profile(name)
-        rebuild()
-
-    def _add_new_profile(self):
-        name = self.controller.create_profile()
-        self._refresh_profile_buttons()
-        self._start_profile_rename("global", name)
-
-    def _confirm_profile_delete(self, kind: str, name: str):
-        if kind == "global" and len(self.controller.get_global_profile_names()) <= 1:
-            return
-        box = QMessageBox(self.window)
-        kind_word = "avatar profile" if kind == "avatar" else "profile"
-        box.setWindowTitle(f"Delete {kind_word.title()}")
-        box.setText(f"Delete {kind_word} '{name}'?")
-        box.setInformativeText(
-            "This removes the profile's saved per-toy settings.\n"
-            "Your toys themselves remain."
-        )
-        box.setIcon(QMessageBox.Warning)
-        del_btn = box.addButton("Delete", QMessageBox.DestructiveRole)
-        box.addButton("Cancel", QMessageBox.RejectRole)
-        box.exec()
-        if box.clickedButton() is del_btn:
-            if kind == "avatar":
-                self.controller.delete_avatar_profile(name)
-            else:
-                self.controller.delete_profile(name)
-
-    def _start_profile_rename(self, kind: str, current_name: str):
-        """Replace the matching row's name button with an inline QLineEdit
-        plus explicit ✓ / ✗ buttons. Avoids using `editingFinished` because
-        it fires on stray focus changes (including the rebuild that happens
-        when a commit succeeds), which used to silently revert the rename.
-        """
-        if not self.controller.profile_exists(kind, current_name):
-            return
-        layout = (self.global_profile_list_layout if kind == "global"
-                  else self.avatar_profile_list_layout)
-        if layout is None:
-            return
-
-        # Find the row widget with this profile name.
-        target_row = None
-        for i in range(layout.count()):
-            item = layout.itemAt(i)
-            row = item.widget() if item else None
-            if row is not None and row.property("profileName") == current_name:
-                target_row = row
-                break
-        if target_row is None:
-            return
-        row_layout = target_row.layout()
-        if row_layout is None:
-            return
-
-        # Rebuild the row in place: leading dot + inline editor.
-        _clear_layout(row_layout)
-
-        dot = QLabel("✎")
-        dot.setProperty("role", "muted")
-        self._repolish(dot)
-        row_layout.addWidget(dot)
-
-        entry = QLineEdit(current_name)
-        entry.setMinimumHeight(34)
-        entry.selectAll()
-        row_layout.addWidget(entry, 1)
-
-        # One-shot guard so returnPressed + button clicks can't double-commit.
-        state = {"done": False}
-
-        def commit():
-            if state["done"]:
-                return
-            state["done"] = True
-            new_name = entry.text().strip()
-            if not new_name or new_name == current_name:
-                # No change → just rebuild the row.
-                self._refresh_profile_buttons()
-                return
-            if kind == "avatar":
-                self.controller.rename_avatar_profile(current_name, new_name)
-            else:
-                self.controller.rename_profile(current_name, new_name)
-
-        def cancel():
-            if state["done"]:
-                return
-            state["done"] = True
-            self._refresh_profile_buttons()
-
-        entry.returnPressed.connect(commit)
-        # Escape cancels. We use a key-press event filter via a small lambda
-        # subclass-free hack: connect to keyPressEvent via installEventFilter
-        # on a dedicated object would be overkill — instead handle Escape
-        # by listening through a child shortcut on the QLineEdit.
-        from PySide6.QtGui import QKeySequence, QShortcut
-        esc = QShortcut(QKeySequence("Escape"), entry)
-        esc.activated.connect(cancel)
-
-        ok = QPushButton("")
-        ok.setFixedSize(34, 34)
-        ok.setProperty("role", "confirm")
-        ok.setToolTip("Confirm")
-        ok.setIcon(_icon_check(COLOR_TEXT))
-        ok.setIconSize(QSize(18, 18))
-        ok.clicked.connect(lambda _=False: commit())
-        row_layout.addWidget(ok)
-
-        no = QPushButton("")
-        no.setFixedSize(34, 34)
-        no.setProperty("role", "cancel")
-        no.setToolTip("Cancel")
-        no.setIcon(_icon_cross(COLOR_TEXT))
-        no.setIconSize(QSize(18, 18))
-        no.clicked.connect(lambda _=False: cancel())
-        row_layout.addWidget(no)
-
-        entry.setFocus()
+    def _build_mode_grid(self) -> QWidget:
+        """Compact 2-column × 3-row grid of mode buttons for the sidebar.
+        The sidebar deliberately has no scroll area, so the grid must stay
+        small: ~44px-tall buttons with 4px gaps inside the ~180px inner
+        width. _refresh_mode_buttons restyles the buttons in place."""
+        host = QWidget()
+        grid = QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setSpacing(4)
+        host.setLayout(grid)
+        self.mode_grid_buttons = []
+        ctl = self.controller
+        infos = ctl.get_modes_info() if hasattr(ctl, "get_modes_info") else []
+        for i in range(6):
+            info = infos[i] if i < len(infos) else {}
+            btn = QPushButton(
+                f"{info.get('name', f'Mode {i}')}\n{info.get('icon', '')}"
+            )
+            btn.setProperty("role", "modeBtn")
+            btn.setProperty("active", "true" if info.get("active") else "false")
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setFixedHeight(44)
+            btn.clicked.connect(
+                lambda _=False, i=i: self.controller.switch_mode(i)
+            )
+            grid.addWidget(btn, i // 2, i % 2)
+            self.mode_grid_buttons.append(btn)
+        return host
 
     # ----------------------------------------------------------
     # Simple Mode view
@@ -784,7 +389,8 @@ class DashboardMixin:
 
         tlay.addWidget(self._muted_label(
             "Routes every detected SPS source to every connected toy with no "
-            "per-toy configuration. Profiles are ignored while this is on."
+            "per-toy configuration. Per-motor Device Routing is bypassed "
+            "while this is on; the active mode's master intensity still applies."
         ))
 
         self.simple_mode_status_label = QLabel("")
@@ -1028,12 +634,13 @@ class DashboardMixin:
         if self.simple_mode_status_label is not None:
             if ctl.get_simple_mode():
                 self.simple_mode_status_label.setText(
-                    "Simple Mode is ON — Device Routing profiles are bypassed."
+                    "Simple Mode is ON — per-motor Device Routing is bypassed "
+                    "(the mode's master intensity still applies)."
                 )
                 self.simple_mode_status_label.setStyleSheet(f"color: {COLOR_SUCCESS};")
             else:
                 self.simple_mode_status_label.setText(
-                    "Simple Mode is OFF — normal per-profile routing is active."
+                    "Simple Mode is OFF — normal per-motor Device Routing is active."
                 )
                 self.simple_mode_status_label.setStyleSheet(f"color: {COLOR_TEXT_MUTED};")
 

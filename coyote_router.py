@@ -14,9 +14,12 @@ from zone_strength import zone_filter_strength
 STRENGTH_MAX = 200
 
 
-def compute_channel_strength(cfg: Dict[str, Any], strength01: float) -> int:
+def compute_channel_strength(cfg: Dict[str, Any], strength01: float,
+                             scale: float = 1.0) -> int:
     """Shape a 0..1 zone strength into a 0-200 channel strength using the
-    channel's threshold / gain / max_strength. Pure + testable."""
+    channel's threshold / gain / max_strength. `scale` is the mode master
+    scale (0..1); applied pre-quantization so attenuation keeps full
+    resolution, and scale=0 guarantees 0. Pure + testable."""
     if not cfg or not cfg.get("enabled", True):
         return 0
     try:
@@ -28,6 +31,7 @@ def compute_channel_strength(cfg: Dict[str, Any], strength01: float) -> int:
     if strength01 <= threshold:
         return 0
     shaped = (strength01 - threshold) * gain
+    shaped *= scale
     shaped = max(0.0, min(1.0, shaped))
     val = int(round(shaped * max(0, min(STRENGTH_MAX, max_strength))))
     return max(0, min(STRENGTH_MAX, val))
@@ -40,10 +44,15 @@ class CoyoteRouter(PollingRouter):
                  engine,
                  get_channel_configs: Callable[[], Dict[str, Dict[str, Any]]],
                  get_sps_sources: Optional[Callable[[], Dict[str, Any]]] = None,
-                 poll_rate_s: float = 0.016):
+                 poll_rate_s: float = 0.016,
+                 get_master_scale: Optional[Callable[[], float]] = None):
         super().__init__("CoyoteRouter", engine, poll_rate_s=poll_rate_s)
         self.get_channel_configs = get_channel_configs
         self.get_sps_sources = get_sps_sources or (lambda: None)
+        # Mode master scale (0..1); no test-level hook here — e-stim is
+        # deliberately excluded from the connectivity pulse (see constants.py
+        # OGP_TEST_LEVEL).
+        self.get_master_scale = get_master_scale or (lambda: 1.0)
 
     def _engine_ready(self) -> bool:
         return self.engine.is_connected
@@ -54,6 +63,10 @@ class CoyoteRouter(PollingRouter):
             sps_sources = self.get_sps_sources()
         except Exception:
             sps_sources = None
+        try:
+            scale = float(self.get_master_scale())
+        except Exception:
+            scale = 1.0
         out: Dict[str, int] = {}
         for ch in ("A", "B"):
             cfg = cfgs.get(ch)
@@ -64,7 +77,7 @@ class CoyoteRouter(PollingRouter):
             strength01 = zone_filter_strength(
                 cfg.get("ogb_zone"), cfg.get("zone_type", "Orf"),
                 cfg.get("filters") or [], params, sps_sources)
-            out[ch] = compute_channel_strength(cfg, strength01)
+            out[ch] = compute_channel_strength(cfg, strength01, scale)
         return out
 
     def dispatch(self, channel: str, target: int) -> None:

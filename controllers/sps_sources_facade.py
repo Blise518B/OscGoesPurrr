@@ -3,7 +3,7 @@
 The UI builds / edits user-defined synthetic SPS sources only through these
 methods, and the routers read the live source map through
 `_get_sps_source_map`. The persisted registry lives on
-`self.profile_manager.sps_sources` (a SpsSourceManager); the evaluation
+`self.mode_manager.sps_sources` (a SpsSourceManager); the evaluation
 math lives in sps_source.py.
 """
 
@@ -16,7 +16,7 @@ from zone_strength import zone_filter_strength
 
 class SpsSourcesFacade:
     """Mixin: synthetic-SPS-source controller methods. Composed into
-    OscGoesPurrrApp. Assumes the host has `self.profile_manager`."""
+    OscGoesPurrrApp. Assumes the host has `self.mode_manager`."""
 
     # ------------------------------------------------------------------
     # Router-facing getter
@@ -26,7 +26,7 @@ class SpsSourcesFacade:
         """`name -> definition` of every ENABLED source. Passed into the
         motor and bHaptics routers each tick so a selected synthetic source
         name resolves to a live value."""
-        return self.profile_manager.sps_sources.get_source_map(enabled_only=True)
+        return self.mode_manager.sps_sources.get_source_map(enabled_only=True)
 
     # ------------------------------------------------------------------
     # UI-facing reads
@@ -34,12 +34,12 @@ class SpsSourcesFacade:
 
     def get_sps_sources(self) -> List[Dict[str, Any]]:
         """Every stored source definition (copies), for the editor view."""
-        return self.profile_manager.sps_sources.list_sources()
+        return self.mode_manager.sps_sources.list_sources()
 
     def get_sps_source_names_flat(self) -> List[str]:
         """Flat list of all source names — for the Device Routing picker's
         'Custom Sources' section."""
-        return [s["name"] for s in self.profile_manager.sps_sources.list_sources()
+        return [s["name"] for s in self.mode_manager.sps_sources.list_sources()
                 if s.get("name")]
 
     def get_sps_source_names_by_type(self) -> Dict[str, List[str]]:
@@ -47,7 +47,7 @@ class SpsSourcesFacade:
         mirroring get_detected_zones() so the bHaptics Cross-Routing picker
         can slot synthetic sources alongside auto-detected zones."""
         out: Dict[str, List[str]] = {"Orifices": [], "Penetrators": []}
-        for s in self.profile_manager.sps_sources.list_sources():
+        for s in self.mode_manager.sps_sources.list_sources():
             name = s.get("name")
             if not name:
                 continue
@@ -61,7 +61,7 @@ class SpsSourcesFacade:
         user can see what a source *would* emit before enabling it."""
         params, _version, _zones = store.snapshot()
         out: Dict[str, float] = {}
-        for s in self.profile_manager.sps_sources.list_sources():
+        for s in self.mode_manager.sps_sources.list_sources():
             name = s.get("name")
             if name:
                 out[name] = evaluate_sps_source(s, params)
@@ -95,18 +95,18 @@ class SpsSourcesFacade:
     # ------------------------------------------------------------------
 
     def add_or_update_sps_source(self, defn: Dict[str, Any]) -> Optional[str]:
-        name = self.profile_manager.sps_sources.add_or_update_source(defn)
+        name = self.mode_manager.sps_sources.add_or_update_source(defn)
         self._sps_sources_changed()
         return name
 
     def delete_sps_source(self, name: str) -> bool:
-        ok = self.profile_manager.sps_sources.delete_source(name)
+        ok = self.mode_manager.sps_sources.delete_source(name)
         if ok:
             self._sps_sources_changed()
         return ok
 
     def rename_sps_source(self, old: str, new: str) -> bool:
-        ok = self.profile_manager.sps_sources.rename_source(old, new)
+        ok = self.mode_manager.sps_sources.rename_source(old, new)
         if ok:
             self._sps_sources_changed()
         return ok
