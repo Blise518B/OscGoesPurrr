@@ -318,8 +318,8 @@ class SettingsMixin:
             "Color profiles",
             "Switches the app-wide palette — surfaces, accents and the "
             "signal-chain activity colors. <b>Purrple</b> is the original "
-            "indigo/purple identity; <b>Noir</b> is black &amp; green. "
-            "Applies on the next launch."
+            "indigo/purple identity; <b>Noir</b> is the same design "
+            "re-hued to green &amp; light blue. Applies on the next launch."
         ))
         ap_hdr_row.addStretch(1)
         ap_lay.addLayout(ap_hdr_row)

@@ -61,17 +61,20 @@ class TestProfiles:
         # …and purrple never claims the native window frame.
         assert p.get("WINDOW_BORDER") is None
 
-    def test_noir_uses_one_green_highlight(self):
-        # The noir identity: neutral base, a single vibrant green carrying
-        # every highlight (no gradient of green hues).
+    def test_noir_is_the_green_blue_hue_swap(self):
+        # The noir identity: the original design language with purple
+        # re-hued to the hero green and pink to the hero light blue.
+        # The green→blue gradient (scrollbars/meters draw PRIMARY→LIVE)
+        # is the centrepiece — pin its exact endpoints.
         p = constants.COLOR_PROFILES["noir"]
-        green = p["PRIMARY"]
-        assert p["SUCCESS"] == green
-        assert p["INPUT_BORDER"] == green
-        assert p["CHAIN_LIVE"] == green
-        assert p["VALUE_HI"] == green
-        assert p["WINDOW_BORDER"] == green
-        # Vibrant green is far too light for white labels — noir carries
+        assert p["PRIMARY"] == "#07FF77"
+        assert p["LIVE"] == "#4DB8FF"
+        assert p["SUCCESS"] == p["PRIMARY"]
+        # The inspector ramp rides the same hero pair.
+        assert p["VALUE_LO"] == p["PRIMARY"]
+        assert p["VALUE_HI"] == p["LIVE"]
+        assert p["WINDOW_BORDER"] == p["PRIMARY"]
+        # Neon green is far too light for white labels — noir carries
         # near-black text on primary fills (readability, ~14.7:1).
         assert p["TEXT_ON_PRIMARY"] != p["TEXT"]
 

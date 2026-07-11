@@ -58,50 +58,55 @@ COLOR_PROFILES = {
         "VALUE_HI": "#FF3D7F",
     },
     "noir": {
-        "label": "Noir (black & green)",
-        # ONE green. Neutral black/gray base everywhere; the single
-        # vibrant green (#07FF77) carries every highlight — outlines,
-        # focus, selection, chain activity, window border. No tinted
-        # surfaces, no gradient of green hues. Red stays for errors,
-        # orange for warnings, and a selective blue marks live/
-        # significant numbers so they don't drown in the green.
-        "PRIMARY": "#07FF77",        # THE highlight green
-        "PRIMARY_HOVER": "#00D95C",  # pressed/hover shade of the same green
+        "label": "Noir (green & blue)",
+        # The original design language, hue-swapped: every purple-family
+        # color re-hued to the hero green (#07FF77, H147°) and every
+        # pink-family color to the hero light blue (#4DB8FF, H204°),
+        # keeping each color's saturation/brightness — so the deep tinted
+        # surfaces, the input borders, the muted-text tint and the chain
+        # ramp all relate to each other exactly like purrple's do. The
+        # green→blue gradient (scrollbars, meters, sliders — PRIMARY →
+        # LIVE) is the identity's centrepiece. Red stays for errors,
+        # orange for warnings.
+        "PRIMARY": "#07FF77",        # Main brand accent (Neon Green)
+        "PRIMARY_HOVER": "#00D95C",
         "ALERT": "#FF1150",          # Error stays red — semantics over style
         "ALERT_HOVER": "#DD0E45",
-        "SUCCESS": "#07FF77",        # Connected / Good — same green
-        "LIVE": "#4DB8FF",           # Live data numbers (selective blue)
-        "LIVE_DIM": "#123246",
+        "SUCCESS": "#07FF77",        # Connected / Good — the same green
+        "LIVE": "#4DB8FF",           # Live data, "now firing" (Light Blue)
+        "LIVE_DIM": "#1E557A",       # Pill background tint for LIVE text
         "WARNING": "#FF7300",        # Warning stays orange
         "WARNING_DIM": "#7A3700",
         "SUCCESS_DIM": "#073D24",
         "ALERT_DIM": "#5A0820",
-        # Surfaces — neutral black and gray, no hue tint.
-        "BG": "#0A0A0A",             # App background (near-black)
-        "SURFACE": "#161616",        # Cards, active tabs, separators
-        "SURFACE_HOVER": "#202020",  # Hover state for tabs
-        "BUTTON": "#242424",
-        "BUTTON_HOVER": "#303030",
-        "INPUT_BG": "#101010",       # Fields: black…
-        "INPUT_BORDER": "#07FF77",   # …with the vibrant green outline
-        "INPUT_FOCUS": "#B3FFD1",    # Focused field pops brighter
+        # Surfaces — tinted deep green, mirroring purrple's deep indigo
+        # (same S/V, hue swapped). The tint is what separates the look
+        # from a generic dark theme.
+        "BG": "#092415",             # Deep app background (green-black)
+        "SURFACE": "#155331",        # Cards, active tabs, separators
+        "SURFACE_HOVER": "#207044",  # Hover state for tabs
+        "BUTTON": "#2C8C57",
+        "BUTTON_HOVER": "#3CB372",
+        "INPUT_BG": "#124027",       # Text inputs, combo boxes, pickers
+        "INPUT_BORDER": "#2C8C57",   # Resting border for interactive widgets
+        "INPUT_FOCUS": "#7BFFB7",    # Focus border (lighter green)
         "TEXT": "#FFFFFF",
-        # Vibrant green is far too light for white labels (~1.35:1) —
+        # The neon green is far too light for white labels (~1.35:1) —
         # buttons/selections carry near-black text on the green fill.
         "TEXT_ON_PRIMARY": "#0A0A0A",
-        "TEXT_MUTED": "#9A9A9A",     # Secondary labels — neutral gray
-        "CHAIN_IDLE": "#3A3A3A",     # idle = gray, part of the base
-        "CHAIN_LIVE": "#07FF77",     # live = the highlight green
-        # OSC-inspector value ramp: gray base → green highlight. The low
-        # end doubles as TEXT (the inspector paints values with it), so
-        # it must stay legible on the near-black background — mid-gray,
-        # not the surface gray.
-        "VALUE_LO": "#9A9A9A",
-        "VALUE_HI": "#07FF77",
+        "TEXT_MUTED": "#9AB8A8",     # Secondary labels — slight green tint
+        # Signal-chain activity ramp: idle dark green → vivid light blue
+        # (purrple: dark purple → vivid pink).
+        "CHAIN_IDLE": "#30A063",
+        "CHAIN_LIVE": "#40B3FF",
+        # OSC-inspector value ramp: green → light blue, the same pair as
+        # the scrollbar gradient.
+        "VALUE_LO": "#07FF77",
+        "VALUE_HI": "#4DB8FF",
         # Native window frame (Windows 11 DWM). Purrple leaves the
         # system frame untouched; noir claims it for the identity.
         "WINDOW_BORDER": "#07FF77",
-        "WINDOW_CAPTION": "#0A0A0A",
+        "WINDOW_CAPTION": "#092415",
         "WINDOW_CAPTION_TEXT": "#FFFFFF",
     },
 }
