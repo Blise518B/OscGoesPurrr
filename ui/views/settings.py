@@ -301,6 +301,65 @@ class SettingsMixin:
 
         parent_layout.addWidget(ql_card)
 
+        # ---- Appearance Card ----
+        # Color profiles: the palette is baked into every module (and the
+        # generated QSS) at import time, so a switch applies on the next
+        # launch rather than live — cheap, and keeps the paint paths free
+        # of theme lookups.
+        ap_card = _Card()
+        ap_lay = _vbox(14, 8)
+        ap_card.setLayout(ap_lay)
+        ap_hdr_row = _hbox(0, 6)
+        ap_hdr = QLabel("Appearance")
+        f = ap_hdr.font(); f.setBold(True); f.setPointSize(12)
+        ap_hdr.setFont(f)
+        ap_hdr_row.addWidget(ap_hdr)
+        ap_hdr_row.addWidget(self._make_help_badge(
+            "Color profiles",
+            "Switches the app-wide palette — surfaces, accents and the "
+            "signal-chain activity colors. <b>Purrple</b> is the original "
+            "indigo/purple identity; <b>Noir</b> is black &amp; green. "
+            "Applies on the next launch."
+        ))
+        ap_hdr_row.addStretch(1)
+        ap_lay.addLayout(ap_hdr_row)
+
+        cp_row = _hbox(0, 8)
+        cp_row.addWidget(QLabel("Color profile:"))
+        cp_combo = QComboBox()
+        for key, palette in COLOR_PROFILES.items():
+            cp_combo.addItem(palette.get("label", key), key)
+        current_profile = str(self.controller.get_app_setting(
+            "color_profile", DEFAULT_COLOR_PROFILE))
+        for i in range(cp_combo.count()):
+            if cp_combo.itemData(i) == current_profile:
+                cp_combo.setCurrentIndex(i)
+                break
+        self._appearance_note = self._muted_label(
+            "The palette is applied at startup — restart OscGoesPurrr "
+            "to see the new profile."
+        )
+
+        def on_profile_changed(idx: int) -> None:
+            key = cp_combo.itemData(idx)
+            self.controller.set_app_setting("color_profile", str(key))
+            if key != COLOR_PROFILE:
+                self._appearance_note.setText(
+                    "Saved — restart OscGoesPurrr to apply the "
+                    f"{cp_combo.itemText(idx)} profile."
+                )
+            else:
+                self._appearance_note.setText(
+                    "This profile is already active."
+                )
+
+        cp_combo.currentIndexChanged.connect(on_profile_changed)
+        cp_row.addWidget(cp_combo)
+        cp_row.addStretch(1)
+        ap_lay.addLayout(cp_row)
+        ap_lay.addWidget(self._appearance_note)
+        parent_layout.addWidget(ap_card)
+
         # ---- Features Card ----
         # Lets the user turn off subsystems they don't need. Disabling a
         # feature hides its sidebar entry AND stops its background thread

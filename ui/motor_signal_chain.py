@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
 from constants import (
     BTN_HEIGHT_SMALL, COLOR_SUCCESS, COLOR_ALERT, COLOR_TEXT,
     COLOR_SURFACE, COLOR_SURFACE_HOVER, COLOR_TEXT_MUTED, COLOR_LIVE,
+    COLOR_CHAIN_IDLE, COLOR_CHAIN_LIVE,
 )
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
 from ui.widgets import ToggleSwitch, RainbowMeter as _RainbowMeter, ProgressProxy as _ProgressProxy
@@ -423,12 +424,12 @@ _STAGE_LEVEL_TRACE: Dict[str, str] = {
     STAGE_OUTPUT:    "out",
 }
 
-# Stage card border lerp endpoints. Low (idle) is dark purple,
-# matching the indigo canvas; high (saturated) is vivid pink so a
-# motor at full pulls visual attention. Hex chosen for readable
-# contrast on the surface-hover background.
-_STAGE_BORDER_LOW = "#5030A0"   # dark purple
-_STAGE_BORDER_HIGH = "#FF40A0"  # vivid pink
+# Stage card border lerp endpoints. Low (idle) matches the canvas;
+# high (saturated) pulls visual attention on a hot motor. Themed via
+# the active color profile in constants.py (dark purple → vivid pink
+# on the default palette).
+_STAGE_BORDER_LOW = COLOR_CHAIN_IDLE
+_STAGE_BORDER_HIGH = COLOR_CHAIN_LIVE
 
 # Only repaint the card border when the level has changed by at
 # least this much, to keep the stylesheet churn well below the

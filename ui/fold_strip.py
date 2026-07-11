@@ -43,14 +43,16 @@ from PySide6.QtGui import QBrush, QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QSizePolicy, QWidget
 
 from constants import (
-    COLOR_INPUT_FOCUS, COLOR_SURFACE, COLOR_SURFACE_HOVER, COLOR_TEXT_MUTED,
+    COLOR_CHAIN_IDLE, COLOR_CHAIN_LIVE, COLOR_INPUT_FOCUS, COLOR_SURFACE,
+    COLOR_SURFACE_HOVER, COLOR_TEXT_MUTED,
 )
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
 
-# ---- Shared colour ramp (endpoints copied from motor_signal_chain) ----
-# Border: idle dark purple → saturated vivid pink.
-BORDER_LOW = "#5030A0"
-BORDER_HIGH = "#FF40A0"
+# ---- Shared colour ramp (same endpoints as motor_signal_chain) ----
+# Border: idle (canvas-matched) → saturated live accent. Themed via the
+# active color profile in constants.py.
+BORDER_LOW = COLOR_CHAIN_IDLE
+BORDER_HIGH = COLOR_CHAIN_LIVE
 # Connector: idle muted grey → the same vivid pink.
 _CONNECTOR_IDLE = QColor(COLOR_TEXT_MUTED)
 _CONNECTOR_LIVE = QColor(BORDER_HIGH)

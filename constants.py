@@ -1,52 +1,133 @@
 # constants.py
 
+import json as _json
+from pathlib import Path as _Path
+
 # --- Theme & Colors ---
 # Each accent has a semantic job — see ARCHITECTURE.md / UI restyle notes.
-# Brand primary identity (purple) drives nav/selection/focus.
-# The other accents carry meaning: pink = live data, green = healthy,
-# orange = warning, red-pink = error. Don't reach for primary just to make
-# something "pop"; pick the accent whose meaning fits the state.
+# Brand primary identity drives nav/selection/focus. The other accents
+# carry meaning: live = "now firing", green = healthy, orange = warning,
+# red = error. Don't reach for primary just to make something "pop"; pick
+# the accent whose meaning fits the state.
+#
+# The colors ship as named PROFILES. "purrple" is the original indigo /
+# electric-purple identity and stays byte-identical; "noir" is the black
+# & green alternative. The active profile comes from the persisted app
+# setting `color_profile`, read straight from app_settings.json below —
+# constants must stay import-safe (no project imports, no Qt), and every
+# module copies these values at import time, so switching profiles in
+# Settings applies on the next launch.
 
-# Primary brand — punchier than the prior #6B4EFF so it reads against the
-# deeper indigo canvas.
-COLOR_PRIMARY = "#7C4DFF"         # Main brand accent (Electric Purple)
-COLOR_PRIMARY_HOVER = "#6A3DEC"
+COLOR_PROFILES = {
+    "purrple": {
+        "label": "Purrple (default)",
+        # Primary brand — punchier than the prior #6B4EFF so it reads
+        # against the deeper indigo canvas.
+        "PRIMARY": "#7C4DFF",        # Main brand accent (Electric Purple)
+        "PRIMARY_HOVER": "#6A3DEC",
+        "ALERT": "#FF1150",          # Error / destructive (Hot Red-Pink)
+        "ALERT_HOVER": "#DD0E45",
+        "SUCCESS": "#07FF77",        # Connected / Good (Neon Green)
+        "LIVE": "#FF3D7F",           # Live data, "now firing" (Hot Pink)
+        "LIVE_DIM": "#7A1E3F",       # Pill background tint for LIVE text
+        "WARNING": "#FF7300",        # Attention but not error (Orange)
+        "WARNING_DIM": "#7A3700",
+        "SUCCESS_DIM": "#073D24",
+        "ALERT_DIM": "#5A0820",
+        # Surfaces — tinted deep indigo, not neutral grey. The hue shift
+        # is what separates the look from a generic dark theme.
+        "BG": "#0D0924",             # Deep app background (indigo-black)
+        "SURFACE": "#1D1553",        # Cards, active tabs, separators
+        "SURFACE_HOVER": "#2A2070",  # Hover state for tabs
+        # Interactive surfaces — clearly lighter than cards so they read
+        # as "clickable".
+        "BUTTON": "#3A2C8C",
+        "BUTTON_HOVER": "#4D3CB3",
+        "INPUT_BG": "#1A1240",       # Text inputs, combo boxes, pickers
+        "INPUT_BORDER": "#3A2C8C",
+        "INPUT_FOCUS": "#9A7BFF",    # Focus border (lighter purple)
+        "TEXT": "#FFFFFF",
+        "TEXT_MUTED": "#9A9AB8",     # Secondary labels — slight purple tint
+        # Signal-chain activity ramp (fold cards / stage cards / arrows):
+        # idle end matches the canvas, live end pulls attention.
+        "CHAIN_IDLE": "#5030A0",     # dark purple
+        "CHAIN_LIVE": "#FF40A0",     # vivid pink
+    },
+    "noir": {
+        "label": "Noir (black & green)",
+        "PRIMARY": "#00C853",        # Main brand accent (Vivid Green)
+        "PRIMARY_HOVER": "#00A046",
+        "ALERT": "#FF1150",          # Error stays red — semantics over style
+        "ALERT_HOVER": "#DD0E45",
+        "SUCCESS": "#07FF77",        # Connected / Good (Neon Green)
+        "LIVE": "#B2FF2E",           # Live data, "now firing" (Lime)
+        "LIVE_DIM": "#3D5210",
+        "WARNING": "#FF7300",        # Warning stays orange
+        "WARNING_DIM": "#7A3700",
+        "SUCCESS_DIM": "#073D24",
+        "ALERT_DIM": "#5A0820",
+        # Surfaces — near-black with a faint green tint so it reads as a
+        # deliberate identity, not a dead grey theme.
+        "BG": "#090D0A",             # App background (green-black)
+        "SURFACE": "#131A15",        # Cards, active tabs, separators
+        "SURFACE_HOVER": "#1B241D",  # Hover state for tabs
+        "BUTTON": "#20362A",
+        "BUTTON_HOVER": "#2C4839",
+        "INPUT_BG": "#101711",
+        "INPUT_BORDER": "#2E4A38",
+        "INPUT_FOCUS": "#4DFFA0",    # Focus border (light green)
+        "TEXT": "#FFFFFF",
+        "TEXT_MUTED": "#94AC9C",     # Secondary labels — slight green tint
+        "CHAIN_IDLE": "#1E5C38",     # dark green
+        "CHAIN_LIVE": "#3DFF8C",     # vivid green
+    },
+}
 
-# Error / destructive (was COLOR_ALERT — kept name for back-compat).
-COLOR_ALERT = "#FF1150"           # Error / destructive (Hot Red-Pink)
-COLOR_ALERT_HOVER = "#DD0E45"
+DEFAULT_COLOR_PROFILE = "purrple"
 
-# Success / healthy / connected
-COLOR_SUCCESS = "#07FF77"         # Connected / Good (Neon Green)
 
-# New semantic accents
-COLOR_LIVE = "#FF3D7F"            # Live data, "now firing" feedback (Hot Pink)
-COLOR_LIVE_DIM = "#7A1E3F"        # Pill background tint for COLOR_LIVE text
-COLOR_WARNING = "#FF7300"         # Attention but not error (Orange)
-COLOR_WARNING_DIM = "#7A3700"     # Pill background tint for COLOR_WARNING text
-COLOR_SUCCESS_DIM = "#073D24"     # Pill background tint for COLOR_SUCCESS text
-COLOR_ALERT_DIM = "#5A0820"       # Pill background tint for COLOR_ALERT text
+def _load_color_profile() -> str:
+    """Read the persisted profile choice without importing the settings
+    package (which imports this module). Any failure — missing file,
+    bad JSON, unknown name — falls back to the default palette."""
+    try:
+        p = (_Path.home() / "AppData" / "Roaming" / "OscGoesPurrr"
+             / "app_settings.json")
+        with open(p, "r", encoding="utf-8") as f:
+            choice = _json.load(f).get("color_profile")
+        if choice in COLOR_PROFILES:
+            return choice
+    except Exception:
+        pass
+    return DEFAULT_COLOR_PROFILE
 
-# Surfaces — tinted deep indigo, not neutral grey. The hue shift is what
-# separates the look from a generic dark theme.
-COLOR_BG = "#0D0924"              # Deep app background (indigo-black)
-COLOR_SURFACE = "#1D1553"         # Cards, active tabs, separators
-COLOR_SURFACE_HOVER = "#2A2070"   # Hover state for tabs
 
-# Interactive surfaces — buttons and clickable areas sit on top of cards
-# (COLOR_SURFACE), so they need to be clearly lighter to read as "clickable".
-COLOR_BUTTON = "#3A2C8C"          # Secondary/idle buttons, segmented controls
-COLOR_BUTTON_HOVER = "#4D3CB3"    # Hover state for interactive buttons
+COLOR_PROFILE = _load_color_profile()
+_PALETTE = COLOR_PROFILES[COLOR_PROFILE]
 
-# Interactive widget surfaces — slightly lighter so dropdowns, search fields
-# and pickers stand out from cards/window background as obviously clickable.
-COLOR_INPUT_BG = "#1A1240"        # Text inputs, combo boxes, pickers
-COLOR_INPUT_BORDER = "#3A2C8C"    # Resting border for interactive widgets
-COLOR_INPUT_FOCUS = "#9A7BFF"     # Focus border (lighter purple)
-
-# Text
-COLOR_TEXT = "#FFFFFF"
-COLOR_TEXT_MUTED = "#9A9AB8"      # Secondary labels — slight purple tint
+COLOR_PRIMARY = _PALETTE["PRIMARY"]
+COLOR_PRIMARY_HOVER = _PALETTE["PRIMARY_HOVER"]
+COLOR_ALERT = _PALETTE["ALERT"]
+COLOR_ALERT_HOVER = _PALETTE["ALERT_HOVER"]
+COLOR_SUCCESS = _PALETTE["SUCCESS"]
+COLOR_LIVE = _PALETTE["LIVE"]
+COLOR_LIVE_DIM = _PALETTE["LIVE_DIM"]
+COLOR_WARNING = _PALETTE["WARNING"]
+COLOR_WARNING_DIM = _PALETTE["WARNING_DIM"]
+COLOR_SUCCESS_DIM = _PALETTE["SUCCESS_DIM"]
+COLOR_ALERT_DIM = _PALETTE["ALERT_DIM"]
+COLOR_BG = _PALETTE["BG"]
+COLOR_SURFACE = _PALETTE["SURFACE"]
+COLOR_SURFACE_HOVER = _PALETTE["SURFACE_HOVER"]
+COLOR_BUTTON = _PALETTE["BUTTON"]
+COLOR_BUTTON_HOVER = _PALETTE["BUTTON_HOVER"]
+COLOR_INPUT_BG = _PALETTE["INPUT_BG"]
+COLOR_INPUT_BORDER = _PALETTE["INPUT_BORDER"]
+COLOR_INPUT_FOCUS = _PALETTE["INPUT_FOCUS"]
+COLOR_TEXT = _PALETTE["TEXT"]
+COLOR_TEXT_MUTED = _PALETTE["TEXT_MUTED"]
+COLOR_CHAIN_IDLE = _PALETTE["CHAIN_IDLE"]
+COLOR_CHAIN_LIVE = _PALETTE["CHAIN_LIVE"]
 
 # --- UI Dimensions ---
 WINDOW_GEOMETRY = "1100x700"
