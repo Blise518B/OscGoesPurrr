@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QDialog, QMessageBox, QTreeWidget, QTreeWidgetItem, QHeaderView,
     QButtonGroup, QStackedWidget, QTableWidget, QTableWidgetItem,
     QAbstractItemView, QComboBox, QSpinBox, QDoubleSpinBox, QToolButton,
+    QColorDialog,
 )
 from ui import lovense_icons as _lovense_icons
 
@@ -322,8 +323,11 @@ class SettingsMixin:
             "buttons); <b>Noir</b> is black &amp; gray with green "
             "highlights; <b>Aurora</b> is its gradient sibling — a smooth "
             "navy→teal sweep across the whole background with green→blue "
-            "gradient highlights. Switching applies immediately: the app "
-            "restarts itself."
+            "gradient highlights. <b>Custom</b> derives a whole palette "
+            "from two colors you pick: A carries the highlights (buttons, "
+            "outlines, live chain), B the second accent (meters, value "
+            "ramp, gradient partner) — the base stays neutral dark. "
+            "Switching applies immediately: the app restarts itself."
         ))
         ap_hdr_row.addStretch(1)
         ap_lay.addLayout(ap_hdr_row)
@@ -333,6 +337,11 @@ class SettingsMixin:
         cp_combo = QComboBox()
         for key, palette in COLOR_PROFILES.items():
             cp_combo.addItem(palette.get("label", key), key)
+        # "custom" only exists in COLOR_PROFILES when it's the active
+        # choice (the loader registers it at import) — the option itself
+        # must always be offered.
+        if cp_combo.findData("custom") < 0:
+            cp_combo.addItem("Custom (yours)", "custom")
         current_profile = str(self.controller.get_app_setting(
             "color_profile", DEFAULT_COLOR_PROFILE))
         for i in range(cp_combo.count()):
@@ -344,8 +353,86 @@ class SettingsMixin:
             "automatically so every widget repaints — takes a second."
         )
 
+        # ---- Custom-theme editor (visible only when Custom is picked).
+        # Two accents + a gradient toggle; nothing applies until the
+        # Apply button so browsing colors can't restart-loop the app.
+        saved = self.controller.get_app_setting("custom_colors", None)
+        saved = saved if isinstance(saved, dict) else {}
+        self._custom_theme = {
+            "a": str(saved.get("a") or "#07FF77"),
+            "b": str(saved.get("b") or "#4DB8FF"),
+            "gradient": bool(saved.get("gradient", True)),
+        }
+        custom_row_host = QWidget()
+        cr_lay = _hbox(0, 8)
+        custom_row_host.setLayout(cr_lay)
+
+        def _style_swatch(btn: QPushButton, hex_color: str) -> None:
+            c = QColor(hex_color)
+            text = "#0A0A0A" if c.lightness() > 128 else "#FFFFFF"
+            btn.setText(hex_color.upper())
+            btn.setStyleSheet(
+                f"background: {hex_color}; color: {text}; "
+                f"border: 1px solid #555; border-radius: 6px; "
+                f"padding: 6px 10px; font-weight: bold;"
+            )
+
+        def _pick(which: str, btn: QPushButton) -> None:
+            initial = QColor(self._custom_theme[which])
+            chosen = QColorDialog.getColor(
+                initial, self.window,
+                f"Pick accent {which.upper()}",
+            )
+            if chosen.isValid():
+                self._custom_theme[which] = chosen.name().upper()
+                _style_swatch(btn, self._custom_theme[which])
+
+        cr_lay.addWidget(QLabel("Highlight A:"))
+        swatch_a = QPushButton()
+        swatch_a.setCursor(Qt.PointingHandCursor)
+        _style_swatch(swatch_a, self._custom_theme["a"])
+        swatch_a.clicked.connect(lambda _=False: _pick("a", swatch_a))
+        cr_lay.addWidget(swatch_a)
+        cr_lay.addSpacing(8)
+        cr_lay.addWidget(QLabel("Accent B:"))
+        swatch_b = QPushButton()
+        swatch_b.setCursor(Qt.PointingHandCursor)
+        _style_swatch(swatch_b, self._custom_theme["b"])
+        swatch_b.clicked.connect(lambda _=False: _pick("b", swatch_b))
+        cr_lay.addWidget(swatch_b)
+        cr_lay.addSpacing(8)
+        gradient_toggle = ToggleSwitch("Gradient background")
+        gradient_toggle.setChecked(self._custom_theme["gradient"])
+        gradient_toggle.toggled.connect(
+            lambda checked: self._custom_theme.__setitem__(
+                "gradient", bool(checked))
+        )
+        cr_lay.addWidget(gradient_toggle)
+        cr_lay.addStretch(1)
+        apply_btn = QPushButton("Apply custom colors")
+        cr_lay.addWidget(apply_btn)
+        custom_row_host.setVisible(current_profile == "custom")
+
+        def _apply_custom() -> None:
+            self.controller.set_app_setting("custom_colors",
+                                            dict(self._custom_theme))
+            self.controller.set_app_setting("color_profile", "custom")
+            self._appearance_note.setText("Applying Custom — restarting…")
+            QTimer.singleShot(200, self.controller.request_restart)
+
+        apply_btn.clicked.connect(_apply_custom)
+
         def on_profile_changed(idx: int) -> None:
             key = cp_combo.itemData(idx)
+            custom_row_host.setVisible(key == "custom")
+            if key == "custom":
+                # Nothing is written until Apply — browsing accents must
+                # not restart-loop the app.
+                self._appearance_note.setText(
+                    "Pick your two colors, then Apply — the whole palette "
+                    "(gradients, outlines, meters) derives from them."
+                )
+                return
             self.controller.set_app_setting("color_profile", str(key))
             if key == COLOR_PROFILE:
                 self._appearance_note.setText(
@@ -364,6 +451,7 @@ class SettingsMixin:
         cp_row.addWidget(cp_combo)
         cp_row.addStretch(1)
         ap_lay.addLayout(cp_row)
+        ap_lay.addWidget(custom_row_host)
         ap_lay.addWidget(self._appearance_note)
         parent_layout.addWidget(ap_card)
 
