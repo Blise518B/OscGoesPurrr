@@ -269,6 +269,15 @@ class MotorRouter:
         self._clock = clock
         # Tracks last calculated outputs to prevent flooding the UI/hardware thread.
         self.last_outputs: Dict[tuple, float] = {}
+        # Always-on CONTACT-level thrust counter for the usage
+        # statistics: one physical stroke = one count, however many
+        # stored toys/motors ride it. The swing detector runs once per
+        # routing pass on the max depth across all computed motors (see
+        # reevaluate_state / reevaluate_simple_mode); drained via
+        # consume_thrusts(). Plain int — see that method for threading.
+        self.thrust_count: int = 0
+        self._global_thrust_state: Dict[str, Any] = {}
+        self._tick_max_draw: float = 0.0
         # Per-motor mixer state, keyed by (device_name, motor_idx). Each
         # value is a dict with `last_time`, `last_position`,
         # `smoothed_speed` (speed-derivation pipeline state) and
@@ -807,8 +816,10 @@ class MotorRouter:
         direction, and the bottom turn (pull-out ending) never counts, so
         one full in-out cycle is exactly one thrust.
 
-        Also the future data source for the statistics thrust counter —
-        keep it pure per-chain-state math with no side channels."""
+        Also the data source for the statistics thrust counter, which
+        runs it against the MOTOR-level state dict — keep it pure
+        state-dict math with no side channels so both callers stay
+        independent."""
         ext = chain_state.get("thrust_ext")
         if ext is None:
             chain_state["thrust_ext"] = d_raw
@@ -944,6 +955,17 @@ class MotorRouter:
         on screen. Once every output sits at zero, idle ticks stop
         costing CPU again."""
         return any(v > 0.0 for v in self.last_outputs.values())
+
+    def consume_thrusts(self) -> int:
+        """Return the thrust count accumulated since the last call and
+        zero it. Called at 1 Hz by the stats facade on the GUI thread —
+        the same thread the routing tick increments on, and even if a
+        caller ever moved off-thread these are plain int ops under the
+        GIL, so the worst case is one tick's increment landing in the
+        next drain instead of this one. Never blocks, never allocates."""
+        n = self.thrust_count
+        self.thrust_count = 0
+        return n
 
     # ----------------------------------------------------------
     # Per-(motor, chain) intermediates subscribers (Cut 6).
@@ -1203,6 +1225,14 @@ class MotorRouter:
 
         state = self._get_motor_state((device_name, motor_idx))
         self._ensure_chain_state(state, len(chains_cfg))
+
+        # Usage statistics: contribute this motor's live input to the
+        # routing pass's max-depth track. The stroke detector itself
+        # runs ONCE per pass on that max (see reevaluate_state) so one
+        # physical stroke counts once, not once per stored toy-motor
+        # riding the same contact. O(1).
+        if live_d_raw > self._tick_max_draw:
+            self._tick_max_draw = live_d_raw
 
         now = self._clock()
         last_t = state["last_time"]
@@ -1653,6 +1683,11 @@ class MotorRouter:
         anti-stuck safety net rather than the configurable two-timer model."""
         zones = self._get_zone_tuples(all_params, zones)
         value = self.compute_simple_mode_value(all_params, zones=zones)
+        # Usage statistics: strokes count in Simple Mode too — the same
+        # contact-level detector as the full path, fed the pre-antistuck
+        # global value (anti-stuck fades outputs, not physical motion).
+        if self._detect_thrust(self._global_thrust_state, value):
+            self.thrust_count += 1
         value = self._simple_antistuck(value, self._clock())
         updates: List[Tuple[str, float, int]] = []
         for device_name, motor_count in device_motor_counts.items():
@@ -1678,6 +1713,17 @@ class MotorRouter:
         self._simple_as_last_val = None
         self._simple_as_since = -1.0
 
+    def forget_device(self, device_name: str) -> None:
+        """Drop every trace of a deleted toy. Without this, its stale
+        last_outputs entry (frozen at whatever it was when deleted) keeps
+        needs_settling() true forever — the routing tick never idles
+        again — and the stats facade keeps booking phantom on-time
+        against a toy that no longer exists."""
+        for key in [k for k in self.last_outputs if k[0] == device_name]:
+            del self.last_outputs[key]
+        for key in [k for k in self._motor_state if k[0] == device_name]:
+            del self._motor_state[key]
+
     def reevaluate_state(
         self,
         active_profile: Dict[str, Any],
@@ -1700,6 +1746,7 @@ class MotorRouter:
         # Refresh length calibrations first so all motor calculations see fresh state.
         self._update_length_detectors(all_params, zones)
 
+        self._tick_max_draw = 0.0
         updates: List[Tuple[str, float, int]] = []
         for device_name, config in active_profile.items():
             motor_count = config.get("motor_count", 0)
@@ -1715,4 +1762,9 @@ class MotorRouter:
                 if self.last_outputs.get(state_key) != target_val:
                     self.last_outputs[state_key] = target_val
                     updates.append((device_name, target_val, motor_idx))
+        # Usage statistics: one stroke = one count, measured on the
+        # strongest contact this pass saw (each motor contributed its
+        # live input in _calculate_motor_target).
+        if self._detect_thrust(self._global_thrust_state, self._tick_max_draw):
+            self.thrust_count += 1
         return updates

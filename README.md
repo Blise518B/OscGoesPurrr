@@ -63,6 +63,11 @@ toys, SteamVR trackers, bHaptics suits, OWO suits, e-stim units
 * **Real-time OSC debugger.** Inspector tab shows live parameter
   values and an OSC diagnostics view exposes packets handled,
   phonebook GETs, handler exceptions, etc.
+* **Usage statistics.** A Statistics tab tracks lifetime totals —
+  active time, thrust count, per-toy on-time, per-zone (socket / plug /
+  touch) contact time — plus a summary of your last 20 sessions.
+  Sampled once a second, completely off the haptic hot path, and
+  resettable any time.
 
 ## 🚀 Installation
 
@@ -225,6 +230,7 @@ All user state is stored under `%APPDATA%\OscGoesPurrr\`:
   zone routing.
 * `known_devices.json` — global registry of every toy ever seen.
 * `sps_sources.json` — user-defined synthetic SPS sources.
+* `stats.json` — lifetime usage statistics + recent-session summaries.
 
 Delete a file to reset that subsystem to defaults; the app re-creates
 it on next launch.

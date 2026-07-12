@@ -19,6 +19,7 @@ from ._paths import (
     SESSIONS_DIR,
     SESSIONS_SETTINGS_FILE,
     SPS_SOURCES_FILE,
+    STATS_FILE,
     STEAMVR_SETTINGS_FILE,
 )
 from .app import AppSettingsManager, DEFAULT_APP_SETTINGS
@@ -45,6 +46,7 @@ __all__ = [
     "SESSIONS_DIR",
     "SESSIONS_SETTINGS_FILE",
     "SPS_SOURCES_FILE",
+    "STATS_FILE",
     "STEAMVR_SETTINGS_FILE",
     "AppSettingsManager",
     "BHapticsSettingsManager",

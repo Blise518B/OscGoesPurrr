@@ -1062,6 +1062,106 @@ class TestArming:
         assert captured[-1]["thrusts"] == 2
 
 
+# ============================================================ thrust counter
+
+class TestThrustCounter:
+    """Always-on CONTACT-level stroke counting for the usage statistics:
+    the swing detector runs once per routing pass on the max depth
+    across all computed motors, so one physical stroke counts once —
+    however many stored toys and motors ride the same contact."""
+
+    def _profile(self, n_devices=1):
+        return {
+            f"Toy{i}": {"motor_count": 1,
+                        "osc_addresses": {"0": ["P"]},
+                        "mix": _pass_through_mix()}
+            for i in range(n_devices)
+        }
+
+    def _stroke(self, router, clock, profile, depth=0.8, half_s=0.15):
+        """One full in-out stroke through the real routing entry point."""
+        clock.advance(half_s)
+        router.reevaluate_state(profile, {"P": depth}, zones=set())
+        clock.advance(half_s)
+        router.reevaluate_state(profile, {"P": 0.02}, zones=set())
+
+    def test_strokes_increment_and_consume_zeroes(self, router, clock):
+        profile = self._profile()
+        router.reevaluate_state(profile, {"P": 0.0}, zones=set())
+        for _ in range(3):
+            self._stroke(router, clock, profile)
+        assert router.consume_thrusts() == 3
+        # Drained: a second consume with no new strokes reads zero.
+        assert router.consume_thrusts() == 0
+
+    def test_one_stroke_counts_once_across_many_stored_toys(
+            self, router, clock):
+        # Regression: counting used to run per stored toy-motor, so a
+        # rig with three remembered toys booked 3x the real strokes.
+        profile = self._profile(n_devices=3)
+        router.reevaluate_state(profile, {"P": 0.0}, zones=set())
+        self._stroke(router, clock, profile)
+        assert router.consume_thrusts() == 1
+
+    def test_shallow_jitter_never_counts(self, router, clock):
+        profile = self._profile()
+        router.reevaluate_state(profile, {"P": 0.5}, zones=set())
+        for i in range(20):
+            clock.advance(0.1)
+            p = 0.5 + (0.05 if i % 2 == 0 else -0.05)
+            router.reevaluate_state(profile, {"P": p}, zones=set())
+        assert router.consume_thrusts() == 0
+
+    def test_simple_mode_counts_strokes_too(self, router, clock):
+        # Simple Mode routes through reevaluate_simple_mode — lifetime
+        # totals must not silently freeze there while on-time accrues.
+        counts = {"Toy0": 1}
+        zones = {("Orf", "Z")}
+
+        def _params(depth):
+            return {"OGB/Orf/Z/TouchOthersClose": True,
+                    "OGB/Orf/Z/TouchOthers": depth}
+
+        router.reevaluate_simple_mode(counts, _params(0.0), zones=zones)
+        for _ in range(2):
+            clock.advance(0.15)
+            router.reevaluate_simple_mode(counts, _params(0.8), zones=zones)
+            clock.advance(0.15)
+            router.reevaluate_simple_mode(counts, _params(0.02), zones=zones)
+        assert router.consume_thrusts() == 2
+
+    def test_counter_is_independent_of_arming(self, router, clock):
+        # The Arming stage keeps its own chain-level swing detector;
+        # enabling it must neither double-count nor starve the
+        # contact-level statistics counter.
+        profile = self._profile()
+        profile["Toy0"]["mix"]["0"]["chains"][0]["arming"] = {
+            "enabled": True, "thrusts": 3,
+            "window_s": 6.0, "disarm_after_s": 45.0,
+        }
+        router.reevaluate_state(profile, {"P": 0.0}, zones=set())
+        for _ in range(3):
+            self._stroke(router, clock, profile)
+        assert router.consume_thrusts() == 3
+
+
+class TestForgetDevice:
+    def test_deleted_toy_stops_settling_ticks(self, router, clock):
+        # Regression: deleting a toy while driven froze its >0 entry in
+        # last_outputs — needs_settling() stayed true forever and the
+        # stats booked phantom on-time against a toy that no longer
+        # exists.
+        profile = {"Doomed": {"motor_count": 1,
+                              "osc_addresses": {"0": ["P"]},
+                              "mix": _pass_through_mix()}}
+        router.reevaluate_state(profile, {"P": 0.8}, zones=set())
+        assert router.needs_settling()
+        router.forget_device("Doomed")
+        assert not router.needs_settling()
+        assert not any(k[0] == "Doomed" for k in router.last_outputs)
+        assert not any(k[0] == "Doomed" for k in router._motor_state)
+
+
 # ============================================================ Tier 3.3c: texture
 
 class TestTexture:

@@ -77,6 +77,7 @@ from ui.views.handy import HandyMixin
 from ui.views.device_frame import DeviceFrameMixin
 from ui.views.overview import OverviewMixin
 from ui.views.sps_sources import SpsSourcesMixin
+from ui.views.statistics import StatisticsMixin
 
 
 # ============================================================
@@ -647,6 +648,7 @@ class OscGoesPurrrUI(
     DeviceFrameMixin,
     OverviewMixin,
     SpsSourcesMixin,
+    StatisticsMixin,
 ):
     """UI Component class — handles all GUI rendering and updates."""
 
@@ -810,7 +812,7 @@ class OscGoesPurrrUI(
         self.main_stack = QStackedWidget()
         root_layout.addWidget(self.main_stack, 1)
 
-        view_names = ["Dashboard", "Overview", "Simple Mode",
+        view_names = ["Dashboard", "Overview", "Statistics", "Simple Mode",
                       "Device Routing", "SPS Sources",
                       "SteamVR Device Comms", "bHaptics", "PiShock", "Coyote", "OWO",
                       "Handy",
@@ -819,6 +821,7 @@ class OscGoesPurrrUI(
         builders = {
             "Dashboard": self._build_dashboard_view,
             "Overview": self._build_overview_view,
+            "Statistics": self._build_statistics_view,
             "Simple Mode": self._build_simple_mode_view,
             "Device Routing": self._build_device_routing_view,
             "SPS Sources": self._build_sps_sources_view,
@@ -912,7 +915,7 @@ class OscGoesPurrrUI(
         lay.addWidget(self._build_mode_grid())
         lay.addSpacing(8)
 
-        nav_buttons = ["Dashboard", "Overview", "Simple Mode",
+        nav_buttons = ["Dashboard", "Overview", "Statistics", "Simple Mode",
                        "Device Routing", "SPS Sources",
                        "SteamVR Device Comms", "bHaptics", "PiShock", "Coyote", "OWO",
                        "Handy",
@@ -1080,6 +1083,7 @@ class OscGoesPurrrUI(
         # zones detected while the page was hidden become selectable.
         arrival_refreshers = {
             "Overview": ("_refresh_overview_dynamic",),
+            "Statistics": ("_refresh_statistics_view",),
             "SteamVR Device Comms": ("_refresh_steamvr_status_only",),
             "bHaptics": ("_refresh_bhaptics_status_only",),
             "PiShock": ("_refresh_pishock_status_only",

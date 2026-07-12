@@ -66,6 +66,7 @@ from controllers import (
     ModesFacade,
     SessionsFacade,
     SpsSourcesFacade,
+    StatsFacade,
 )
 
 
@@ -93,6 +94,7 @@ class OscGoesPurrrApp(
     ModesFacade,
     SessionsFacade,
     SpsSourcesFacade,
+    StatsFacade,
 ):
     def __init__(self):
         self.async_loop: asyncio.AbstractEventLoop = None
@@ -403,7 +405,13 @@ class OscGoesPurrrApp(
 
         # Build stored devices UI after loading profiles
         self.ui.build_stored_devices_ui()
-    
+
+        # Usage statistics — lifetime totals + per-session summaries.
+        # Needs the motor router (thrust counter) so it comes last;
+        # sampling rides the 1 Hz refresh_device_states heartbeat in
+        # run(), and _stats_shutdown() in quit_app closes the session.
+        self._stats_init()
+
     # Cap how many queue messages we drain per tick. Under an OSC storm this
     # keeps the UI thread responsive — anything not drained this tick gets
     # picked up on the next 100 ms poll.
@@ -661,6 +669,10 @@ class OscGoesPurrrApp(
         this toy again, reconnect it."""
         self.mode_manager.delete_device(device_name)
         self.mode_manager.known_devices.forget(device_name)
+        # And the router's runtime state: a stale >0 last_outputs entry
+        # would keep the settling tick alive forever and book phantom
+        # on-time against the deleted toy in the statistics.
+        self.motor_router.forget_device(device_name)
 
         # Remove from UI via the framework-agnostic facade
         self.ui.remove_device_frame(device_name)
@@ -1116,6 +1128,14 @@ class OscGoesPurrrApp(
         except Exception:
             pass
 
+        # Finalize the usage-statistics session (records it + flushes
+        # stats.json) while the state is still coherent, before the
+        # engines are torn down below.
+        try:
+            self._stats_shutdown()
+        except Exception:
+            pass
+
         # Cleanly disconnect Intiface so its log doesn't show an abrupt
         # websocket drop and so it stops scanning when we leave. Best-effort
         # with a short timeout — daemon-killing the async thread on exit is
@@ -1292,6 +1312,10 @@ class OscGoesPurrrApp(
                     self.ui.update_backend_nav_dots()
             except Exception:
                 pass
+            # Usage statistics ride the same 1 Hz heartbeat — one cheap
+            # sample per second, off every routing hot path. The facade
+            # guards its own body so a stats bug can't kill this pump.
+            self._stats_sample_tick()
             self.ui.schedule_callback(1000, refresh_device_states)
 
         # Register clean shutdown handler to auto-save profiles

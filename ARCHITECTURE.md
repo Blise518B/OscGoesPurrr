@@ -318,6 +318,9 @@ zone — detected OGB or synthetic SPS source — identically.
       (synthetic SPS source CRUD; the routers read the live source map)
     * `controllers/sessions_facade.py` — `SessionsFacade` (session-logger
       lifecycle — see "Session logging" below)
+    * `controllers/stats_facade.py` — `StatsFacade` (usage statistics:
+      owns the `StatsTracker`, samples usage at 1 Hz off the UI
+      heartbeat, exposes `get_stats_snapshot()` / `reset_stats()`)
   * Adding a new engine means: write the engine + router, write a new
     `controllers/<name>_facade.py` mixin, add it to `OscGoesPurrrApp`'s
     base list, expose UI methods on the mixin. **No changes to the UI's
@@ -580,6 +583,13 @@ change-debounce re-dispatches on the next tick.
   pythonnet, so the rest of the app never imports `clr`.
 * `utilities.py` — small helpers (`value_to_hex_color`,
   `toggle_windows_console`, `create_default_icon`).
+* `stats_tracker.py` — sealed usage-statistics accumulator: lifetime
+  totals + per-session summaries (active time, thrusts, per-toy
+  on-time, per-zone contact time) with atomic JSON persistence to
+  `stats.json` and an injectable clock. Driven by
+  `controllers/stats_facade.py` (`StatsFacade`), which samples toy
+  outputs, zone contact, and the motor router's O(1) thrust counter at
+  1 Hz off the UI heartbeat — never on a routing hot path.
 * `version.py` — single source of truth for `__version__`.
 * `settings/` — per-user settings managers, one JSON file per concern
   (see the Mode model section above).

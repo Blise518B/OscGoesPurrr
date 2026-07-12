@@ -477,7 +477,7 @@ class DashboardMixin:
     _SIMPLE_MODE_HIDDEN_VIEWS = (
         "Dashboard", "Device Routing", "SPS Sources", "SteamVR Device Comms",
         "bHaptics", "PiShock", "Coyote", "OWO", "Handy", "OSC Inspector",
-        "OSC Diagnostics", "Overview", "System Log",
+        "OSC Diagnostics", "Overview", "Statistics", "System Log",
     )
 
     # Sidebar entries gated by Settings → Features. A view is hidden if any

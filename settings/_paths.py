@@ -53,5 +53,10 @@ HANDY_SETTINGS_FILE = APPDATA_DIR / "handy_settings.json"
 SESSIONS_DIR = APPDATA_DIR / "sessions"
 SESSIONS_SETTINGS_FILE = APPDATA_DIR / "sessions_settings.json"
 
+# Usage statistics — lifetime totals (on-time, thrusts, per-toy /
+# per-zone usage) plus the recent-session summaries. Owned by
+# stats_tracker.StatsTracker, not a settings manager.
+STATS_FILE = APPDATA_DIR / "stats.json"
+
 
 os.makedirs(APPDATA_DIR, exist_ok=True)
