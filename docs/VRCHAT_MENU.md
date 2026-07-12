@@ -16,7 +16,23 @@ load it ignores incoming `OGP/Mode`, because VRChat replays stale saved
 values then — the app is the source of truth, so an avatar swap can never
 yank your mode).
 
-## Setting it up (plain Unity, ~10 minutes, no FX layer needed)
+## Option A — one-click installer (recommended)
+
+1. Copy [`unity/OGP_MenuInstaller.cs`](../unity/OGP_MenuInstaller.cs) into
+   your avatar project, anywhere under `Assets/` (e.g.
+   `Assets/OscGoesPurrr/Editor/`).
+2. Select your avatar in the Hierarchy.
+3. Run **Tools → OscGoesPurrr → Install VRChat Menu**.
+
+That's it — it adds both parameters (unsynced, 0 sync bits), builds the
+"OscGoesPurrr" submenu (six mode toggles + the Test button), and links it
+into your expressions menu. Re-running it later is safe (it updates in
+place, never duplicates), it never mutates SDK-shipped default assets
+(it clones them into `Assets/OscGoesPurrr/` instead), and it works the
+same on VRCFury-managed and plain avatars — it edits the avatar
+descriptor's own assets, which VRCFury preserves at build time.
+
+## Option B — manual setup (plain Unity, ~10 minutes, no FX layer needed)
 
 Because these parameters only talk to OSC — they don't drive any
 animations — you don't need an animator controller at all. Two assets:
@@ -41,9 +57,8 @@ animations — you don't need an animator controller at all. Two assets:
    * One **Button** control bound to `OGP/Test` — a Button (not Toggle) is
      momentary: the pulse runs only while you hold it.
 
-Upload, and you're done. VRCFury users: a drag-and-drop prefab that adds
-the parameters + menu automatically is planned; until then the manual
-steps above work on any avatar, VRCFury-managed or not.
+Upload, and you're done. (If you'd rather not click through Unity
+inspectors, use Option A above — same result, one menu click.)
 
 ## Troubleshooting
 
