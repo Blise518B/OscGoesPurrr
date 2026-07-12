@@ -813,6 +813,341 @@ class TestZeroCut:
         assert last["out"] == 0.0       # …cut to silence
 
 
+# ============================================================ Tier 3.3b: punch
+
+class TestPunch:
+    """Third parallel source next to Depth and Speed: a fast RISE in
+    depth strikes an impulse that decays quickly and merges max-wins
+    after the depth/speed combine."""
+
+    def _cfg(self, gain=1.0, decay_ms=120.0, depth_gain=0.3):
+        cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
+        chain = cfg["mix"]["0"]["chains"][0]
+        chain["depth"]["gain"] = depth_gain
+        chain["punch"] = {"gain": gain, "decay_ms": decay_ms}
+        return cfg
+
+    def test_default_chain_config_has_punch_off(self):
+        p = MotorRouter.DEFAULT_MIX_CONFIG["chains"][0]["punch"]
+        assert p == {"gain": 0.0, "decay_ms": 120.0}
+
+    def test_fast_rise_strikes_above_the_depth_level(self, router, clock):
+        cfg = self._cfg()
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        clock.advance(0.1)
+        # 0 → 0.6 in 100 ms = 6.0/s — a full-strength hit; depth alone
+        # would only read 0.6 * 0.3 = 0.18.
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.6}, zones=set())
+        assert out == pytest.approx(1.0)
+
+    def test_envelope_decays_after_the_hit(self, router, clock):
+        cfg = self._cfg(decay_ms=120.0)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        clock.advance(0.1)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.6}, zones=set())
+        clock.advance(0.12)   # one decay tau, input held still
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.6}, zones=set())
+        assert out == pytest.approx(0.3679, abs=0.01)   # e^-1
+
+    def test_slow_rise_never_ticks_the_envelope(self, router, clock):
+        # 0.02 over 100 ms = 0.2/s — below the jitter deadband.
+        cfg = self._cfg(gain=2.0, depth_gain=0.0)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        clock.advance(0.1)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.02}, zones=set())
+        assert out == 0.0
+
+    def test_pull_out_is_not_a_punch(self, router, clock):
+        cfg = self._cfg(gain=1.0, depth_gain=0.0)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
+        clock.advance(2.0)    # any earlier strike has fully decayed
+        router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
+        clock.advance(0.05)
+        # Fast REMOVAL: huge negative rate — must contribute nothing.
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        assert out == 0.0
+
+    def test_gain_zero_is_off(self, router, clock):
+        cfg = self._cfg(gain=0.0)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        clock.advance(0.1)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.6}, zones=set())
+        assert out == pytest.approx(0.18)   # depth only (0.6 * 0.3)
+
+    def test_enabling_mid_hold_reads_no_phantom_rise(self, router, clock):
+        # While punch is off its position memory keeps tracking, so
+        # flipping it on mid-hold must not read the held depth as one
+        # giant rise.
+        cfg = self._cfg(gain=0.0, depth_gain=0.0)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
+        clock.advance(0.1)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
+        cfg["mix"]["0"]["chains"][0]["punch"]["gain"] = 1.0
+        clock.advance(0.1)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 1.0}, zones=set())
+        assert out == 0.0
+
+    def test_punch_overrides_a_multiply_combine(self, router, clock):
+        # combine=multiply with a silent speed channel yields 0 — the
+        # accent must still land (it merges max-wins after the combine).
+        cfg = self._cfg(gain=1.0)
+        cfg["mix"]["0"]["chains"][0]["combine"] = "multiply"
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        clock.advance(0.1)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.6}, zones=set())
+        assert out == pytest.approx(1.0)
+
+    def test_punch_rides_the_emit_stream(self, router, clock):
+        cfg = self._cfg()
+        captured = []
+        router.subscribe_intermediates("dev", 0, 0, captured.append)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        clock.advance(0.1)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.6}, zones=set())
+        assert captured[-1]["punch"] == pytest.approx(1.0)
+
+
+# ============================================================ Tier 3.3d: arming
+
+class TestArming:
+    """The sleep gate: output stays silent until N full strokes land
+    inside the window, stays armed while strokes keep coming, and
+    disarms after a quiet spell."""
+
+    def _cfg(self, enabled=True, thrusts=3, window_s=6.0,
+             disarm_after_s=45.0):
+        cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
+        cfg["mix"]["0"]["chains"][0]["arming"] = {
+            "enabled": enabled, "thrusts": thrusts,
+            "window_s": window_s, "disarm_after_s": disarm_after_s,
+        }
+        return cfg
+
+    def _stroke(self, router, clock, cfg, depth=0.8, half_s=0.15):
+        """One full in-out stroke: rise to `depth`, fall back to ~0."""
+        clock.advance(half_s)
+        router._calculate_motor_target("dev", 0, cfg, {"P": depth}, zones=set())
+        clock.advance(half_s)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.02}, zones=set())
+        return out
+
+    def test_default_chain_config_has_arming_off(self):
+        a = MotorRouter.DEFAULT_MIX_CONFIG["chains"][0]["arming"]
+        assert a == {"enabled": False, "thrusts": 3, "window_s": 6.0,
+                     "disarm_after_s": 45.0}
+
+    def test_idle_contact_stays_silent(self, router, clock):
+        # Resting against the receiver at half depth: no strokes, no output.
+        cfg = self._cfg()
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.5}, zones=set())
+        clock.advance(1.0)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.5}, zones=set())
+        assert out == 0.0
+
+    def test_one_stroke_is_not_enough(self, router, clock):
+        cfg = self._cfg(thrusts=3)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        self._stroke(router, clock, cfg)
+        clock.advance(0.1)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.8}, zones=set())
+        assert out == 0.0
+
+    def test_n_strokes_inside_the_window_arm_the_chain(self, router, clock):
+        cfg = self._cfg(thrusts=3, window_s=6.0)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        for _ in range(3):
+            self._stroke(router, clock, cfg)
+        clock.advance(0.1)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.8}, zones=set())
+        assert out == pytest.approx(0.8)
+
+    def test_strokes_spread_past_the_window_never_arm(self, router, clock):
+        cfg = self._cfg(thrusts=3, window_s=2.0)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        for _ in range(3):
+            self._stroke(router, clock, cfg)
+            clock.advance(3.0)   # each stroke ages out before the next
+            router._calculate_motor_target("dev", 0, cfg, {"P": 0.02}, zones=set())
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.8}, zones=set())
+        assert out == 0.0
+
+    def test_quiet_spell_disarms_again(self, router, clock):
+        cfg = self._cfg(thrusts=2, window_s=6.0, disarm_after_s=10.0)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        for _ in range(2):
+            self._stroke(router, clock, cfg)
+        clock.advance(0.1)
+        assert router._calculate_motor_target(
+            "dev", 0, cfg, {"P": 0.8}, zones=set()) > 0.0
+        # Hold still past the disarm timeout: back to silence.
+        clock.advance(11.0)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.8}, zones=set())
+        assert out == 0.0
+
+    def test_shallow_jitter_never_ticks_the_counter(self, router, clock):
+        # Swings under the hysteresis floor (0.15) are OSC jitter, not
+        # strokes — even many of them must not arm the chain.
+        cfg = self._cfg(thrusts=2)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.5}, zones=set())
+        for i in range(20):
+            clock.advance(0.1)
+            p = 0.5 + (0.05 if i % 2 == 0 else -0.05)
+            router._calculate_motor_target("dev", 0, cfg, {"P": p}, zones=set())
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.55}, zones=set())
+        assert out == 0.0
+
+    def test_disabled_is_passthrough(self, router, clock):
+        cfg = self._cfg(enabled=False)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        clock.advance(0.1)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.8}, zones=set())
+        assert out == pytest.approx(0.8)
+
+    def test_brush_after_a_tick_gap_cannot_cancel_an_overdue_disarm(
+            self, router, clock):
+        # Regression: ticks stop while all outputs are 0 (silent VRChat),
+        # so the disarm deadline may first be evaluated hours late — on
+        # the SAME tick a brush lands. The brush used to refresh
+        # last_thrust_t before the deadline check, keeping the chain
+        # armed; it must instead count as stroke 1-of-N toward re-arming.
+        cfg = self._cfg(thrusts=3, window_s=6.0, disarm_after_s=45.0)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        for _ in range(3):
+            self._stroke(router, clock, cfg)
+        clock.advance(0.1)
+        # Armed: partner pushes fully in, then the OSC stream freezes.
+        assert router._calculate_motor_target(
+            "dev", 0, cfg, {"P": 0.95}, zones=set()) > 0.0
+        clock.advance(3 * 3600.0)   # hours of silence, zero ticks
+        # A single pull-out-shaped brush event arrives.
+        out = router._calculate_motor_target(
+            "dev", 0, cfg, {"P": 0.4}, zones=set())
+        assert out == 0.0
+        clock.advance(0.1)
+        out = router._calculate_motor_target(
+            "dev", 0, cfg, {"P": 0.4}, zones=set())
+        assert out == 0.0
+
+    def test_reenabling_arming_reads_no_phantom_stroke(self, router, clock):
+        # Regression: motion while arming was disabled left the swing
+        # detector's extremes stale; re-enabling then counted the old
+        # rise + a new fall as one phantom stroke (instant arm at
+        # thrusts=1, the editor's minimum).
+        cfg = self._cfg(enabled=True, thrusts=1)
+        cfg["mix"]["0"]["chains"][0]["arming"]["enabled"] = False
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        clock.advance(0.15)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.8}, zones=set())
+        clock.advance(0.15)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.8}, zones=set())
+        cfg["mix"]["0"]["chains"][0]["arming"]["enabled"] = True
+        clock.advance(0.15)
+        out = router._calculate_motor_target(
+            "dev", 0, cfg, {"P": 0.02}, zones=set())
+        assert out == 0.0
+        clock.advance(0.15)
+        out = router._calculate_motor_target(
+            "dev", 0, cfg, {"P": 0.5}, zones=set())
+        assert out == 0.0   # still disarmed: no phantom stroke counted
+
+    def test_armed_state_rides_the_emit_stream(self, router, clock):
+        cfg = self._cfg(thrusts=2)
+        captured = []
+        router.subscribe_intermediates("dev", 0, 0, captured.append)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        assert captured[-1]["armed"] is False
+        for _ in range(2):
+            self._stroke(router, clock, cfg)
+        assert captured[-1]["armed"] is True
+        assert captured[-1]["thrusts"] == 2
+
+
+# ============================================================ Tier 3.3c: texture
+
+class TestTexture:
+    """Post-smoothing wobble: downward-only modulation of the held level
+    (never exceeds it, never parks it at zero), animated by the settling
+    tick between OSC events."""
+
+    def _cfg(self, enabled=True, amount=0.5, rate_hz=2.5, follow=False):
+        cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
+        cfg["mix"]["0"]["chains"][0]["texture"] = {
+            "enabled": enabled, "amount": amount,
+            "rate_hz": rate_hz, "follow_speed": follow,
+        }
+        return cfg
+
+    def _run_held(self, router, clock, cfg, level=0.8, ticks=60, dt=1 / 60):
+        router._calculate_motor_target("dev", 0, cfg, {"P": level}, zones=set())
+        outs = []
+        for _ in range(ticks):
+            clock.advance(dt)
+            outs.append(router._calculate_motor_target(
+                "dev", 0, cfg, {"P": level}, zones=set()))
+        return outs
+
+    def test_default_chain_config_has_texture_off(self):
+        t = MotorRouter.DEFAULT_MIX_CONFIG["chains"][0]["texture"]
+        assert t == {"enabled": False, "amount": 0.25,
+                     "rate_hz": 2.0, "follow_speed": False}
+
+    def test_disabled_is_identity(self, router, clock):
+        outs = self._run_held(router, clock, self._cfg(enabled=False))
+        assert all(o == pytest.approx(0.8) for o in outs)
+
+    def test_wobble_stays_inside_the_downward_band(self, router, clock):
+        # amount 0.5 on a held 0.8: outputs sweep [0.4, 0.8], never above.
+        outs = self._run_held(router, clock, self._cfg(amount=0.5))
+        assert max(outs) <= 0.8 + 1e-9
+        assert max(outs) > 0.75          # crest reaches the level
+        assert min(outs) == pytest.approx(0.4, abs=0.03)   # trough
+        assert min(outs) > 0.0
+
+    def test_activation_starts_at_full_level(self, router, clock):
+        cfg = self._cfg(amount=0.9)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        clock.advance(0.01)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.8}, zones=set())
+        # First driven tick: phase parked at the wobble top — the attack
+        # lands at (almost) full level, then the grain begins.
+        assert out == pytest.approx(0.8, abs=0.02)
+
+    def test_full_amount_never_parks_output_at_zero(self, router, clock):
+        # amount clamps at 0.9: the trough floor keeps needs_settling()
+        # true so the LFO can't freeze a driven motor at exactly zero.
+        outs = self._run_held(router, clock, self._cfg(amount=1.0), level=1.0)
+        assert min(outs) > 0.0
+        assert min(outs) == pytest.approx(0.1, abs=0.03)
+
+    def test_follow_speed_is_inert_while_holding_still(self, router, clock):
+        # With no motion the speed signal is 0, so follow_speed must not
+        # change the wobble at all.
+        plain = self._run_held(router, clock, self._cfg(follow=False))
+        router2 = MotorRouter(clock=clock.now)
+        follow = self._run_held(router2, clock, self._cfg(follow=True))
+        assert plain == pytest.approx(follow)
+
+    def test_zerocut_still_wins(self, router, clock):
+        cfg = self._cfg(amount=0.5)
+        cfg["mix"]["0"]["chains"][0]["zerocut"] = {
+            "enabled": True, "threshold": 0.0}
+        cfg["mix"]["0"]["chains"][0]["smoothing"] = {
+            "rise_ms": 0.0, "fall_ms": 500.0}
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.8}, zones=set())
+        clock.advance(0.05)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        assert out == 0.0
+
+    def test_textured_rides_the_emit_stream(self, router, clock):
+        cfg = self._cfg(amount=0.5)
+        captured = []
+        router.subscribe_intermediates("dev", 0, 0, captured.append)
+        self._run_held(router, clock, cfg)
+        last = captured[-1]
+        assert last["textured"] == last["out"]
+        assert last["smoothed"] == pytest.approx(0.8)
+
+
 # ============================================================ Tier 3.4: speed fall-off
 
 class TestSpeedFalloffIntegration:

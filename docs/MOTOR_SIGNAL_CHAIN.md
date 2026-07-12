@@ -47,30 +47,41 @@ router still owns the math.
 
 ```
 Input ─→ Depth (gain + curve) ─↘
-     │                          Combine ──┬─→ Smoothing ─→ Output
-     │   Speed (gain + curve) ─↗          │
-     │                                    ▲
-     └─→ Activity Gate ───────── valve ───┘
+     │   Speed (gain + curve) ─→ Combine ──┬─→ Arming ─→ Smoothing ─→ …
+     │   Punch (hit detector) ─↗           │
+     │                                     ▲
+     └─→ Activity Gate ────────── valve ───┘
                                   (open / closed)
+
+… ─→ Texture ─→ Zero cut ─→ Output
 ```
 
-Six logical stages, left to right:
+Eleven logical stages, left to right:
 
 1. **Input** — what the motor listens to.
 2. **Depth** — instantaneous magnitude path, gained + shaped.
 3. **Speed** — derivative path, gained + shaped.
-4. **Combine** — how Depth and Speed are merged.
-5. **Activity Gate** — sidechain valve that suppresses output when
+4. **Punch** — attack-transient path: a fast thrust in spikes a
+   short hit that decays quickly; merges max-wins with the combined
+   signal.
+5. **Combine** — how Depth and Speed are merged.
+6. **Activity Gate** — sidechain valve that suppresses output when
    input movement is below threshold.
-6. **Smoothing** — post-combine rise/fall envelope.
-7. **Output** — toy motor (vibrate or linear).
+7. **Arming** — sleep gate: silent until enough full strokes land
+   inside a window; disarms after a quiet timeout.
+8. **Smoothing** — post-combine rise/fall envelope.
+9. **Texture** — post-smoothing grain: a downward-only wobble on
+   held levels.
+10. **Zero cut** — final override: input at zero snaps the output
+    to silence instantly.
+11. **Output** — toy motor (vibrate or linear).
 
-Depth and Speed run in parallel from a shared Input. The Activity Gate
-runs in parallel too — it observes raw activity directly off the Input
-stage's speed detector and acts as a valve on the combined signal
-between Combine and Smoothing. Smoothing sits **after** the gate so
-gate transitions get rounded into the envelope and the toy never
-clicks on/off.
+Depth, Speed and Punch run in parallel from a shared Input. The
+Activity Gate runs in parallel too — it observes raw activity directly
+off the Input stage's speed detector and acts as a valve on the
+combined signal between Combine and Smoothing. Smoothing sits
+**after** the gates so gate transitions get rounded into the envelope
+and the toy never clicks on/off.
 
 ---
 
@@ -135,6 +146,24 @@ those become invisible constants inside the speed detector (see
 user-facing **Fall-off** knob (`decay_ms`) after field tuning showed
 the fixed 300 ms tail reads as "the toy keeps going after I
 stopped".
+
+### Punch
+
+Attack-transient detector — the third parallel source next to Depth
+and Speed. A fast thrust IN spikes a short hit on top of the
+sustained level, then decays. The hit merges max-wins with the
+combined Depth/Speed signal — an accent, never a duck. Pull-out
+never punches; slow repositioning is ignored.
+
+Editor contents:
+
+* **Gain** — `QDoubleSpinBox`, 0.0–2.0, step 0.05, default 0.0.
+  **0 = off** — no enable flag; gain 0 disables the stage, matching
+  the channels' "set gain to 0" convention.
+* **Decay (ms)** — `QDoubleSpinBox`, 30–1000, step 10, default 120.
+  How long the hit takes to ring out.
+
+Stored at `mix.<motor>.punch.{gain, decay_ms}`.
 
 ### Combine
 
@@ -224,6 +253,25 @@ detectors would drift apart over time. Re-using the speed signal
 means the activity meter operates in the same units the user sees in
 Tune's Raw-speed trace.
 
+### Arming
+
+The sleep gate. Output stays silent until the partner lands
+`thrusts` full strokes inside `window_s` seconds; once armed it
+stays armed while strokes keep coming, and disarms after
+`disarm_after_s` seconds of quiet. An accidental brush can never
+wake the motor — this is what makes 🌙 Sleep safe to wear while
+sleeping.
+
+Editor contents:
+
+* **Enable** — toggle. Off by default.
+* **Thrusts** — spinbox, 1–10, default 3.
+* **Window (s)** — spinbox, 1–30, default 6.
+* **Disarm after (s)** — spinbox, 5–600, default 45.
+
+Stored at `mix.<motor>.arming.{enabled, thrusts, window_s,
+disarm_after_s}`.
+
 **Visual.** The gate stage shows a thin horizontal activity meter
 with a tick mark at `wake_threshold`. The gate symbol (a valve icon
 or similar) flips open/closed when the bar crosses the line. Reads
@@ -241,6 +289,24 @@ Editor contents:
 
 Stored at `mix.<motor>.smoothing.{rise_ms, fall_ms}`. (Renamed from
 `attack_ms` / `release_ms` on disk too.)
+
+### Texture
+
+Post-smoothing grain. Wobbles a held level so it has texture instead
+of sitting flat. The modulation is downward-only — the output never
+exceeds the smoothed level — and the smoothing envelope tracks the
+pre-texture value so the wobble never feeds back into itself.
+
+Editor contents:
+
+* **Enable** — toggle. Off by default.
+* **Amount (%)** — spinbox, 0–90 %, default 25 (stored as 0.0–0.9).
+* **Rate (Hz)** — `QDoubleSpinBox`, 0.2–8.0, step 0.1, default 2.0.
+* **Follow speed** — toggle, default off. Scales the grain rate with
+  the speed signal so faster motion means faster grain.
+
+Stored at `mix.<motor>.texture.{enabled, amount, rate_hz,
+follow_speed}`.
 
 ### Output
 
@@ -384,6 +450,10 @@ is purely additive with no schema migration:
             "depth": {"gain": 1.0, "curve": "linear", "curve_param": 1.0},
             "speed": {"gain": 1.0, "curve": "linear", "curve_param": 1.0,
                       "decay_ms": 300.0},
+            # Attack transients: a fast thrust in spikes a short hit
+            # that decays quickly and merges max-wins with the
+            # combined signal. gain 0 = off.
+            "punch": {"gain": 0.0, "decay_ms": 120.0},
             "combine": "max",                  # "add" | "max" | "multiply"
             "gate": {
                 "enabled": False,
@@ -392,7 +462,16 @@ is purely additive with no schema migration:
                 "attack_s": 0.05,
                 "release_s": 0.5,
             },
+            # Sleep gate: silent until `thrusts` full strokes land
+            # inside `window_s`; disarms after `disarm_after_s` of
+            # quiet.
+            "arming": {"enabled": False, "thrusts": 3,
+                       "window_s": 6.0, "disarm_after_s": 45.0},
             "smoothing": {"rise_ms": 50.0, "fall_ms": 20.0},
+            # Post-smoothing grain: downward-only wobble on held
+            # levels; rate can follow the speed signal.
+            "texture": {"enabled": False, "amount": 0.25,
+                        "rate_hz": 2.0, "follow_speed": False},
             # Final override: input at/below threshold (plug removed)
             # snaps the chain output to 0 instantly instead of riding
             # the smoothing fall tail / speed ring down.
@@ -501,7 +580,8 @@ which is real but rarer than it first sounds.
   realistic main+override use case; three becomes a configuration
   maze and the diagram stops fitting on a card.
 * Chains are structurally identical — both have the full Input →
-  Depth/Speed → Combine → Gate → Smoothing → Zero cut pipeline. There is no
+  Depth/Speed/Punch → Combine → Gate → Arming → Smoothing → Texture →
+  Zero cut pipeline. There is no
   "primary" vs "secondary" template; the second chain just gets
   configured differently if the user wants passthrough behavior.
 * Merge at output: configurable op (`add` / `max` / `multiply`),

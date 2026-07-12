@@ -48,22 +48,27 @@ from settings import (
 # ---------------------------------------------------------------------------
 
 _SLOT_FEEL: Dict[int, Dict[str, Any]] = {
-    # Low — teasing: subdued depth, barely speed-reactive, slow envelopes.
+    # Low — teasing: subdued depth, barely speed-reactive, slow envelopes,
+    # and a slow grain wobble so a held contact keeps feeling alive.
     1: {"depth_gain": 0.55, "speed_gain": 0.35, "speed_decay_ms": 500.0,
-        "rise_ms": 350.0, "fall_ms": 600.0},
+        "rise_ms": 350.0, "fall_ms": 600.0,
+        "texture": {"enabled": True, "amount": 0.3, "rate_hz": 1.5,
+                    "follow_speed": False}},
     # Medium — between Low and High: most of the depth, moderate speed.
     2: {"depth_gain": 0.85, "speed_gain": 0.70, "speed_decay_ms": 350.0,
         "rise_ms": 120.0, "fall_ms": 200.0},
-    # High — reacts hard to speed: full depth, speed dominates, snappy.
+    # High — reacts hard to speed: full depth, speed dominates, snappy,
+    # with a punch accent so sharp thrusts land as crisp hits.
     3: {"depth_gain": 1.0, "speed_gain": 1.6, "speed_decay_ms": 220.0,
-        "rise_ms": 40.0, "fall_ms": 80.0},
-    # Sleep — hard to wake: the gate needs sustained strong contact before
-    # anything plays, and everything ramps gently. (A true thrust-count
-    # arming gate is planned; until then the gate threshold carries it.)
+        "rise_ms": 40.0, "fall_ms": 80.0,
+        "punch": {"gain": 0.9, "decay_ms": 140.0}},
+    # Sleep — hard to wake: nothing plays until three full strokes land
+    # inside six seconds (an accidental brush can't trigger it), it stays
+    # awake while strokes keep coming, and everything ramps gently.
     4: {"depth_gain": 0.70, "speed_gain": 0.40, "speed_decay_ms": 500.0,
         "rise_ms": 600.0, "fall_ms": 900.0,
-        "gate": {"enabled": True, "wake_threshold": 0.45,
-                 "sleep_delay_s": 8.0, "attack_s": 2.5, "release_s": 3.0}},
+        "arming": {"enabled": True, "thrusts": 3, "window_s": 6.0,
+                   "disarm_after_s": 45.0}},
 }
 
 
@@ -82,8 +87,9 @@ def preset_motor_mix(slot: int) -> Dict[str, Any]:
     chain["speed"]["decay_ms"] = feel["speed_decay_ms"]
     chain["smoothing"]["rise_ms"] = feel["rise_ms"]
     chain["smoothing"]["fall_ms"] = feel["fall_ms"]
-    if "gate" in feel:
-        chain["gate"].update(feel["gate"])
+    for stage in ("gate", "punch", "arming", "texture"):
+        if stage in feel:
+            chain[stage].update(feel[stage])
     return mix
 
 

@@ -40,13 +40,15 @@ def test_module_imports():
 def test_stage_constants_are_unique_and_ordered():
     from ui.motor_signal_chain import (
         _STAGE_ORDER, _STAGE_LABELS,
-        STAGE_INPUT, STAGE_DEPTH, STAGE_SPEED,
-        STAGE_COMBINE, STAGE_GATE, STAGE_SMOOTHING, STAGE_ZEROCUT,
+        STAGE_INPUT, STAGE_DEPTH, STAGE_SPEED, STAGE_PUNCH,
+        STAGE_COMBINE, STAGE_GATE, STAGE_ARMING, STAGE_SMOOTHING,
+        STAGE_TEXTURE, STAGE_ZEROCUT,
         STAGE_OUTPUT,
     )
     expected = (
-        STAGE_INPUT, STAGE_DEPTH, STAGE_SPEED,
-        STAGE_COMBINE, STAGE_GATE, STAGE_SMOOTHING, STAGE_ZEROCUT,
+        STAGE_INPUT, STAGE_DEPTH, STAGE_SPEED, STAGE_PUNCH,
+        STAGE_COMBINE, STAGE_GATE, STAGE_ARMING, STAGE_SMOOTHING,
+        STAGE_TEXTURE, STAGE_ZEROCUT,
         STAGE_OUTPUT,
     )
     assert _STAGE_ORDER == expected
@@ -601,21 +603,21 @@ def test_widget_build_expand_intermediates_collapse():
     ui = _SmokeUI(_SmokeController())
     w = MotorSignalChainWidget(ui, "DevX", 0, "vibrate")
 
-    # Built collapsed: 7 horizontal slots, 8 stage cards (Depth+Speed
-    # share a slot; Zero cut sits between Smoothing and Output), nothing
-    # expanded.
-    assert len(w._slots) == 7
-    assert len(w._stage_cards) == 8
+    # Built collapsed: 9 horizontal slots, 11 stage cards (Depth+Speed+
+    # Punch share a slot; Arming sits between Gate and Smoothing, Texture
+    # between Smoothing and Zero cut), nothing expanded.
+    assert len(w._slots) == 9
+    assert len(w._stage_cards) == 11
     assert w._active_stage is None
     # Small mode by default → cards/arrows centred.
     assert w._strip_host._centered is True
-    # 7 slots interleaved with 6 flexible connector cells (no trailing
+    # 9 slots interleaved with 8 flexible connector cells (no trailing
     # stretch) — the cells are what the stretching arrows are drawn across.
-    assert w._strip_lay.count() == 13
-    # Input forks into Depth+Speed and they join into Combine: the parallel
-    # ds slot (index 1) is registered with its two inner cards.
+    assert w._strip_lay.count() == 17
+    # Input forks into Depth+Speed+Punch and they join into Combine: the
+    # parallel ds slot (index 1) is registered with its three inner cards.
     assert w._strip_host._branch_index == 1
-    assert len(w._strip_host._branch_cards) == 2
+    assert len(w._strip_host._branch_cards) == 3
     # Smoothing has a quick delay slider (like Depth/Speed's gain slider).
     assert w._delay_control is not None
 

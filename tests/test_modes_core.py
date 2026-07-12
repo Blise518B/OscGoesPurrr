@@ -163,8 +163,8 @@ class TestMigration:
         sleep = mm.modes[4]["mix"]["ToyA"]["0"]["chains"][0]
         assert low["depth"]["gain"] == 0.55
         assert high["speed"]["gain"] == 1.6
-        assert sleep["gate"]["enabled"] is True
-        assert sleep["gate"]["wake_threshold"] == 0.45
+        assert sleep["arming"]["enabled"] is True
+        assert sleep["arming"]["thrusts"] == 3
 
     def test_backup_written_and_old_profiles_dropped(self, isolated):
         self._write_v2(isolated)
@@ -409,8 +409,19 @@ class TestPresets:
     def test_feel_slots_stay_inside_router_ranges(self):
         for slot in range(6):
             chain = preset_motor_mix(slot)["chains"][0]
-            for part in ("depth", "speed"):
+            for part in ("depth", "speed", "punch"):
                 assert 0.0 <= chain[part]["gain"] <= 2.0
                 assert math.isfinite(chain[part]["gain"])
-            assert set(chain) == {"depth", "speed", "combine", "gate",
-                                  "smoothing", "zerocut"}
+            assert 0.0 <= chain["texture"]["amount"] <= 0.9
+            assert set(chain) == {"depth", "speed", "punch", "combine",
+                                  "gate", "arming", "smoothing", "texture",
+                                  "zerocut"}
+
+    def test_low_teases_and_high_punches(self):
+        low = preset_motor_mix(1)["chains"][0]
+        high = preset_motor_mix(3)["chains"][0]
+        assert low["texture"]["enabled"] is True
+        assert high["punch"]["gain"] > 0.0
+        # And the accents stay OUT of the slots that didn't ask for them.
+        assert preset_motor_mix(2)["chains"][0]["texture"]["enabled"] is False
+        assert preset_motor_mix(2)["chains"][0]["punch"]["gain"] == 0.0

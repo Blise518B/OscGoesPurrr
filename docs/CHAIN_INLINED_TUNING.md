@@ -70,8 +70,9 @@ Single-chain motor:
 │ ▸ Simulated input                                              │
 │                                                                │
 │ [Input] → [Depth] ↘                                            │
-│                    [Combine] → [Gate] → [Smoothing]            │
-│         [Speed] ↗               → [Zero cut] → [Output]        │
+│           [Speed] → [Combine] → [Gate] → [Arming]              │
+│         [Punch] ↗    → [Smoothing] → [Texture]                 │
+│                        → [Zero cut] → [Output]                 │
 │                                                                │
 │  ▾ Depth                              ←  active stage          │
 │    Gain: [1.00]   Curve: [linear ▾]   Param: [—]               │
@@ -241,15 +242,21 @@ final).
 | Input     | `d_raw`                          | What this chain is being fed.       |
 | Depth     | `d_raw`, `d_shaped`              | Curve + gain effect at a glance.    |
 | Speed     | `s_raw`, `s_shaped`              | Same idea for the speed channel.    |
+| Punch     | `d_raw`, `punch`                 | The thrust-in transient it detects. |
 | Combine   | `d_shaped`, `s_shaped`, `mixed`  | Both channels and their merge.      |
 | Gate      | `mixed`, `gated`                 | What the gate let through.          |
 |           | (activity meter visual stays)    |                                     |
-| Smoothing | `gated`, `smoothed`              | Envelope's effect on the gate step. |
-| Zero cut  | `smoothed`, `out`                | The tail being cut to silence.      |
+| Arming    | `gated`, `armed_out`             | What the sleep gate let through.    |
+| Smoothing | `armed_out`, `smoothed`          | Envelope's effect on the gate step. |
+| Texture   | `smoothed`, `textured`           | The grain wobble under the level.   |
+| Zero cut  | `textured`, `out`                | The tail being cut to silence.      |
 | Output    | `out`                            | Final chain output.                 |
 
-`smoothed` is the post-smoothing, pre-zero-cut value; `out` is the
-chain's final output (identical while the zero cut is disabled or
+`armed_out` is the post-arming gate output (identical to `gated`
+while arming is disabled or armed); `smoothed` is the post-smoothing
+value; `textured` is the post-texture, pre-zero-cut value (identical
+to `smoothed` while texture is disabled); `out` is the chain's final
+output (identical to `textured` while the zero cut is disabled or
 the input is live). For single-chain motors, `out` = the motor
 target. For two-chain motors, `out` = this chain's per-chain output
 (pre-merge).

@@ -193,6 +193,11 @@ class MotorRouter:
                 "depth": {"gain": 1.0, "curve": "linear", "curve_param": 1.0},
                 "speed": {"gain": 1.0, "curve": "linear", "curve_param": 1.0,
                           "decay_ms": 300.0},
+                # Punch — third parallel source next to Depth and Speed: an
+                # attack-transient detector that spikes on a fast RISE in
+                # depth (a sharp thrust in) and decays quickly, adding a
+                # crisp hit on top of the sustained level. gain 0 = off.
+                "punch": {"gain": 0.0, "decay_ms": 120.0},
                 "combine": "max",
                 "gate": {
                     "enabled": False,
@@ -201,7 +206,20 @@ class MotorRouter:
                     "attack_s": 0.05,
                     "release_s": 0.5,
                 },
+                # Arming — the sleep gate: output stays silent until the
+                # partner lands `thrusts` full strokes within `window_s`
+                # seconds, then stays armed until `disarm_after_s` passes
+                # with no further strokes. Accidental brushes and idle
+                # contact can never wake the motor.
+                "arming": {"enabled": False, "thrusts": 3,
+                           "window_s": 6.0, "disarm_after_s": 45.0},
                 "smoothing": {"rise_ms": 50.0, "fall_ms": 20.0},
+                # Texture — post-smoothing wobble so a held level has grain
+                # instead of sitting flat. Downward-only modulation (never
+                # exceeds the smoothed level); rate can follow the speed
+                # signal so faster motion means faster grain.
+                "texture": {"enabled": False, "amount": 0.25,
+                            "rate_hz": 2.0, "follow_speed": False},
                 # Zero cut — the chain's final stage. When the chain's raw
                 # input sits at/below `threshold` (plug removed → contact
                 # proximity 0), the output snaps to 0 instantly instead of
@@ -212,6 +230,38 @@ class MotorRouter:
         # Only meaningful when len(chains) > 1; harmless otherwise.
         "merge": "max",
     }
+
+    # --- Punch tuning -------------------------------------------------
+    # A depth rise of this many full-ranges per second counts as a
+    # full-strength hit (a firm thrust covers the full range in ~0.3 s).
+    _PUNCH_FULL_RATE_PER_S = 3.0
+    # Rises slower than this are ignored entirely — OSC float jitter and
+    # slow repositioning must not tick the punch envelope.
+    _PUNCH_MIN_RATE_PER_S = 0.35
+    _PUNCH_DECAY_MS_MIN = 30.0
+    _PUNCH_DECAY_MS_MAX = 1000.0
+
+    # --- Arming (thrust detector) tuning --------------------------------
+    # A depth swing must cover at least this much of the full range for
+    # its reversal to count as one thrust — OSC jitter and shallow
+    # accidental brushes never tick the counter.
+    _THRUST_MIN_SWING = 0.15
+    # Bookkeeping cap on remembered thrust timestamps (well above any
+    # realistic `thrusts` requirement).
+    _THRUST_TIMES_CAP = 32
+
+    # --- Texture tuning -----------------------------------------------
+    # Rate window: below ~0.2 Hz the wobble reads as drift, above ~8 Hz
+    # it exceeds what the per-feature hardware send caps can express.
+    _TEXTURE_RATE_HZ_MIN = 0.2
+    _TEXTURE_RATE_HZ_MAX = 8.0
+    # Amount is capped below 1.0 so the modulation trough can never park
+    # the output at exactly zero — needs_settling() keys on output > 0,
+    # and a zero-parked motor would stop ticking with the LFO frozen.
+    _TEXTURE_AMOUNT_MAX = 0.9
+    # Phase where sin == -1: the wobble applies zero attenuation there,
+    # so activations start at full level (see the chain loop).
+    _TEXTURE_PHASE_TOP = 1.5 * math.pi
 
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         # `clock` is dependency-injected so tests can drive time deterministically.
@@ -716,6 +766,83 @@ class MotorRouter:
         denom = max(1.0 - cutoff, 1e-6)
         return min(1.0, (smoothed - cutoff) / denom)
 
+    def _derive_punch_signal(self, chain_state: Dict[str, Any],
+                             position: float,
+                             dt: float,
+                             decay_tau_s: float) -> float:
+        """Attack-transient detector: the normalized RISE rate of depth
+        strikes an impulse envelope that decays with `decay_tau_s`. Only
+        rising edges count (pull-out is not a punch), and rises slower
+        than _PUNCH_MIN_RATE_PER_S are ignored so OSC float jitter and
+        slow repositioning never tick the envelope.
+
+        Keeps its own `punch_last_d` memory — the speed detector's
+        `last_position` is already advanced by the time punch runs, and
+        speed measures |Δ| while punch needs the signed rise.
+
+        Rate independence: rise/dt is a per-second rate and the decay is
+        a wall-clock exp, so a thrust reads identically at any router
+        poll rate. Returns the envelope in [0, 1] — the caller applies
+        the chain's punch gain."""
+        last_d = chain_state.get("punch_last_d", -1.0)
+        env = float(chain_state.get("punch_env", 0.0))
+        if dt > 0.0:
+            env *= math.exp(-dt / max(1e-3, decay_tau_s))
+            if last_d >= 0.0:
+                rate = (position - last_d) / dt
+                if rate >= self._PUNCH_MIN_RATE_PER_S:
+                    strike = min(1.0, rate / self._PUNCH_FULL_RATE_PER_S)
+                    if strike > env:
+                        env = strike
+        chain_state["punch_last_d"] = position
+        chain_state["punch_env"] = env
+        return env
+
+    def _detect_thrust(self, chain_state: Dict[str, Any],
+                       d_raw: float) -> bool:
+        """Swing detector: returns True exactly once per completed
+        in-stroke — when the depth signal reverses downward after a rise
+        that covered at least _THRUST_MIN_SWING. Hysteresis is inherent:
+        jitter smaller than the swing floor never flips the tracked
+        direction, and the bottom turn (pull-out ending) never counts, so
+        one full in-out cycle is exactly one thrust.
+
+        Also the future data source for the statistics thrust counter —
+        keep it pure per-chain-state math with no side channels."""
+        ext = chain_state.get("thrust_ext")
+        if ext is None:
+            chain_state["thrust_ext"] = d_raw
+            chain_state["thrust_base"] = d_raw
+            chain_state["thrust_dir"] = 0
+            return False
+        direction = chain_state.get("thrust_dir", 0)
+        base = chain_state.get("thrust_base", ext)
+        if direction >= 0:
+            if d_raw >= ext:
+                chain_state["thrust_ext"] = d_raw
+                if direction == 0 and d_raw - base >= self._THRUST_MIN_SWING:
+                    chain_state["thrust_dir"] = 1
+                return False
+            if ext - d_raw >= self._THRUST_MIN_SWING:
+                # Reversal down. Counts only if we were genuinely rising
+                # and the rise itself covered a full swing.
+                counted = (direction == 1
+                           and ext - base >= self._THRUST_MIN_SWING)
+                chain_state["thrust_dir"] = -1
+                chain_state["thrust_base"] = ext
+                chain_state["thrust_ext"] = d_raw
+                return counted
+            return False
+        # direction == -1: riding a fall.
+        if d_raw <= ext:
+            chain_state["thrust_ext"] = d_raw
+            return False
+        if d_raw - ext >= self._THRUST_MIN_SWING:
+            chain_state["thrust_dir"] = 1
+            chain_state["thrust_base"] = ext
+            chain_state["thrust_ext"] = d_raw
+        return False
+
     def _antistuck_factor(self, state: Dict[str, Any], d_raw: float,
                           now: float,
                           cfg: Optional[Dict[str, Any]]) -> float:
@@ -1138,7 +1265,34 @@ class MotorRouter:
                 self._coerce_float(speed.get("curve_param", 1.0), 1.0),
             ) * self._coerce_float(speed.get("gain", 1.0), 1.0, 0.0, 2.0)
 
+            # Punch — third parallel source. Computed alongside depth and
+            # speed, then merged max-wins AFTER the d/s combine op: an
+            # impulse is an accent overlay, and folding it into "multiply"
+            # would zero the whole chain between hits.
+            punch_cfg = chain.get("punch", {}) if isinstance(chain, dict) else {}
+            if not isinstance(punch_cfg, dict):
+                punch_cfg = {}
+            punch_gain = self._coerce_float(
+                punch_cfg.get("gain", 0.0), 0.0, 0.0, 2.0
+            )
+            if punch_gain > 0.0:
+                punch_decay_s = self._coerce_float(
+                    punch_cfg.get("decay_ms", 120.0), 120.0,
+                    self._PUNCH_DECAY_MS_MIN, self._PUNCH_DECAY_MS_MAX,
+                ) / 1000.0
+                punch = min(1.0, self._derive_punch_signal(
+                    chain_state, chain_d_raw, dt, punch_decay_s
+                ) * punch_gain)
+            else:
+                # Keep the memory tracking so enabling punch mid-motion
+                # doesn't read the whole current depth as one giant rise.
+                chain_state["punch_last_d"] = chain_d_raw
+                chain_state["punch_env"] = 0.0
+                punch = 0.0
+
             mixed = combine(d_shaped, s_shaped, str(chain.get("combine", "max")))
+            if punch > mixed:
+                mixed = punch
 
             # Activity gate — sidechain on s_raw. Per-chain state so
             # two chains on the same motor can hold different gate
@@ -1190,6 +1344,70 @@ class MotorRouter:
                 gate_open_emit = True
                 activity_emit = 0.0
 
+            # Arming — the sleep gate. The chain stays silent until the
+            # partner lands N full strokes inside the window; once armed it
+            # stays armed until the strokes stop for `disarm_after_s`.
+            # Placed BEFORE smoothing so waking attacks along the chain's
+            # rise envelope and disarming rides its fall — no hard steps.
+            arming_cfg = chain.get("arming", {}) if isinstance(chain, dict) else {}
+            if not isinstance(arming_cfg, dict):
+                arming_cfg = {}
+            if bool(arming_cfg.get("enabled", False)):
+                need = int(self._coerce_float(
+                    arming_cfg.get("thrusts", 3), 3.0, 1.0, 10.0))
+                window_s = self._coerce_float(
+                    arming_cfg.get("window_s", 6.0), 6.0, 1.0, 30.0)
+                disarm_after_s = self._coerce_float(
+                    arming_cfg.get("disarm_after_s", 45.0), 45.0, 5.0, 600.0)
+                times = chain_state.setdefault("thrust_times", [])
+                # Ticks stop entirely while every output is 0 (silent
+                # VRChat), so this may be the first evaluation in hours:
+                # a swing's two halves must not straddle a gap longer
+                # than the counting window, or a pre-gap half-rise pairs
+                # with a post-gap fall into a phantom stroke.
+                if dt > window_s:
+                    chain_state.pop("thrust_ext", None)
+                    chain_state.pop("thrust_base", None)
+                    chain_state.pop("thrust_dir", None)
+                # Disarm FIRST, against the PRE-tick deadline. A stroke
+                # landing after the deadline expired must count toward
+                # RE-arming (1 of N), never extend the stale armed state
+                # — otherwise a single brush hours later re-triggers a
+                # sleeping user's motor without the required wake strokes.
+                if bool(chain_state.get("armed", False)):
+                    prev_last_t = chain_state.get("last_thrust_t", -1.0)
+                    if prev_last_t < 0.0 or now - prev_last_t > disarm_after_s:
+                        chain_state["armed"] = False
+                        times.clear()
+                if self._detect_thrust(chain_state, chain_d_raw):
+                    times.append(now)
+                    if len(times) > self._THRUST_TIMES_CAP:
+                        del times[0]
+                    chain_state["last_thrust_t"] = now
+                while times and now - times[0] > window_s:
+                    times.pop(0)
+                armed = bool(chain_state.get("armed", False))
+                if not armed and len(times) >= need:
+                    armed = True
+                chain_state["armed"] = armed
+                armed_out = gated if armed else 0.0
+                armed_emit = armed
+                thrusts_emit = len(times)
+            else:
+                # Disabled: pass-through, and the next enable starts
+                # disarmed with a clean counter AND a clean swing
+                # detector — stale extremes from motion while disabled
+                # must not count as a phantom stroke on re-enable.
+                chain_state["armed"] = False
+                chain_state.pop("thrust_times", None)
+                chain_state.pop("thrust_ext", None)
+                chain_state.pop("thrust_base", None)
+                chain_state.pop("thrust_dir", None)
+                chain_state.pop("last_thrust_t", None)
+                armed_out = gated
+                armed_emit = True
+                thrusts_emit = 0
+
             smoothing = chain.get("smoothing", {}) if isinstance(chain, dict) else {}
             rise_ms = self._coerce_float(
                 smoothing.get("rise_ms", 50.0), 50.0, 0.0, 2000.0
@@ -1198,8 +1416,48 @@ class MotorRouter:
                 smoothing.get("fall_ms", 20.0), 20.0, 0.0, 2000.0
             )
             smoothed_chain = smooth(
-                chain_state["smoothed_output"], gated, dt * 1000.0, rise_ms, fall_ms
+                chain_state["smoothed_output"], armed_out, dt * 1000.0,
+                rise_ms, fall_ms
             )
+
+            # Texture — post-smoothing wobble so a held level has grain.
+            # Downward-only: the output oscillates between the smoothed
+            # level and (1 - amount) × level, never above it — texture is
+            # cosmetic modulation and must not amplify. The smoothing
+            # envelope state deliberately tracks the PRE-texture value so
+            # the wobble never feeds back into its own envelope. While a
+            # driven motor holds a level, needs_settling() keeps the tick
+            # running (output stays > 0 — see _TEXTURE_AMOUNT_MAX), which
+            # is what animates the LFO between OSC events.
+            texture_cfg = chain.get("texture", {}) if isinstance(chain, dict) else {}
+            if not isinstance(texture_cfg, dict):
+                texture_cfg = {}
+            textured_chain = smoothed_chain
+            if bool(texture_cfg.get("enabled", False)) and smoothed_chain > 0.0:
+                tx_amount = self._coerce_float(
+                    texture_cfg.get("amount", 0.25), 0.25,
+                    0.0, self._TEXTURE_AMOUNT_MAX,
+                )
+                tx_rate = self._coerce_float(
+                    texture_cfg.get("rate_hz", 2.0), 2.0,
+                    self._TEXTURE_RATE_HZ_MIN, self._TEXTURE_RATE_HZ_MAX,
+                )
+                if bool(texture_cfg.get("follow_speed", False)):
+                    # Full-speed motion doubles the grain rate; the result
+                    # stays inside the hardware-expressible window.
+                    tx_rate = min(self._TEXTURE_RATE_HZ_MAX,
+                                  tx_rate * (1.0 + max(0.0, min(1.0, s_shaped))))
+                phase = (chain_state.get("texture_phase", self._TEXTURE_PHASE_TOP)
+                         + math.tau * tx_rate * dt) % math.tau
+                chain_state["texture_phase"] = phase
+                textured_chain = smoothed_chain * (
+                    1.0 - tx_amount * 0.5 * (1.0 + math.sin(phase))
+                )
+            else:
+                # Park the phase where sin == -1 (zero attenuation) so the
+                # next activation starts at full level — the attack lands
+                # first, then the grain begins.
+                chain_state["texture_phase"] = self._TEXTURE_PHASE_TOP
 
             # Zero cut — the chain's final stage. While the chain's own raw
             # input reads at/below the threshold (plug removed → proximity
@@ -1212,6 +1470,7 @@ class MotorRouter:
             # physics, and while the cut holds, its ring is inaudible
             # anyway.
             smoothed_emit = smoothed_chain  # pre-cut, for the Smoothing trace
+            textured_emit = textured_chain  # pre-cut, for the Texture trace
             zerocut = chain.get("zerocut", {}) if isinstance(chain, dict) else {}
             if not isinstance(zerocut, dict):
                 # Hand-edited profile with e.g. `"zerocut": true` — treat
@@ -1223,20 +1482,29 @@ class MotorRouter:
                 )
                 if chain_d_raw <= zc_threshold:
                     smoothed_chain = 0.0
+                    textured_chain = 0.0
+            # The smoothing envelope tracks the post-cut, PRE-texture value:
+            # the cut resets it (re-insert attacks from silence) while the
+            # texture wobble never feeds back into its own envelope.
             chain_state["smoothed_output"] = smoothed_chain
 
-            chain_outputs.append(smoothed_chain)
+            chain_outputs.append(textured_chain)
             chain_emits.append({
                 "d_raw":     chain_d_raw,
                 "s_raw":     s_raw,
                 "d_shaped":  d_shaped,
                 "s_shaped":  s_shaped,
+                "punch":     punch,
                 "mixed":     mixed,
                 "activity":  activity_emit,
                 "gate_open": gate_open_emit,
                 "gated":     gated,
+                "armed":     armed_emit,
+                "thrusts":   thrusts_emit,
+                "armed_out": armed_out,
                 "smoothed":  smoothed_emit,
-                "out":       smoothed_chain,
+                "textured":  textured_emit,
+                "out":       textured_chain,
             })
 
         # Merge chain outputs into the final motor target. For a
@@ -1280,11 +1548,16 @@ class MotorRouter:
                     "s_raw":     emit["s_raw"],
                     "d_shaped":  emit["d_shaped"],
                     "s_shaped":  emit["s_shaped"],
+                    "punch":     emit["punch"],
                     "mixed":     emit["mixed"],
                     "activity":  emit["activity"],
                     "gate_open": emit["gate_open"],
                     "gated":     emit["gated"],
+                    "armed":     emit["armed"],
+                    "thrusts":   emit["thrusts"],
+                    "armed_out": emit["armed_out"],
                     "smoothed":  emit["smoothed"],
+                    "textured":  emit["textured"],
                     "out":       emit["out"],
                     "final_out": final_out,
                 }

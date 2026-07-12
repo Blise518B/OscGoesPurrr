@@ -1,6 +1,6 @@
 """Per-motor signal-chain widget — the user-facing surface for the
-Input → Depth/Speed → Combine → Gate → Smoothing → Zero cut → Output
-pipeline.
+Input → Depth/Speed/Punch → Combine → Gate → Arming → Smoothing →
+Texture → Zero cut → Output pipeline.
 
 Embedded in two contexts (intentionally — see docs/MOTOR_SIGNAL_CHAIN.md
 § "Tune view, 1:1 with Device Routing"):
@@ -330,15 +330,19 @@ def _set_merge_op(controller, device_name: str, motor_idx: int,
 STAGE_INPUT = "input"
 STAGE_DEPTH = "depth"
 STAGE_SPEED = "speed"
+STAGE_PUNCH = "punch"
 STAGE_COMBINE = "combine"
 STAGE_GATE = "gate"
+STAGE_ARMING = "arming"
 STAGE_SMOOTHING = "smoothing"
+STAGE_TEXTURE = "texture"
 STAGE_ZEROCUT = "zerocut"
 STAGE_OUTPUT = "output"
 
 _STAGE_ORDER = (
-    STAGE_INPUT, STAGE_DEPTH, STAGE_SPEED,
-    STAGE_COMBINE, STAGE_GATE, STAGE_SMOOTHING, STAGE_ZEROCUT,
+    STAGE_INPUT, STAGE_DEPTH, STAGE_SPEED, STAGE_PUNCH,
+    STAGE_COMBINE, STAGE_GATE, STAGE_ARMING, STAGE_SMOOTHING,
+    STAGE_TEXTURE, STAGE_ZEROCUT,
     STAGE_OUTPUT,
 )
 
@@ -346,9 +350,12 @@ _STAGE_LABELS = {
     STAGE_INPUT:     "Input",
     STAGE_DEPTH:     "Depth",
     STAGE_SPEED:     "Speed",
+    STAGE_PUNCH:     "Punch",
     STAGE_COMBINE:   "Combine",
     STAGE_GATE:      "Gate",
+    STAGE_ARMING:    "Arming",
     STAGE_SMOOTHING: "Smoothing",
+    STAGE_TEXTURE:   "Texture",
     STAGE_ZEROCUT:   "Zero cut",
     STAGE_OUTPUT:    "Output",
 }
@@ -360,9 +367,12 @@ _STAGE_SHORT = {
     STAGE_INPUT:     "In",
     STAGE_DEPTH:     "Dep",
     STAGE_SPEED:     "Spd",
+    STAGE_PUNCH:     "Pch",
     STAGE_COMBINE:   "Cmb",
     STAGE_GATE:      "Gate",
+    STAGE_ARMING:    "Arm",
     STAGE_SMOOTHING: "Smth",
+    STAGE_TEXTURE:   "Tex",
     STAGE_ZEROCUT:   "Cut",
     STAGE_OUTPUT:    "Out",
 }
@@ -388,11 +398,20 @@ _TRACE_STYLE = {
     "s_raw":    ("#FFBB88", {"width": 1.6}),
     "d_shaped": ("#3366FF", {"width": 1.8, "dash": "dash"}),
     "s_shaped": ("#FF7733", {"width": 1.8, "dash": "dash"}),
+    # Punch envelope — derived from d_raw like the shaped channels, so
+    # it takes the shaped-signal dash in its own hue.
+    "punch":    ("#FF66AA", {"width": 1.8, "dash": "dash"}),
     "mixed":    ("#C040FF", {"width": 1.6, "dash": "dot"}),
     "gated":    ("#FFCC00", {"width": 1.6}),
-    # Post-smoothing, PRE zero cut — a lighter dashed green so the Zero
-    # cut card can show the tail it is cutting against the final `out`.
+    # Post-arming — the gate output after the sleep gate; identical to
+    # `gated` while arming is disabled or armed.
+    "armed_out": ("#66CCFF", {"width": 1.6}),
+    # Post-smoothing, PRE texture/zero cut — a lighter dashed green so
+    # the downstream cards can show the level they modulate or cut.
     "smoothed": ("#7FD9A8", {"width": 1.6, "dash": "dash"}),
+    # Post-texture, PRE zero cut — dotted so the grain wobble reads
+    # against the smoothed level it never exceeds.
+    "textured": ("#B4E67F", {"width": 1.6, "dash": "dot"}),
     "out":      (COLOR_SUCCESS, {"width": 2.0}),
 }
 
@@ -400,10 +419,13 @@ _STAGE_TRACES: Dict[str, Tuple[str, ...]] = {
     STAGE_INPUT:     ("d_raw",),
     STAGE_DEPTH:     ("d_raw", "d_shaped"),
     STAGE_SPEED:     ("s_raw", "s_shaped"),
+    STAGE_PUNCH:     ("d_raw", "punch"),
     STAGE_COMBINE:   ("d_shaped", "s_shaped", "mixed"),
     STAGE_GATE:      ("mixed", "gated"),
-    STAGE_SMOOTHING: ("gated", "smoothed"),
-    STAGE_ZEROCUT:   ("smoothed", "out"),
+    STAGE_ARMING:    ("gated", "armed_out"),
+    STAGE_SMOOTHING: ("armed_out", "smoothed"),
+    STAGE_TEXTURE:   ("smoothed", "textured"),
+    STAGE_ZEROCUT:   ("textured", "out"),
     STAGE_OUTPUT:    ("out",),
 }
 
@@ -417,9 +439,12 @@ _STAGE_LEVEL_TRACE: Dict[str, str] = {
     STAGE_INPUT:     "d_raw",
     STAGE_DEPTH:     "d_shaped",
     STAGE_SPEED:     "s_shaped",
+    STAGE_PUNCH:     "punch",
     STAGE_COMBINE:   "mixed",
     STAGE_GATE:      "gated",
+    STAGE_ARMING:    "armed_out",
     STAGE_SMOOTHING: "smoothed",
+    STAGE_TEXTURE:   "textured",
     STAGE_ZEROCUT:   "out",
     STAGE_OUTPUT:    "out",
 }
@@ -1132,9 +1157,10 @@ class _StripHost(QWidget):
         super().__init__(parent)
         self._slots: List[QWidget] = []
         self._levels: List[float] = []
-        # Fork/join around the parallel Depth/Speed slot: Input forks into
-        # both channels, and both join into Combine. `_branch_index` is that
-        # slot's position in `_slots`; `_branch_cards` is [depth, speed].
+        # Fork/join around the parallel Depth/Speed/Punch slot: Input forks
+        # into every parallel source, and all join into Combine.
+        # `_branch_index` is that slot's position in `_slots`;
+        # `_branch_cards` is [depth, speed, punch].
         self._branch_index: int = -1
         self._branch_cards: List[QWidget] = []
         self._branch_levels: List[float] = []
@@ -1173,7 +1199,7 @@ class _StripHost(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
         has_branch = (0 <= self._branch_index < len(self._slots)
-                      and len(self._branch_cards) == 2)
+                      and len(self._branch_cards) >= 2)
         for i in range(len(self._slots) - 1):
             try:
                 a = self._slots[i]
@@ -1186,7 +1212,7 @@ class _StripHost(QWidget):
                 color = _lerp_color(_CONNECTOR_IDLE, _CONNECTOR_LIVE, level)
                 n = len(self._branch_cards)
                 if has_branch and i + 1 == self._branch_index:
-                    # Fork: Input splits into Depth and Speed. Spread the two
+                    # Fork: Input splits into the parallel sources. Spread the
                     # arrows' start points on Input's edge so they don't stack.
                     sx, scy = self._card_anchor(a, right=True)
                     for idx, card in enumerate(self._branch_cards):
@@ -1195,9 +1221,9 @@ class _StripHost(QWidget):
                             p, start, self._card_anchor(card, right=False),
                             color)
                 elif has_branch and i == self._branch_index:
-                    # Join: Depth and Speed merge into Combine. Spread the two
-                    # arrows' arrival points on Combine's edge, and tint each
-                    # by its own channel level.
+                    # Join: the parallel sources merge into Combine. Spread
+                    # the arrows' arrival points on Combine's edge, and tint
+                    # each by its own channel level.
                     dx, dcy = self._card_anchor(b, right=False)
                     for idx, card in enumerate(self._branch_cards):
                         lv = (self._branch_levels[idx]
@@ -1348,9 +1374,10 @@ class MotorSignalChainWidget(QFrame):
         reset_btn = QPushButton("Reset to defaults")
         reset_btn.setFixedHeight(BTN_HEIGHT_SMALL)
         reset_btn.setToolTip(
-            "Wipe every setting in THIS chain (channels, curves, "
-            "combine, gate, smoothing, zero cut) back to the built-in "
-            "defaults. Other chains on the same motor are untouched."
+            "Wipe every setting in THIS chain (channels, curves, punch, "
+            "combine, gate, arming, smoothing, texture, zero cut) back "
+            "to the built-in defaults. Other chains on the same motor "
+            "are untouched."
         )
         reset_btn.clicked.connect(self._on_reset_clicked)
         header_row.addWidget(reset_btn)
@@ -1513,33 +1540,41 @@ class MotorSignalChainWidget(QFrame):
         add_slot(in_card)
         self._slot_for_stage[STAGE_INPUT] = in_card
 
-        # Depth + Speed share one vertical slot.
+        # Depth + Speed + Punch share one vertical slot — three parallel
+        # sources that all merge in Combine.
         ds = QWidget()
         ds_lay = _vbox(0, 4)
         ds.setLayout(ds_lay)
         depth_card = add_card(STAGE_DEPTH)
         speed_card = add_card(STAGE_SPEED)
+        punch_card = add_card(STAGE_PUNCH)
         # Inner cards follow the slot width (the slot is what animates),
         # so let them shrink to the rail width when the slot is squished.
         depth_card.setMinimumWidth(0)
         speed_card.setMinimumWidth(0)
+        punch_card.setMinimumWidth(0)
         ds_lay.addWidget(depth_card)
         ds_lay.addWidget(speed_card)
+        ds_lay.addWidget(punch_card)
         add_slot(ds)
         self._slot_for_stage[STAGE_DEPTH] = ds
         self._slot_for_stage[STAGE_SPEED] = ds
+        self._slot_for_stage[STAGE_PUNCH] = ds
         self._ds_slot = ds
 
-        for sid in (STAGE_COMBINE, STAGE_GATE, STAGE_SMOOTHING,
+        for sid in (STAGE_COMBINE, STAGE_GATE, STAGE_ARMING,
+                    STAGE_SMOOTHING, STAGE_TEXTURE,
                     STAGE_ZEROCUT, STAGE_OUTPUT):
             card = add_card(sid)
             add_slot(card)
             self._slot_for_stage[sid] = card
 
         host.set_slots(self._slots)
-        # Input forks into Depth+Speed, and they join into Combine — tell the
-        # host which slot is the parallel pair so it draws branch arrows.
-        host.set_branch(self._slots.index(self._ds_slot), [depth_card, speed_card])
+        # Input forks into Depth+Speed+Punch, and they join into Combine —
+        # tell the host which slot holds the parallel cards so it draws
+        # branch arrows.
+        host.set_branch(self._slots.index(self._ds_slot),
+                        [depth_card, speed_card, punch_card])
         return host
 
     def _make_stage_card(self, stage_id: str) -> _StageCard:
@@ -1627,6 +1662,21 @@ class MotorSignalChainWidget(QFrame):
             curve = str(cfg.get("curve", "linear"))
             prefix = "" if curve == "linear" else f"{curve[0]} "
             return f"{prefix}×{gain:.2g}"
+        if stage_id == STAGE_PUNCH:
+            pc = chain.get("punch", {}) if isinstance(chain, dict) else {}
+            if not isinstance(pc, dict):
+                pc = {}
+            try:
+                gain = float(pc.get("gain", 0.0))
+            except (TypeError, ValueError):
+                gain = 0.0
+            if gain <= 0.0:
+                return "off"
+            try:
+                decay = float(pc.get("decay_ms", 120.0))
+            except (TypeError, ValueError):
+                decay = 120.0
+            return f"×{gain:.2g} · {decay:.0f} ms"
         if stage_id == STAGE_COMBINE:
             return str(chain.get("combine", "max"))
         if stage_id == STAGE_GATE:
@@ -1634,11 +1684,38 @@ class MotorSignalChainWidget(QFrame):
             if not gate.get("enabled", False):
                 return "off"
             return f"≥{float(gate.get('wake_threshold', 0.05)):.2g}"
+        if stage_id == STAGE_ARMING:
+            ac = chain.get("arming", {}) if isinstance(chain, dict) else {}
+            if not isinstance(ac, dict) or not ac.get("enabled", False):
+                return "off"
+            try:
+                thrusts = float(ac.get("thrusts", 3))
+            except (TypeError, ValueError):
+                thrusts = 3.0
+            try:
+                window = float(ac.get("window_s", 6.0))
+            except (TypeError, ValueError):
+                window = 6.0
+            return f"{thrusts:.0f}× in {window:.0f} s"
         if stage_id == STAGE_SMOOTHING:
             sm = chain.get("smoothing", {}) if isinstance(chain, dict) else {}
             rise = float(sm.get("rise_ms", 50))
             fall = float(sm.get("fall_ms", 20))
             return f"↑{rise:.0f}/↓{fall:.0f}ms"
+        if stage_id == STAGE_TEXTURE:
+            tc = chain.get("texture", {}) if isinstance(chain, dict) else {}
+            if not isinstance(tc, dict) or not tc.get("enabled", False):
+                return "off"
+            try:
+                amount = float(tc.get("amount", 0.25))
+            except (TypeError, ValueError):
+                amount = 0.25
+            try:
+                rate = float(tc.get("rate_hz", 2.0))
+            except (TypeError, ValueError):
+                rate = 2.0
+            suffix = " →spd" if tc.get("follow_speed", False) else ""
+            return f"±{amount * 100.0:.0f}% @ {rate:.1f} Hz{suffix}"
         if stage_id == STAGE_ZEROCUT:
             zc = chain.get("zerocut", {}) if isinstance(chain, dict) else {}
             if not isinstance(zc, dict) or not zc.get("enabled", False):
@@ -2039,15 +2116,17 @@ class MotorSignalChainWidget(QFrame):
 
         levels = [
             g(STAGE_INPUT),
-            max(g(STAGE_DEPTH), g(STAGE_SPEED)),
+            max(g(STAGE_DEPTH), g(STAGE_SPEED), g(STAGE_PUNCH)),
             g(STAGE_COMBINE),
             g(STAGE_GATE),
+            g(STAGE_ARMING),
             g(STAGE_SMOOTHING),
+            g(STAGE_TEXTURE),
             g(STAGE_ZEROCUT),
         ]
-        # Per-channel levels tint the two join arrows (Depth→Combine,
-        # Speed→Combine) independently.
-        branch_levels = [g(STAGE_DEPTH), g(STAGE_SPEED)]
+        # Per-channel levels tint the three join arrows (Depth→Combine,
+        # Speed→Combine, Punch→Combine) independently.
+        branch_levels = [g(STAGE_DEPTH), g(STAGE_SPEED), g(STAGE_PUNCH)]
         if (levels != self._last_connector_levels
                 or branch_levels != self._last_branch_levels):
             self._last_connector_levels = levels
@@ -2070,12 +2149,18 @@ class MotorSignalChainWidget(QFrame):
             inner = self._build_channel_editor("depth", "Depth")
         elif stage_id == STAGE_SPEED:
             inner = self._build_channel_editor("speed", "Speed")
+        elif stage_id == STAGE_PUNCH:
+            inner = self._build_punch_editor()
         elif stage_id == STAGE_COMBINE:
             inner = self._build_combine_editor()
         elif stage_id == STAGE_GATE:
             inner = self._build_gate_editor()
+        elif stage_id == STAGE_ARMING:
+            inner = self._build_arming_editor()
         elif stage_id == STAGE_SMOOTHING:
             inner = self._build_smoothing_editor()
+        elif stage_id == STAGE_TEXTURE:
+            inner = self._build_texture_editor()
         elif stage_id == STAGE_ZEROCUT:
             inner = self._build_zerocut_editor()
         elif stage_id == STAGE_OUTPUT:
@@ -2397,6 +2482,80 @@ class MotorSignalChainWidget(QFrame):
             lay.addLayout(fo_row)
         return host
 
+    def _build_punch_editor(self) -> QWidget:
+        """Punch — attack-transient gain + decay. Gain 0 = off."""
+        host = QFrame()
+        host.setObjectName("stageEditor")
+        lay = _vbox(10, 8)
+        host.setLayout(lay)
+
+        hdr_row = _hbox(0, 6)
+        header = QLabel("Punch")
+        hf = header.font(); hf.setBold(True)
+        header.setFont(hf)
+        hdr_row.addWidget(header)
+        hdr_row.addWidget(self._ui._make_help_badge(
+            "Punch",
+            "Attack transients: a fast thrust IN spikes a short hit on "
+            "top of the sustained level, then decays. Merges max-wins "
+            "with the Depth/Speed combine — an accent, never a duck. "
+            "Pull-out never punches; slow repositioning is ignored."
+        ))
+        hdr_row.addStretch(1)
+        lay.addLayout(hdr_row)
+
+        chain = _read_chain(self._controller, self._device_name,
+                            self._motor_idx, self._chain_idx)
+        pc_cfg = chain.get("punch", {}) if isinstance(chain, dict) else {}
+        if not isinstance(pc_cfg, dict):
+            pc_cfg = {}  # hand-edited profile — build from defaults
+        try:
+            pc_gain = float(pc_cfg.get("gain", 0.0))
+        except (TypeError, ValueError):
+            pc_gain = 0.0
+        try:
+            pc_decay = float(pc_cfg.get("decay_ms", 120.0))
+        except (TypeError, ValueError):
+            pc_decay = 120.0
+
+        # Gain: 0 disables the stage entirely.
+        gain_row = _hbox(0, 8)
+        gain_row.addWidget(QLabel("Gain:"))
+        gain_spin = _NoTrackSpin()
+        gain_spin.setRange(0.0, 2.0)
+        gain_spin.setSingleStep(0.05)
+        gain_spin.setDecimals(2)
+        gain_spin.setValue(pc_gain)
+        gain_spin.valueChanged.connect(
+            lambda v: _update_chain_field(
+                self._controller, self._device_name, self._motor_idx, self._chain_idx,
+                ("punch", "gain"), float(v),
+            )
+        )
+        gain_row.addWidget(gain_spin)
+        gain_row.addStretch(1)
+        lay.addLayout(gain_row)
+
+        # Decay: how long the hit takes to ring out.
+        dc_row = _hbox(0, 8)
+        dc_row.addWidget(QLabel("Decay (ms):"))
+        dc_spin = _NoTrackSpin()
+        dc_spin.setRange(30.0, 1000.0)
+        dc_spin.setSingleStep(10.0)
+        dc_spin.setDecimals(0)
+        dc_spin.setValue(pc_decay)
+        dc_spin.valueChanged.connect(
+            lambda v: _update_chain_field(
+                self._controller, self._device_name, self._motor_idx, self._chain_idx,
+                ("punch", "decay_ms"), float(v),
+            )
+        )
+        dc_row.addWidget(dc_spin)
+        dc_row.addStretch(1)
+        lay.addLayout(dc_row)
+
+        return host
+
     def _build_combine_editor(self) -> QWidget:
         """Combine policy — segmented Add / Max / Multiply."""
         host = QFrame()
@@ -2663,6 +2822,115 @@ class MotorSignalChainWidget(QFrame):
             except RuntimeError:
                 pass
 
+    def _build_arming_editor(self) -> QWidget:
+        """Arming — enable toggle + thrust count, window, and disarm
+        timeout."""
+        host = QFrame()
+        host.setObjectName("stageEditor")
+        lay = _vbox(10, 8)
+        host.setLayout(lay)
+
+        hdr_row = _hbox(0, 6)
+        header = QLabel("Arming")
+        hf = header.font(); hf.setBold(True)
+        header.setFont(hf)
+        hdr_row.addWidget(header)
+        hdr_row.addWidget(self._ui._make_help_badge(
+            "Arming",
+            "Nothing plays until this many full strokes land inside the "
+            "window — an accidental brush can't wake the motor. Stays "
+            "armed while strokes keep coming; disarms after the quiet "
+            "timeout. This is what makes 🌙 Sleep safe to wear while "
+            "sleeping."
+        ))
+        hdr_row.addStretch(1)
+        lay.addLayout(hdr_row)
+
+        chain = _read_chain(self._controller, self._device_name,
+                            self._motor_idx, self._chain_idx)
+        ac_cfg = chain.get("arming", {}) if isinstance(chain, dict) else {}
+        if not isinstance(ac_cfg, dict):
+            ac_cfg = {}  # hand-edited profile — build from defaults
+        try:
+            ac_thrusts = float(ac_cfg.get("thrusts", 3))
+        except (TypeError, ValueError):
+            ac_thrusts = 3.0
+        try:
+            ac_window = float(ac_cfg.get("window_s", 6.0))
+        except (TypeError, ValueError):
+            ac_window = 6.0
+        try:
+            ac_disarm = float(ac_cfg.get("disarm_after_s", 45.0))
+        except (TypeError, ValueError):
+            ac_disarm = 45.0
+
+        # Enable toggle.
+        enable_cb = ToggleSwitch("Enable")
+        enable_cb.setChecked(bool(ac_cfg.get("enabled", False)))
+        enable_cb.toggled.connect(
+            lambda v: _update_chain_field(
+                self._controller, self._device_name, self._motor_idx, self._chain_idx,
+                ("arming", "enabled"), bool(v),
+            )
+        )
+        lay.addWidget(enable_cb)
+
+        # Thrusts: full strokes required to arm.
+        th_row = _hbox(0, 8)
+        th_row.addWidget(QLabel("Thrusts:"))
+        th_spin = _NoTrackSpin()
+        th_spin.setRange(1.0, 10.0)
+        th_spin.setSingleStep(1.0)
+        th_spin.setDecimals(0)
+        th_spin.setValue(ac_thrusts)
+        th_spin.valueChanged.connect(
+            lambda v: _update_chain_field(
+                self._controller, self._device_name, self._motor_idx, self._chain_idx,
+                ("arming", "thrusts"), int(v),
+            )
+        )
+        th_row.addWidget(th_spin)
+        th_row.addStretch(1)
+        lay.addLayout(th_row)
+
+        # Window: the strokes must land within this many seconds.
+        wn_row = _hbox(0, 8)
+        wn_row.addWidget(QLabel("Window (s):"))
+        wn_spin = _NoTrackSpin()
+        wn_spin.setRange(1.0, 30.0)
+        wn_spin.setSingleStep(1.0)
+        wn_spin.setDecimals(0)
+        wn_spin.setValue(ac_window)
+        wn_spin.valueChanged.connect(
+            lambda v: _update_chain_field(
+                self._controller, self._device_name, self._motor_idx, self._chain_idx,
+                ("arming", "window_s"), float(v),
+            )
+        )
+        wn_row.addWidget(wn_spin)
+        wn_row.addStretch(1)
+        lay.addLayout(wn_row)
+
+        # Disarm after: quiet time before the gate closes again.
+        da_row = _hbox(0, 8)
+        da_row.addWidget(QLabel("Disarm after (s):"))
+        da_spin = _NoTrackSpin()
+        da_spin.setRange(5.0, 600.0)
+        da_spin.setSingleStep(5.0)
+        da_spin.setDecimals(0)
+        da_spin.setValue(ac_disarm)
+        da_spin.valueChanged.connect(
+            lambda v: _update_chain_field(
+                self._controller, self._device_name, self._motor_idx, self._chain_idx,
+                ("arming", "disarm_after_s"), float(v),
+            )
+        )
+        da_row.addWidget(da_spin)
+        da_row.addStretch(1)
+        lay.addLayout(da_row)
+
+        return host
+
     def _build_smoothing_editor(self) -> QWidget:
         """Rise / fall envelope follower. Same math as the old
         Phase 2 smoothing block, just renamed for clarity."""
@@ -2719,6 +2987,102 @@ class MotorSignalChainWidget(QFrame):
         row.addWidget(fall_spin)
         row.addStretch(1)
         lay.addLayout(row)
+        return host
+
+    def _build_texture_editor(self) -> QWidget:
+        """Texture — enable toggle + grain amount, rate, and the
+        follow-speed switch."""
+        host = QFrame()
+        host.setObjectName("stageEditor")
+        lay = _vbox(10, 8)
+        host.setLayout(lay)
+
+        hdr_row = _hbox(0, 6)
+        header = QLabel("Texture")
+        hf = header.font(); hf.setBold(True)
+        header.setFont(hf)
+        hdr_row.addWidget(header)
+        hdr_row.addWidget(self._ui._make_help_badge(
+            "Texture",
+            "Wobbles a held level so it has grain instead of sitting "
+            "flat. Downward-only — never louder than the smoothed "
+            "level. Follow speed makes faster motion mean faster grain."
+        ))
+        hdr_row.addStretch(1)
+        lay.addLayout(hdr_row)
+
+        chain = _read_chain(self._controller, self._device_name,
+                            self._motor_idx, self._chain_idx)
+        tc_cfg = chain.get("texture", {}) if isinstance(chain, dict) else {}
+        if not isinstance(tc_cfg, dict):
+            tc_cfg = {}  # hand-edited profile — build from defaults
+        try:
+            tc_amount = float(tc_cfg.get("amount", 0.25))
+        except (TypeError, ValueError):
+            tc_amount = 0.25
+        try:
+            tc_rate = float(tc_cfg.get("rate_hz", 2.0))
+        except (TypeError, ValueError):
+            tc_rate = 2.0
+
+        # Enable toggle.
+        enable_cb = ToggleSwitch("Enable")
+        enable_cb.setChecked(bool(tc_cfg.get("enabled", False)))
+        enable_cb.toggled.connect(
+            lambda v: _update_chain_field(
+                self._controller, self._device_name, self._motor_idx, self._chain_idx,
+                ("texture", "enabled"), bool(v),
+            )
+        )
+        lay.addWidget(enable_cb)
+
+        # Amount: stored 0..0.9, exposed as 0-90 %.
+        am_row = _hbox(0, 8)
+        am_row.addWidget(QLabel("Amount (%):"))
+        am_spin = _NoTrackSpin()
+        am_spin.setRange(0.0, 90.0)
+        am_spin.setSingleStep(5.0)
+        am_spin.setDecimals(0)
+        am_spin.setValue(tc_amount * 100.0)
+        am_spin.valueChanged.connect(
+            lambda v: _update_chain_field(
+                self._controller, self._device_name, self._motor_idx, self._chain_idx,
+                ("texture", "amount"), float(v) / 100.0,
+            )
+        )
+        am_row.addWidget(am_spin)
+        am_row.addStretch(1)
+        lay.addLayout(am_row)
+
+        # Rate: grain frequency.
+        rt_row = _hbox(0, 8)
+        rt_row.addWidget(QLabel("Rate (Hz):"))
+        rt_spin = _NoTrackSpin()
+        rt_spin.setRange(0.2, 8.0)
+        rt_spin.setSingleStep(0.1)
+        rt_spin.setDecimals(1)
+        rt_spin.setValue(tc_rate)
+        rt_spin.valueChanged.connect(
+            lambda v: _update_chain_field(
+                self._controller, self._device_name, self._motor_idx, self._chain_idx,
+                ("texture", "rate_hz"), float(v),
+            )
+        )
+        rt_row.addWidget(rt_spin)
+        rt_row.addStretch(1)
+        lay.addLayout(rt_row)
+
+        # Follow speed: grain rate scales with the speed signal.
+        follow_cb = ToggleSwitch("Follow speed")
+        follow_cb.setChecked(bool(tc_cfg.get("follow_speed", False)))
+        follow_cb.toggled.connect(
+            lambda v: _update_chain_field(
+                self._controller, self._device_name, self._motor_idx, self._chain_idx,
+                ("texture", "follow_speed"), bool(v),
+            )
+        )
+        lay.addWidget(follow_cb)
+
         return host
 
     def _build_output_editor(self) -> QWidget:
