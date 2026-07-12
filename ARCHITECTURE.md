@@ -251,9 +251,11 @@ zone — detected OGB or synthetic SPS source — identically.
       `diagnostics`, `settings`). Each builds its view and calls
       *only* controller facade methods.
     * `ui/motor_signal_chain.py` — the per-motor signal-chain widget
-      (Input → Depth/Speed/Punch → Combine → Gate → Arming →
-      Smoothing → Texture → Zero cut → Output), embedded in Device
-      Routing's motor cards (see `docs/MOTOR_SIGNAL_CHAIN.md`).
+      (Input → Depth/Speed/Punch → Combine → Wake → Envelope →
+      Zero cut → Output; Wake merges the old Gate + Arming into one
+      two-mode stage, Envelope merges Smoothing + grain Texture),
+      embedded in Device Routing's motor cards (see
+      `docs/MOTOR_SIGNAL_CHAIN.md`).
     * `ui/trace_graph.py` — custom-painted scrolling time-series plot used
       by the chain mini-graphs and the chains' `▸ Overview` disclosure.
     * `ui/fold_strip.py` — the chain's visual language (collapsible fold

@@ -813,8 +813,8 @@ class DashboardMixin:
             "Toy cards",
             "Every connected or remembered toy gets a card. Click the bar "
             "to expand its per-motor signal chains (Input → Depth/Speed/"
-            "Punch → Combine → Gate → Arming → Smoothing → Texture → "
-            "Zero cut → Output — click any stage to edit it). <b>Mute</b> "
+            "Punch → Combine → Wake → Envelope → Zero cut → Output — "
+            "click any stage to edit it). <b>Mute</b> "
             "silences the toy without touching its "
             "config; <b>Test</b> pulses the motors; the mini bars mirror "
             "each motor's live output."

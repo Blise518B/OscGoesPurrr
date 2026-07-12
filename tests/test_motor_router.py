@@ -910,15 +910,15 @@ class TestPunch:
 # ============================================================ Tier 3.3d: arming
 
 class TestArming:
-    """The sleep gate: output stays silent until N full strokes land
-    inside the window, stays armed while strokes keep coming, and
-    disarms after a quiet spell."""
+    """The Wake stage in stroke-counter mode (the sleep gate): output
+    stays silent until N full strokes land inside the window, stays
+    armed while strokes keep coming, and disarms after a quiet spell."""
 
     def _cfg(self, enabled=True, thrusts=3, window_s=6.0,
              disarm_after_s=45.0):
         cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
-        cfg["mix"]["0"]["chains"][0]["arming"] = {
-            "enabled": enabled, "thrusts": thrusts,
+        cfg["mix"]["0"]["chains"][0]["wake"] = {
+            "enabled": enabled, "mode": "strokes", "thrusts": thrusts,
             "window_s": window_s, "disarm_after_s": disarm_after_s,
         }
         return cfg
@@ -931,10 +931,26 @@ class TestArming:
         out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.02}, zones=set())
         return out
 
-    def test_default_chain_config_has_arming_off(self):
-        a = MotorRouter.DEFAULT_MIX_CONFIG["chains"][0]["arming"]
-        assert a == {"enabled": False, "thrusts": 3, "window_s": 6.0,
-                     "disarm_after_s": 45.0}
+    def test_default_wake_config_is_off_activity_mode(self):
+        w = MotorRouter.DEFAULT_MIX_CONFIG["chains"][0]["wake"]
+        assert w["enabled"] is False
+        assert w["mode"] == "activity"
+        assert w["thrusts"] == 3 and w["window_s"] == 6.0
+        assert w["disarm_after_s"] == 45.0
+
+    def test_legacy_arming_chain_still_upgrades(self, router, clock):
+        # A chain saved before the Gate+Arming merge (bare `arming` key,
+        # no `wake`) must keep working via the on-the-fly upgrade.
+        cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
+        cfg["mix"]["0"]["chains"][0]["arming"] = {
+            "enabled": True, "thrusts": 2, "window_s": 6.0,
+            "disarm_after_s": 45.0}
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
+        assert self._stroke(router, clock, cfg) == 0.0   # not armed yet
+        self._stroke(router, clock, cfg)                 # 2nd stroke arms
+        clock.advance(0.1)
+        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.8}, zones=set())
+        assert out == pytest.approx(0.8)
 
     def test_idle_contact_stays_silent(self, router, clock):
         # Resting against the receiver at half depth: no strokes, no output.
@@ -1034,13 +1050,13 @@ class TestArming:
         # rise + a new fall as one phantom stroke (instant arm at
         # thrusts=1, the editor's minimum).
         cfg = self._cfg(enabled=True, thrusts=1)
-        cfg["mix"]["0"]["chains"][0]["arming"]["enabled"] = False
+        cfg["mix"]["0"]["chains"][0]["wake"]["enabled"] = False
         router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
         clock.advance(0.15)
         router._calculate_motor_target("dev", 0, cfg, {"P": 0.8}, zones=set())
         clock.advance(0.15)
         router._calculate_motor_target("dev", 0, cfg, {"P": 0.8}, zones=set())
-        cfg["mix"]["0"]["chains"][0]["arming"]["enabled"] = True
+        cfg["mix"]["0"]["chains"][0]["wake"]["enabled"] = True
         clock.advance(0.15)
         out = router._calculate_motor_target(
             "dev", 0, cfg, {"P": 0.02}, zones=set())
@@ -1050,16 +1066,18 @@ class TestArming:
             "dev", 0, cfg, {"P": 0.5}, zones=set())
         assert out == 0.0   # still disarmed: no phantom stroke counted
 
-    def test_armed_state_rides_the_emit_stream(self, router, clock):
+    def test_wake_state_rides_the_emit_stream(self, router, clock):
         cfg = self._cfg(thrusts=2)
         captured = []
         router.subscribe_intermediates("dev", 0, 0, captured.append)
         router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
-        assert captured[-1]["armed"] is False
+        assert captured[-1]["wake_mode"] == "strokes"
+        assert captured[-1]["wake_open"] is False
         for _ in range(2):
             self._stroke(router, clock, cfg)
-        assert captured[-1]["armed"] is True
-        assert captured[-1]["thrusts"] == 2
+        assert captured[-1]["wake_open"] is True
+        # In strokes mode the meter is progress toward arming (2/2 = 1.0).
+        assert captured[-1]["wake_meter"] == pytest.approx(1.0)
 
 
 # ============================================================ thrust counter
@@ -1347,6 +1365,26 @@ class TestActivityGateIntegration:
         cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
         out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.7}, zones=set())
         assert out == pytest.approx(0.7)
+
+    def test_native_wake_activity_mode_gates_static_input(self, router, clock):
+        # The merged Wake block in activity mode behaves identically to the
+        # legacy gate (which the rest of this class exercises via upgrade).
+        cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
+        chain = cfg["mix"]["0"]["chains"][0]
+        chain["wake"] = {"enabled": True, "mode": "activity",
+                         "wake_threshold": 0.1, "sleep_delay_s": 0.5}
+        chain["smoothing"] = {"rise_ms": 0.0, "fall_ms": 0.0}
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.5}, zones=set())
+        for _ in range(10):
+            clock.advance(0.05)
+            out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.5}, zones=set())
+        assert out == 0.0   # static input never fills the activity meter
+        captured = []
+        router.subscribe_intermediates("dev", 0, 0, captured.append)
+        clock.advance(0.05)
+        router._calculate_motor_target("dev", 0, cfg, {"P": 0.5}, zones=set())
+        assert captured[-1]["wake_mode"] == "activity"
+        assert captured[-1]["wake_open"] is False
 
     def test_static_input_does_not_open_gate(self, router, clock):
         # Static depth never produces speed → activity meter stays at 0

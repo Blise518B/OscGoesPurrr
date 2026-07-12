@@ -131,13 +131,24 @@ class TestMigration:
         (tmp / "profiles.json").write_text(json.dumps(_v2_payload()),
                                            encoding="utf-8")
 
-    def test_custom_slot_keeps_user_tuning_exactly(self, isolated):
+    def test_custom_slot_keeps_user_tuning(self, isolated):
         self._write_v2(isolated)
         mm = ModeManager()
-        expected = _v2_payload()["global_profiles"]["Default"]["ToyA"]["mix"]
-        assert mm.modes[ModeManager.CUSTOM_SLOT]["mix"]["ToyA"] == expected
-        # And the app lands ON Custom so the post-migration feel is
-        # byte-identical to the pre-migration behavior.
+        chain = mm.modes[ModeManager.CUSTOM_SLOT]["mix"]["ToyA"]["0"][
+            "chains"][0]
+        # Every tuned value survives the migration…
+        assert chain["depth"]["gain"] == 1.7
+        assert chain["speed"]["decay_ms"] == 123.0
+        assert chain["smoothing"] == {"rise_ms": 77.0, "fall_ms": 33.0}
+        assert chain["zerocut"] == {"enabled": True, "threshold": 0.02}
+        # …and the legacy `gate` block is folded into the merged `wake`
+        # stage (Gate+Arming were unified), preserving its threshold.
+        assert "gate" not in chain and "arming" not in chain
+        assert chain["wake"]["enabled"] is True
+        assert chain["wake"]["mode"] == "activity"
+        assert chain["wake"]["wake_threshold"] == 0.11
+        # And the app lands ON Custom so the post-migration feel matches
+        # the pre-migration behavior.
         assert mm.active_mode == ModeManager.CUSTOM_SLOT
 
     def test_wiring_extracted_without_mix(self, isolated):
@@ -163,8 +174,9 @@ class TestMigration:
         sleep = mm.modes[4]["mix"]["ToyA"]["0"]["chains"][0]
         assert low["depth"]["gain"] == 0.55
         assert high["speed"]["gain"] == 1.6
-        assert sleep["arming"]["enabled"] is True
-        assert sleep["arming"]["thrusts"] == 3
+        assert sleep["wake"]["enabled"] is True
+        assert sleep["wake"]["mode"] == "strokes"
+        assert sleep["wake"]["thrusts"] == 3
 
     def test_backup_written_and_old_profiles_dropped(self, isolated):
         self._write_v2(isolated)
@@ -306,6 +318,51 @@ class TestPersistence:
         assert mm.active_mode == ModeManager.DEFAULT_ACTIVE_MODE
 
 
+class TestWakeMigration:
+    """A chain saved before the Gate+Arming→Wake merge (separate `gate`/
+    `arming` keys, no `wake`) must be folded to `wake` at load and
+    persisted — otherwise the first UI edit backfills a bare-default
+    `wake` that shadows a still-armed Sleep gate, silently disabling it."""
+
+    def _legacy_v3(self, isolated, arming):
+        # A schema-v3 file whose Custom-slot chain still carries a legacy
+        # arming block (as if written just before the merge shipped).
+        modes = [dict(m, mix={}) for m in ModeManager.DEFAULT_MODES]
+        modes[ModeManager.CUSTOM_SLOT]["mix"] = {
+            "ToyA": {"0": {"chains": [{
+                "depth": {"gain": 1.0}, "arming": arming,
+            }], "merge": "max"}}}
+        (isolated / "profiles.json").write_text(json.dumps({
+            "schema": 3, "wiring": {"ToyA": {"motor_count": 1}},
+            "modes": modes, "active_mode": ModeManager.CUSTOM_SLOT,
+        }), "utf-8")
+
+    def test_legacy_arming_folds_into_wake_and_persists(self, isolated):
+        self._legacy_v3(isolated, {
+            "enabled": True, "thrusts": 5, "window_s": 8.0,
+            "disarm_after_s": 60.0})
+        mm = ModeManager()
+        chain = mm.modes[ModeManager.CUSTOM_SLOT]["mix"]["ToyA"]["0"]["chains"][0]
+        assert "arming" not in chain and "gate" not in chain
+        assert chain["wake"]["enabled"] is True
+        assert chain["wake"]["mode"] == "strokes"
+        assert chain["wake"]["thrusts"] == 5
+        assert chain["wake"]["disarm_after_s"] == 60.0
+        # Persisted, so a re-load (and any UI edit) sees the merged shape.
+        on_disk = json.loads((isolated / "profiles.json").read_text("utf-8"))
+        disk_chain = on_disk["modes"][ModeManager.CUSTOM_SLOT][
+            "mix"]["ToyA"]["0"]["chains"][0]
+        assert "arming" not in disk_chain
+        assert disk_chain["wake"]["thrusts"] == 5
+
+    def test_migration_is_idempotent_no_extra_save(self, isolated):
+        # A clean v3 file (already on `wake`) must not be rewritten.
+        ModeManager()   # fresh install writes a clean file
+        before = (isolated / "profiles.json").read_text("utf-8")
+        ModeManager()   # second load: nothing legacy → no save
+        assert (isolated / "profiles.json").read_text("utf-8") == before
+
+
 class TestDegradedLoadProtection:
     """A file that existed but couldn't be READ must never be traded for
     this session's in-memory defaults (the boot seeder saves immediately,
@@ -414,8 +471,7 @@ class TestPresets:
                 assert math.isfinite(chain[part]["gain"])
             assert 0.0 <= chain["texture"]["amount"] <= 0.9
             assert set(chain) == {"depth", "speed", "punch", "combine",
-                                  "gate", "arming", "smoothing", "texture",
-                                  "zerocut"}
+                                  "wake", "smoothing", "texture", "zerocut"}
 
     def test_low_teases_and_high_punches(self):
         low = preset_motor_mix(1)["chains"][0]
@@ -425,3 +481,11 @@ class TestPresets:
         # And the accents stay OUT of the slots that didn't ask for them.
         assert preset_motor_mix(2)["chains"][0]["texture"]["enabled"] is False
         assert preset_motor_mix(2)["chains"][0]["punch"]["gain"] == 0.0
+
+    def test_sleep_uses_the_wake_stage_in_strokes_mode(self):
+        sleep = preset_motor_mix(4)["chains"][0]
+        assert sleep["wake"]["enabled"] is True
+        assert sleep["wake"]["mode"] == "strokes"
+        # The other slots leave Wake off.
+        for slot in (0, 1, 2, 3, 5):
+            assert preset_motor_mix(slot)["chains"][0]["wake"]["enabled"] is False

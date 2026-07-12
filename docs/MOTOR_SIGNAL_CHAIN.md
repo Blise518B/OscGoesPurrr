@@ -47,16 +47,13 @@ router still owns the math.
 
 ```
 Input ─→ Depth (gain + curve) ─↘
-     │   Speed (gain + curve) ─→ Combine ──┬─→ Arming ─→ Smoothing ─→ …
-     │   Punch (hit detector) ─↗           │
-     │                                     ▲
-     └─→ Activity Gate ────────── valve ───┘
-                                  (open / closed)
+     │   Speed (gain + curve) ─→ Combine ─→ Wake ─→ Envelope ─→ …
+     │   Punch (hit detector) ─↗           (gate)  (smooth+grain)
 
-… ─→ Texture ─→ Zero cut ─→ Output
+… ─→ Zero cut ─→ Output
 ```
 
-Eleven logical stages, left to right:
+Nine logical stages, left to right:
 
 1. **Input** — what the motor listens to.
 2. **Depth** — instantaneous magnitude path, gained + shaped.
@@ -65,23 +62,25 @@ Eleven logical stages, left to right:
    short hit that decays quickly; merges max-wins with the combined
    signal.
 5. **Combine** — how Depth and Speed are merged.
-6. **Activity Gate** — sidechain valve that suppresses output when
-   input movement is below threshold.
-7. **Arming** — sleep gate: silent until enough full strokes land
-   inside a window; disarms after a quiet timeout.
-8. **Smoothing** — post-combine rise/fall envelope.
-9. **Texture** — post-smoothing grain: a downward-only wobble on
-   held levels.
-10. **Zero cut** — final override: input at zero snaps the output
-    to silence instantly.
-11. **Output** — toy motor (vibrate or linear).
+6. **Wake** — the activity gate, in one of two interchangeable modes
+   (chosen by `wake.mode`): **Activity** (an analog activity meter that
+   wakes on sustained movement) or **Strokes** (the sleep gate: silent
+   until enough full strokes land inside a window, disarms after a
+   quiet timeout). Merges the pre-merge Gate + Arming stages.
+7. **Envelope** — how the level moves over time: a post-combine
+   rise/fall **Smoothing** envelope plus an optional downward-only
+   **Grain** wobble on held levels (the config keys stay `smoothing`
+   and `texture`; only the card merges).
+8. **Zero cut** — final override: input at zero snaps the output
+   to silence instantly.
+9. **Output** — toy motor (vibrate or linear).
 
-Depth, Speed and Punch run in parallel from a shared Input. The
-Activity Gate runs in parallel too — it observes raw activity directly
-off the Input stage's speed detector and acts as a valve on the
-combined signal between Combine and Smoothing. Smoothing sits
-**after** the gates so gate transitions get rounded into the envelope
-and the toy never clicks on/off.
+Depth, Speed and Punch run in parallel from a shared Input. Wake gates
+the combined signal — in Activity mode it observes raw activity off the
+Input stage's speed detector. Envelope's smoothing sits **after** the
+gate so Wake's open/close transitions get rounded into the envelope and
+the toy never clicks on/off; its grain runs **after** smoothing (before
+it, smoothing would iron the wobble back out).
 
 ---
 
@@ -184,43 +183,53 @@ visible, no hidden bypass.
 The `modulator_range` panel and the at-most-one-modulate cross-channel
 rule both go away.
 
-### Activity Gate
+### Wake
 
-Sidechain valve. Observes the raw speed-detector signal (before
-per-channel gain/curve) and gates the combined signal between Combine
-and Smoothing.
+The activity gate — one stage that merges the pre-merge Gate + Arming
+stages into two interchangeable modes, chosen by the mode toggle. One
+mode runs at a time. **Off by default** — a new always-on gate would
+silently change every existing profile's feel.
 
 Editor contents:
 
-* **Enable** — toggle. **Off by default.** A new always-on gate would
-  silently change every existing profile's feel.
-* **Wake threshold** — `QDoubleSpinBox`, 0.0–1.0, step 0.01.
-  Activity-meter level at which the gate opens.
-* **Sleep delay** — `QDoubleSpinBox`, 0.0–10.0 s, step 0.1.
-  How long activity must remain below threshold before the gate
-  closes.
-* **Build-up (s)** — `QDoubleSpinBox`, 0.01–10.0 s, step 0.1,
-  default 0.05. The meter's attack tau: how long sustained movement
-  takes to charge the activity meter. High values make the gate
-  demand a few seconds of motion before waking instead of opening on
-  the first twitch.
-* **Decay (s)** — `QDoubleSpinBox`, 0.01–10.0 s, step 0.1, default
-  0.5. The meter's release tau: how long the charged meter takes to
-  drain once movement stops.
+* **Enable** — toggle. Off by default.
+* **Mode** — segmented `Activity` / `Strokes`. Stored at
+  `mix.<motor>.wake.mode`.
+* *Activity-mode params* (shown when mode = Activity):
+  * **Wake threshold** — `QDoubleSpinBox`, 0.0–1.0, step 0.01.
+    Activity-meter level at which the gate opens.
+  * **Sleep delay** — `QDoubleSpinBox`, 0.0–10.0 s, step 0.1. How
+    long activity must stay below threshold before the gate closes.
+  * **Build-up (s)** — `QDoubleSpinBox`, 0.01–10.0 s, step 0.1,
+    default 0.05. The meter's attack tau: how long sustained movement
+    takes to charge the activity meter. High values demand a few
+    seconds of motion before waking instead of opening on a twitch.
+  * **Decay (s)** — `QDoubleSpinBox`, 0.01–10.0 s, step 0.1, default
+    0.5. The meter's release tau: how long the charged meter drains
+    once movement stops.
+  * A thin horizontal activity meter with a tick at `wake_threshold`.
+* *Strokes-mode params* (shown when mode = Strokes):
+  * **Thrusts** — spinbox, 1–10, default 3.
+  * **Window (s)** — spinbox, 1–30, default 6.
+  * **Disarm after (s)** — spinbox, 5–600, default 45.
 
-Stored at `mix.<motor>.gate.{enabled, wake_threshold, sleep_delay_s,
-attack_s, release_s}`.
+Stored at `mix.<motor>.wake.{enabled, mode, wake_threshold,
+sleep_delay_s, attack_s, release_s, thrusts, window_s,
+disarm_after_s}`. The UI writes the merged block and strips any legacy
+`mix.<motor>.gate` / `mix.<motor>.arming` blocks on save; the router
+upgrades an un-migrated file at runtime (arming.enabled → Strokes mode,
+else Activity).
 
-Internal model:
+**Activity mode — internal model:**
 
 * An activity meter `A ∈ [0, 1]` rises with `|d/dt|` as an asymmetric
   EMA. Time constants are per-chain knobs with conservative defaults
   (they were hidden constants until the field-tuning pass found that
   a fixed 50 ms attack lets a single twitch spike the meter over the
   threshold — there was no way to require *sustained* movement):
-  * `gate.attack_s` — default 0.05 (50 ms), fast rise so new movement
+  * `wake.attack_s` — default 0.05 (50 ms), fast rise so new movement
     registers immediately. Raise it to make the gate charge slowly.
-  * `gate.release_s` — default 0.50 (500 ms), slow decay so brief
+  * `wake.release_s` — default 0.50 (500 ms), slow decay so brief
     stillness does not instantly drop the meter below threshold.
     Raise it to make the activity "budget" coast across pauses.
   Both are clamped to [0.01, 10.0] s by the router. The meter is
@@ -228,76 +237,50 @@ Internal model:
 * Gate state: open when `A ≥ wake_threshold`. Once open, closes after
   `A` has stayed below `wake_threshold` continuously for
   `sleep_delay_s` seconds.
-* Output when gate is closed: 0 (the combined signal is multiplied by
-  the gate state, which is 0 or 1 — *before* smoothing so the
-  envelope rounds the transition).
 
-**Smoothing applied to gate transitions.** The combined signal is
-multiplied by the gate state (0 or 1) *before* the smoothing stage.
-A gate close steps from `combined` to 0 — output is falling, so
-`fall_ms` governs the slope. A gate open steps from 0 to `combined`
-— output is rising, so `rise_ms` governs the slope. The user does
-not need to think about this; the rise/fall knobs they already tuned
-handle gate transitions automatically.
+**Strokes mode.** The sleep gate. Output stays silent until the
+partner lands `thrusts` full strokes inside `window_s` seconds; once
+armed it stays armed while strokes keep coming, and disarms after
+`disarm_after_s` seconds of quiet. An accidental brush can never wake
+the motor — this is what makes 🌙 Sleep safe to wear while sleeping.
 
-**Why this placement (sidechain, not inline).** Putting the gate in
-parallel decouples sensitivity from feel tuning. Changing the depth
-curve or speed gain does not accidentally retune what the gate
-considers "active." The gate's input is per-input (avatar movement);
-its tuning knobs are per-motor, so two motors on the same toy can
-have different wake/sleep settings while seeing identical activity.
+**Placement.** Wake gates the combined signal between Combine and
+Envelope. The combined value is multiplied by the gate state (0 or 1)
+*before* Envelope's smoothing, so a gate close (falling, `fall_ms`) or
+open (rising, `rise_ms`) is rounded by the rise/fall knobs the user
+already tuned — no separate gate-smoothing settings exist.
 
 **Why the activity meter watches the speed detector, not a separate
 integrator.** "Activity" and "speed" are the same primitive. Two
 detectors would drift apart over time. Re-using the speed signal
 means the activity meter operates in the same units the user sees in
-Tune's Raw-speed trace.
+Tune's Raw-speed trace. The gate's input is per-input (avatar motion);
+its knobs are per-motor, so two motors on the same toy can have
+different wake/sleep settings while seeing identical activity.
 
-### Arming
+**Visual.** The Wake stage card shows a thin valve indicator that
+flips open/closed with the gate; the expanded editor's activity meter
+(Activity mode) reads like a VU meter with a threshold mark.
 
-The sleep gate. Output stays silent until the partner lands
-`thrusts` full strokes inside `window_s` seconds; once armed it
-stays armed while strokes keep coming, and disarms after
-`disarm_after_s` seconds of quiet. An accidental brush can never
-wake the motor — this is what makes 🌙 Sleep safe to wear while
-sleeping.
+### Envelope
 
-Editor contents:
+How the level moves over time. One card merging two sections; the
+config keys stay `smoothing` and `texture` separately.
 
-* **Enable** — toggle. Off by default.
-* **Thrusts** — spinbox, 1–10, default 3.
-* **Window (s)** — spinbox, 1–30, default 6.
-* **Disarm after (s)** — spinbox, 5–600, default 45.
-
-Stored at `mix.<motor>.arming.{enabled, thrusts, window_s,
-disarm_after_s}`.
-
-**Visual.** The gate stage shows a thin horizontal activity meter
-with a tick mark at `wake_threshold`. The gate symbol (a valve icon
-or similar) flips open/closed when the bar crosses the line. Reads
-like a VU meter with a threshold mark.
-
-### Smoothing
-
-Post-mix envelope follower. Today's `attack_ms` / `release_ms`,
-renamed for clarity.
-
-Editor contents:
+**Smoothing** — post-mix rise/fall envelope follower. Editor contents:
 
 * **Rise (ms)** — `QDoubleSpinBox`, 0–2000, step 10, default 50.
 * **Fall (ms)** — `QDoubleSpinBox`, 0–2000, step 10, default 20.
 
-Stored at `mix.<motor>.smoothing.{rise_ms, fall_ms}`. (Renamed from
-`attack_ms` / `release_ms` on disk too.)
+Stored at `mix.<motor>.smoothing.{rise_ms, fall_ms}`. De-jitters the
+signal and shapes the macro attack/release; the same knobs round
+Wake's open/close transitions.
 
-### Texture
-
-Post-smoothing grain. Wobbles a held level so it has texture instead
-of sitting flat. The modulation is downward-only — the output never
-exceeds the smoothed level — and the smoothing envelope tracks the
-pre-texture value so the wobble never feeds back into itself.
-
-Editor contents:
+**Grain** — post-smoothing wobble so a held level has texture instead
+of sitting dead flat. The modulation is downward-only — the output
+never exceeds the smoothed level — and the smoothing envelope tracks
+the pre-grain value so the wobble never feeds back into itself. Editor
+contents:
 
 * **Enable** — toggle. Off by default.
 * **Amount (%)** — spinbox, 0–90 %, default 25 (stored as 0.0–0.9).
@@ -307,6 +290,10 @@ Editor contents:
 
 Stored at `mix.<motor>.texture.{enabled, amount, rate_hz,
 follow_speed}`.
+
+**Why grain comes after smoothing.** Ahead of the smoothing stage the
+envelope follower would simply iron the wobble back out; placing grain
+last preserves it while still riding under the smoothed level.
 
 ### Output
 
@@ -330,7 +317,7 @@ The toy motor. Editor contents depend on motor kind.
 
 Storage keys unchanged.
 
-**Gate × linear actuator.** The chain is motor-kind agnostic — when
+**Wake × linear actuator.** The chain is motor-kind agnostic — when
 the gate closes mid-stroke on a linear toy, the combined value goes
 to 0. For `Mode = Position` this means the actuator returns to
 position 0 (clamped by `min_pos`); for `Mode = Speed` it means
@@ -352,10 +339,9 @@ border (reuses the `tuneStageCard[active="true"]` QSS rule).
 ┌ Motor 0 · Thrust (linear) ──────────────────────────────────────┐
 │                                                                 │
 │  [Input] ─→ [Depth] ↘                                           │
-│                      [Combine] ─→ [Smoothing] ─→ [Output]       │
-│           [Speed] ↗      ▲                                      │
-│                          │                                      │
-│  [Activity Gate] ────────┘                                      │
+│             [Speed] ─→ [Combine] ─→ [Wake] ─→ [Envelope] ─→ …   │
+│             [Punch] ↗                                           │
+│  … ─→ [Zero cut] ─→ [Output]                                    │
 │                                                                 │
 │  ▼ Input                                                        │
 │    Zones:   [Select Zones (3 enabled) ▾]                        │
@@ -455,21 +441,25 @@ is purely additive with no schema migration:
             # combined signal. gain 0 = off.
             "punch": {"gain": 0.0, "decay_ms": 120.0},
             "combine": "max",                  # "add" | "max" | "multiply"
-            "gate": {
+            # Wake — the activity gate, one of two modes (`mode`):
+            #   "activity": analog meter, wakes on sustained movement
+            #     (wake_threshold / sleep_delay_s / attack_s / release_s).
+            #   "strokes": sleep gate, silent until `thrusts` full strokes
+            #     land inside `window_s`; disarms after `disarm_after_s`.
+            "wake": {
                 "enabled": False,
+                "mode": "activity",            # "activity" | "strokes"
                 "wake_threshold": 0.05,
                 "sleep_delay_s": 0.5,
                 "attack_s": 0.05,
                 "release_s": 0.5,
+                "thrusts": 3,
+                "window_s": 6.0,
+                "disarm_after_s": 45.0,
             },
-            # Sleep gate: silent until `thrusts` full strokes land
-            # inside `window_s`; disarms after `disarm_after_s` of
-            # quiet.
-            "arming": {"enabled": False, "thrusts": 3,
-                       "window_s": 6.0, "disarm_after_s": 45.0},
             "smoothing": {"rise_ms": 50.0, "fall_ms": 20.0},
-            # Post-smoothing grain: downward-only wobble on held
-            # levels; rate can follow the speed signal.
+            # Envelope's grain half: post-smoothing downward-only wobble
+            # on held levels; rate can follow the speed signal.
             "texture": {"enabled": False, "amount": 0.25,
                         "rate_hz": 2.0, "follow_speed": False},
             # Final override: input at/below threshold (plug removed)
@@ -540,8 +530,9 @@ brings Tune into alignment.
 * **Multiply + zero channel.** If `combine = multiply` and one
   channel is 0, output is 0 regardless of the other. The diagram
   makes this visible; no hidden bypass. Locked as-is.
-* **Gate default off.** Existing tuned profiles stay silent on the
-  gate. Users opt in per motor. Locked.
+* **Wake default off.** Existing tuned profiles stay silent on the
+  gate (both Wake modes default disabled). Users opt in per motor.
+  Locked.
 * **Curves stay.** Power and s_curve shape *feel* in a way gain
   can't reproduce; keeping them costs one tiny dropdown per channel.
   Locked.
@@ -568,7 +559,7 @@ the same motor.
 This is **deferred to Cut 5** — not part of the initial redesign.
 The minimum version of "feed a parameter directly to output" is
 already achievable with one chain configured as: gain 1.0, curve
-linear, gate disabled, smoothing 0/0 ms. The case where a second
+linear, Wake disabled, smoothing 0/0 ms. The case where a second
 chain genuinely earns its keep is when you want the heavily-processed
 behavior *and* the raw behavior simultaneously on the same motor,
 which is real but rarer than it first sounds.
@@ -580,8 +571,8 @@ which is real but rarer than it first sounds.
   realistic main+override use case; three becomes a configuration
   maze and the diagram stops fitting on a card.
 * Chains are structurally identical — both have the full Input →
-  Depth/Speed/Punch → Combine → Gate → Arming → Smoothing → Texture →
-  Zero cut pipeline. There is no
+  Depth/Speed/Punch → Combine → Wake → Envelope → Zero cut pipeline.
+  There is no
   "primary" vs "secondary" template; the second chain just gets
   configured differently if the user wants passthrough behavior.
 * Merge at output: configurable op (`add` / `max` / `multiply`),

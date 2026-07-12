@@ -70,9 +70,8 @@ Single-chain motor:
 │ ▸ Simulated input                                              │
 │                                                                │
 │ [Input] → [Depth] ↘                                            │
-│           [Speed] → [Combine] → [Gate] → [Arming]              │
-│         [Punch] ↗    → [Smoothing] → [Texture]                 │
-│                        → [Zero cut] → [Output]                 │
+│           [Speed] → [Combine] → [Wake] → [Envelope]           │
+│         [Punch] ↗    → [Zero cut] → [Output]                   │
 │                                                                │
 │  ▾ Depth                              ←  active stage          │
 │    Gain: [1.00]   Curve: [linear ▾]   Param: [—]               │
@@ -244,21 +243,21 @@ final).
 | Speed     | `s_raw`, `s_shaped`              | Same idea for the speed channel.    |
 | Punch     | `d_raw`, `punch`                 | The thrust-in transient it detects. |
 | Combine   | `d_shaped`, `s_shaped`, `mixed`  | Both channels and their merge.      |
-| Gate      | `mixed`, `gated`                 | What the gate let through.          |
+| Wake      | `mixed`, `wake_meter`, `wake_out`| Meter/arming progress + what the gate let through. |
 |           | (activity meter visual stays)    |                                     |
-| Arming    | `gated`, `armed_out`             | What the sleep gate let through.    |
-| Smoothing | `armed_out`, `smoothed`          | Envelope's effect on the gate step. |
-| Texture   | `smoothed`, `textured`           | The grain wobble under the level.   |
+| Envelope  | `wake_out`, `smoothed`, `textured` | Smoothing + the grain wobble under the level. |
 | Zero cut  | `textured`, `out`                | The tail being cut to silence.      |
 | Output    | `out`                            | Final chain output.                 |
 
-`armed_out` is the post-arming gate output (identical to `gated`
-while arming is disabled or armed); `smoothed` is the post-smoothing
-value; `textured` is the post-texture, pre-zero-cut value (identical
-to `smoothed` while texture is disabled); `out` is the chain's final
-output (identical to `textured` while the zero cut is disabled or
-the input is live). For single-chain motors, `out` = the motor
-target. For two-chain motors, `out` = this chain's per-chain output
+`wake_meter` is the Wake meter (activity level in activity mode,
+strokes/needed progress in strokes mode); `wake_out` is the post-Wake
+gate output (identical to `mixed` while the gate is open or Wake is
+disabled); `smoothed` is the post-smoothing value; `textured` is the
+post-grain, pre-zero-cut Envelope output (identical to `smoothed`
+while grain/texture is disabled); `out` is the chain's final output
+(identical to `textured` while the zero cut is disabled or the input
+is live). For single-chain motors, `out` = the motor target. For
+two-chain motors, `out` = this chain's per-chain output
 (pre-merge).
 The merged-final is available in the wrapper-level overview graph
 and as the vibe-meter value at the bottom of each chain.

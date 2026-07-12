@@ -62,13 +62,14 @@ _SLOT_FEEL: Dict[int, Dict[str, Any]] = {
     3: {"depth_gain": 1.0, "speed_gain": 1.6, "speed_decay_ms": 220.0,
         "rise_ms": 40.0, "fall_ms": 80.0,
         "punch": {"gain": 0.9, "decay_ms": 140.0}},
-    # Sleep — hard to wake: nothing plays until three full strokes land
-    # inside six seconds (an accidental brush can't trigger it), it stays
-    # awake while strokes keep coming, and everything ramps gently.
+    # Sleep — hard to wake: the Wake stage in stroke-counter mode keeps
+    # everything silent until three full strokes land inside six seconds
+    # (an accidental brush can't trigger it), stays awake while strokes
+    # keep coming, and everything ramps gently.
     4: {"depth_gain": 0.70, "speed_gain": 0.40, "speed_decay_ms": 500.0,
         "rise_ms": 600.0, "fall_ms": 900.0,
-        "arming": {"enabled": True, "thrusts": 3, "window_s": 6.0,
-                   "disarm_after_s": 45.0}},
+        "wake": {"enabled": True, "mode": "strokes", "thrusts": 3,
+                 "window_s": 6.0, "disarm_after_s": 45.0}},
 }
 
 
@@ -87,7 +88,7 @@ def preset_motor_mix(slot: int) -> Dict[str, Any]:
     chain["speed"]["decay_ms"] = feel["speed_decay_ms"]
     chain["smoothing"]["rise_ms"] = feel["rise_ms"]
     chain["smoothing"]["fall_ms"] = feel["fall_ms"]
-    for stage in ("gate", "punch", "arming", "texture"):
+    for stage in ("wake", "punch", "texture"):
         if stage in feel:
             chain[stage].update(feel[stage])
     return mix
@@ -242,8 +243,52 @@ class ModeManager:
             self.save_profiles()
 
         self._normalize_wiring_addresses()
+        self._migrate_chains_to_wake()
         self._backfill_known_devices()
         self._install_active_mix()
+
+    def _migrate_chains_to_wake(self) -> None:
+        """Fold every stored chain's legacy `gate` / `arming` stages into
+        the merged `wake` block (the two were unified into one stage).
+        Runs once at load and persists, so the router's on-the-fly
+        upgrade never has to fire in normal operation — critically, so a
+        chain reaching the editor already carries a real `wake` block. A
+        legacy chain left un-migrated would have a bare-default `wake`
+        backfilled by the first UI edit, silently shadowing (disabling) a
+        still-armed Sleep gate. Idempotent: chains already on `wake` with
+        no legacy keys are skipped."""
+        from motor_router import MotorRouter  # local: avoid import cycle
+        changed = False
+        for mode in self.modes:
+            mix = mode.get("mix")
+            if not isinstance(mix, dict):
+                continue
+            for per_device in mix.values():
+                if not isinstance(per_device, dict):
+                    continue
+                for per_motor in per_device.values():
+                    if not isinstance(per_motor, dict):
+                        continue
+                    chains = per_motor.get("chains")
+                    if not isinstance(chains, list):
+                        continue
+                    for chain in chains:
+                        if not isinstance(chain, dict):
+                            continue
+                        has_legacy = "gate" in chain or "arming" in chain
+                        if not has_legacy:
+                            continue
+                        # Derive from the legacy keys BEFORE dropping them.
+                        # If a `wake` block is already present (a newer
+                        # save) it wins and we only strip the stale legacy
+                        # keys.
+                        if not isinstance(chain.get("wake"), dict):
+                            chain["wake"] = MotorRouter._wake_cfg(chain)
+                        chain.pop("gate", None)
+                        chain.pop("arming", None)
+                        changed = True
+        if changed:
+            self.save_profiles()
 
     def _load_v3(self, raw: Dict[str, Any]) -> None:
         # A present-but-mis-shaped section (hand edit gone wrong) is

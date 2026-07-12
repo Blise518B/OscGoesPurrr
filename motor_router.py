@@ -199,20 +199,29 @@ class MotorRouter:
                 # crisp hit on top of the sustained level. gain 0 = off.
                 "punch": {"gain": 0.0, "decay_ms": 120.0},
                 "combine": "max",
-                "gate": {
+                # Wake — the activity gate: nothing plays until real
+                # contact is detected, two interchangeable ways (one runs
+                # at a time, chosen by `mode`):
+                #   "activity" — an analog activity meter; wakes on
+                #     sustained movement above `wake_threshold`, sleeps
+                #     `sleep_delay_s` after it stops (attack/release taus
+                #     shape how fast the meter fills / drains).
+                #   "strokes" — a discrete stroke counter (the sleep
+                #     gate); stays silent until `thrusts` full in-out
+                #     strokes land within `window_s`, stays awake while
+                #     they keep coming, disarms after `disarm_after_s`
+                #     quiet. Accidental brushes can't wake it.
+                "wake": {
                     "enabled": False,
+                    "mode": "activity",
                     "wake_threshold": 0.05,
                     "sleep_delay_s": 0.5,
                     "attack_s": 0.05,
                     "release_s": 0.5,
+                    "thrusts": 3,
+                    "window_s": 6.0,
+                    "disarm_after_s": 45.0,
                 },
-                # Arming — the sleep gate: output stays silent until the
-                # partner lands `thrusts` full strokes within `window_s`
-                # seconds, then stays armed until `disarm_after_s` passes
-                # with no further strokes. Accidental brushes and idle
-                # contact can never wake the motor.
-                "arming": {"enabled": False, "thrusts": 3,
-                           "window_s": 6.0, "disarm_after_s": 45.0},
                 "smoothing": {"rise_ms": 50.0, "fall_ms": 20.0},
                 # Texture — post-smoothing wobble so a held level has grain
                 # instead of sitting flat. Downward-only modulation (never
@@ -854,6 +863,119 @@ class MotorRouter:
             chain_state["thrust_ext"] = d_raw
         return False
 
+    @staticmethod
+    def _wake_cfg(chain: Dict[str, Any]) -> Dict[str, Any]:
+        """The chain's effective Wake config. Prefers the merged `wake`
+        block; upgrades a legacy chain (separate `gate` / `arming`) on the
+        fly so files saved before the merge keep working — if arming was
+        enabled it maps to strokes mode (the stronger sleep gate wins),
+        otherwise the activity gate."""
+        if not isinstance(chain, dict):
+            return {}
+        w = chain.get("wake")
+        if isinstance(w, dict):
+            return w
+        gate = chain.get("gate")
+        gate = gate if isinstance(gate, dict) else {}
+        arming = chain.get("arming")
+        arming = arming if isinstance(arming, dict) else {}
+        if not gate and not arming:
+            return {}
+        strokes = bool(arming.get("enabled", False))
+        return {
+            "enabled": strokes or bool(gate.get("enabled", False)),
+            "mode": "strokes" if strokes else "activity",
+            "wake_threshold": gate.get("wake_threshold", 0.05),
+            "sleep_delay_s": gate.get("sleep_delay_s", 0.5),
+            "attack_s": gate.get("attack_s", 0.05),
+            "release_s": gate.get("release_s", 0.5),
+            "thrusts": arming.get("thrusts", 3),
+            "window_s": arming.get("window_s", 6.0),
+            "disarm_after_s": arming.get("disarm_after_s", 45.0),
+        }
+
+    def _wake_activity(self, chain_state: Dict[str, Any], s_raw: float,
+                       mixed: float, dt: float, now: float,
+                       cfg: Dict[str, Any]):
+        """Activity-meter gate: an analog meter fills with sustained
+        movement (sidechained on s_raw) and opens the gate above
+        `wake_threshold`, closing `sleep_delay_s` after motion stops.
+        Returns (waked, open, meter)."""
+        wake_threshold = self._coerce_float(
+            cfg.get("wake_threshold", 0.05), 0.05, 0.0, 1.0)
+        sleep_delay_s = self._coerce_float(
+            cfg.get("sleep_delay_s", 0.5), 0.5, 0.0, 60.0)
+        attack_s = self._coerce_float(
+            cfg.get("attack_s", 0.05), 0.05, 0.01, 10.0)
+        release_s = self._coerce_float(
+            cfg.get("release_s", 0.5), 0.5, 0.01, 10.0)
+        new_meter = activity_meter(
+            chain_state["activity_meter"], s_raw, dt, attack_s, release_s)
+        chain_state["activity_meter"] = new_meter
+        new_open, new_below_since = activity_gate(
+            bool(chain_state["gate_open"]), chain_state["below_since"],
+            new_meter, now, wake_threshold, sleep_delay_s)
+        chain_state["gate_open"] = new_open
+        chain_state["below_since"] = new_below_since
+        return (mixed if new_open else 0.0), new_open, new_meter
+
+    def _wake_strokes(self, chain_state: Dict[str, Any], chain_d_raw: float,
+                      mixed: float, dt: float, now: float,
+                      cfg: Dict[str, Any]):
+        """Stroke-counter gate (the sleep gate): silent until `thrusts`
+        full in-out strokes land within `window_s`, armed while they keep
+        coming, disarms after `disarm_after_s` quiet. Returns (waked,
+        armed, progress) where progress is 0..1 toward arming."""
+        need = int(self._coerce_float(cfg.get("thrusts", 3), 3.0, 1.0, 10.0))
+        window_s = self._coerce_float(cfg.get("window_s", 6.0), 6.0, 1.0, 30.0)
+        disarm_after_s = self._coerce_float(
+            cfg.get("disarm_after_s", 45.0), 45.0, 5.0, 600.0)
+        times = chain_state.setdefault("thrust_times", [])
+        # Ticks stop entirely while every output is 0 (silent VRChat), so
+        # this may be the first evaluation in hours: a swing's two halves
+        # must not straddle a gap longer than the counting window, or a
+        # pre-gap half-rise pairs with a post-gap fall into a phantom stroke.
+        if dt > window_s:
+            chain_state.pop("thrust_ext", None)
+            chain_state.pop("thrust_base", None)
+            chain_state.pop("thrust_dir", None)
+        # Disarm FIRST, against the PRE-tick deadline. A stroke landing
+        # after the deadline expired must count toward RE-arming (1 of N),
+        # never extend the stale armed state — otherwise a single brush
+        # hours later re-triggers a sleeping user's motor without the
+        # required wake strokes.
+        if bool(chain_state.get("armed", False)):
+            prev_last_t = chain_state.get("last_thrust_t", -1.0)
+            if prev_last_t < 0.0 or now - prev_last_t > disarm_after_s:
+                chain_state["armed"] = False
+                times.clear()
+        if self._detect_thrust(chain_state, chain_d_raw):
+            times.append(now)
+            if len(times) > self._THRUST_TIMES_CAP:
+                del times[0]
+            chain_state["last_thrust_t"] = now
+        while times and now - times[0] > window_s:
+            times.pop(0)
+        armed = bool(chain_state.get("armed", False))
+        if not armed and len(times) >= need:
+            armed = True
+        chain_state["armed"] = armed
+        progress = min(1.0, len(times) / need) if need > 0 else 0.0
+        return (mixed if armed else 0.0), armed, progress
+
+    @staticmethod
+    def _wake_reset(chain_state: Dict[str, Any]) -> None:
+        """Park BOTH wake algorithms at rest so a future enable (either
+        mode) starts clean — a stale activity meter or a stale swing
+        extremum must not leak a phantom wake on re-enable."""
+        chain_state["activity_meter"] = 0.0
+        chain_state["gate_open"] = False
+        chain_state["below_since"] = None
+        chain_state["armed"] = False
+        for k in ("thrust_times", "thrust_ext", "thrust_base",
+                  "thrust_dir", "last_thrust_t"):
+            chain_state.pop(k, None)
+
     def _antistuck_factor(self, state: Dict[str, Any], d_raw: float,
                           now: float,
                           cfg: Optional[Dict[str, Any]]) -> float:
@@ -1324,119 +1446,24 @@ class MotorRouter:
             if punch > mixed:
                 mixed = punch
 
-            # Activity gate — sidechain on s_raw. Per-chain state so
-            # two chains on the same motor can hold different gate
-            # states at the same instant (e.g. chain 0 wide-open while
-            # chain 1's tighter threshold is still asleep).
-            gate_cfg = chain.get("gate", {}) if isinstance(chain, dict) else {}
-            gate_enabled = bool(gate_cfg.get("enabled", False))
-            if gate_enabled:
-                wake_threshold = self._coerce_float(
-                    gate_cfg.get("wake_threshold", 0.05), 0.05, 0.0, 1.0
-                )
-                sleep_delay_s = self._coerce_float(
-                    gate_cfg.get("sleep_delay_s", 0.5), 0.5, 0.0, 60.0
-                )
-                # Meter build-up / decay taus. Long attack = the gate
-                # wants sustained movement before waking; long release
-                # = the activity "budget" drains over seconds instead
-                # of collapsing between strokes.
-                attack_s = self._coerce_float(
-                    gate_cfg.get("attack_s", 0.05), 0.05, 0.01, 10.0
-                )
-                release_s = self._coerce_float(
-                    gate_cfg.get("release_s", 0.5), 0.5, 0.01, 10.0
-                )
-                new_meter = activity_meter(
-                    chain_state["activity_meter"], s_raw, dt,
-                    attack_s, release_s,
-                )
-                chain_state["activity_meter"] = new_meter
-                new_open, new_below_since = activity_gate(
-                    bool(chain_state["gate_open"]),
-                    chain_state["below_since"],
-                    new_meter,
-                    now,
-                    wake_threshold,
-                    sleep_delay_s,
-                )
-                chain_state["gate_open"] = new_open
-                chain_state["below_since"] = new_below_since
-                gated = mixed if new_open else 0.0
-                gate_open_emit = new_open
-                activity_emit = new_meter
+            # Wake — the activity gate. ONE stage, two interchangeable
+            # algorithms (see DEFAULT_MIX_CONFIG's `wake` block): an analog
+            # activity meter or a discrete stroke counter, `mode` picking
+            # which. Placed BEFORE smoothing so waking attacks along the
+            # chain's rise envelope and sleeping rides its fall — no hard
+            # steps. Per-chain state so two chains on one motor can hold
+            # different wake states.
+            wake_cfg = self._wake_cfg(chain)
+            wake_mode = str(wake_cfg.get("mode", "activity"))
+            if not bool(wake_cfg.get("enabled", False)):
+                self._wake_reset(chain_state)
+                waked, wake_open_emit, wake_meter_emit = mixed, True, 0.0
+            elif wake_mode == "strokes":
+                waked, wake_open_emit, wake_meter_emit = self._wake_strokes(
+                    chain_state, chain_d_raw, mixed, dt, now, wake_cfg)
             else:
-                # Hold meter + gate at rest so a future enable starts fresh.
-                chain_state["activity_meter"] = 0.0
-                chain_state["gate_open"] = False
-                chain_state["below_since"] = None
-                gated = mixed
-                gate_open_emit = True
-                activity_emit = 0.0
-
-            # Arming — the sleep gate. The chain stays silent until the
-            # partner lands N full strokes inside the window; once armed it
-            # stays armed until the strokes stop for `disarm_after_s`.
-            # Placed BEFORE smoothing so waking attacks along the chain's
-            # rise envelope and disarming rides its fall — no hard steps.
-            arming_cfg = chain.get("arming", {}) if isinstance(chain, dict) else {}
-            if not isinstance(arming_cfg, dict):
-                arming_cfg = {}
-            if bool(arming_cfg.get("enabled", False)):
-                need = int(self._coerce_float(
-                    arming_cfg.get("thrusts", 3), 3.0, 1.0, 10.0))
-                window_s = self._coerce_float(
-                    arming_cfg.get("window_s", 6.0), 6.0, 1.0, 30.0)
-                disarm_after_s = self._coerce_float(
-                    arming_cfg.get("disarm_after_s", 45.0), 45.0, 5.0, 600.0)
-                times = chain_state.setdefault("thrust_times", [])
-                # Ticks stop entirely while every output is 0 (silent
-                # VRChat), so this may be the first evaluation in hours:
-                # a swing's two halves must not straddle a gap longer
-                # than the counting window, or a pre-gap half-rise pairs
-                # with a post-gap fall into a phantom stroke.
-                if dt > window_s:
-                    chain_state.pop("thrust_ext", None)
-                    chain_state.pop("thrust_base", None)
-                    chain_state.pop("thrust_dir", None)
-                # Disarm FIRST, against the PRE-tick deadline. A stroke
-                # landing after the deadline expired must count toward
-                # RE-arming (1 of N), never extend the stale armed state
-                # — otherwise a single brush hours later re-triggers a
-                # sleeping user's motor without the required wake strokes.
-                if bool(chain_state.get("armed", False)):
-                    prev_last_t = chain_state.get("last_thrust_t", -1.0)
-                    if prev_last_t < 0.0 or now - prev_last_t > disarm_after_s:
-                        chain_state["armed"] = False
-                        times.clear()
-                if self._detect_thrust(chain_state, chain_d_raw):
-                    times.append(now)
-                    if len(times) > self._THRUST_TIMES_CAP:
-                        del times[0]
-                    chain_state["last_thrust_t"] = now
-                while times and now - times[0] > window_s:
-                    times.pop(0)
-                armed = bool(chain_state.get("armed", False))
-                if not armed and len(times) >= need:
-                    armed = True
-                chain_state["armed"] = armed
-                armed_out = gated if armed else 0.0
-                armed_emit = armed
-                thrusts_emit = len(times)
-            else:
-                # Disabled: pass-through, and the next enable starts
-                # disarmed with a clean counter AND a clean swing
-                # detector — stale extremes from motion while disabled
-                # must not count as a phantom stroke on re-enable.
-                chain_state["armed"] = False
-                chain_state.pop("thrust_times", None)
-                chain_state.pop("thrust_ext", None)
-                chain_state.pop("thrust_base", None)
-                chain_state.pop("thrust_dir", None)
-                chain_state.pop("last_thrust_t", None)
-                armed_out = gated
-                armed_emit = True
-                thrusts_emit = 0
+                waked, wake_open_emit, wake_meter_emit = self._wake_activity(
+                    chain_state, s_raw, mixed, dt, now, wake_cfg)
 
             smoothing = chain.get("smoothing", {}) if isinstance(chain, dict) else {}
             rise_ms = self._coerce_float(
@@ -1446,7 +1473,7 @@ class MotorRouter:
                 smoothing.get("fall_ms", 20.0), 20.0, 0.0, 2000.0
             )
             smoothed_chain = smooth(
-                chain_state["smoothed_output"], armed_out, dt * 1000.0,
+                chain_state["smoothed_output"], waked, dt * 1000.0,
                 rise_ms, fall_ms
             )
 
@@ -1520,21 +1547,22 @@ class MotorRouter:
 
             chain_outputs.append(textured_chain)
             chain_emits.append({
-                "d_raw":     chain_d_raw,
-                "s_raw":     s_raw,
-                "d_shaped":  d_shaped,
-                "s_shaped":  s_shaped,
-                "punch":     punch,
-                "mixed":     mixed,
-                "activity":  activity_emit,
-                "gate_open": gate_open_emit,
-                "gated":     gated,
-                "armed":     armed_emit,
-                "thrusts":   thrusts_emit,
-                "armed_out": armed_out,
-                "smoothed":  smoothed_emit,
-                "textured":  textured_emit,
-                "out":       textured_chain,
+                "d_raw":      chain_d_raw,
+                "s_raw":      s_raw,
+                "d_shaped":   d_shaped,
+                "s_shaped":   s_shaped,
+                "punch":      punch,
+                "mixed":      mixed,
+                # Wake stage: open (gate open / armed / disabled), a 0..1
+                # meter (activity level, or progress toward arming in
+                # strokes mode), and the post-wake signal.
+                "wake_mode":  wake_mode,
+                "wake_open":  wake_open_emit,
+                "wake_meter": wake_meter_emit,
+                "wake_out":   waked,
+                "smoothed":   smoothed_emit,
+                "textured":   textured_emit,
+                "out":        textured_chain,
             })
 
         # Merge chain outputs into the final motor target. For a
@@ -1578,18 +1606,16 @@ class MotorRouter:
                     "s_raw":     emit["s_raw"],
                     "d_shaped":  emit["d_shaped"],
                     "s_shaped":  emit["s_shaped"],
-                    "punch":     emit["punch"],
-                    "mixed":     emit["mixed"],
-                    "activity":  emit["activity"],
-                    "gate_open": emit["gate_open"],
-                    "gated":     emit["gated"],
-                    "armed":     emit["armed"],
-                    "thrusts":   emit["thrusts"],
-                    "armed_out": emit["armed_out"],
-                    "smoothed":  emit["smoothed"],
-                    "textured":  emit["textured"],
-                    "out":       emit["out"],
-                    "final_out": final_out,
+                    "punch":      emit["punch"],
+                    "mixed":      emit["mixed"],
+                    "wake_mode":  emit["wake_mode"],
+                    "wake_open":  emit["wake_open"],
+                    "wake_meter": emit["wake_meter"],
+                    "wake_out":   emit["wake_out"],
+                    "smoothed":   emit["smoothed"],
+                    "textured":   emit["textured"],
+                    "out":        emit["out"],
+                    "final_out":  final_out,
                 }
                 # Iterate over a copy so a subscriber that unsubscribes
                 # itself inside its own callback doesn't corrupt the
@@ -1614,7 +1640,6 @@ class MotorRouter:
                 first = chain_emits[0] if chain_emits else {
                     "d_raw": 0.0, "s_raw": 0.0,
                     "d_shaped": 0.0, "s_shaped": 0.0, "mixed": 0.0,
-                    "activity": 0.0, "gate_open": True, "gated": 0.0,
                     "out": 0.0,
                 }
                 self._session_broadcast(device_name, motor_idx, {
@@ -1624,9 +1649,6 @@ class MotorRouter:
                     "d_shaped":  first["d_shaped"],
                     "s_shaped":  first["s_shaped"],
                     "mixed":     first["mixed"],
-                    "activity":  first["activity"],
-                    "gate_open": first["gate_open"],
-                    "gated":     first["gated"],
                     "out":       final_out,
                     "chains":    chain_emits,
                     "merge":     merge_op,

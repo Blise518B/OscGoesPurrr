@@ -1,6 +1,7 @@
 """Per-motor signal-chain widget — the user-facing surface for the
-Input → Depth/Speed/Punch → Combine → Gate → Arming → Smoothing →
-Texture → Zero cut → Output pipeline.
+Input → Depth/Speed/Punch → Combine → Wake → Envelope → Zero cut →
+Output pipeline (Wake merges the old Gate + Arming stages into one
+two-mode stage; Envelope merges Smoothing + the grain Texture).
 
 Embedded in two contexts (intentionally — see docs/MOTOR_SIGNAL_CHAIN.md
 § "Tune view, 1:1 with Device Routing"):
@@ -213,6 +214,19 @@ def _ensure_chain_at(per_motor: Dict[str, Any], chain_idx: int) -> Dict[str, Any
     if not isinstance(chains[safe_idx], dict):
         chains[safe_idx] = _default_chain()
     chain = chains[safe_idx]
+    # A chain saved before the Gate+Arming→Wake merge carries `gate` /
+    # `arming` but no `wake`. Derive the merged block from them (and drop
+    # the legacy keys) BEFORE the generic backfill below would inject a
+    # bare-default `wake` — that default, which the router now prefers
+    # over the legacy blocks, would silently disable a still-armed Sleep
+    # gate on any unrelated field edit. (The config-load migration does
+    # this for stored chains; this guards any legacy chain that reaches
+    # the editor another way.)
+    if not isinstance(chain.get("wake"), dict) and (
+            "gate" in chain or "arming" in chain):
+        chain["wake"] = _read_wake_cfg(chain)
+        chain.pop("gate", None)
+        chain.pop("arming", None)
     # Backfill chain top-level keys (defensive against partial writes).
     for tk, tv in template["chains"][0].items():
         if tk not in chain:
@@ -250,6 +264,74 @@ def _update_chain_fields(controller, device_name: str, motor_idx: int,
                 cursor[k] = sub
             cursor = sub
         cursor[path[-1]] = value
+    _write_per_motor(controller, device_name, motor_idx, per_motor)
+
+
+def _read_wake_cfg(chain: Dict[str, Any]) -> Dict[str, Any]:
+    """Effective Wake config for seeding the merged Wake card's widgets.
+    Prefers the merged `wake` block; falls back to deriving it from a
+    legacy chain's separate `gate` / `arming` blocks (arming.enabled →
+    strokes mode, else activity) so a file saved before the merge still
+    displays with the right state. Mirrors MotorRouter._wake_cfg — the
+    router upgrades at runtime, the UI only needs the initial widget
+    values. Returns a dict backed by the canonical wake defaults for any
+    missing key, so callers can read without further fallbacks."""
+    from motor_router import MotorRouter
+    out = copy.deepcopy(MotorRouter.DEFAULT_MIX_CONFIG["chains"][0]["wake"])
+    if not isinstance(chain, dict):
+        return out
+    w = chain.get("wake")
+    if isinstance(w, dict):
+        out.update(w)
+        return out
+    gate = chain.get("gate")
+    gate = gate if isinstance(gate, dict) else {}
+    arming = chain.get("arming")
+    arming = arming if isinstance(arming, dict) else {}
+    if not gate and not arming:
+        return out
+    strokes = bool(arming.get("enabled", False))
+    out.update({
+        "enabled": strokes or bool(gate.get("enabled", False)),
+        "mode": "strokes" if strokes else "activity",
+        "wake_threshold": gate.get("wake_threshold", out["wake_threshold"]),
+        "sleep_delay_s": gate.get("sleep_delay_s", out["sleep_delay_s"]),
+        "attack_s": gate.get("attack_s", out["attack_s"]),
+        "release_s": gate.get("release_s", out["release_s"]),
+        "thrusts": arming.get("thrusts", out["thrusts"]),
+        "window_s": arming.get("window_s", out["window_s"]),
+        "disarm_after_s": arming.get("disarm_after_s", out["disarm_after_s"]),
+    })
+    return out
+
+
+def _update_wake_field(controller, device_name: str, motor_idx: int,
+                       chain_idx: int, subkey: str, value: Any) -> None:
+    """Write one `wake.<subkey>` field (see _update_wake_fields)."""
+    _update_wake_fields(controller, device_name, motor_idx, chain_idx,
+                        ((subkey, value),))
+
+
+def _update_wake_fields(controller, device_name: str, motor_idx: int,
+                        chain_idx: int, updates) -> None:
+    """Write several `wake.<subkey>` fields in ONE read-modify-write pass
+    AND strip the legacy `gate` / `arming` top-level keys, so a chain
+    re-saved through the merged Wake editor lands clean on disk (the
+    router upgrades old files at runtime; the UI persists the merged
+    shape). One write/recalc cycle for the whole gesture."""
+    per_motor = copy.deepcopy(
+        _read_per_motor(controller, device_name, motor_idx)
+    )
+    chain = _ensure_chain_at(per_motor, chain_idx)
+    wake = chain.get("wake")
+    if not isinstance(wake, dict):
+        wake = {}
+        chain["wake"] = wake
+    for subkey, value in updates:
+        wake[subkey] = value
+    # Merged-schema cleanup — the two pre-merge blocks no longer exist.
+    chain.pop("gate", None)
+    chain.pop("arming", None)
     _write_per_motor(controller, device_name, motor_idx, per_motor)
 
 
@@ -332,17 +414,18 @@ STAGE_DEPTH = "depth"
 STAGE_SPEED = "speed"
 STAGE_PUNCH = "punch"
 STAGE_COMBINE = "combine"
-STAGE_GATE = "gate"
-STAGE_ARMING = "arming"
-STAGE_SMOOTHING = "smoothing"
-STAGE_TEXTURE = "texture"
+# Wake merges the pre-merge Gate + Arming stages into one two-mode stage
+# (mode "activity" = the old Gate, "strokes" = the old Arming/sleep gate).
+STAGE_WAKE = "wake"
+# Envelope merges Smoothing + the grain Texture into one card; the config
+# keys stay `smoothing` and `texture` separately (only the card merges).
+STAGE_ENVELOPE = "envelope"
 STAGE_ZEROCUT = "zerocut"
 STAGE_OUTPUT = "output"
 
 _STAGE_ORDER = (
     STAGE_INPUT, STAGE_DEPTH, STAGE_SPEED, STAGE_PUNCH,
-    STAGE_COMBINE, STAGE_GATE, STAGE_ARMING, STAGE_SMOOTHING,
-    STAGE_TEXTURE, STAGE_ZEROCUT,
+    STAGE_COMBINE, STAGE_WAKE, STAGE_ENVELOPE, STAGE_ZEROCUT,
     STAGE_OUTPUT,
 )
 
@@ -352,10 +435,8 @@ _STAGE_LABELS = {
     STAGE_SPEED:     "Speed",
     STAGE_PUNCH:     "Punch",
     STAGE_COMBINE:   "Combine",
-    STAGE_GATE:      "Gate",
-    STAGE_ARMING:    "Arming",
-    STAGE_SMOOTHING: "Smoothing",
-    STAGE_TEXTURE:   "Texture",
+    STAGE_WAKE:      "Wake",
+    STAGE_ENVELOPE:  "Envelope",
     STAGE_ZEROCUT:   "Zero cut",
     STAGE_OUTPUT:    "Output",
 }
@@ -369,10 +450,8 @@ _STAGE_SHORT = {
     STAGE_SPEED:     "Spd",
     STAGE_PUNCH:     "Pch",
     STAGE_COMBINE:   "Cmb",
-    STAGE_GATE:      "Gate",
-    STAGE_ARMING:    "Arm",
-    STAGE_SMOOTHING: "Smth",
-    STAGE_TEXTURE:   "Tex",
+    STAGE_WAKE:      "Wake",
+    STAGE_ENVELOPE:  "Env",
     STAGE_ZEROCUT:   "Cut",
     STAGE_OUTPUT:    "Out",
 }
@@ -390,7 +469,8 @@ _COMBINE_OPS = ("add", "max", "multiply")
 #   * raw signals (d_raw / s_raw): solid, lighter tints
 #   * shaped signals (d_shaped / s_shaped): dashed
 #   * mixed (post-combine): dotted purple
-#   * gated (post-gate, pre-smooth): solid yellow
+#   * wake_meter (the Wake meter / arming progress): dotted yellow
+#   * wake_out (post-wake signal): solid cyan
 #   * out (post-smooth chain output): bold green
 
 _TRACE_STYLE = {
@@ -402,15 +482,18 @@ _TRACE_STYLE = {
     # it takes the shaped-signal dash in its own hue.
     "punch":    ("#FF66AA", {"width": 1.8, "dash": "dash"}),
     "mixed":    ("#C040FF", {"width": 1.6, "dash": "dot"}),
-    "gated":    ("#FFCC00", {"width": 1.6}),
-    # Post-arming — the gate output after the sleep gate; identical to
-    # `gated` while arming is disabled or armed.
-    "armed_out": ("#66CCFF", {"width": 1.6}),
-    # Post-smoothing, PRE texture/zero cut — a lighter dashed green so
-    # the downstream cards can show the level they modulate or cut.
+    # Wake meter — activity level (activity mode) or arming progress
+    # (strokes mode); dotted yellow so it reads as the gate's meter, not
+    # the signal it gates.
+    "wake_meter": ("#FFCC00", {"width": 1.6, "dash": "dot"}),
+    # Post-wake signal — the combined signal after the gate; identical to
+    # `mixed` while the gate is open or Wake is disabled.
+    "wake_out":  ("#66CCFF", {"width": 1.6}),
+    # Post-smoothing, PRE grain/zero cut — a lighter dashed green so the
+    # Envelope card can show the internal level its grain modulates.
     "smoothed": ("#7FD9A8", {"width": 1.6, "dash": "dash"}),
-    # Post-texture, PRE zero cut — dotted so the grain wobble reads
-    # against the smoothed level it never exceeds.
+    # Post-grain (Envelope output), PRE zero cut — dotted so the grain
+    # wobble reads against the smoothed level it never exceeds.
     "textured": ("#B4E67F", {"width": 1.6, "dash": "dot"}),
     "out":      (COLOR_SUCCESS, {"width": 2.0}),
 }
@@ -421,10 +504,8 @@ _STAGE_TRACES: Dict[str, Tuple[str, ...]] = {
     STAGE_SPEED:     ("s_raw", "s_shaped"),
     STAGE_PUNCH:     ("d_raw", "punch"),
     STAGE_COMBINE:   ("d_shaped", "s_shaped", "mixed"),
-    STAGE_GATE:      ("mixed", "gated"),
-    STAGE_ARMING:    ("gated", "armed_out"),
-    STAGE_SMOOTHING: ("armed_out", "smoothed"),
-    STAGE_TEXTURE:   ("smoothed", "textured"),
+    STAGE_WAKE:      ("mixed", "wake_meter", "wake_out"),
+    STAGE_ENVELOPE:  ("wake_out", "smoothed", "textured"),
     STAGE_ZEROCUT:   ("textured", "out"),
     STAGE_OUTPUT:    ("out",),
 }
@@ -441,10 +522,8 @@ _STAGE_LEVEL_TRACE: Dict[str, str] = {
     STAGE_SPEED:     "s_shaped",
     STAGE_PUNCH:     "punch",
     STAGE_COMBINE:   "mixed",
-    STAGE_GATE:      "gated",
-    STAGE_ARMING:    "armed_out",
-    STAGE_SMOOTHING: "smoothed",
-    STAGE_TEXTURE:   "textured",
+    STAGE_WAKE:      "wake_out",
+    STAGE_ENVELOPE:  "textured",
     STAGE_ZEROCUT:   "out",
     STAGE_OUTPUT:    "out",
 }
@@ -652,7 +731,7 @@ class ActivityMeter(QFrame):
 
 
 # ----------------------------------------------------------
-# ValveIndicator — animated open/closed bar for the gate stage card.
+# ValveIndicator — animated open/closed bar for the Wake stage card.
 # ----------------------------------------------------------
 
 class ValveIndicator(QFrame):
@@ -1375,9 +1454,8 @@ class MotorSignalChainWidget(QFrame):
         reset_btn.setFixedHeight(BTN_HEIGHT_SMALL)
         reset_btn.setToolTip(
             "Wipe every setting in THIS chain (channels, curves, punch, "
-            "combine, gate, arming, smoothing, texture, zero cut) back "
-            "to the built-in defaults. Other chains on the same motor "
-            "are untouched."
+            "combine, wake, envelope, zero cut) back to the built-in "
+            "defaults. Other chains on the same motor are untouched."
         )
         reset_btn.clicked.connect(self._on_reset_clicked)
         header_row.addWidget(reset_btn)
@@ -1392,7 +1470,7 @@ class MotorSignalChainWidget(QFrame):
         # Last-applied border level per stage; gates stylesheet churn and
         # feeds the connector colours.
         self._stage_last_level: Dict[str, float] = {}
-        # Optional valve indicator on the gate stage card only.
+        # Optional valve indicator on the Wake stage card only.
         self._stage_valve: Optional[ValveIndicator] = None
         # Per-stage mini-graphs (Cut 6); built lazily in _build_editor_for.
         self._stage_graphs: Dict[str, _TraceGraph] = {}
@@ -1562,8 +1640,7 @@ class MotorSignalChainWidget(QFrame):
         self._slot_for_stage[STAGE_PUNCH] = ds
         self._ds_slot = ds
 
-        for sid in (STAGE_COMBINE, STAGE_GATE, STAGE_ARMING,
-                    STAGE_SMOOTHING, STAGE_TEXTURE,
+        for sid in (STAGE_COMBINE, STAGE_WAKE, STAGE_ENVELOPE,
                     STAGE_ZEROCUT, STAGE_OUTPUT):
             card = add_card(sid)
             add_slot(card)
@@ -1575,15 +1652,52 @@ class MotorSignalChainWidget(QFrame):
         # branch arrows.
         host.set_branch(self._slots.index(self._ds_slot),
                         [depth_card, speed_card, punch_card])
-        return host
+
+        # Wrap the host under a muted group-header legend so the strip
+        # reads as three left-to-right clusters (Sources / Wake /
+        # Shaping) between the Input and Output bookends. The legend is
+        # decoupled from the accordion geometry — it never pins widths or
+        # anchors connectors, so it can't perturb the animation.
+        wrap = QWidget()
+        wrap_lay = _vbox(0, 2)
+        wrap.setLayout(wrap_lay)
+        wrap_lay.addWidget(self._build_group_header_row())
+        wrap_lay.addWidget(host)
+        return wrap
+
+    def _build_group_header_row(self) -> QWidget:
+        """Muted section markers above the strip. The pipeline reads left
+        to right as three clusters — Sources (Depth/Speed/Punch), Wake,
+        and Shaping (Envelope, Zero cut) — with Input/Output as bookends.
+        Purely a legend: evenly spread so the order is legible without
+        pretending to pixel-align to the animating cards below."""
+        row = QWidget()
+        lay = _hbox(0, 0)
+        row.setLayout(lay)
+        # Leading gap roughly over the Input bookend.
+        lay.addSpacing(_CARD_COLLAPSED_MIN)
+        for text in ("Sources", "Wake", "Shaping"):
+            lay.addStretch(1)
+            lbl = QLabel(text.upper())
+            lf = lbl.font()
+            lf.setPointSize(max(7, lf.pointSize() - 1))
+            lf.setBold(True)
+            lbl.setFont(lf)
+            lbl.setProperty("muted", "true")
+            self._ui._repolish(lbl)
+            lay.addWidget(lbl)
+            lay.addStretch(1)
+        return row
 
     def _make_stage_card(self, stage_id: str) -> _StageCard:
-        """Build one accordion cell. Depth/Speed get a quick gain slider and
-        Smoothing a quick delay (ms) slider; the other (compact) stages stack
-        their title over the output number and show the subtitle summary. The
-        gate also gets its valve indicator. Clicking the card toggles its
-        expansion via `_on_stage_clicked`."""
-        is_slider = stage_id in (STAGE_DEPTH, STAGE_SPEED, STAGE_SMOOTHING)
+        """Build one accordion cell. Depth/Speed/Punch get a quick gain
+        slider and Envelope a quick delay (ms) slider; the other (compact)
+        stages stack their title over the output number and show the
+        subtitle summary. Envelope also carries a grain summary line under
+        its slider, and Wake its valve indicator. Clicking the card toggles
+        its expansion via `_on_stage_clicked`."""
+        is_slider = stage_id in (STAGE_DEPTH, STAGE_SPEED, STAGE_PUNCH,
+                                 STAGE_ENVELOPE)
         card = _StageCard(
             stage_id, _STAGE_LABELS[stage_id],
             _STAGE_SHORT.get(stage_id, _STAGE_LABELS[stage_id][:4]),
@@ -1591,26 +1705,53 @@ class MotorSignalChainWidget(QFrame):
         )
         card.clicked.connect(self._on_stage_clicked)
 
-        if stage_id in (STAGE_DEPTH, STAGE_SPEED):
+        if stage_id in (STAGE_DEPTH, STAGE_SPEED, STAGE_PUNCH):
+            # Quick gain control on the collapsed card — Depth/Speed default
+            # 1.0, Punch 0.0 (off). STAGE_* ids equal the config keys, so the
+            # gain sync path (_on_gain_from_slider/_spin) writes the right
+            # nested field for all three unchanged.
             chain = _read_chain(self._controller, self._device_name,
                                 self._motor_idx, self._chain_idx)
             cfg = chain.get(stage_id, {}) if isinstance(chain, dict) else {}
-            gain_ctrl = _GainControl(float(cfg.get("gain", 1.0)))
+            if not isinstance(cfg, dict):
+                cfg = {}
+            default_gain = 0.0 if stage_id == STAGE_PUNCH else 1.0
+            try:
+                seed_gain = float(cfg.get("gain", default_gain))
+            except (TypeError, ValueError):
+                seed_gain = default_gain
+            gain_ctrl = _GainControl(seed_gain)
             gain_ctrl.gainChanged.connect(
                 lambda g, ck=stage_id: self._on_gain_from_slider(ck, g)
             )
             self._gain_sliders[stage_id] = gain_ctrl
             card.quick_layout.addWidget(gain_ctrl)
-        elif stage_id == STAGE_SMOOTHING:
+        elif stage_id == STAGE_ENVELOPE:
             chain = _read_chain(self._controller, self._device_name,
                                 self._motor_idx, self._chain_idx)
             sm = chain.get("smoothing", {}) if isinstance(chain, dict) else {}
-            seed = max(float(sm.get("rise_ms", 50.0)),
-                       float(sm.get("fall_ms", 20.0)))
+            if not isinstance(sm, dict):
+                sm = {}
+            try:
+                seed = max(float(sm.get("rise_ms", 50.0)),
+                           float(sm.get("fall_ms", 20.0)))
+            except (TypeError, ValueError):
+                seed = 50.0
             delay_ctrl = _DelayControl(seed)
             delay_ctrl.msChanged.connect(self._on_delay_from_slider)
             self._delay_control = delay_ctrl
             card.quick_layout.addWidget(delay_ctrl)
+            # Grain summary line under the delay readout so the collapsed
+            # Envelope card shows BOTH smoothing and grain at a glance.
+            grain = QLabel(self._summary_for_stage(STAGE_ENVELOPE))
+            grain.setAlignment(Qt.AlignHCenter)
+            gf = grain.font()
+            gf.setPointSize(max(7, gf.pointSize() - 1))
+            grain.setFont(gf)
+            grain.setProperty("muted", "true")
+            self._ui._repolish(grain)
+            card.quick_layout.addWidget(grain)
+            self._stage_subtitles[STAGE_ENVELOPE] = grain
         else:
             subtitle = QLabel(self._summary_for_stage(stage_id))
             subtitle.setAlignment(Qt.AlignHCenter)
@@ -1622,9 +1763,9 @@ class MotorSignalChainWidget(QFrame):
             card.quick_layout.addWidget(subtitle)
             self._stage_subtitles[stage_id] = subtitle
 
-        # Valve indicator — only on the Gate card. Animates open/closed;
+        # Valve indicator — only on the Wake card. Animates open/closed;
         # complements the full ActivityMeter inside the expanded editor.
-        if stage_id == STAGE_GATE:
+        if stage_id == STAGE_WAKE:
             valve = ValveIndicator()
             card.quick_layout.addWidget(valve)
             self._stage_valve = valve
@@ -1679,33 +1820,34 @@ class MotorSignalChainWidget(QFrame):
             return f"×{gain:.2g} · {decay:.0f} ms"
         if stage_id == STAGE_COMBINE:
             return str(chain.get("combine", "max"))
-        if stage_id == STAGE_GATE:
-            gate = chain.get("gate", {}) if isinstance(chain, dict) else {}
-            if not gate.get("enabled", False):
+        if stage_id == STAGE_WAKE:
+            # Reflects the active mode; derives from legacy gate/arming for
+            # files saved before the merge (via _read_wake_cfg).
+            wc = _read_wake_cfg(chain)
+            if not wc.get("enabled", False):
                 return "off"
-            return f"≥{float(gate.get('wake_threshold', 0.05)):.2g}"
-        if stage_id == STAGE_ARMING:
-            ac = chain.get("arming", {}) if isinstance(chain, dict) else {}
-            if not isinstance(ac, dict) or not ac.get("enabled", False):
-                return "off"
+            mode = str(wc.get("mode", "activity"))
+            if mode == "strokes":
+                try:
+                    thrusts = float(wc.get("thrusts", 3))
+                except (TypeError, ValueError):
+                    thrusts = 3.0
+                try:
+                    window = float(wc.get("window_s", 6.0))
+                except (TypeError, ValueError):
+                    window = 6.0
+                return f"{thrusts:.0f}× in {window:.0f}s"
             try:
-                thrusts = float(ac.get("thrusts", 3))
+                thr = float(wc.get("wake_threshold", 0.05))
             except (TypeError, ValueError):
-                thrusts = 3.0
-            try:
-                window = float(ac.get("window_s", 6.0))
-            except (TypeError, ValueError):
-                window = 6.0
-            return f"{thrusts:.0f}× in {window:.0f} s"
-        if stage_id == STAGE_SMOOTHING:
-            sm = chain.get("smoothing", {}) if isinstance(chain, dict) else {}
-            rise = float(sm.get("rise_ms", 50))
-            fall = float(sm.get("fall_ms", 20))
-            return f"↑{rise:.0f}/↓{fall:.0f}ms"
-        if stage_id == STAGE_TEXTURE:
+                thr = 0.05
+            return f"Activity · wake {thr:.2g}"
+        if stage_id == STAGE_ENVELOPE:
+            # Slider card: the delay readout already shows smoothing, so
+            # this line carries only the grain (Texture) half.
             tc = chain.get("texture", {}) if isinstance(chain, dict) else {}
             if not isinstance(tc, dict) or not tc.get("enabled", False):
-                return "off"
+                return "grain off"
             try:
                 amount = float(tc.get("amount", 0.25))
             except (TypeError, ValueError):
@@ -1714,8 +1856,7 @@ class MotorSignalChainWidget(QFrame):
                 rate = float(tc.get("rate_hz", 2.0))
             except (TypeError, ValueError):
                 rate = 2.0
-            suffix = " →spd" if tc.get("follow_speed", False) else ""
-            return f"±{amount * 100.0:.0f}% @ {rate:.1f} Hz{suffix}"
+            return f"grain {amount * 100.0:.0f}% @ {rate:.1f}Hz"
         if stage_id == STAGE_ZEROCUT:
             zc = chain.get("zerocut", {}) if isinstance(chain, dict) else {}
             if not isinstance(zc, dict) or not zc.get("enabled", False):
@@ -2114,14 +2255,15 @@ class MotorSignalChainWidget(QFrame):
         def g(s: str) -> float:
             return max(0.0, min(1.0, ll.get(s, 0.0)))
 
+        # One entry per connector, in slot order: Input→Sources (fork),
+        # Sources→Combine (join), Combine→Wake, Wake→Envelope,
+        # Envelope→Zero cut, Zero cut→Output.
         levels = [
             g(STAGE_INPUT),
             max(g(STAGE_DEPTH), g(STAGE_SPEED), g(STAGE_PUNCH)),
             g(STAGE_COMBINE),
-            g(STAGE_GATE),
-            g(STAGE_ARMING),
-            g(STAGE_SMOOTHING),
-            g(STAGE_TEXTURE),
+            g(STAGE_WAKE),
+            g(STAGE_ENVELOPE),
             g(STAGE_ZEROCUT),
         ]
         # Per-channel levels tint the three join arrows (Depth→Combine,
@@ -2153,14 +2295,10 @@ class MotorSignalChainWidget(QFrame):
             inner = self._build_punch_editor()
         elif stage_id == STAGE_COMBINE:
             inner = self._build_combine_editor()
-        elif stage_id == STAGE_GATE:
-            inner = self._build_gate_editor()
-        elif stage_id == STAGE_ARMING:
-            inner = self._build_arming_editor()
-        elif stage_id == STAGE_SMOOTHING:
-            inner = self._build_smoothing_editor()
-        elif stage_id == STAGE_TEXTURE:
-            inner = self._build_texture_editor()
+        elif stage_id == STAGE_WAKE:
+            inner = self._build_wake_editor()
+        elif stage_id == STAGE_ENVELOPE:
+            inner = self._build_envelope_editor()
         elif stage_id == STAGE_ZEROCUT:
             inner = self._build_zerocut_editor()
         elif stage_id == STAGE_OUTPUT:
@@ -2200,7 +2338,7 @@ class MotorSignalChainWidget(QFrame):
         via Qt.QueuedConnection). Pushes samples to every built stage
         graph, refreshes the activity meter, updates the per-stage
         border colors (Cut 7f), and drives the valve indicator on the
-        gate stage card (Cut 7h)."""
+        Wake stage card (Cut 7h)."""
         try:
             t_s = float(payload.get("t_ms", 0.0)) / 1000.0
         except (TypeError, ValueError):
@@ -2221,14 +2359,17 @@ class MotorSignalChainWidget(QFrame):
                 # C++ widget gone between dispatch and slot. Drop the
                 # ref so we stop trying to push to it.
                 self._stage_graphs.pop(stage_id, None)
-        # Activity meter (gate editor, when expanded).
+        # Activity meter (Wake editor, activity mode, when expanded). The
+        # meter trace is `wake_meter`; `wake_open` flips its open/closed
+        # colour. In strokes mode the meter is hidden, so an update here is
+        # a harmless no-op paint.
         if self._activity_meter is not None:
             try:
                 self._activity_meter.set_value(
-                    float(payload.get("activity", 0.0))
+                    float(payload.get("wake_meter", 0.0))
                 )
                 self._activity_meter.set_open(
-                    bool(payload.get("gate_open", False))
+                    bool(payload.get("wake_open", False))
                 )
             except (TypeError, ValueError, RuntimeError):
                 pass
@@ -2253,13 +2394,13 @@ class MotorSignalChainWidget(QFrame):
                     self._stage_cards.pop(stage_id, None)
         # Connector colours track the (epsilon-gated) per-stage levels.
         self._update_connector_levels()
-        # Valve indicator on the gate stage card — slides the bar
+        # Valve indicator on the Wake stage card — slides the bar
         # forward on open, back on close. Animation handles the
         # interpolation; we just set the target.
         if self._stage_valve is not None:
             try:
                 self._stage_valve.set_open(
-                    bool(payload.get("gate_open", False))
+                    bool(payload.get("wake_open", False))
                 )
             except RuntimeError:
                 self._stage_valve = None
@@ -2499,7 +2640,8 @@ class MotorSignalChainWidget(QFrame):
             "Attack transients: a fast thrust IN spikes a short hit on "
             "top of the sustained level, then decays. Merges max-wins "
             "with the Depth/Speed combine — an accent, never a duck. "
-            "Pull-out never punches; slow repositioning is ignored."
+            "Pull-out never punches; slow repositioning is ignored. Same "
+            "gain knob as the slider on the collapsed card."
         ))
         hdr_row.addStretch(1)
         lay.addLayout(hdr_row)
@@ -2518,7 +2660,9 @@ class MotorSignalChainWidget(QFrame):
         except (TypeError, ValueError):
             pc_decay = 120.0
 
-        # Gain: 0 disables the stage entirely.
+        # Gain: 0 disables the stage entirely. Two-way sync with the quick
+        # gain slider on the collapsed card (same field, same sync path as
+        # Depth/Speed — "punch" is both the STAGE id and the config key).
         gain_row = _hbox(0, 8)
         gain_row.addWidget(QLabel("Gain:"))
         gain_spin = _NoTrackSpin()
@@ -2526,12 +2670,11 @@ class MotorSignalChainWidget(QFrame):
         gain_spin.setSingleStep(0.05)
         gain_spin.setDecimals(2)
         gain_spin.setValue(pc_gain)
+        # Connect AFTER setValue so the seed is silent.
         gain_spin.valueChanged.connect(
-            lambda v: _update_chain_field(
-                self._controller, self._device_name, self._motor_idx, self._chain_idx,
-                ("punch", "gain"), float(v),
-            )
+            lambda v: self._on_gain_from_spin("punch", float(v))
         )
+        self._gain_spins["punch"] = gain_spin
         gain_row.addWidget(gain_spin)
         gain_row.addStretch(1)
         lay.addLayout(gain_row)
@@ -2685,136 +2828,252 @@ class MotorSignalChainWidget(QFrame):
 
         return host
 
-    def _build_gate_editor(self) -> QWidget:
-        """Activity gate — enable toggle + wake threshold + sleep
-        delay + the activity meter visual."""
+    def _build_wake_editor(self) -> QWidget:
+        """Wake — the merged activity gate. One stage, two interchangeable
+        ways to gate (chosen by the mode toggle):
+          * Activity — an analog meter charges with sustained movement and
+            opens above Wake threshold, sleeping after motion stops (the
+            old Gate stage).
+          * Strokes — the sleep gate: silent until N full strokes land in
+            the window, disarms after quiet (the old Arming stage). An
+            accidental brush can't wake it; this is what makes 🌙 Sleep
+            safe.
+        Every write goes through _update_wake_field, which also strips the
+        legacy gate/arming blocks so a re-saved chain lands clean on disk.
+        Initial values are seeded via _read_wake_cfg, which derives them
+        from legacy gate/arming for files saved before the merge."""
         host = QFrame()
         host.setObjectName("stageEditor")
         lay = _vbox(10, 8)
         host.setLayout(lay)
 
+        def _f(value, default):
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return default
+
         hdr_row = _hbox(0, 6)
-        header = QLabel("Activity gate")
+        header = QLabel("Wake")
         hf = header.font(); hf.setBold(True)
         header.setFont(hf)
         hdr_row.addWidget(header)
         hdr_row.addWidget(self._ui._make_help_badge(
-            "Activity gate",
-            "Sidechain valve. Observes the speed detector's output; "
-            "opens when activity crosses <b>Wake threshold</b>; closes "
-            "after activity stays below threshold for <b>Sleep delay</b> "
-            "seconds. <b>Build-up</b> / <b>Decay</b> set how slowly the "
-            "activity meter itself charges with movement and drains in "
-            "stillness — raise them to demand a few seconds of sustained "
-            "motion instead of waking on a twitch. Off by default."
+            "Wake",
+            "The activity gate — nothing plays until real contact is "
+            "detected, in one of two interchangeable ways (pick with the "
+            "mode toggle). <b>Activity</b>: an analog meter charges with "
+            "sustained movement and opens above <b>Wake threshold</b>, "
+            "sleeping <b>Sleep delay</b> seconds after motion stops "
+            "(Build-up / Decay shape how fast the meter fills and drains). "
+            "<b>Strokes</b>: the sleep gate — silent until <b>Thrusts</b> "
+            "full strokes land inside <b>Window</b>, stays awake while they "
+            "keep coming, disarms after the quiet timeout. An accidental "
+            "brush can't wake Strokes mode; it's what makes 🌙 Sleep safe "
+            "to wear while sleeping. Off by default."
         ))
         hdr_row.addStretch(1)
         lay.addLayout(hdr_row)
 
-        chain = _read_chain(self._controller, self._device_name, self._motor_idx, self._chain_idx)
-        gate_cfg = chain.get("gate", {}) if isinstance(chain, dict) else {}
+        wake_cfg = _read_wake_cfg(_read_chain(
+            self._controller, self._device_name, self._motor_idx,
+            self._chain_idx))
+        mode = str(wake_cfg.get("mode", "activity"))
+        if mode not in ("activity", "strokes"):
+            mode = "activity"
 
         # Enable toggle.
         enable_cb = ToggleSwitch("Enable")
-        enable_cb.setChecked(bool(gate_cfg.get("enabled", False)))
+        enable_cb.setChecked(bool(wake_cfg.get("enabled", False)))
         enable_cb.toggled.connect(
-            lambda v: _update_chain_field(
-                self._controller, self._device_name, self._motor_idx, self._chain_idx,
-                ("gate", "enabled"), bool(v),
+            lambda v: _update_wake_field(
+                self._controller, self._device_name, self._motor_idx,
+                self._chain_idx, "enabled", bool(v),
             )
         )
         lay.addWidget(enable_cb)
 
-        # Wake threshold.
+        # The two param sections — built below, shown/hidden by mode.
+        # Declared up front so the mode toggle's closure can flip them.
+        activity_frame = QFrame()
+        activity_frame.setObjectName("stageEditor")
+        act_lay = _vbox(0, 8)
+        activity_frame.setLayout(act_lay)
+        strokes_frame = QFrame()
+        strokes_frame.setObjectName("stageEditor")
+        str_lay = _vbox(0, 8)
+        strokes_frame.setLayout(str_lay)
+
+        # Mode toggle: Activity / Strokes.
+        mode_row = _hbox(0, 8)
+        mode_row.addWidget(QLabel("Mode:"))
+
+        def on_mode(val: str) -> None:
+            m = ("strokes" if str(val).lower().startswith("stroke")
+                 else "activity")
+            _update_wake_field(
+                self._controller, self._device_name, self._motor_idx,
+                self._chain_idx, "mode", m,
+            )
+            activity_frame.setVisible(m == "activity")
+            strokes_frame.setVisible(m == "strokes")
+        mode_seg = self._make_segmented(
+            ("Activity", "Strokes"),
+            "Strokes" if mode == "strokes" else "Activity",
+            on_mode,
+        )
+        mode_row.addWidget(mode_seg)
+        mode_row.addStretch(1)
+        lay.addLayout(mode_row)
+
+        # ---- Activity params (the old Gate) ----
         wt_row = _hbox(0, 8)
         wt_row.addWidget(QLabel("Wake threshold:"))
         wt_spin = _NoTrackSpin()
         wt_spin.setRange(0.0, 1.0)
         wt_spin.setSingleStep(0.01)
         wt_spin.setDecimals(2)
-        wt_spin.setValue(float(gate_cfg.get("wake_threshold", 0.05)))
+        wt_spin.setValue(_f(wake_cfg.get("wake_threshold", 0.05), 0.05))
         wt_spin.valueChanged.connect(self._on_wake_threshold_changed)
         wt_row.addWidget(wt_spin)
         wt_row.addStretch(1)
-        lay.addLayout(wt_row)
+        act_lay.addLayout(wt_row)
 
-        # Sleep delay.
         sd_row = _hbox(0, 8)
         sd_row.addWidget(QLabel("Sleep delay (s):"))
         sd_spin = _NoTrackSpin()
         sd_spin.setRange(0.0, 10.0)
         sd_spin.setSingleStep(0.1)
         sd_spin.setDecimals(1)
-        sd_spin.setValue(float(gate_cfg.get("sleep_delay_s", 0.5)))
+        sd_spin.setValue(_f(wake_cfg.get("sleep_delay_s", 0.5), 0.5))
         sd_spin.valueChanged.connect(
-            lambda v: _update_chain_field(
-                self._controller, self._device_name, self._motor_idx, self._chain_idx,
-                ("gate", "sleep_delay_s"), float(v),
+            lambda v: _update_wake_field(
+                self._controller, self._device_name, self._motor_idx,
+                self._chain_idx, "sleep_delay_s", float(v),
             )
         )
         sd_row.addWidget(sd_spin)
         sd_row.addStretch(1)
-        lay.addLayout(sd_row)
+        act_lay.addLayout(sd_row)
 
-        # Meter build-up: how long sustained movement takes to charge
-        # the activity meter. High values make the gate demand a few
-        # seconds of motion before waking instead of opening on the
-        # first twitch.
+        # Meter build-up: how long sustained movement takes to charge the
+        # activity meter (attack tau). High values demand a few seconds of
+        # motion before waking instead of opening on the first twitch.
         at_row = _hbox(0, 8)
         at_row.addWidget(QLabel("Build-up (s):"))
         at_spin = _NoTrackSpin()
         at_spin.setRange(0.01, 10.0)
         at_spin.setSingleStep(0.1)
         at_spin.setDecimals(2)
-        at_spin.setValue(float(gate_cfg.get("attack_s", 0.05)))
+        at_spin.setValue(_f(wake_cfg.get("attack_s", 0.05), 0.05))
         at_spin.valueChanged.connect(
-            lambda v: _update_chain_field(
-                self._controller, self._device_name, self._motor_idx, self._chain_idx,
-                ("gate", "attack_s"), float(v),
+            lambda v: _update_wake_field(
+                self._controller, self._device_name, self._motor_idx,
+                self._chain_idx, "attack_s", float(v),
             )
         )
         at_row.addWidget(at_spin)
         at_row.addStretch(1)
-        lay.addLayout(at_row)
+        act_lay.addLayout(at_row)
 
         # Meter decay: how long the charged meter takes to drain once
-        # movement stops. High values keep the "budget" up across
-        # brief pauses instead of bouncing below threshold.
+        # movement stops (release tau). High values coast the "budget"
+        # across brief pauses instead of bouncing below threshold.
         rl_row = _hbox(0, 8)
         rl_row.addWidget(QLabel("Decay (s):"))
         rl_spin = _NoTrackSpin()
         rl_spin.setRange(0.01, 10.0)
         rl_spin.setSingleStep(0.1)
         rl_spin.setDecimals(2)
-        rl_spin.setValue(float(gate_cfg.get("release_s", 0.5)))
+        rl_spin.setValue(_f(wake_cfg.get("release_s", 0.5), 0.5))
         rl_spin.valueChanged.connect(
-            lambda v: _update_chain_field(
-                self._controller, self._device_name, self._motor_idx, self._chain_idx,
-                ("gate", "release_s"), float(v),
+            lambda v: _update_wake_field(
+                self._controller, self._device_name, self._motor_idx,
+                self._chain_idx, "release_s", float(v),
             )
         )
         rl_row.addWidget(rl_spin)
         rl_row.addStretch(1)
-        lay.addLayout(rl_row)
+        act_lay.addLayout(rl_row)
 
         # Activity meter visual.
         meter_label = QLabel("Activity")
         meter_label.setProperty("muted", "true")
         self._ui._repolish(meter_label)
-        lay.addWidget(meter_label)
+        act_lay.addWidget(meter_label)
         meter = ActivityMeter()
-        meter.set_threshold(float(gate_cfg.get("wake_threshold", 0.05)))
-        lay.addWidget(meter)
+        meter.set_threshold(_f(wake_cfg.get("wake_threshold", 0.05), 0.05))
+        act_lay.addWidget(meter)
         self._activity_meter = meter
+
+        # ---- Strokes params (the old Arming / sleep gate) ----
+        th_row = _hbox(0, 8)
+        th_row.addWidget(QLabel("Thrusts:"))
+        th_spin = _NoTrackSpin()
+        th_spin.setRange(1.0, 10.0)
+        th_spin.setSingleStep(1.0)
+        th_spin.setDecimals(0)
+        th_spin.setValue(_f(wake_cfg.get("thrusts", 3), 3.0))
+        th_spin.valueChanged.connect(
+            lambda v: _update_wake_field(
+                self._controller, self._device_name, self._motor_idx,
+                self._chain_idx, "thrusts", int(v),
+            )
+        )
+        th_row.addWidget(th_spin)
+        th_row.addStretch(1)
+        str_lay.addLayout(th_row)
+
+        wn_row = _hbox(0, 8)
+        wn_row.addWidget(QLabel("Window (s):"))
+        wn_spin = _NoTrackSpin()
+        wn_spin.setRange(1.0, 30.0)
+        wn_spin.setSingleStep(1.0)
+        wn_spin.setDecimals(0)
+        wn_spin.setValue(_f(wake_cfg.get("window_s", 6.0), 6.0))
+        wn_spin.valueChanged.connect(
+            lambda v: _update_wake_field(
+                self._controller, self._device_name, self._motor_idx,
+                self._chain_idx, "window_s", float(v),
+            )
+        )
+        wn_row.addWidget(wn_spin)
+        wn_row.addStretch(1)
+        str_lay.addLayout(wn_row)
+
+        da_row = _hbox(0, 8)
+        da_row.addWidget(QLabel("Disarm after (s):"))
+        da_spin = _NoTrackSpin()
+        da_spin.setRange(5.0, 600.0)
+        da_spin.setSingleStep(5.0)
+        da_spin.setDecimals(0)
+        da_spin.setValue(_f(wake_cfg.get("disarm_after_s", 45.0), 45.0))
+        da_spin.valueChanged.connect(
+            lambda v: _update_wake_field(
+                self._controller, self._device_name, self._motor_idx,
+                self._chain_idx, "disarm_after_s", float(v),
+            )
+        )
+        da_row.addWidget(da_spin)
+        da_row.addStretch(1)
+        str_lay.addLayout(da_row)
+
+        # Parent the frames, THEN set visibility — setVisible(True) on a
+        # still-parentless frame briefly realises it as a top-level window.
+        lay.addWidget(activity_frame)
+        lay.addWidget(strokes_frame)
+        activity_frame.setVisible(mode == "activity")
+        strokes_frame.setVisible(mode == "strokes")
         return host
 
     def _on_wake_threshold_changed(self, val: float) -> None:
         """Spinbox is the canonical store; the activity meter visual
         mirrors it so the tick mark moves with the user's edit even
-        before live data flows in."""
-        _update_chain_field(
-            self._controller, self._device_name, self._motor_idx, self._chain_idx,
-            ("gate", "wake_threshold"), float(val),
+        before live data flows in. Also strips legacy gate/arming keys
+        (via _update_wake_field) like every other Wake write."""
+        _update_wake_field(
+            self._controller, self._device_name, self._motor_idx,
+            self._chain_idx, "wake_threshold", float(val),
         )
         if self._activity_meter is not None:
             try:
@@ -2822,140 +3081,56 @@ class MotorSignalChainWidget(QFrame):
             except RuntimeError:
                 pass
 
-    def _build_arming_editor(self) -> QWidget:
-        """Arming — enable toggle + thrust count, window, and disarm
-        timeout."""
+    def _build_envelope_editor(self) -> QWidget:
+        """Envelope — how the level moves over time. Two sections:
+          * Smoothing (top): rise/fall envelope follower; de-jitters and
+            shapes the macro attack/release, and rounds the Wake gate's
+            open/close transitions.
+          * Grain (below): a subtle downward-only wobble so a held level
+            has texture instead of sitting dead flat (the old Texture
+            stage).
+        Grain runs AFTER smoothing on purpose — ahead of it, smoothing
+        would iron the wobble back out. The config keys stay `smoothing`
+        and `texture` separately; only the card merges."""
         host = QFrame()
         host.setObjectName("stageEditor")
         lay = _vbox(10, 8)
         host.setLayout(lay)
 
         hdr_row = _hbox(0, 6)
-        header = QLabel("Arming")
+        header = QLabel("Envelope")
         hf = header.font(); hf.setBold(True)
         header.setFont(hf)
         hdr_row.addWidget(header)
         hdr_row.addWidget(self._ui._make_help_badge(
-            "Arming",
-            "Nothing plays until this many full strokes land inside the "
-            "window — an accidental brush can't wake the motor. Stays "
-            "armed while strokes keep coming; disarms after the quiet "
-            "timeout. This is what makes 🌙 Sleep safe to wear while "
-            "sleeping."
+            "Envelope",
+            "How the level moves over time. <b>Smoothing</b> shapes the "
+            "macro attack/release and de-jitters the signal — <b>Rise</b> "
+            "sets how fast it ramps up, <b>Fall</b> how fast it decays, and "
+            "the same knobs round the Wake gate's open/close transitions. "
+            "<b>Grain</b> adds a subtle downward-only wobble on top so a "
+            "held level has texture instead of sitting dead flat. Grain "
+            "comes <i>after</i> smoothing on purpose: ahead of it, "
+            "smoothing would just iron the wobble back out."
         ))
         hdr_row.addStretch(1)
         lay.addLayout(hdr_row)
 
         chain = _read_chain(self._controller, self._device_name,
                             self._motor_idx, self._chain_idx)
-        ac_cfg = chain.get("arming", {}) if isinstance(chain, dict) else {}
-        if not isinstance(ac_cfg, dict):
-            ac_cfg = {}  # hand-edited profile — build from defaults
-        try:
-            ac_thrusts = float(ac_cfg.get("thrusts", 3))
-        except (TypeError, ValueError):
-            ac_thrusts = 3.0
-        try:
-            ac_window = float(ac_cfg.get("window_s", 6.0))
-        except (TypeError, ValueError):
-            ac_window = 6.0
-        try:
-            ac_disarm = float(ac_cfg.get("disarm_after_s", 45.0))
-        except (TypeError, ValueError):
-            ac_disarm = 45.0
 
-        # Enable toggle.
-        enable_cb = ToggleSwitch("Enable")
-        enable_cb.setChecked(bool(ac_cfg.get("enabled", False)))
-        enable_cb.toggled.connect(
-            lambda v: _update_chain_field(
-                self._controller, self._device_name, self._motor_idx, self._chain_idx,
-                ("arming", "enabled"), bool(v),
-            )
-        )
-        lay.addWidget(enable_cb)
-
-        # Thrusts: full strokes required to arm.
-        th_row = _hbox(0, 8)
-        th_row.addWidget(QLabel("Thrusts:"))
-        th_spin = _NoTrackSpin()
-        th_spin.setRange(1.0, 10.0)
-        th_spin.setSingleStep(1.0)
-        th_spin.setDecimals(0)
-        th_spin.setValue(ac_thrusts)
-        th_spin.valueChanged.connect(
-            lambda v: _update_chain_field(
-                self._controller, self._device_name, self._motor_idx, self._chain_idx,
-                ("arming", "thrusts"), int(v),
-            )
-        )
-        th_row.addWidget(th_spin)
-        th_row.addStretch(1)
-        lay.addLayout(th_row)
-
-        # Window: the strokes must land within this many seconds.
-        wn_row = _hbox(0, 8)
-        wn_row.addWidget(QLabel("Window (s):"))
-        wn_spin = _NoTrackSpin()
-        wn_spin.setRange(1.0, 30.0)
-        wn_spin.setSingleStep(1.0)
-        wn_spin.setDecimals(0)
-        wn_spin.setValue(ac_window)
-        wn_spin.valueChanged.connect(
-            lambda v: _update_chain_field(
-                self._controller, self._device_name, self._motor_idx, self._chain_idx,
-                ("arming", "window_s"), float(v),
-            )
-        )
-        wn_row.addWidget(wn_spin)
-        wn_row.addStretch(1)
-        lay.addLayout(wn_row)
-
-        # Disarm after: quiet time before the gate closes again.
-        da_row = _hbox(0, 8)
-        da_row.addWidget(QLabel("Disarm after (s):"))
-        da_spin = _NoTrackSpin()
-        da_spin.setRange(5.0, 600.0)
-        da_spin.setSingleStep(5.0)
-        da_spin.setDecimals(0)
-        da_spin.setValue(ac_disarm)
-        da_spin.valueChanged.connect(
-            lambda v: _update_chain_field(
-                self._controller, self._device_name, self._motor_idx, self._chain_idx,
-                ("arming", "disarm_after_s"), float(v),
-            )
-        )
-        da_row.addWidget(da_spin)
-        da_row.addStretch(1)
-        lay.addLayout(da_row)
-
-        return host
-
-    def _build_smoothing_editor(self) -> QWidget:
-        """Rise / fall envelope follower. Same math as the old
-        Phase 2 smoothing block, just renamed for clarity."""
-        host = QFrame()
-        host.setObjectName("stageEditor")
-        lay = _vbox(10, 8)
-        host.setLayout(lay)
-
-        hdr_row = _hbox(0, 6)
-        header = QLabel("Smoothing")
-        hf = header.font(); hf.setBold(True)
-        header.setFont(hf)
-        hdr_row.addWidget(header)
-        hdr_row.addWidget(self._ui._make_help_badge(
-            "Smoothing",
-            "Post-gate envelope follower. <b>Rise</b> controls how fast "
-            "the output ramps up; <b>Fall</b> how fast it decays. The "
-            "same knobs round the gate's open/close transitions, so no "
-            "separate gate-smoothing settings exist."
-        ))
-        hdr_row.addStretch(1)
-        lay.addLayout(hdr_row)
-
-        chain = _read_chain(self._controller, self._device_name, self._motor_idx, self._chain_idx)
+        # ---- Smoothing section (rise / fall) ----
         sm_cfg = chain.get("smoothing", {}) if isinstance(chain, dict) else {}
+        if not isinstance(sm_cfg, dict):
+            sm_cfg = {}
+        try:
+            sm_rise = float(sm_cfg.get("rise_ms", 50.0))
+        except (TypeError, ValueError):
+            sm_rise = 50.0
+        try:
+            sm_fall = float(sm_cfg.get("fall_ms", 20.0))
+        except (TypeError, ValueError):
+            sm_fall = 20.0
 
         row = _hbox(0, 8)
         row.addWidget(QLabel("Rise:"))
@@ -2964,7 +3139,7 @@ class MotorSignalChainWidget(QFrame):
         rise_spin.setSingleStep(10.0)
         rise_spin.setDecimals(0)
         rise_spin.setSuffix(" ms")
-        rise_spin.setValue(float(sm_cfg.get("rise_ms", 50.0)))
+        rise_spin.setValue(sm_rise)
         # Connect AFTER setValue so seeding is silent; the handler persists
         # and reflects the slower of rise/fall on the quick delay slider.
         rise_spin.valueChanged.connect(
@@ -2979,7 +3154,7 @@ class MotorSignalChainWidget(QFrame):
         fall_spin.setSingleStep(10.0)
         fall_spin.setDecimals(0)
         fall_spin.setSuffix(" ms")
-        fall_spin.setValue(float(sm_cfg.get("fall_ms", 20.0)))
+        fall_spin.setValue(sm_fall)
         fall_spin.valueChanged.connect(
             lambda v: self._on_smoothing_spin_changed("fall_ms", float(v))
         )
@@ -2987,32 +3162,15 @@ class MotorSignalChainWidget(QFrame):
         row.addWidget(fall_spin)
         row.addStretch(1)
         lay.addLayout(row)
-        return host
 
-    def _build_texture_editor(self) -> QWidget:
-        """Texture — enable toggle + grain amount, rate, and the
-        follow-speed switch."""
-        host = QFrame()
-        host.setObjectName("stageEditor")
-        lay = _vbox(10, 8)
-        host.setLayout(lay)
+        # ---- Grain section (the old Texture) ----
+        grain_hdr = QLabel("Grain")
+        ghf = grain_hdr.font(); ghf.setBold(True)
+        grain_hdr.setFont(ghf)
+        grain_hdr.setProperty("muted", "true")
+        self._ui._repolish(grain_hdr)
+        lay.addWidget(grain_hdr)
 
-        hdr_row = _hbox(0, 6)
-        header = QLabel("Texture")
-        hf = header.font(); hf.setBold(True)
-        header.setFont(hf)
-        hdr_row.addWidget(header)
-        hdr_row.addWidget(self._ui._make_help_badge(
-            "Texture",
-            "Wobbles a held level so it has grain instead of sitting "
-            "flat. Downward-only — never louder than the smoothed "
-            "level. Follow speed makes faster motion mean faster grain."
-        ))
-        hdr_row.addStretch(1)
-        lay.addLayout(hdr_row)
-
-        chain = _read_chain(self._controller, self._device_name,
-                            self._motor_idx, self._chain_idx)
         tc_cfg = chain.get("texture", {}) if isinstance(chain, dict) else {}
         if not isinstance(tc_cfg, dict):
             tc_cfg = {}  # hand-edited profile — build from defaults
@@ -3030,8 +3188,8 @@ class MotorSignalChainWidget(QFrame):
         enable_cb.setChecked(bool(tc_cfg.get("enabled", False)))
         enable_cb.toggled.connect(
             lambda v: _update_chain_field(
-                self._controller, self._device_name, self._motor_idx, self._chain_idx,
-                ("texture", "enabled"), bool(v),
+                self._controller, self._device_name, self._motor_idx,
+                self._chain_idx, ("texture", "enabled"), bool(v),
             )
         )
         lay.addWidget(enable_cb)
@@ -3046,8 +3204,8 @@ class MotorSignalChainWidget(QFrame):
         am_spin.setValue(tc_amount * 100.0)
         am_spin.valueChanged.connect(
             lambda v: _update_chain_field(
-                self._controller, self._device_name, self._motor_idx, self._chain_idx,
-                ("texture", "amount"), float(v) / 100.0,
+                self._controller, self._device_name, self._motor_idx,
+                self._chain_idx, ("texture", "amount"), float(v) / 100.0,
             )
         )
         am_row.addWidget(am_spin)
@@ -3064,8 +3222,8 @@ class MotorSignalChainWidget(QFrame):
         rt_spin.setValue(tc_rate)
         rt_spin.valueChanged.connect(
             lambda v: _update_chain_field(
-                self._controller, self._device_name, self._motor_idx, self._chain_idx,
-                ("texture", "rate_hz"), float(v),
+                self._controller, self._device_name, self._motor_idx,
+                self._chain_idx, ("texture", "rate_hz"), float(v),
             )
         )
         rt_row.addWidget(rt_spin)
@@ -3077,8 +3235,8 @@ class MotorSignalChainWidget(QFrame):
         follow_cb.setChecked(bool(tc_cfg.get("follow_speed", False)))
         follow_cb.toggled.connect(
             lambda v: _update_chain_field(
-                self._controller, self._device_name, self._motor_idx, self._chain_idx,
-                ("texture", "follow_speed"), bool(v),
+                self._controller, self._device_name, self._motor_idx,
+                self._chain_idx, ("texture", "follow_speed"), bool(v),
             )
         )
         lay.addWidget(follow_cb)
@@ -3244,7 +3402,8 @@ class MotorSignalChainWidget(QFrame):
         secondary chain (Cut 5) can be reset independently of the
         primary. After the reset, tear down any built editors (they
         rebuild lazily with the fresh values on next expand), re-seed the
-        Depth/Speed quick gain sliders, and restore the expanded stage."""
+        Depth/Speed/Punch quick gain sliders, and restore the expanded
+        stage."""
         _reset_chain_to_defaults(
             self._controller, self._device_name, self._motor_idx,
             self._chain_idx,
@@ -3264,12 +3423,15 @@ class MotorSignalChainWidget(QFrame):
         chain = _read_chain(
             self._controller, self._device_name, self._motor_idx, self._chain_idx
         )
-        for ck in (STAGE_DEPTH, STAGE_SPEED):
+        for ck in (STAGE_DEPTH, STAGE_SPEED, STAGE_PUNCH):
             slider = self._gain_sliders.get(ck)
             if slider is not None:
                 cfg = chain.get(ck, {}) if isinstance(chain, dict) else {}
+                if not isinstance(cfg, dict):
+                    cfg = {}
+                default_gain = 0.0 if ck == STAGE_PUNCH else 1.0
                 try:
-                    slider.set_gain(float(cfg.get("gain", 1.0)))
+                    slider.set_gain(float(cfg.get("gain", default_gain)))
                 except RuntimeError:
                     self._gain_sliders.pop(ck, None)
         if self._delay_control is not None:

@@ -41,14 +41,13 @@ def test_stage_constants_are_unique_and_ordered():
     from ui.motor_signal_chain import (
         _STAGE_ORDER, _STAGE_LABELS,
         STAGE_INPUT, STAGE_DEPTH, STAGE_SPEED, STAGE_PUNCH,
-        STAGE_COMBINE, STAGE_GATE, STAGE_ARMING, STAGE_SMOOTHING,
-        STAGE_TEXTURE, STAGE_ZEROCUT,
+        STAGE_COMBINE, STAGE_WAKE, STAGE_ENVELOPE, STAGE_ZEROCUT,
         STAGE_OUTPUT,
     )
+    # Gate + Arming merged into Wake; Smoothing + Texture into Envelope.
     expected = (
         STAGE_INPUT, STAGE_DEPTH, STAGE_SPEED, STAGE_PUNCH,
-        STAGE_COMBINE, STAGE_GATE, STAGE_ARMING, STAGE_SMOOTHING,
-        STAGE_TEXTURE, STAGE_ZEROCUT,
+        STAGE_COMBINE, STAGE_WAKE, STAGE_ENVELOPE, STAGE_ZEROCUT,
         STAGE_OUTPUT,
     )
     assert _STAGE_ORDER == expected
@@ -104,20 +103,91 @@ def test_storage_helpers_round_trip():
     assert chain == _default_chain()
 
 
-def test_update_chain_field_writes_gate_subfield():
-    """Nested-path writes don't blow away sibling fields — the
-    activity gate's three keys must coexist after individual
-    writes."""
+def test_update_chain_field_writes_nested_subfield():
+    """Nested-path writes don't blow away sibling fields — a stage's
+    keys must coexist after individual writes."""
     from ui.motor_signal_chain import _read_chain, _update_chain_field
 
     ctrl = StubController()
-    _update_chain_field(ctrl, "DevY", 0, 0, ("gate", "enabled"), True)
-    _update_chain_field(ctrl, "DevY", 0, 0, ("gate", "wake_threshold"), 0.2)
-    _update_chain_field(ctrl, "DevY", 0, 0, ("gate", "sleep_delay_s"), 1.5)
+    _update_chain_field(ctrl, "DevY", 0, 0, ("smoothing", "rise_ms"), 120.0)
+    _update_chain_field(ctrl, "DevY", 0, 0, ("smoothing", "fall_ms"), 60.0)
+    _update_chain_field(ctrl, "DevY", 0, 0, ("texture", "enabled"), True)
     chain = _read_chain(ctrl, "DevY", 0)
-    assert chain["gate"]["enabled"] is True
-    assert chain["gate"]["wake_threshold"] == 0.2
-    assert chain["gate"]["sleep_delay_s"] == 1.5
+    assert chain["smoothing"]["rise_ms"] == 120.0
+    assert chain["smoothing"]["fall_ms"] == 60.0
+    assert chain["texture"]["enabled"] is True
+
+
+def test_update_wake_fields_write_and_strip_legacy():
+    """Wake writes land under `wake`, don't clobber siblings, and strip
+    any legacy `gate` / `arming` blocks so a chain re-saved through the
+    merged Wake editor lands clean on disk."""
+    from ui.motor_signal_chain import (
+        _read_chain, _update_wake_field, _update_chain_field,
+    )
+    ctrl = StubController()
+    # Seed a legacy-shaped chain (pre-merge gate + arming blocks).
+    _update_chain_field(ctrl, "DevY", 0, 0, ("gate", "enabled"), True)
+    _update_chain_field(ctrl, "DevY", 0, 0, ("arming", "enabled"), True)
+    # A Wake write persists the merged shape AND drops the legacy blocks.
+    _update_wake_field(ctrl, "DevY", 0, 0, "enabled", True)
+    _update_wake_field(ctrl, "DevY", 0, 0, "mode", "strokes")
+    _update_wake_field(ctrl, "DevY", 0, 0, "thrusts", 5)
+    chain = _read_chain(ctrl, "DevY", 0)
+    assert chain["wake"]["enabled"] is True
+    assert chain["wake"]["mode"] == "strokes"
+    assert chain["wake"]["thrusts"] == 5
+    assert "gate" not in chain
+    assert "arming" not in chain
+
+
+def test_unrelated_edit_on_legacy_chain_preserves_the_gate():
+    """Regression: a chain still holding legacy `gate`/`arming` (no
+    `wake`) that reaches the editor must derive `wake` from them on ANY
+    field write — otherwise a bare-default `wake` would be backfilled,
+    shadowing (disabling) a still-armed Sleep gate on an unrelated edit."""
+    from ui.motor_signal_chain import _read_chain, _update_chain_field
+
+    ctrl = StubController()
+    # Inject a pre-merge chain directly (arming enabled, NO wake key).
+    ctrl.profiles["DevZ"] = {"mix": {"0": {"chains": [{
+        "depth": {"gain": 1.0, "curve": "linear", "curve_param": 1.0},
+        "arming": {"enabled": True, "thrusts": 5, "window_s": 8.0,
+                   "disarm_after_s": 60.0},
+    }], "merge": "max"}}}
+    # Edit an UNRELATED field (depth gain).
+    _update_chain_field(ctrl, "DevZ", 0, 0, ("depth", "gain"), 1.2)
+    chain = _read_chain(ctrl, "DevZ", 0)
+    assert chain["depth"]["gain"] == 1.2
+    # The gate survived, folded into wake — not reset to the disabled
+    # default, and the legacy key is gone.
+    assert "arming" not in chain and "gate" not in chain
+    assert chain["wake"]["enabled"] is True
+    assert chain["wake"]["mode"] == "strokes"
+    assert chain["wake"]["thrusts"] == 5
+    assert chain["wake"]["disarm_after_s"] == 60.0
+
+
+def test_read_wake_cfg_derives_from_legacy():
+    """_read_wake_cfg seeds the Wake card from a pre-merge chain:
+    arming.enabled → strokes mode, gate-only → activity, and a merged
+    `wake` block is returned with defaults backfilled."""
+    from ui.motor_signal_chain import _read_wake_cfg
+    strokes = _read_wake_cfg({"arming": {"enabled": True, "thrusts": 4},
+                              "gate": {"enabled": False}})
+    assert strokes["mode"] == "strokes"
+    assert strokes["enabled"] is True
+    assert strokes["thrusts"] == 4
+    activity = _read_wake_cfg({"gate": {"enabled": True,
+                                        "wake_threshold": 0.2}})
+    assert activity["mode"] == "activity"
+    assert activity["enabled"] is True
+    assert activity["wake_threshold"] == 0.2
+    merged = _read_wake_cfg({"wake": {"enabled": True, "mode": "activity"}})
+    assert merged["mode"] == "activity"
+    assert merged["enabled"] is True
+    # Backfilled default key present even though the input omitted it.
+    assert "sleep_delay_s" in merged
 
 
 # ============================================================ Cut 5: chain list
@@ -603,22 +673,23 @@ def test_widget_build_expand_intermediates_collapse():
     ui = _SmokeUI(_SmokeController())
     w = MotorSignalChainWidget(ui, "DevX", 0, "vibrate")
 
-    # Built collapsed: 9 horizontal slots, 11 stage cards (Depth+Speed+
-    # Punch share a slot; Arming sits between Gate and Smoothing, Texture
-    # between Smoothing and Zero cut), nothing expanded.
-    assert len(w._slots) == 9
-    assert len(w._stage_cards) == 11
+    # Built collapsed: 7 horizontal slots, 9 stage cards (Depth+Speed+
+    # Punch share a slot; Gate+Arming merged into Wake, Smoothing+Texture
+    # into Envelope), nothing expanded.
+    assert len(w._slots) == 7
+    assert len(w._stage_cards) == 9
     assert w._active_stage is None
     # Small mode by default → cards/arrows centred.
     assert w._strip_host._centered is True
-    # 9 slots interleaved with 8 flexible connector cells (no trailing
-    # stretch) — the cells are what the stretching arrows are drawn across.
-    assert w._strip_lay.count() == 17
+    # 7 slots interleaved with 6 flexible connector cells (connector before
+    # every slot except the first) — the cells the stretching arrows are
+    # drawn across.
+    assert w._strip_lay.count() == 13
     # Input forks into Depth+Speed+Punch and they join into Combine: the
     # parallel ds slot (index 1) is registered with its three inner cards.
     assert w._strip_host._branch_index == 1
     assert len(w._strip_host._branch_cards) == 3
-    # Smoothing has a quick delay slider (like Depth/Speed's gain slider).
+    # Envelope has a quick delay slider (like Depth/Speed's gain slider).
     assert w._delay_control is not None
 
     # Exercise the connector paint path (incl. the fork/join branch arrows)
