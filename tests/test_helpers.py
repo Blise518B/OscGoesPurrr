@@ -11,7 +11,7 @@ from motor_router import (
     _classify_zone_path,
     _clean_custom_addr,
 )
-from utilities import normalize_osc_value
+from utilities import create_default_icon, normalize_osc_value
 
 
 # ---------------------------------------------------------------- normalize_osc_value
@@ -77,6 +77,27 @@ class TestClassifyZonePath:
         # VRCFury Haptics zone form (see OGB's bridge parser).
         assert _classify_zone_path("VFH/Zone/Touch/Head/Others") == ("Touch", "Head")
         assert _classify_zone_path("VFH/Zone/Orf/Boob/TouchOthers") == ("Orf", "Boob")
+
+
+# ---------------------------------------------------------------- create_default_icon
+
+class TestCreateDefaultIconTint:
+    def test_tint_draws_corner_dot(self):
+        # The tray-glow dot fills the bottom-right quadrant; its center
+        # pixel must be exactly the requested tint.
+        img = create_default_icon(tint="#FF0000")
+        assert img.size == (64, 64)
+        assert img.getpixel((51, 51)) == (255, 0, 0)
+
+    def test_tinted_differs_from_plain(self):
+        base = create_default_icon()
+        tinted = create_default_icon(tint="#00FF00")
+        assert base.size == tinted.size == (64, 64)
+        assert base.tobytes() != tinted.tobytes()
+
+    def test_bad_tint_is_harmless(self):
+        img = create_default_icon(tint="not-a-color")
+        assert img.size == (64, 64)
 
     def test_vfh_unknown_category_returns_none(self):
         assert _classify_zone_path("VFH/Zone/Wibble/X/Y") is None

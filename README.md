@@ -68,6 +68,13 @@ toys, SteamVR trackers, bHaptics suits, OWO suits, e-stim units
   touch) contact time — plus a summary of your last 20 sessions.
   Sampled once a second, completely off the haptic hot path, and
   resettable any time.
+* **Quality of life.** A launch-time update check against GitHub
+  releases (opt-out; one HTTPS request, notice only — nothing
+  auto-installs), automatic settings snapshots at every launch (newest
+  five kept, restorable from Settings → Quality of Life), a tray icon
+  that glows with live output intensity while minimized to the tray,
+  and an opt-in animated background drift for the gradient color
+  profiles.
 
 ## 🚀 Installation
 

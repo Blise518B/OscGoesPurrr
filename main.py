@@ -50,6 +50,9 @@ from utilities import (
 )
 from version import __version__
 import debug_log
+import update_checker
+from settings import APPDATA_DIR
+from settings_snapshots import list_snapshots, make_snapshot, restore_snapshot
 
 # Per-engine facade mixins extend the controller's call surface without
 # bloating main.py — each mixin's docstring covers its assumed attributes.
@@ -101,7 +104,15 @@ class OscGoesPurrrApp(
         
         # Thread-safe communication queue (standard library, not asyncio)
         self.thread_queue: queue.Queue = queue.Queue()
-        
+
+        # One-shot settings snapshot — BEFORE ModeManager loads, so a
+        # schema migration can never eat the only copy of the
+        # pre-migration files. Runs exactly once per launch; there is
+        # deliberately no background backup process.
+        snap_dir = make_snapshot(APPDATA_DIR)
+        if snap_dir:
+            print(f"[snapshots] settings backed up to {snap_dir}")
+
         # Mode manager instance (modes + wiring + all settings managers)
         self.mode_manager = ModeManager()
 
@@ -615,6 +626,26 @@ class OscGoesPurrrApp(
             elif msg_type == "ogp_test":
                 # Menu Test button held/released (OGP/Test bool).
                 self.set_ogp_test_active(bool(data))
+            elif msg_type == "update_checked":
+                # GitHub release check finished (launch or manual; see
+                # _spawn_update_check). data = (info_or_none, manual).
+                info, manual = data
+                if info and info.get("available"):
+                    latest = str(info.get("latest", ""))
+                    url = str(info.get("url", ""))
+                    self.log_message(
+                        f"Update available: v{latest} — get it at {url}")
+                    notice = getattr(self.ui, "show_update_notice", None)
+                    if callable(notice):
+                        notice(latest, url)
+                elif manual:
+                    # Only the button-triggered check reports negative
+                    # results; the automatic launch check stays silent.
+                    if info is not None:
+                        self.log_message(f"You're up to date (v{__version__})")
+                    else:
+                        self.log_message(
+                            "Update check failed — couldn't reach GitHub.")
 
         # Dispatch the coalesced haptic targets last — one command per motor
         # carrying the freshest value.
@@ -662,6 +693,96 @@ class OscGoesPurrrApp(
             self.log_message(f"Opened logs folder: {folder}")
         except Exception as e:
             self.log_message(f"Open logs folder failed: {type(e).__name__}: {e}")
+
+    # ==================================================================
+    # Update checker — one background HTTPS request against the GitHub
+    # releases API. Result always comes back through the thread_queue
+    # as ("update_checked", (info_or_none, manual)); see
+    # process_async_queue for the handling.
+    # ==================================================================
+
+    def _spawn_update_check(self, manual: bool = False) -> None:
+        """Run update_checker.check_for_update on a daemon thread and put
+        the result on the queue. Never blocks the GUI thread and never
+        raises (the checker itself collapses every failure to None)."""
+        def _worker(manual=manual):
+            info = update_checker.check_for_update(__version__)
+            self.thread_queue.put(("update_checked", (info, manual)))
+        threading.Thread(target=_worker, daemon=True,
+                         name="UpdateCheck").start()
+
+    def check_for_updates_now(self) -> None:
+        """UI facade: Settings → 'Check for updates now'. Same path as
+        the launch check, but negative results are reported too."""
+        self.log_message("Checking GitHub for a newer release...")
+        self._spawn_update_check(manual=True)
+
+    # ==================================================================
+    # Settings snapshots — launch-time backups of every settings JSON
+    # (made once in __init__, before ModeManager loads). These facades
+    # give the Settings UI its list/restore surface.
+    # ==================================================================
+
+    def get_settings_snapshots(self) -> List[Dict[str, Any]]:
+        """UI facade: available settings snapshots, newest first."""
+        return list_snapshots(APPDATA_DIR)
+
+    def restore_settings_snapshot(self, name: str) -> bool:
+        """UI facade: copy snapshot `name`'s files back over the live
+        settings and restart the app. CRITICAL: sets _skip_shutdown_saves
+        so quit_app's shutdown persistence (profiles, window geometry)
+        can't re-save the dying process's in-memory state over the files
+        just restored. Statistics are unaffected — stats.json is
+        excluded from snapshots entirely."""
+        ok = restore_snapshot(APPDATA_DIR, name)
+        if not ok:
+            self.log_message(f"Settings restore failed: {name}")
+            return False
+        self._skip_shutdown_saves = True
+        self.log_message(f"Settings restored from snapshot {name} — restarting…")
+        self.request_restart()
+        return True
+
+    def _update_tray_glow(self) -> None:
+        """Tray-icon activity tint, riding the 1 Hz refresh_device_states
+        heartbeat. Buckets the loudest live motor output into
+        idle/low/mid/high and redraws the tray icon ONLY when the bucket
+        changes — zero work at steady state, and a no-op whenever no
+        tray icon is running (minimize-to-tray off or window visible)."""
+        tray = getattr(self, "tray_icon", None)
+        # Gate on pystray's _running, not `visible`: stop() clears only
+        # _running, so a restored-from-tray icon reads visible==True
+        # forever and this would keep redrawing a dead icon.
+        if tray is None or not getattr(tray, "_running", False):
+            return
+        try:
+            level = max(self.motor_router.last_outputs.values(), default=0.0)
+        except Exception:
+            level = 0.0
+        if level <= 0.0:
+            bucket = 0
+        elif level < 1.0 / 3.0:
+            bucket = 1
+        elif level < 2.0 / 3.0:
+            bucket = 2
+        else:
+            bucket = 3
+        if bucket == getattr(self, "_tray_glow_bucket", 0):
+            return
+        self._tray_glow_bucket = bucket
+        # Bucket color rides the value ramp (COLOR_VALUE_LO → HI blend,
+        # same math as the OSC inspector); bucket 0 = the plain icon.
+        tint = value_to_hex_color(bucket / 3.0) if bucket else None
+        try:
+            # Residual risk, accepted: pystray swaps native icon handles
+            # in the ASSIGNING thread, and its own tray thread can touch
+            # the same handle on rare WM_DISPLAYCHANGE/TASKBARCREATED
+            # events. pystray offers no marshaling API; a collision's
+            # worst case is one garbled icon paint until the next bucket
+            # change, which this except also contains.
+            tray.icon = create_default_icon(tint=tint)
+        except Exception:
+            pass
 
     def delete_stored_device(self, device_name: str):
         """Forget a toy entirely — removes its shared wiring, its feel entry
@@ -1082,6 +1203,9 @@ class OscGoesPurrrApp(
             pystray.MenuItem("Quit", self.quit_from_tray)
         )
         self.tray_icon = pystray.Icon("OscGoesPurrr", image, "OscGoesPurrr", menu)
+        # Fresh icon is untinted — reset the glow bucket so the 1 Hz
+        # heartbeat's change gate starts from a matching state.
+        self._tray_glow_bucket = 0
 
         # pystray blocks, so we must run it in a daemon thread
         threading.Thread(target=self.tray_icon.run, daemon=True).start()
@@ -1089,6 +1213,12 @@ class OscGoesPurrrApp(
     def restore_from_tray(self, icon, item):
         """Restores the UI from the system tray (thread-safe)."""
         icon.stop()
+        # Drop the reference: pystray's stop() clears _running but not
+        # `visible`, so a kept reference would read as a live icon to
+        # the tray-glow heartbeat forever. Plain attribute store —
+        # atomic under the GIL, safe from the tray thread.
+        self.tray_icon = None
+        self._tray_glow_bucket = 0
         self.ui.show_window()
 
     def quit_from_tray(self, icon, item):
@@ -1114,11 +1244,17 @@ class OscGoesPurrrApp(
         except Exception:
             pass
         self.log_message("Shutting down...")
-        current_geometry = self.ui.get_geometry()
-        if current_geometry:
-            self.mode_manager.app_settings.update_setting("window_geometry", current_geometry)
+        # Shutdown persistence — skipped entirely right after a snapshot
+        # restore (see restore_settings_snapshot): the dying process
+        # would otherwise re-save its in-memory state over the files
+        # just copied back from the snapshot.
+        skip_saves = getattr(self, "_skip_shutdown_saves", False)
+        if not skip_saves:
+            current_geometry = self.ui.get_geometry()
+            if current_geometry:
+                self.mode_manager.app_settings.update_setting("window_geometry", current_geometry)
 
-        self.save_profiles()
+            self.save_profiles()
 
         # Close any active session file with a footer + final flush.
         # Best-effort: if the worker thread is wedged this just times
@@ -1130,7 +1266,11 @@ class OscGoesPurrrApp(
 
         # Finalize the usage-statistics session (records it + flushes
         # stats.json) while the state is still coherent, before the
-        # engines are torn down below.
+        # engines are torn down below. Deliberately NOT gated on
+        # skip_saves: stats.json is excluded from settings snapshots
+        # (it's usage history, not settings — see settings_snapshots.
+        # _EXCLUDE), so a restore never touches it and this flush can't
+        # overwrite anything restored.
         try:
             self._stats_shutdown()
         except Exception:
@@ -1310,6 +1450,10 @@ class OscGoesPurrrApp(
                     # Same heartbeat drives the sidebar's per-backend
                     # status dots (change-gated, so this is ~free).
                     self.ui.update_backend_nav_dots()
+                # Tray-icon glow rides the same heartbeat; it self-guards
+                # when no tray icon is running and only redraws when the
+                # output bucket actually changes.
+                self._update_tray_glow()
             except Exception:
                 pass
             # Usage statistics ride the same 1 Hz heartbeat — one cheap
@@ -1363,6 +1507,12 @@ class OscGoesPurrrApp(
         # Boot OSC server 500ms after UI launches to prevent freezing
         if self.mode_manager.app_settings.settings.get("auto_connect_osc", True):
             self.ui.schedule_callback(OSC_BOOT_DELAY_MS, self.toggle_osc_connection)
+
+        # GitHub update check — one fire-and-forget HTTPS request a few
+        # seconds after boot (daemon thread; result rides thread_queue,
+        # so startup never waits on the network).
+        if self.get_app_setting("update_check_enabled", True):
+            self.ui.schedule_callback(3000, self._spawn_update_check)
 
         # Start the OSC debugger UI refresh loop
         self.refresh_debugger_ui()

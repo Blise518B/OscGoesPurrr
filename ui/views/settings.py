@@ -6,6 +6,7 @@ by OscGoesPurrrUI.__init__ (self.controller, self.invoker, etc.)."""
 from typing import List, Optional, Dict, Any, Callable
 import os
 import sys
+import time
 
 from PySide6.QtCore import (
     Qt, QTimer, Signal, QObject, QEvent, QSize, QPointF, QRectF
@@ -300,6 +301,68 @@ class SettingsMixin:
             "these if you need to report a crash or a toy that won't connect."
         ))
 
+        # --- Update checker ---
+        upd_row = QWidget()
+        upd_lay = _hbox(0, 6)
+        upd_row.setLayout(upd_lay)
+        upd_toggle = ToggleSwitch("Check for updates at launch")
+        upd_toggle.setChecked(
+            bool(self.controller.get_app_setting("update_check_enabled", True))
+        )
+        upd_toggle.toggled.connect(
+            lambda checked: self.controller.set_app_setting(
+                "update_check_enabled", bool(checked))
+        )
+        upd_lay.addWidget(upd_toggle)
+        upd_lay.addWidget(self._make_help_badge(
+            "Update check",
+            "Asks GitHub once at launch whether a newer OscGoesPurrr "
+            "release exists — a single HTTPS request; nothing is sent "
+            "about you or your setup. When a newer version is found, a "
+            "link appears here and in the System Log. Nothing downloads "
+            "or installs by itself."
+        ))
+        upd_lay.addStretch(1)
+        upd_btn = QPushButton("Check for updates now")
+        upd_btn.setProperty("role", "secondary")
+        upd_btn.clicked.connect(
+            lambda _=False: self.controller.check_for_updates_now())
+        upd_lay.addWidget(upd_btn)
+        ql_lay.addWidget(upd_row)
+
+        # Filled by show_update_notice() when a newer release exists.
+        self.update_notice_label = QLabel("")
+        self.update_notice_label.setOpenExternalLinks(True)
+        self.update_notice_label.setWordWrap(True)
+        self.update_notice_label.setVisible(False)
+        ql_lay.addWidget(self.update_notice_label)
+
+        # --- Settings backups (launch snapshots) ---
+        bk_row = QWidget()
+        bk_lay = _hbox(0, 8)
+        bk_row.setLayout(bk_lay)
+        bk_lay.addWidget(QLabel("Settings backups:"))
+        self.snapshot_combo = QComboBox()
+        self._populate_snapshot_combo()
+        bk_lay.addWidget(self.snapshot_combo, 1)
+        bk_restore_btn = QPushButton("Restore")
+        bk_restore_btn.setProperty("role", "secondary")
+        bk_restore_btn.clicked.connect(
+            lambda _=False: self._on_restore_snapshot_clicked())
+        bk_lay.addWidget(bk_restore_btn)
+        bk_lay.addWidget(self._make_help_badge(
+            "Settings backups",
+            "Every launch, all settings files are snapshotted into "
+            "<b>%APPDATA%\\OscGoesPurrr\\backups</b> (the newest five "
+            "are kept). <b>Restore</b> copies a snapshot back over the "
+            "current settings and restarts the app — the escape hatch "
+            "when a config change or an update went wrong. Restores are "
+            "all-or-nothing (a failure changes nothing), and your usage "
+            "statistics are never part of a snapshot — restoring old "
+            "settings can't rewind your lifetime stats."
+        ))
+        ql_lay.addWidget(bk_row)
+
         parent_layout.addWidget(ql_card)
 
         # ---- Appearance Card ----
@@ -453,6 +516,36 @@ class SettingsMixin:
         ap_lay.addLayout(cp_row)
         ap_lay.addWidget(custom_row_host)
         ap_lay.addWidget(self._appearance_note)
+
+        # Animated background — a slow drift of the gradient profiles'
+        # background sweep. The toggle is always visible, but the paint
+        # layer only engages while the ACTIVE profile ships a gradient
+        # background (flat profiles have nothing to animate). Applies
+        # live via _apply_animated_background — no restart needed.
+        anim_row = _hbox(0, 6)
+        anim_toggle = ToggleSwitch("Animated background (gradient profiles)")
+        anim_toggle.setChecked(
+            bool(self.controller.get_app_setting("animated_background", False))
+        )
+
+        def on_anim_bg(checked: bool) -> None:
+            self.controller.set_app_setting("animated_background",
+                                            bool(checked))
+            self._apply_animated_background()
+
+        anim_toggle.toggled.connect(on_anim_bg)
+        anim_row.addWidget(anim_toggle)
+        anim_row.addWidget(self._make_help_badge(
+            "Animated background",
+            "Slowly sweeps the background gradient around the window "
+            "(one full turn about every 30 seconds, ~12 fps). Only the "
+            "gradient profiles show it — <b>Purrple (gradient)</b>, "
+            "<b>Aurora</b>, or a <b>Custom</b> theme with its gradient "
+            "toggle on; flat profiles are unaffected. Pauses while the "
+            "window is minimized, and applies immediately when toggled."
+        ))
+        anim_row.addStretch(1)
+        ap_lay.addLayout(anim_row)
         parent_layout.addWidget(ap_card)
 
         # ---- Features Card ----
@@ -580,6 +673,77 @@ class SettingsMixin:
         f = lbl.font(); f.setBold(True)
         lbl.setFont(f)
         return lbl
+
+    # ----------------------------------------------------------
+    # Update notice (controller facade)
+    # ----------------------------------------------------------
+
+    def show_update_notice(self, latest: str, url: str) -> None:
+        """Controller facade: surface an available release as a
+        clickable link in the Quality of Life card. Called from the
+        queue pump on the GUI thread."""
+        lbl = getattr(self, "update_notice_label", None)
+        if lbl is None:
+            return
+        safe_latest = _html_escape(str(latest))
+        safe_url = _html_escape(str(url))
+        lbl.setText(
+            f"Update available: <b>v{safe_latest}</b> — "
+            f'<a href="{safe_url}">open releases page</a>'
+        )
+        lbl.setVisible(True)
+
+    # ----------------------------------------------------------
+    # Settings backups (launch snapshots)
+    # ----------------------------------------------------------
+
+    def _populate_snapshot_combo(self) -> None:
+        """Fill the Settings-backups combo from the controller facade,
+        newest first. Labels are human-formatted timestamps; the raw
+        snapshot name rides in the item data."""
+        combo = getattr(self, "snapshot_combo", None)
+        if combo is None:
+            return
+        combo.clear()
+        try:
+            snaps = self.controller.get_settings_snapshots() or []
+        except Exception:
+            snaps = []
+        for snap in snaps:
+            try:
+                label = time.strftime(
+                    "%Y-%m-%d %H:%M:%S",
+                    time.localtime(float(snap.get("ts", 0))))
+            except (TypeError, ValueError, OverflowError, OSError):
+                label = str(snap.get("name", "?"))
+            combo.addItem(label, snap.get("name"))
+        if combo.count() == 0:
+            combo.addItem("No backups yet", None)
+            combo.setEnabled(False)
+        else:
+            combo.setEnabled(True)
+
+    def _on_restore_snapshot_clicked(self) -> None:
+        combo = getattr(self, "snapshot_combo", None)
+        if combo is None:
+            return
+        name = combo.currentData()
+        if not name:
+            return
+        label = combo.currentText()
+        resp = QMessageBox.question(
+            self.window, "Restore settings",
+            f"Restore settings from {label}?\n\nCurrent settings will be "
+            "replaced and the app restarts.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if resp != QMessageBox.Yes:
+            return
+        if not self.controller.restore_settings_snapshot(str(name)):
+            QMessageBox.warning(
+                self.window, "Restore failed",
+                "That backup could not be restored — see the System Log "
+                "for details.")
 
     def _build_help_view(self, parent_layout: QVBoxLayout):
         title = QLabel("Help & How It Works")

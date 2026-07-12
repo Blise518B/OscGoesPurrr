@@ -67,6 +67,13 @@ DEFAULT_APP_SETTINGS = {
     # (the original behavior). See intiface_connection.py and the Settings →
     # Intiface Engine toggle.
     "use_integrated_intiface": True,
+    # Ask GitHub once at launch whether a newer release exists (a single
+    # HTTPS request, notice only — nothing downloads or installs itself).
+    "update_check_enabled": True,
+    # Slowly drift the background gradient (~12 fps paint layer, paused
+    # while minimized). Only engages on gradient color profiles (Purrple
+    # gradient, Aurora, Custom with gradient); flat profiles ignore it.
+    "animated_background": False,
 }
 
 

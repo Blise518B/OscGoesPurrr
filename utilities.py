@@ -187,13 +187,20 @@ def toggle_windows_console(show: bool):
         if hwnd:
             ctypes.windll.user32.ShowWindow(hwnd, 5 if show else 0)
 
-def create_default_icon():
+def create_default_icon(tint: str = None):
     """Returns a 64x64 PIL Image for the system tray icon.
 
     Loads OGP_Icon.ico from the bundled resource path (works both during
     development and when frozen by PyInstaller). Falls back to a
     programmatic placeholder if the file cannot be read.
+
+    `tint` (optional "#RRGGBB" hex) overlays a small filled activity dot
+    in the bottom-right quadrant with a slightly darker outline — the
+    controller's tray-glow heartbeat uses it to show live output
+    intensity while minimized. Pure PIL; a bad tint value just skips
+    the overlay.
     """
+    image = None
     try:
         import sys
         from PIL import Image
@@ -204,12 +211,28 @@ def create_default_icon():
             icon_path = os.path.join(os.path.dirname(__file__), "Images", "OGP_Icon.ico")
 
         if os.path.exists(icon_path):
-            return Image.open(icon_path).resize((64, 64)).convert("RGB")
+            # Context manager: PIL keeps the file handle open lazily and
+            # a GC'd unclosed FileIO raises a ResourceWarning.
+            with Image.open(icon_path) as src:
+                image = src.resize((64, 64)).convert("RGB")
     except Exception:
-        pass
+        image = None
 
-    from PIL import Image, ImageDraw
-    image = Image.new("RGB", (64, 64), color=(30, 30, 30))
-    dc = ImageDraw.Draw(image)
-    dc.ellipse((16, 16, 48, 48), fill=(147, 112, 219))
+    if image is None:
+        from PIL import Image, ImageDraw
+        image = Image.new("RGB", (64, 64), color=(30, 30, 30))
+        dc = ImageDraw.Draw(image)
+        dc.ellipse((16, 16, 48, 48), fill=(147, 112, 219))
+
+    if tint:
+        try:
+            from PIL import ImageDraw
+            r, g, b = _hex_rgb(str(tint))
+            outline = (int(r * 0.6), int(g * 0.6), int(b * 0.6))
+            dc = ImageDraw.Draw(image)
+            # ~22 px dot in the bottom-right quadrant of the 64px canvas.
+            dc.ellipse((40, 40, 62, 62), fill=(r, g, b),
+                       outline=outline, width=1)
+        except Exception:
+            pass
     return image

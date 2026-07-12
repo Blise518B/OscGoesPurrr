@@ -583,6 +583,15 @@ change-debounce re-dispatches on the next tick.
   pythonnet, so the rest of the app never imports `clr`.
 * `utilities.py` — small helpers (`value_to_hex_color`,
   `toggle_windows_console`, `create_default_icon`).
+* `update_checker.py` — sealed one-shot GitHub release check
+  (`check_for_update`); never raises, never blocks startup. The
+  controller spawns a daemon thread around it and routes the result
+  through `thread_queue` as an `update_checked` event.
+* `settings_snapshots.py` — sealed launch-time settings backups:
+  `make_snapshot` copies every top-level settings JSON into
+  `backups/<timestamp>/` once per launch (before ModeManager loads,
+  keeping the newest five), `list_snapshots` / `restore_snapshot` back
+  the Settings → Quality of Life restore UI. No background process.
 * `stats_tracker.py` — sealed usage-statistics accumulator: lifetime
   totals + per-session summaries (active time, thrusts, per-toy
   on-time, per-zone contact time) with atomic JSON persistence to

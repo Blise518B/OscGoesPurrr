@@ -6,14 +6,17 @@
 # layout helpers) — and nothing else.
 
 from typing import List, Optional, Dict, Any, Callable
+import math
 import os
+import re
 import sys
+import time
 
 from PySide6.QtCore import (
     Qt, QThread, QTimer, Signal, QObject, QEvent, QSize, QPointF, QRect, QRectF
 )
 from PySide6.QtGui import (
-    QFont, QColor, QTextCharFormat, QTextCursor, QIcon,
+    QFont, QColor, QTextCharFormat, QTextCursor, QIcon, QLinearGradient,
     QPixmap, QPainter, QPen, QBrush, QPainterPath, QPolygonF
 )
 from PySide6.QtWidgets import (
@@ -631,6 +634,113 @@ QTableWidget::item {{
 
 
 # ============================================================
+# Animated aurora background (opt-in paint layer)
+# ============================================================
+
+_GRADIENT_STOP_RE = re.compile(r"stop\s*:\s*([0-9.]+)\s+(#[0-9A-Fa-f]{6})")
+
+
+def _parse_gradient_stops(brush: str) -> list:
+    """Extract [(pos, QColor), ...] stops from a QSS qlineargradient
+    expression (the *_BRUSH strings in constants.py — stops are always
+    plain #RRGGBB there). Returns [] for anything unparseable."""
+    stops = []
+    try:
+        for pos, hex_color in _GRADIENT_STOP_RE.findall(str(brush)):
+            stops.append((max(0.0, min(1.0, float(pos))), QColor(hex_color)))
+    except Exception:
+        return []
+    return stops
+
+
+class _AuroraBackground(QObject):
+    """Slow animated drift of a gradient profile's background sweep.
+
+    Deliberately NOT a per-frame QSS restyle — re-setting the app
+    stylesheet recomputes styling for every widget. Instead an event
+    filter intercepts the root container's Paint event and fills it with
+    one freshly-angled QLinearGradient built from the SAME stops the
+    static QSS background uses, so detaching the layer lands back on an
+    identical-looking frame. (The QSS background brush on QWidget#root
+    would out-prioritize a QPalette window brush, which is why this is
+    a paint hook rather than window.setPalette — verified by offscreen
+    pixel sampling.)
+
+    A ~12 fps QTimer schedules the repaints; the sweep axis makes one
+    full rotation about every `period_s` seconds, phased off the wall
+    clock so there's no per-tick accumulation drift. Latency guard: the
+    tick does nothing but one `update()`; while the window is minimized
+    or hidden it skips ALL work (and no paint events arrive anyway).
+    """
+
+    def __init__(self, window, root, stops, period_s: float = 30.0,
+                 interval_ms: int = 80):
+        super().__init__(root)
+        self._window = window
+        self._root = root
+        self._stops = list(stops)
+        self._period_s = max(5.0, float(period_s))
+        self._timer = QTimer(self)
+        self._timer.setInterval(int(interval_ms))
+        self._timer.timeout.connect(self._tick)
+        self._root.installEventFilter(self)
+        self._timer.start()
+
+    def stop(self) -> None:
+        """Detach the layer; the next paint falls back to the static
+        QSS gradient (same stops, fixed diagonal)."""
+        self._timer.stop()
+        try:
+            self._root.removeEventFilter(self)
+            self._root.update()
+        except RuntimeError:
+            pass  # root already destroyed at shutdown
+
+    def _tick(self) -> None:
+        try:
+            # Zero work while nobody can see the window — and while it
+            # isn't the ACTIVE window either: update() repaints the whole
+            # child hierarchy (QSS children aren't opaque) on the same
+            # GUI thread that runs the routing tick, and this app's user
+            # is usually in VR with the window unfocused for hours. The
+            # gradient freezes while unfocused and resumes seamlessly
+            # (phase derives from the monotonic clock, not frame count).
+            if (self._window.isMinimized() or not self._window.isVisible()
+                    or not self._window.isActiveWindow()):
+                return
+            self._root.update()
+        except RuntimeError:
+            self._timer.stop()
+
+    def eventFilter(self, obj, event):
+        if obj is self._root and event.type() == QEvent.Paint:
+            try:
+                painter = QPainter(self._root)
+                painter.fillRect(self._root.rect(), self._gradient())
+                painter.end()
+                return True  # replaces the widget's own QSS background paint
+            except Exception:
+                return False
+        return False
+
+    def _gradient(self) -> QLinearGradient:
+        rect = self._root.rect()
+        w, h = max(1, rect.width()), max(1, rect.height())
+        # Phase from the wall clock: one full rotation per period.
+        phase = (time.monotonic() % self._period_s) / self._period_s
+        # Start from the QSS gradient's own top-left → bottom-right
+        # diagonal and rotate the sweep axis around the center.
+        angle = math.atan2(h, w) + phase * 2.0 * math.pi
+        cx, cy = w / 2.0, h / 2.0
+        radius = math.hypot(w, h) / 2.0
+        dx, dy = math.cos(angle) * radius, math.sin(angle) * radius
+        grad = QLinearGradient(cx - dx, cy - dy, cx + dx, cy + dy)
+        for pos, color in self._stops:
+            grad.setColorAt(pos, color)
+        return grad
+
+
+# ============================================================
 # OscGoesPurrrUI — the PySide6 view layer
 # ============================================================
 
@@ -775,6 +885,12 @@ class OscGoesPurrrUI(
         # Build the UI tree.
         self.setup_ui()
 
+        # Opt-in animated background for the gradient color profiles
+        # (Settings → Appearance). Attached after the widget tree exists;
+        # the Settings toggle re-calls _apply_animated_background live.
+        self._bg_anim: Optional[_AuroraBackground] = None
+        self._apply_animated_background()
+
     # ----------------------------------------------------------
     # Top-level layout
     # ----------------------------------------------------------
@@ -782,6 +898,9 @@ class OscGoesPurrrUI(
     def setup_ui(self):
         root = QWidget()
         root.setObjectName("root")
+        # Kept for the animated-background layer, which paints this
+        # widget's background in place of its static QSS gradient.
+        self._root_widget = root
         root_layout = _hbox(0, 0)
         root.setLayout(root_layout)
 
@@ -889,6 +1008,30 @@ class OscGoesPurrrUI(
         _install_rainbow_scrollbars(scroll)
         scroll.setWidget(page)
         return scroll
+
+    # ----------------------------------------------------------
+    # Animated background (Settings → Appearance)
+    # ----------------------------------------------------------
+
+    def _apply_animated_background(self) -> None:
+        """Start or stop the aurora paint layer to match the persisted
+        `animated_background` setting. The toggle is always offered, but
+        the layer only engages when the ACTIVE color profile paints a
+        gradient background — flat profiles have nothing to animate.
+        Safe to call repeatedly (the Settings toggle does)."""
+        want = bool(self.controller.get_app_setting("animated_background",
+                                                    False))
+        is_gradient = (isinstance(COLOR_BG_BRUSH, str)
+                       and COLOR_BG_BRUSH.startswith("qlineargradient"))
+        root = getattr(self, "_root_widget", None)
+        active = getattr(self, "_bg_anim", None)
+        if want and is_gradient and active is None and root is not None:
+            stops = _parse_gradient_stops(COLOR_BG_BRUSH)
+            if len(stops) >= 2:
+                self._bg_anim = _AuroraBackground(self.window, root, stops)
+        elif active is not None and not (want and is_gradient):
+            active.stop()
+            self._bg_anim = None
 
     # ----------------------------------------------------------
     # Sidebar
