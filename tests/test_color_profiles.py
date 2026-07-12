@@ -148,3 +148,60 @@ class TestProfiles:
         # Reads the real user settings file (or nothing); whatever it
         # finds, it must return a known profile name.
         assert constants._load_color_profile() in constants.COLOR_PROFILES
+
+
+class TestCustomPalette:
+    """derive_custom_palette: the whole theme from two user accents."""
+
+    def test_defines_the_full_palette_with_valid_hex(self):
+        p = constants.derive_custom_palette("#07FF77", "#4DB8FF")
+        missing = REQUIRED_KEYS - set(p)
+        assert not missing, sorted(missing)
+        for key in REQUIRED_KEYS:
+            assert HEX_RE.match(p[key]), f"{key} = {p[key]!r}"
+        for key in OPTIONAL_HEX_KEYS:
+            assert HEX_RE.match(p[key])
+        assert p.get("label")
+
+    def test_accents_land_where_the_design_language_says(self):
+        p = constants.derive_custom_palette("#07FF77", "#4DB8FF")
+        # A = hero: primary, outlines, success, chain-live, window border.
+        for key in ("PRIMARY", "SUCCESS", "INPUT_BORDER", "CHAIN_LIVE",
+                    "VALUE_HI", "WINDOW_BORDER"):
+            assert p[key] == "#07FF77", key
+        # B = second accent: live pill + the value ramp's low end.
+        assert p["LIVE"] == "#4DB8FF"
+        assert p["VALUE_LO"] == "#4DB8FF"
+        # Base stays neutral (no accent tint in surfaces) and errors stay red.
+        assert p["BG"] == "#0C0D0E"
+        assert p["ALERT"] == "#F44336"
+
+    def test_text_on_primary_flips_with_accent_luminance(self):
+        bright = constants.derive_custom_palette("#07FF77", "#4DB8FF")
+        dark = constants.derive_custom_palette("#5A2CA0", "#4DB8FF")
+        assert bright["TEXT_ON_PRIMARY"] == "#0A0A0A"   # neon green → black
+        assert dark["TEXT_ON_PRIMARY"] == "#FFFFFF"     # deep purple → white
+
+    def test_gradient_flag_controls_the_brush_keys(self):
+        flat = constants.derive_custom_palette("#07FF77", "#4DB8FF",
+                                               gradient=False)
+        grad = constants.derive_custom_palette("#07FF77", "#4DB8FF",
+                                               gradient=True)
+        for key in ("BG_BRUSH", "SURFACE_BRUSH", "PRIMARY_BRUSH"):
+            assert key not in flat
+            assert grad[key].startswith("qlineargradient(")
+        assert "#07FF77" in grad["PRIMARY_BRUSH"]
+        assert "#4DB8FF" in grad["PRIMARY_BRUSH"]
+
+    def test_garbage_accents_fall_back_to_the_hero_pair(self):
+        p = constants.derive_custom_palette("chartreuse", None)
+        assert p["PRIMARY"] == "#07FF77"
+        assert p["LIVE"] == "#4DB8FF"
+
+    def test_sneaky_malformed_hex_falls_back_too(self):
+        # int(x, 16) tolerates whitespace / signs / fullwidth digits —
+        # these must not leak verbatim into QSS color slots.
+        for sneaky in ("#FF F F", "#+1+1+1", "# 1 2 3", "#００００００"):
+            p = constants.derive_custom_palette(sneaky, sneaky)
+            assert p["PRIMARY"] == "#07FF77", repr(sneaky)
+            assert p["LIVE"] == "#4DB8FF", repr(sneaky)

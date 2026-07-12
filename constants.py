@@ -195,15 +195,123 @@ COLOR_PROFILES = {
 DEFAULT_COLOR_PROFILE = "purrple"
 
 
+# ---------------------------------------------------------------------------
+# Custom theme derivation — the whole palette from two user-picked colors.
+# Pure hex math (stdlib only; this module must stay import-safe). Color A is
+# the hero/highlight (primary, outlines, success, chain-live, window border),
+# color B the second accent (live pill, value-ramp low end, gradient partner).
+# The base stays neutral near-black/gray — per the design language, tint
+# belongs in highlights and gradients, never in surfaces. Alert red and
+# warning amber are fixed: error semantics don't re-theme.
+# ---------------------------------------------------------------------------
+
+def _crgb(hex_color):
+    h = str(hex_color).lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def _chex(r, g, b):
+    return "#%02X%02X%02X" % (
+        max(0, min(255, int(round(r)))),
+        max(0, min(255, int(round(g)))),
+        max(0, min(255, int(round(b)))),
+    )
+
+
+def _cmix(hex_a, hex_b, t):
+    """Blend a→b by t (0..1)."""
+    a, b = _crgb(hex_a), _crgb(hex_b)
+    return _chex(*(a[i] + (b[i] - a[i]) * t for i in range(3)))
+
+
+def _cluma(hex_color):
+    """Cheap relative luminance (0..1) for text-contrast picks."""
+    r, g, b = _crgb(hex_color)
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255.0
+
+
+def _valid_hex(value, fallback):
+    # Strict char check — int(x, 16) tolerates whitespace/signs/fullwidth
+    # digits inside the slices, which would let a malformed accent leak
+    # verbatim into QSS color slots and gradient strings.
+    v = str(value or "")
+    if (len(v) == 7 and v[0] == "#"
+            and all(ch in "0123456789abcdefABCDEF" for ch in v[1:])):
+        return v.upper()
+    return fallback
+
+
+def derive_custom_palette(color_a, color_b, gradient=False):
+    """Build a full profile palette dict from two accents. Same key set the
+    shipped profiles carry (validated by tests/test_color_profiles.py);
+    `gradient=True` adds the BG/SURFACE/PRIMARY brush sweeps like Aurora."""
+    a = _valid_hex(color_a, "#07FF77")
+    b = _valid_hex(color_b, "#4DB8FF")
+    on_a = "#0A0A0A" if _cluma(a) > 0.45 else "#FFFFFF"
+    bg = "#0C0D0E"
+    palette = {
+        "label": "Custom (yours)",
+        "PRIMARY": a,
+        "PRIMARY_HOVER": _cmix(a, "#FFFFFF", 0.18),
+        "ALERT": "#F44336", "ALERT_HOVER": "#EF5350",
+        "ALERT_DIM": "#5A1F1F",
+        "WARNING": "#FFC107", "WARNING_DIM": "#5A4A1F",
+        "SUCCESS": a, "SUCCESS_DIM": _cmix(a, bg, 0.72),
+        "LIVE": b, "LIVE_DIM": _cmix(b, bg, 0.72),
+        "BG": bg,
+        "SURFACE": "#17181A", "SURFACE_HOVER": "#202224",
+        "BUTTON": "#232527", "BUTTON_HOVER": "#2E3134",
+        "INPUT_BG": "#101214",
+        "INPUT_BORDER": a,
+        "INPUT_FOCUS": _cmix(a, "#FFFFFF", 0.45),
+        "TEXT": "#FFFFFF",
+        "TEXT_ON_PRIMARY": on_a,
+        "TEXT_MUTED": "#9A9EA3",
+        "CHAIN_IDLE": _cmix(a, bg, 0.75),
+        "CHAIN_LIVE": a,
+        "VALUE_LO": b, "VALUE_HI": a,
+        "WINDOW_BORDER": a,
+        "WINDOW_CAPTION": bg,
+        "WINDOW_CAPTION_TEXT": "#FFFFFF",
+    }
+    if gradient:
+        corner_a = _cmix(bg, a, 0.14)
+        mid = _cmix(bg, _cmix(a, b, 0.5), 0.08)
+        corner_b = _cmix(bg, b, 0.14)
+        palette["BG_BRUSH"] = (
+            f"qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {corner_a}, "
+            f"stop:0.35 {mid}, stop:0.65 {bg}, stop:1 {corner_b})"
+        )
+        palette["SURFACE_BRUSH"] = (
+            f"qlineargradient(x1:0, y1:0, x2:1, y2:1, "
+            f"stop:0 {_cmix('#17181A', a, 0.06)}, stop:1 #141517)"
+        )
+        palette["PRIMARY_BRUSH"] = (
+            f"qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 {a}, stop:1 {b})"
+        )
+    return palette
+
+
 def _load_color_profile() -> str:
     """Read the persisted profile choice without importing the settings
-    package (which imports this module). Any failure — missing file,
-    bad JSON, unknown name — falls back to the default palette."""
+    package (which imports this module). A "custom" choice derives its
+    palette from the two saved accents and registers it before resolving.
+    Any failure — missing file, bad JSON, unknown name — falls back to the
+    default palette."""
     try:
         p = (_Path.home() / "AppData" / "Roaming" / "OscGoesPurrr"
              / "app_settings.json")
         with open(p, "r", encoding="utf-8") as f:
-            choice = _json.load(f).get("color_profile")
+            settings = _json.load(f)
+        choice = settings.get("color_profile")
+        if choice == "custom":
+            colors = settings.get("custom_colors")
+            colors = colors if isinstance(colors, dict) else {}
+            COLOR_PROFILES["custom"] = derive_custom_palette(
+                colors.get("a"), colors.get("b"),
+                gradient=bool(colors.get("gradient", True)),
+            )
+            return "custom"
         if choice in COLOR_PROFILES:
             return choice
     except Exception:
