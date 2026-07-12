@@ -938,20 +938,6 @@ class TestArming:
         assert w["thrusts"] == 3 and w["window_s"] == 6.0
         assert w["disarm_after_s"] == 45.0
 
-    def test_legacy_arming_chain_still_upgrades(self, router, clock):
-        # A chain saved before the Gate+Arming merge (bare `arming` key,
-        # no `wake`) must keep working via the on-the-fly upgrade.
-        cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
-        cfg["mix"]["0"]["chains"][0]["arming"] = {
-            "enabled": True, "thrusts": 2, "window_s": 6.0,
-            "disarm_after_s": 45.0}
-        router._calculate_motor_target("dev", 0, cfg, {"P": 0.0}, zones=set())
-        assert self._stroke(router, clock, cfg) == 0.0   # not armed yet
-        self._stroke(router, clock, cfg)                 # 2nd stroke arms
-        clock.advance(0.1)
-        out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.8}, zones=set())
-        assert out == pytest.approx(0.8)
-
     def test_idle_contact_stays_silent(self, router, clock):
         # Resting against the receiver at half depth: no strokes, no output.
         cfg = self._cfg()
@@ -1346,17 +1332,18 @@ class TestActivityGateIntegration:
     output, gates the combined signal before smoothing)."""
 
     def _gate_cfg(self, **gate_overrides):
-        """Pass-through chain + gate enabled. Smoothing disabled so
-        the gated output appears immediately on the tick the gate
-        flips, simplifying assertions."""
+        """Pass-through chain + the Wake stage in activity mode. Smoothing
+        disabled so the gated output appears immediately on the tick the
+        gate flips, simplifying assertions."""
         cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})
         chain = cfg["mix"]["0"]["chains"][0]
-        chain["gate"] = {
+        chain["wake"] = {
             "enabled": True,
+            "mode": "activity",
             "wake_threshold": 0.1,
             "sleep_delay_s": 0.5,
         }
-        chain["gate"].update(gate_overrides)
+        chain["wake"].update(gate_overrides)
         chain["smoothing"] = {"rise_ms": 0.0, "fall_ms": 0.0}
         return cfg
 
@@ -1648,16 +1635,16 @@ class TestMultiChainRouting:
             "depth": {"gain": 1.0, "curve": "linear", "curve_param": 1.0},
             "speed": {"gain": 0.0, "curve": "linear", "curve_param": 1.0},
             "combine": "max",
-            "gate": {"enabled": True, "wake_threshold": 0.05,
-                     "sleep_delay_s": 0.5},
+            "wake": {"enabled": True, "mode": "activity",
+                     "wake_threshold": 0.05, "sleep_delay_s": 0.5},
             "smoothing": {"rise_ms": 0.0, "fall_ms": 0.0},
         }
         gate_off = {
             "depth": {"gain": 1.0, "curve": "linear", "curve_param": 1.0},
             "speed": {"gain": 0.0, "curve": "linear", "curve_param": 1.0},
             "combine": "max",
-            "gate": {"enabled": False, "wake_threshold": 0.05,
-                     "sleep_delay_s": 0.5},
+            "wake": {"enabled": False, "mode": "activity",
+                     "wake_threshold": 0.05, "sleep_delay_s": 0.5},
             "smoothing": {"rise_ms": 0.0, "fall_ms": 0.0},
         }
         cfg = _basic_motor_cfg(osc_addresses={"0": ["P"]})

@@ -184,15 +184,14 @@ class ModeManager:
     _degraded_load = False
 
     def _load_or_create_default(self) -> None:
-        """Load modes + wiring from profiles.json, migrating older schemas.
+        """Load modes + wiring from profiles.json (schema v3 only).
 
         A file that EXISTS but can't be used is never silently clobbered:
         transient read errors run this session on defaults without touching
-        the file; a corrupt/mis-shaped one is renamed aside before defaults
-        are persisted; and a v1/v2 profile file is backed up to
-        profiles.json.v2.bak before the one-shot migration rewrites it —
-        modes are the user's tuning work, losing them to a disk hiccup is
-        not acceptable.
+        the file; a corrupt or non-v3 one is renamed aside before defaults
+        are persisted — modes are the user's tuning work, losing them to a
+        disk hiccup is not acceptable. There is deliberately no migration
+        from the pre-modes profile format: v3 is the only schema.
         """
         raw: Any = None
         self._degraded_load = False  # reset on every (re)load attempt
@@ -215,80 +214,26 @@ class ModeManager:
                 self._install_active_mix()
                 return
 
-        if not isinstance(raw, dict):
+        if isinstance(raw, dict) and raw.get("schema") == self.SCHEMA_VERSION:
+            self._load_v3(raw)
+        else:
+            # Unreadable, or an unsupported (non-v3) schema. Preserve it
+            # aside, then start fresh.
             if exists:
                 backup = str(PROFILE_FILE) + ".bak"
                 try:
                     os.replace(PROFILE_FILE, backup)
-                    print(f"[modes] unreadable profiles.json backed up to {backup}")
+                    print(f"[modes] unusable profiles.json backed up to {backup}")
                 except OSError as e:
                     print(f"[modes] could not back up profiles.json: {e}")
-            # Brand-new install (or corrupt file, now backed up).
             self.wiring = {}
             self.modes = self._fresh_modes()
             self.active_mode = self.DEFAULT_ACTIVE_MODE
             self.save_profiles()
-        elif raw.get("schema") == self.SCHEMA_VERSION:
-            self._load_v3(raw)
-        else:
-            # v1 (bare {profile: {device: cfg}}) or v2 (global/avatar
-            # profiles envelope): keep a full backup, then migrate.
-            try:
-                shutil.copyfile(PROFILE_FILE, str(PROFILE_FILE) + ".v2.bak")
-                print(f"[modes] pre-migration backup written to "
-                      f"{PROFILE_FILE}.v2.bak")
-            except OSError as e:
-                print(f"[modes] could not write pre-migration backup: {e}")
-            self._migrate_legacy(raw)
-            self.save_profiles()
 
         self._normalize_wiring_addresses()
-        self._migrate_chains_to_wake()
         self._backfill_known_devices()
         self._install_active_mix()
-
-    def _migrate_chains_to_wake(self) -> None:
-        """Fold every stored chain's legacy `gate` / `arming` stages into
-        the merged `wake` block (the two were unified into one stage).
-        Runs once at load and persists, so the router's on-the-fly
-        upgrade never has to fire in normal operation — critically, so a
-        chain reaching the editor already carries a real `wake` block. A
-        legacy chain left un-migrated would have a bare-default `wake`
-        backfilled by the first UI edit, silently shadowing (disabling) a
-        still-armed Sleep gate. Idempotent: chains already on `wake` with
-        no legacy keys are skipped."""
-        from motor_router import MotorRouter  # local: avoid import cycle
-        changed = False
-        for mode in self.modes:
-            mix = mode.get("mix")
-            if not isinstance(mix, dict):
-                continue
-            for per_device in mix.values():
-                if not isinstance(per_device, dict):
-                    continue
-                for per_motor in per_device.values():
-                    if not isinstance(per_motor, dict):
-                        continue
-                    chains = per_motor.get("chains")
-                    if not isinstance(chains, list):
-                        continue
-                    for chain in chains:
-                        if not isinstance(chain, dict):
-                            continue
-                        has_legacy = "gate" in chain or "arming" in chain
-                        if not has_legacy:
-                            continue
-                        # Derive from the legacy keys BEFORE dropping them.
-                        # If a `wake` block is already present (a newer
-                        # save) it wins and we only strip the stale legacy
-                        # keys.
-                        if not isinstance(chain.get("wake"), dict):
-                            chain["wake"] = MotorRouter._wake_cfg(chain)
-                        chain.pop("gate", None)
-                        chain.pop("arming", None)
-                        changed = True
-        if changed:
-            self.save_profiles()
 
     def _load_v3(self, raw: Dict[str, Any]) -> None:
         # A present-but-mis-shaped section (hand edit gone wrong) is
@@ -343,99 +288,6 @@ class ModeManager:
             if isinstance(k, str) and isinstance(v, int)
             and 0 <= v < self.MODE_COUNT
         } if isinstance(last, dict) else {}
-
-    def _migrate_legacy(self, raw: Dict[str, Any]) -> None:
-        """One-shot v1/v2 → v3. The old 'Default' (or first) global profile
-        becomes the shared wiring; its exact mix lands unchanged in the
-        Custom slot so nothing the user tuned is lost; Low/Medium/High/Sleep
-        seed from the presets. Other global profiles and all avatar profiles
-        live on only in the .v2.bak backup."""
-        if raw.get("schema") == 2 or "global_profiles" in raw:
-            globals_ = raw.get("global_profiles")
-            if not isinstance(globals_, dict):
-                globals_ = {}
-        else:
-            globals_ = raw  # v1: top-level {profile_name: {device: cfg}}
-        source, source_label = self._pick_migration_source(raw, globals_)
-
-        dropped = [n for n in globals_ if globals_.get(n) is not source]
-
-        self.wiring = {}
-        custom_mix: Dict[str, Any] = {}
-        for dev, cfg in source.items():
-            if not isinstance(cfg, dict):
-                continue
-            entry = {k: copy.deepcopy(v) for k, v in cfg.items()
-                     if k not in ("mix", "osc_address")}
-            # Legacy singular address → the list-per-motor form.
-            if not entry.get("osc_addresses") and cfg.get("osc_address"):
-                legacy = strip_param_prefix(cfg["osc_address"])
-                if legacy:
-                    entry["osc_addresses"] = {"0": [legacy]}
-            self.wiring[dev] = entry
-            mix = cfg.get("mix")
-            if isinstance(mix, dict):
-                custom_mix[dev] = copy.deepcopy(mix)
-
-        self.modes = self._fresh_modes()
-        self.modes[self.CUSTOM_SLOT]["mix"] = custom_mix
-        for slot in range(self.MODE_COUNT):
-            if slot == self.CUSTOM_SLOT:
-                continue
-            mode_mix = self.modes[slot]["mix"]
-            for dev, entry in self.wiring.items():
-                per_motor: Dict[str, Any] = {}
-                for i in range(int(entry.get("motor_count", 1) or 1)):
-                    per_motor[str(i)] = preset_motor_mix(slot)
-                mode_mix[dev] = per_motor
-        # Land on Custom: the app must feel exactly as it did before the
-        # migration until the user picks a different mode.
-        self.active_mode = self.CUSTOM_SLOT
-        if dropped:
-            print(f"[modes] migrated {source_label} to the six-mode config; "
-                  f"old profiles {dropped} were not carried over "
-                  "(see profiles.json.v2.bak)")
-        else:
-            print(f"[modes] migrated {source_label} to the six-mode "
-                  "schema v3")
-
-    @staticmethod
-    def _pick_migration_source(raw: Dict[str, Any],
-                               globals_: Dict[str, Any]):
-        """Choose which old profile becomes the wiring + Custom-slot feel.
-
-        The v2 schema never persisted `current_profile` — the persisted
-        record of what the user actually played on is `avatar_last_choice`
-        ({avatar_id: {kind, name}}), which the old resolver applied on
-        every avatar load. So: the most-chosen last-choice profile (global
-        or avatar-bound) wins; only users who never picked anything fall
-        back to 'Default' / the first profile. Returns (profile_dict,
-        human_label)."""
-        avatar_profiles = raw.get("avatar_profiles")
-        if not isinstance(avatar_profiles, dict):
-            avatar_profiles = {}
-        counts: Dict[tuple, int] = {}
-        for choice in (raw.get("avatar_last_choice") or {}).values():
-            if not isinstance(choice, dict):
-                continue
-            kind = choice.get("kind")
-            name = choice.get("name")
-            pool = globals_ if kind == "global" else (
-                avatar_profiles if kind == "avatar" else None)
-            if pool is not None and isinstance(pool.get(name), dict):
-                counts[(kind, name)] = counts.get((kind, name), 0) + 1
-        if counts:
-            kind, name = max(counts.items(), key=lambda kv: kv[1])[0]
-            pool = globals_ if kind == "global" else avatar_profiles
-            return pool[name], f"{kind} profile '{name}'"
-        default = globals_.get("Default")
-        if isinstance(default, dict):
-            return default, "profile 'Default'"
-        first = next(((n, p) for n, p in globals_.items()
-                      if isinstance(p, dict)), None)
-        if first is not None:
-            return first[1], f"profile '{first[0]}'"
-        return {}, "an empty config"
 
     def _normalize_wiring_addresses(self) -> None:
         """Normalizes saved OSC addresses: strips /avatar/parameters/ prefixes

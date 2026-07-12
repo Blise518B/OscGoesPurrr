@@ -65,49 +65,6 @@ def isolated(monkeypatch, tmp_path):
     return tmp_path
 
 
-def _v2_payload():
-    """A realistic schema-2 profiles.json with user tuning worth keeping."""
-    custom_mix = {
-        "0": {
-            "chains": [{
-                "depth": {"gain": 1.7, "curve": "linear", "curve_param": 1.0},
-                "speed": {"gain": 0.2, "curve": "linear", "curve_param": 1.0,
-                          "decay_ms": 123.0},
-                "combine": "max",
-                "gate": {"enabled": True, "wake_threshold": 0.11,
-                         "sleep_delay_s": 0.5, "attack_s": 0.05,
-                         "release_s": 0.5},
-                "smoothing": {"rise_ms": 77.0, "fall_ms": 33.0},
-                "zerocut": {"enabled": True, "threshold": 0.02},
-            }],
-            "merge": "max",
-        },
-    }
-    return {
-        "schema": 2,
-        "global_profiles": {
-            "Default": {
-                "ToyA": {
-                    "motor_count": 2,
-                    "motor_kinds": ["Vibrate", "Vibrate"],
-                    "osc_addresses": {"0": ["ToyA_0"], "1": ["ToyA_1"]},
-                    "motor_0_zones": "All SPS, Boob",
-                    "motor_0_touch": True,
-                    "mix": custom_mix,
-                },
-                "OldStroker": {
-                    "motor_count": 1,
-                    "osc_address": "/avatar/parameters/Legacy_Param",
-                },
-            },
-            "Spare": {"ToyB": {"motor_count": 1}},
-        },
-        "avatar_profiles": {"AvProf": {"ToyA": {"motor_count": 2}}},
-        "avatar_bindings": {"AvProf": "avtr_x"},
-        "avatar_last_choice": {},
-    }
-
-
 class TestFreshInstall:
     def test_creates_six_modes_and_persists(self, isolated):
         mm = ModeManager()
@@ -126,117 +83,29 @@ class TestFreshInstall:
         assert mm.get_master_scale() == 0.0
 
 
-class TestMigration:
-    def _write_v2(self, tmp):
-        (tmp / "profiles.json").write_text(json.dumps(_v2_payload()),
-                                           encoding="utf-8")
+class TestUnsupportedFile:
+    """v3 is the only schema — a pre-modes (v1/v2) or unknown-schema file
+    is backed up aside and replaced with fresh defaults, never migrated."""
 
-    def test_custom_slot_keeps_user_tuning(self, isolated):
-        self._write_v2(isolated)
+    def test_non_v3_file_backed_up_and_reset(self, isolated):
+        old = {"schema": 2, "global_profiles": {"Default": {"ToyA": {}}}}
+        (isolated / "profiles.json").write_text(json.dumps(old), "utf-8")
         mm = ModeManager()
-        chain = mm.modes[ModeManager.CUSTOM_SLOT]["mix"]["ToyA"]["0"][
-            "chains"][0]
-        # Every tuned value survives the migration…
-        assert chain["depth"]["gain"] == 1.7
-        assert chain["speed"]["decay_ms"] == 123.0
-        assert chain["smoothing"] == {"rise_ms": 77.0, "fall_ms": 33.0}
-        assert chain["zerocut"] == {"enabled": True, "threshold": 0.02}
-        # …and the legacy `gate` block is folded into the merged `wake`
-        # stage (Gate+Arming were unified), preserving its threshold.
-        assert "gate" not in chain and "arming" not in chain
-        assert chain["wake"]["enabled"] is True
-        assert chain["wake"]["mode"] == "activity"
-        assert chain["wake"]["wake_threshold"] == 0.11
-        # And the app lands ON Custom so the post-migration feel matches
-        # the pre-migration behavior.
-        assert mm.active_mode == ModeManager.CUSTOM_SLOT
+        # Started fresh (no ToyA carried over) and preserved the old file.
+        assert mm.wiring == {}
+        assert (isolated / "profiles.json.bak").exists()
+        assert json.loads(
+            (isolated / "profiles.json.bak").read_text("utf-8")) == old
+        # The live file is now a clean v3.
+        assert json.loads(
+            (isolated / "profiles.json").read_text("utf-8"))["schema"] == 3
 
-    def test_wiring_extracted_without_mix(self, isolated):
-        self._write_v2(isolated)
+    def test_schemaless_dict_is_reset(self, isolated):
+        (isolated / "profiles.json").write_text(
+            json.dumps({"Default": {"ToyA": {}}}), "utf-8")  # bare v1 shape
         mm = ModeManager()
-        toy = mm.wiring["ToyA"]
-        assert toy["motor_count"] == 2
-        assert toy["motor_0_zones"] == "All SPS, Boob"
-        on_disk = json.loads((isolated / "profiles.json").read_text("utf-8"))
-        assert "mix" not in on_disk["wiring"]["ToyA"]
-
-    def test_legacy_osc_address_upgraded(self, isolated):
-        self._write_v2(isolated)
-        mm = ModeManager()
-        assert mm.wiring["OldStroker"]["osc_addresses"] == {
-            "0": ["Legacy_Param"]}
-
-    def test_presets_seeded_per_slot(self, isolated):
-        self._write_v2(isolated)
-        mm = ModeManager()
-        low = mm.modes[1]["mix"]["ToyA"]["0"]["chains"][0]
-        high = mm.modes[3]["mix"]["ToyA"]["1"]["chains"][0]
-        sleep = mm.modes[4]["mix"]["ToyA"]["0"]["chains"][0]
-        assert low["depth"]["gain"] == 0.55
-        assert high["speed"]["gain"] == 1.6
-        assert sleep["wake"]["enabled"] is True
-        assert sleep["wake"]["mode"] == "strokes"
-        assert sleep["wake"]["thrusts"] == 3
-
-    def test_backup_written_and_old_profiles_dropped(self, isolated):
-        self._write_v2(isolated)
-        ModeManager()
-        bak = isolated / "profiles.json.v2.bak"
-        assert bak.exists()
-        original = json.loads(bak.read_text("utf-8"))
-        assert "Spare" in original["global_profiles"]
-        migrated = json.loads((isolated / "profiles.json").read_text("utf-8"))
-        assert "ToyB" not in migrated["wiring"]
-
-    def test_source_follows_avatar_last_choice_not_default(self, isolated):
-        # v2 never persisted current_profile; avatar_last_choice is the
-        # only record of what the user actually played on. A user whose
-        # active profile was 'MyTuned' must not get stock Default tuning.
-        payload = _v2_payload()
-        payload["global_profiles"]["MyTuned"] = {
-            "ToyA": {"motor_count": 1,
-                     "mix": {"0": {"chains": [], "merge": "multiply"}}},
-        }
-        payload["avatar_last_choice"] = {
-            "avtr_x": {"kind": "global", "name": "MyTuned"},
-            "avtr_y": {"kind": "global", "name": "MyTuned"},
-        }
-        (isolated / "profiles.json").write_text(json.dumps(payload), "utf-8")
-        mm = ModeManager()
-        assert mm.modes[ModeManager.CUSTOM_SLOT]["mix"]["ToyA"] == {
-            "0": {"chains": [], "merge": "multiply"}}
-
-    def test_source_can_be_a_bound_avatar_profile(self, isolated):
-        payload = _v2_payload()
-        payload["avatar_profiles"] = {
-            "AvTuned": {"ToyZ": {"motor_count": 1,
-                                 "mix": {"0": {"chains": [],
-                                               "merge": "add"}}}},
-        }
-        payload["avatar_last_choice"] = {
-            "avtr_x": {"kind": "avatar", "name": "AvTuned"}}
-        (isolated / "profiles.json").write_text(json.dumps(payload), "utf-8")
-        mm = ModeManager()
-        assert "ToyZ" in mm.wiring
-        assert mm.modes[ModeManager.CUSTOM_SLOT]["mix"]["ToyZ"]["0"][
-            "merge"] == "add"
-
-    def test_stale_last_choice_falls_back_to_default(self, isolated):
-        payload = _v2_payload()
-        payload["avatar_last_choice"] = {
-            "avtr_x": {"kind": "global", "name": "Deleted"}}
-        (isolated / "profiles.json").write_text(json.dumps(payload), "utf-8")
-        mm = ModeManager()
-        assert "ToyA" in mm.wiring  # Default carried
-
-    def test_v1_bare_shape_migrates(self, isolated):
-        v1 = {"Default": {"ToyA": {"motor_count": 1,
-                                   "mix": {"0": {"chains": [], "merge": "max"}}}}}
-        (isolated / "profiles.json").write_text(json.dumps(v1), "utf-8")
-        mm = ModeManager()
-        assert "ToyA" in mm.wiring
-        assert mm.modes[ModeManager.CUSTOM_SLOT]["mix"]["ToyA"] == {
-            "0": {"chains": [], "merge": "max"}}
+        assert mm.wiring == {}
+        assert (isolated / "profiles.json.bak").exists()
 
 
 class TestIdentityStability:
@@ -318,48 +187,13 @@ class TestPersistence:
         assert mm.active_mode == ModeManager.DEFAULT_ACTIVE_MODE
 
 
-class TestWakeMigration:
-    """A chain saved before the Gate+Arming→Wake merge (separate `gate`/
-    `arming` keys, no `wake`) must be folded to `wake` at load and
-    persisted — otherwise the first UI edit backfills a bare-default
-    `wake` that shadows a still-armed Sleep gate, silently disabling it."""
-
-    def _legacy_v3(self, isolated, arming):
-        # A schema-v3 file whose Custom-slot chain still carries a legacy
-        # arming block (as if written just before the merge shipped).
-        modes = [dict(m, mix={}) for m in ModeManager.DEFAULT_MODES]
-        modes[ModeManager.CUSTOM_SLOT]["mix"] = {
-            "ToyA": {"0": {"chains": [{
-                "depth": {"gain": 1.0}, "arming": arming,
-            }], "merge": "max"}}}
-        (isolated / "profiles.json").write_text(json.dumps({
-            "schema": 3, "wiring": {"ToyA": {"motor_count": 1}},
-            "modes": modes, "active_mode": ModeManager.CUSTOM_SLOT,
-        }), "utf-8")
-
-    def test_legacy_arming_folds_into_wake_and_persists(self, isolated):
-        self._legacy_v3(isolated, {
-            "enabled": True, "thrusts": 5, "window_s": 8.0,
-            "disarm_after_s": 60.0})
-        mm = ModeManager()
-        chain = mm.modes[ModeManager.CUSTOM_SLOT]["mix"]["ToyA"]["0"]["chains"][0]
-        assert "arming" not in chain and "gate" not in chain
-        assert chain["wake"]["enabled"] is True
-        assert chain["wake"]["mode"] == "strokes"
-        assert chain["wake"]["thrusts"] == 5
-        assert chain["wake"]["disarm_after_s"] == 60.0
-        # Persisted, so a re-load (and any UI edit) sees the merged shape.
-        on_disk = json.loads((isolated / "profiles.json").read_text("utf-8"))
-        disk_chain = on_disk["modes"][ModeManager.CUSTOM_SLOT][
-            "mix"]["ToyA"]["0"]["chains"][0]
-        assert "arming" not in disk_chain
-        assert disk_chain["wake"]["thrusts"] == 5
-
-    def test_migration_is_idempotent_no_extra_save(self, isolated):
-        # A clean v3 file (already on `wake`) must not be rewritten.
+class TestCleanReload:
+    def test_clean_v3_reload_does_not_rewrite_the_file(self, isolated):
+        # A healthy v3 file must not be touched on a second load (no
+        # migration, no normalization change).
         ModeManager()   # fresh install writes a clean file
         before = (isolated / "profiles.json").read_text("utf-8")
-        ModeManager()   # second load: nothing legacy → no save
+        ModeManager()
         assert (isolated / "profiles.json").read_text("utf-8") == before
 
 

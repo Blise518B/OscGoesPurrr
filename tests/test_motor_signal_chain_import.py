@@ -141,53 +141,20 @@ def test_update_wake_fields_write_and_strip_legacy():
     assert "arming" not in chain
 
 
-def test_unrelated_edit_on_legacy_chain_preserves_the_gate():
-    """Regression: a chain still holding legacy `gate`/`arming` (no
-    `wake`) that reaches the editor must derive `wake` from them on ANY
-    field write — otherwise a bare-default `wake` would be backfilled,
-    shadowing (disabling) a still-armed Sleep gate on an unrelated edit."""
-    from ui.motor_signal_chain import _read_chain, _update_chain_field
-
-    ctrl = StubController()
-    # Inject a pre-merge chain directly (arming enabled, NO wake key).
-    ctrl.profiles["DevZ"] = {"mix": {"0": {"chains": [{
-        "depth": {"gain": 1.0, "curve": "linear", "curve_param": 1.0},
-        "arming": {"enabled": True, "thrusts": 5, "window_s": 8.0,
-                   "disarm_after_s": 60.0},
-    }], "merge": "max"}}}
-    # Edit an UNRELATED field (depth gain).
-    _update_chain_field(ctrl, "DevZ", 0, 0, ("depth", "gain"), 1.2)
-    chain = _read_chain(ctrl, "DevZ", 0)
-    assert chain["depth"]["gain"] == 1.2
-    # The gate survived, folded into wake — not reset to the disabled
-    # default, and the legacy key is gone.
-    assert "arming" not in chain and "gate" not in chain
-    assert chain["wake"]["enabled"] is True
-    assert chain["wake"]["mode"] == "strokes"
-    assert chain["wake"]["thrusts"] == 5
-    assert chain["wake"]["disarm_after_s"] == 60.0
-
-
-def test_read_wake_cfg_derives_from_legacy():
-    """_read_wake_cfg seeds the Wake card from a pre-merge chain:
-    arming.enabled → strokes mode, gate-only → activity, and a merged
-    `wake` block is returned with defaults backfilled."""
+def test_read_wake_cfg_backfills_defaults():
+    """_read_wake_cfg seeds the Wake card from the chain's `wake` block,
+    backfilling the canonical defaults for any missing key."""
     from ui.motor_signal_chain import _read_wake_cfg
-    strokes = _read_wake_cfg({"arming": {"enabled": True, "thrusts": 4},
-                              "gate": {"enabled": False}})
-    assert strokes["mode"] == "strokes"
-    assert strokes["enabled"] is True
-    assert strokes["thrusts"] == 4
-    activity = _read_wake_cfg({"gate": {"enabled": True,
-                                        "wake_threshold": 0.2}})
-    assert activity["mode"] == "activity"
-    assert activity["enabled"] is True
-    assert activity["wake_threshold"] == 0.2
-    merged = _read_wake_cfg({"wake": {"enabled": True, "mode": "activity"}})
-    assert merged["mode"] == "activity"
+    merged = _read_wake_cfg({"wake": {"enabled": True, "mode": "strokes",
+                                      "thrusts": 4}})
     assert merged["enabled"] is True
-    # Backfilled default key present even though the input omitted it.
-    assert "sleep_delay_s" in merged
+    assert merged["mode"] == "strokes"
+    assert merged["thrusts"] == 4
+    # Backfilled default keys present even though the input omitted them.
+    assert "sleep_delay_s" in merged and "window_s" in merged
+    # A chain with no wake block reads as the canonical default.
+    empty = _read_wake_cfg({})
+    assert empty["enabled"] is False and empty["mode"] == "activity"
 
 
 # ============================================================ Cut 5: chain list

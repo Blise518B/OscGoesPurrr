@@ -476,8 +476,9 @@ router poll rates are constructor defaults (~16 ms).
 ## Mode model (`config_manager.py`)
 
 The on-disk config file is `profiles.json` (v3 schema — the name stays
-for continuity; v1/v2 profile files are migrated one-shot with a
-`profiles.json.v2.bak` backup). The individual settings managers and
+for continuity). v3 is the only schema: a corrupt or older-format file
+is renamed aside to `profiles.json.bak` and replaced with fresh
+defaults, never migrated. The individual settings managers and
 their file-path constants live in the `settings/` package (one module
 per concern: `app.py`, `bhaptics.py`, `steamvr.py`, `pishock.py`,
 `coyote.py`, `owo.py`, `handy.py`, `known_devices.py`, `sps_sources.py`,

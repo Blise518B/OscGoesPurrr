@@ -214,11 +214,9 @@ Editor contents:
   * **Disarm after (s)** — spinbox, 5–600, default 45.
 
 Stored at `mix.<motor>.wake.{enabled, mode, wake_threshold,
-sleep_delay_s, attack_s, release_s, thrusts, window_s,
-disarm_after_s}`. The UI writes the merged block and strips any legacy
-`mix.<motor>.gate` / `mix.<motor>.arming` blocks on save; the router
-upgrades an un-migrated file at runtime (arming.enabled → Strokes mode,
-else Activity).
+sleep_delay_s, attack_s, release_s, thrusts, window_s, disarm_after_s}`.
+`wake` is the only shape the router reads; a chain with no `wake` block
+is treated as disabled (pass-through).
 
 **Activity mode — internal model:**
 

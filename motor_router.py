@@ -865,34 +865,13 @@ class MotorRouter:
 
     @staticmethod
     def _wake_cfg(chain: Dict[str, Any]) -> Dict[str, Any]:
-        """The chain's effective Wake config. Prefers the merged `wake`
-        block; upgrades a legacy chain (separate `gate` / `arming`) on the
-        fly so files saved before the merge keep working — if arming was
-        enabled it maps to strokes mode (the stronger sleep gate wins),
-        otherwise the activity gate."""
-        if not isinstance(chain, dict):
-            return {}
-        w = chain.get("wake")
-        if isinstance(w, dict):
-            return w
-        gate = chain.get("gate")
-        gate = gate if isinstance(gate, dict) else {}
-        arming = chain.get("arming")
-        arming = arming if isinstance(arming, dict) else {}
-        if not gate and not arming:
-            return {}
-        strokes = bool(arming.get("enabled", False))
-        return {
-            "enabled": strokes or bool(gate.get("enabled", False)),
-            "mode": "strokes" if strokes else "activity",
-            "wake_threshold": gate.get("wake_threshold", 0.05),
-            "sleep_delay_s": gate.get("sleep_delay_s", 0.5),
-            "attack_s": gate.get("attack_s", 0.05),
-            "release_s": gate.get("release_s", 0.5),
-            "thrusts": arming.get("thrusts", 3),
-            "window_s": arming.get("window_s", 6.0),
-            "disarm_after_s": arming.get("disarm_after_s", 45.0),
-        }
+        """The chain's Wake config block, or an empty dict (which the
+        caller reads as disabled)."""
+        if isinstance(chain, dict):
+            w = chain.get("wake")
+            if isinstance(w, dict):
+                return w
+        return {}
 
     def _wake_activity(self, chain_state: Dict[str, Any], s_raw: float,
                        mixed: float, dt: float, now: float,

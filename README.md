@@ -226,8 +226,8 @@ SteamVR's device strip with their own icons and battery indicators.
 
 All user state is stored under `%APPDATA%\OscGoesPurrr\`:
 
-* `profiles.json` — the six modes + shared device wiring (schema v3;
-  older profile files are migrated with a `.v2.bak` backup).
+* `profiles.json` — the six modes + shared device wiring (schema v3; a
+  corrupt or older-format file is backed up to `.bak` and reset).
 * `app_settings.json` — UI toggles, window geometry, speed-blend
   tuning, feature flags.
 * `steamvr_settings.json` — per-tracker config + patterns.

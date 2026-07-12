@@ -214,19 +214,6 @@ def _ensure_chain_at(per_motor: Dict[str, Any], chain_idx: int) -> Dict[str, Any
     if not isinstance(chains[safe_idx], dict):
         chains[safe_idx] = _default_chain()
     chain = chains[safe_idx]
-    # A chain saved before the Gate+Arming→Wake merge carries `gate` /
-    # `arming` but no `wake`. Derive the merged block from them (and drop
-    # the legacy keys) BEFORE the generic backfill below would inject a
-    # bare-default `wake` — that default, which the router now prefers
-    # over the legacy blocks, would silently disable a still-armed Sleep
-    # gate on any unrelated field edit. (The config-load migration does
-    # this for stored chains; this guards any legacy chain that reaches
-    # the editor another way.)
-    if not isinstance(chain.get("wake"), dict) and (
-            "gate" in chain or "arming" in chain):
-        chain["wake"] = _read_wake_cfg(chain)
-        chain.pop("gate", None)
-        chain.pop("arming", None)
     # Backfill chain top-level keys (defensive against partial writes).
     for tk, tv in template["chains"][0].items():
         if tk not in chain:
@@ -268,40 +255,13 @@ def _update_chain_fields(controller, device_name: str, motor_idx: int,
 
 
 def _read_wake_cfg(chain: Dict[str, Any]) -> Dict[str, Any]:
-    """Effective Wake config for seeding the merged Wake card's widgets.
-    Prefers the merged `wake` block; falls back to deriving it from a
-    legacy chain's separate `gate` / `arming` blocks (arming.enabled →
-    strokes mode, else activity) so a file saved before the merge still
-    displays with the right state. Mirrors MotorRouter._wake_cfg — the
-    router upgrades at runtime, the UI only needs the initial widget
-    values. Returns a dict backed by the canonical wake defaults for any
-    missing key, so callers can read without further fallbacks."""
+    """The chain's Wake config for seeding the Wake card's widgets, with
+    the canonical wake defaults backfilled for any missing key so callers
+    can read without further fallbacks."""
     from motor_router import MotorRouter
     out = copy.deepcopy(MotorRouter.DEFAULT_MIX_CONFIG["chains"][0]["wake"])
-    if not isinstance(chain, dict):
-        return out
-    w = chain.get("wake")
-    if isinstance(w, dict):
-        out.update(w)
-        return out
-    gate = chain.get("gate")
-    gate = gate if isinstance(gate, dict) else {}
-    arming = chain.get("arming")
-    arming = arming if isinstance(arming, dict) else {}
-    if not gate and not arming:
-        return out
-    strokes = bool(arming.get("enabled", False))
-    out.update({
-        "enabled": strokes or bool(gate.get("enabled", False)),
-        "mode": "strokes" if strokes else "activity",
-        "wake_threshold": gate.get("wake_threshold", out["wake_threshold"]),
-        "sleep_delay_s": gate.get("sleep_delay_s", out["sleep_delay_s"]),
-        "attack_s": gate.get("attack_s", out["attack_s"]),
-        "release_s": gate.get("release_s", out["release_s"]),
-        "thrusts": arming.get("thrusts", out["thrusts"]),
-        "window_s": arming.get("window_s", out["window_s"]),
-        "disarm_after_s": arming.get("disarm_after_s", out["disarm_after_s"]),
-    })
+    if isinstance(chain, dict) and isinstance(chain.get("wake"), dict):
+        out.update(chain["wake"])
     return out
 
 
@@ -314,11 +274,10 @@ def _update_wake_field(controller, device_name: str, motor_idx: int,
 
 def _update_wake_fields(controller, device_name: str, motor_idx: int,
                         chain_idx: int, updates) -> None:
-    """Write several `wake.<subkey>` fields in ONE read-modify-write pass
-    AND strip the legacy `gate` / `arming` top-level keys, so a chain
-    re-saved through the merged Wake editor lands clean on disk (the
-    router upgrades old files at runtime; the UI persists the merged
-    shape). One write/recalc cycle for the whole gesture."""
+    """Write several `wake.<subkey>` fields in ONE read-modify-write pass.
+    Also drops the obsolete pre-merge `gate` / `arming` keys if a very old
+    config still carries them, so an edited chain lands clean. One
+    write/recalc cycle for the whole gesture."""
     per_motor = copy.deepcopy(
         _read_per_motor(controller, device_name, motor_idx)
     )
@@ -329,7 +288,6 @@ def _update_wake_fields(controller, device_name: str, motor_idx: int,
         chain["wake"] = wake
     for subkey, value in updates:
         wake[subkey] = value
-    # Merged-schema cleanup — the two pre-merge blocks no longer exist.
     chain.pop("gate", None)
     chain.pop("arming", None)
     _write_per_motor(controller, device_name, motor_idx, per_motor)
@@ -1821,8 +1779,7 @@ class MotorSignalChainWidget(QFrame):
         if stage_id == STAGE_COMBINE:
             return str(chain.get("combine", "max"))
         if stage_id == STAGE_WAKE:
-            # Reflects the active mode; derives from legacy gate/arming for
-            # files saved before the merge (via _read_wake_cfg).
+            # Summary reflects the active wake mode.
             wc = _read_wake_cfg(chain)
             if not wc.get("enabled", False):
                 return "off"
@@ -2838,10 +2795,8 @@ class MotorSignalChainWidget(QFrame):
             the window, disarms after quiet (the old Arming stage). An
             accidental brush can't wake it; this is what makes 🌙 Sleep
             safe.
-        Every write goes through _update_wake_field, which also strips the
-        legacy gate/arming blocks so a re-saved chain lands clean on disk.
-        Initial values are seeded via _read_wake_cfg, which derives them
-        from legacy gate/arming for files saved before the merge."""
+        Every write goes through _update_wake_field; initial values are
+        seeded via _read_wake_cfg (canonical defaults backfilled)."""
         host = QFrame()
         host.setObjectName("stageEditor")
         lay = _vbox(10, 8)
