@@ -27,6 +27,13 @@ class ParameterStore:
         # (multi-OSC-client conflict, VRChat dropped us from its routing table,
         # mDNS advertisement lost, etc.). Surfaced in OSC diagnostics logging.
         self.packets_received: int = 0
+        # While True, live UDP/OSCQuery writes are dropped and only the
+        # replay driver may write (via apply_replay_frame). This is the
+        # single choke point that makes session replay "block real OSC
+        # input" — the OSC threads keep running untouched; their writes
+        # just no-op here, so a partner or a stray packet can't fight the
+        # replayed motion. Toggled by the replay facade on the GUI thread.
+        self._input_locked: bool = False
         self.lock = threading.Lock()
 
     # The OSCQuery tree is rooted at avatar/parameters/* for VRChat avatars,
@@ -106,12 +113,62 @@ class ParameterStore:
                 key = key[len(self._AVATAR_PARAM_PREFIX):]
             self.all_parameters[self._canon_param_key(key)] = val
 
+    def set_input_locked(self, locked: bool) -> None:
+        """Gate live writes. While locked, update_parameter and
+        rebuild_from_json no-op (live OSC is ignored); apply_replay_frame
+        still writes. Used by session replay."""
+        with self.lock:
+            self._input_locked = bool(locked)
+
+    def apply_replay_frame(self, params: Dict[str, Any]) -> None:
+        """Replace the OGB parameter set with a reconstructed replay frame,
+        bypassing the input lock. `params` is the full OGB-key snapshot at
+        one point in a recorded session (already reconstructed from the
+        log's snapshot + deltas), so any OGB key absent from it has
+        genuinely returned to rest and is dropped — otherwise a contact
+        that ended mid-session would latch forever.
+
+        packets_received is bumped so the routers' and stats' stale-signal
+        monitors treat replay as a live stream. Non-OGB keys (avatar
+        state, etc.) are left untouched — replay only drives contacts."""
+        with self.lock:
+            # Drop stale OGB keys not in this frame; keep everything else.
+            for key in [k for k in self.all_parameters
+                        if k.startswith("OGB/") and k not in params]:
+                del self.all_parameters[key]
+            new_zone = False
+            for address, value in params.items():
+                address = self._canon_param_key(address)
+                if address not in self.all_parameters:
+                    zone = classify_ogb_zone(address)
+                    if zone is not None and zone not in self._zone_tuples:
+                        self._zone_tuples.add(zone)
+                        new_zone = True
+                self.all_parameters[address] = value
+            if new_zone:
+                self._refresh_zone_lists()
+            self._version += 1
+            self.packets_received += 1
+
+    def clear_ogb_params(self) -> None:
+        """Drop every OGB-classified param (and its zones). Called when
+        replay stops so contacts don't latch at their last replayed
+        value."""
+        with self.lock:
+            for key in [k for k in self.all_parameters if k.startswith("OGB/")]:
+                del self.all_parameters[key]
+            self._zone_tuples.clear()
+            self._refresh_zone_lists()
+            self._version += 1
+
     def rebuild_from_json(self, data: dict) -> int:
         """
         Clears and rebuilds the entire parameter cache from a fresh VRChat OSCQuery JSON.
         Returns the total number of parameters loaded.
         """
         with self.lock:
+            if self._input_locked:
+                return len(self.all_parameters)
             self.all_parameters.clear()
             self._zone_tuples.clear()
             self._parse_oscquery_node(data)
@@ -134,6 +191,8 @@ class ParameterStore:
         """
         address = self._canon_param_key(address)
         with self.lock:
+            if self._input_locked:
+                return  # session replay owns the store; drop live writes
             is_new_key = address not in self.all_parameters
             self.all_parameters[address] = value
             self._version += 1

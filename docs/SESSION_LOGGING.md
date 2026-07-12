@@ -300,14 +300,41 @@ existing snapshot.
 | 2 | `SessionLogger` engine + `SessionSettingsManager` + tests. Dead code, no router/UI integration. |
 | 3 | Router hooks + `SessionsFacade` + main-loop wiring + OGB snapshot poll. |
 | 4 | Sessions tab UI in Settings view. |
+| 5 | Session **replay**: OGB-stream playback through the live router + Replay card in the Sessions tab. |
 
-In-app viewer is **not** in scope. JSONL files are easy to load in
-pandas / Excel for now.
+An in-app data *viewer* (tables / plots of the logged values) is still
+**not** in scope. JSONL files are easy to load in pandas / Excel for now.
+
+## Replay
+
+Session **replay** is implemented (Cut 5). It reconstructs the full OGB
+parameter state at every logged time-point (`session_replay.load_frames`
+folds the snapshot + change-diff deltas back into complete frames) and
+feeds those recorded contacts back through the **live router** at the
+recorded cadence (optionally time-scaled ×0.5–×4). While replaying:
+
+* Live VRChat OSC input is **paused** at the `parameter_store` choke
+  point (`set_input_locked`), so a stray packet or a present partner
+  can't fight the replayed motion.
+* The routing pipeline turns the replayed contacts into output exactly
+  as if they were live — output follows the **current mode, master
+  scale, and per-motor chain settings**, which is the whole point: you
+  re-tune modes / chains against real captured motion with no partner
+  present. The Off mode still means silence.
+* On stop (or when the recording ends) live input is unlocked and the
+  replayed contacts are zeroed so nothing latches.
+
+Driven by `controllers/replay_facade.py` (`ReplayFacade`), with the
+Replay card living in the Sessions tab (`ui/views/sessions.py`). This is
+playback of the OGB *stream*, distinct from the still-out-of-scope in-app
+data viewer above.
 
 ## Open questions deferred
 
 * **gzip rotation on stop** — defer until file size becomes painful.
-* **In-app viewer** — defer; user explicitly opted out of v1.
+* **In-app data viewer** — defer; replay of the OGB stream (Cut 5)
+  covers feel-tuning, but tables / plots of the raw logged values remain
+  out of scope.
 * **Logging the engine boundary (post-quantization Buttplug commands)**
   — interesting for hardware-specific debugging, but not for profile
   tuning. Defer.

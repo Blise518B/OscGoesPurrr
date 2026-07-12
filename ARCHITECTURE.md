@@ -599,6 +599,14 @@ change-debounce re-dispatches on the next tick.
   `controllers/stats_facade.py` (`StatsFacade`), which samples toy
   outputs, zone contact, and the motor router's O(1) thrust counter at
   1 Hz off the UI heartbeat — never on a routing hot path.
+* `session_replay.py` — sealed JSONL parser that reconstructs a recorded
+  session's full OGB contact stream (snapshot baselines + incremental
+  deltas) into time-ordered frames. Driven by
+  `controllers/replay_facade.py` (`ReplayFacade`), which locks live OSC
+  at the `parameter_store` choke point (`set_input_locked`) and walks the
+  frames on the GUI thread via `apply_replay_frame` + `force_recalculate`
+  — so recorded motion runs through the *current* mode/chain settings for
+  feel-tuning with no partner present.
 * `version.py` — single source of truth for `__version__`.
 * `settings/` — per-user settings managers, one JSON file per concern
   (see the Mode model section above).

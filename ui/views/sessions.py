@@ -11,8 +11,8 @@ from typing import Any, Dict, List, Optional
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QFrame, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea,
-    QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
+    QComboBox, QFrame, QLabel, QLineEdit, QMessageBox, QProgressBar,
+    QPushButton, QScrollArea, QSizePolicy, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from constants import BTN_HEIGHT_SMALL
@@ -139,6 +139,11 @@ class SessionsMixin:
         play.addWidget(self.sessions_dir_label)
 
         parent_layout.addWidget(prefs_card)
+
+        # ---- Replay card ----
+        # Sits below the logger controls and above the saved-sessions list
+        # it plays from.
+        self._build_replay_card(parent_layout)
 
         # ---- Saved sessions list ----
         list_card = _Card(dark_bg=True)
@@ -439,6 +444,268 @@ class SessionsMixin:
                 "the Saved to: line above."
             )
 
+    # ----------------------------------------------------------
+    # Replay
+    # ----------------------------------------------------------
+
+    def _build_replay_card(self, parent_layout: QVBoxLayout) -> None:
+        card = _Card()
+        lay = _vbox(14, 8)
+        card.setLayout(lay)
+
+        header = _hbox(0, 8)
+        h = QLabel("Replay")
+        h.setObjectName("sectionTitle")
+        header.addWidget(h)
+        header.addWidget(self._make_help_badge(
+            "Session replay",
+            "Plays a recorded session's contacts back through your "
+            "<b>current mode &amp; chain settings</b>, so you can feel and "
+            "tune tweaks against real captured motion with no partner "
+            "present. Live VRChat input is paused while replaying, and the "
+            "output still respects the active mode — the <b>Off</b> mode "
+            "stays silent. Pick a session, choose a speed, and press Play."
+        ))
+        header.addStretch(1)
+        self.replay_refresh_btn = QPushButton("Refresh list")
+        self.replay_refresh_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+        self.replay_refresh_btn.setToolTip(
+            "Re-scan the sessions folder for recordings.")
+        self.replay_refresh_btn.clicked.connect(
+            lambda _=False: self._repopulate_replay_sessions())
+        header.addWidget(self.replay_refresh_btn)
+        lay.addLayout(header)
+
+        # Controls row: session picker, speed, Play, Stop.
+        controls = _hbox(0, 8)
+        self.replay_session_combo = QComboBox()
+        self.replay_session_combo.setToolTip("Recorded session to replay.")
+        # Refreshing the Play enabled-state when the selection changes.
+        self.replay_session_combo.currentIndexChanged.connect(
+            lambda _=0: self.refresh_replay_status())
+        controls.addWidget(self.replay_session_combo, 1)
+
+        self.replay_speed_combo = QComboBox()
+        for label, val in (("0.5×", 0.5), ("1×", 1.0),
+                           ("2×", 2.0), ("4×", 4.0)):
+            self.replay_speed_combo.addItem(label, float(val))
+        self.replay_speed_combo.setCurrentIndex(1)  # 1×
+        self.replay_speed_combo.setToolTip("Playback speed.")
+        controls.addWidget(self.replay_speed_combo)
+
+        self.replay_play_btn = QPushButton("▶ Play")
+        self.replay_play_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+        self.replay_play_btn.clicked.connect(self._on_replay_play)
+        controls.addWidget(self.replay_play_btn)
+
+        self.replay_stop_btn = QPushButton("■ Stop")
+        self.replay_stop_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+        self.replay_stop_btn.clicked.connect(self._on_replay_stop)
+        controls.addWidget(self.replay_stop_btn)
+        lay.addLayout(controls)
+
+        # Status line + progress bar.
+        self.replay_status_label = QLabel("Not replaying")
+        self.replay_status_label.setProperty("role", "muted")
+        lay.addWidget(self.replay_status_label)
+
+        self.replay_progress = QProgressBar()
+        self.replay_progress.setRange(0, 1000)
+        self.replay_progress.setValue(0)
+        self.replay_progress.setTextVisible(False)
+        self.replay_progress.setVisible(False)
+        lay.addWidget(self.replay_progress)
+
+        parent_layout.addWidget(card)
+
+        # Seed the session list + button/banner state, then start a 500 ms
+        # tick that advances the progress bar while a replay runs and this
+        # panel is on screen (mirrors the Overview timer's visibility
+        # gate). The controller also pushes state changes via
+        # refresh_replay_status(); this timer only fills the gaps between
+        # them so the position counter moves smoothly.
+        self._repopulate_replay_sessions()
+        self._replay_refresh_timer = QTimer(self.window)
+        self._replay_refresh_timer.setInterval(500)
+        self._replay_refresh_timer.timeout.connect(self._replay_tick)
+        self._replay_refresh_timer.start()
+
+    def _format_replay_label(self, s: Dict[str, Any]) -> str:
+        """Human label for a session: when it ran + duration + its id."""
+        ts = s.get("started_at_unix") or s.get("mtime_unix")
+        parts = [_fmt_when(ts)]
+        dur = s.get("duration_s")
+        if dur:
+            parts.append(_fmt_duration(dur))
+        parts.append(str(s.get("id", "?")))
+        return "  •  ".join(parts)
+
+    def _repopulate_replay_sessions(self) -> None:
+        """(Re)fill the replay session combo from the controller's session
+        list. Preserves the current selection when it survives the refresh.
+        Getattr-guarded so an arrival-refresh before the card is built is a
+        no-op."""
+        combo = getattr(self, "replay_session_combo", None)
+        if combo is None:
+            return
+        prev = combo.currentData()
+        try:
+            sessions = self.controller.list_logged_sessions() or []
+        except Exception:
+            sessions = []
+        combo.blockSignals(True)
+        combo.clear()
+        for s in sessions:
+            sid = str(s.get("id", "") or "")
+            if not sid:
+                continue
+            combo.addItem(self._format_replay_label(s), sid)
+        if combo.count() == 0:
+            combo.addItem("No recorded sessions", None)
+            combo.setEnabled(False)
+        else:
+            combo.setEnabled(True)
+            if prev:
+                i = combo.findData(prev)
+                if i >= 0:
+                    combo.setCurrentIndex(i)
+        combo.blockSignals(False)
+        # Reflect the (possibly new) selection in the Play button + status.
+        self.refresh_replay_status()
+
+    def _on_replay_play(self) -> None:
+        combo = getattr(self, "replay_session_combo", None)
+        sid = combo.currentData() if combo is not None else None
+        if not sid:
+            return
+        speed = 1.0
+        sc = getattr(self, "replay_speed_combo", None)
+        if sc is not None:
+            try:
+                speed = float(sc.currentData())
+            except (TypeError, ValueError):
+                speed = 1.0
+        try:
+            # start_replay logs its own reason on failure (already
+            # replaying / recording / no OGB data).
+            self.controller.start_replay(str(sid), float(speed))
+        except Exception as e:
+            self.log_message(f"Replay start failed: {e}")
+        self.refresh_replay_status()
+
+    def _on_replay_stop(self) -> None:
+        try:
+            self.controller.stop_replay()
+        except Exception as e:
+            self.log_message(f"Replay stop failed: {e}")
+        self.refresh_replay_status()
+
+    def _replay_tick(self) -> None:
+        """500 ms timer slot — advances the progress bar while a replay
+        runs and this panel is visible. Inactive/hidden states are driven
+        by the controller's refresh_replay_status() calls, so this
+        early-outs (no facade polling) whenever there's nothing moving to
+        show."""
+        lbl = getattr(self, "replay_status_label", None)
+        if lbl is None:
+            return
+        try:
+            if not lbl.isVisible():
+                return
+        except (AttributeError, RuntimeError):
+            return
+        try:
+            status = self.controller.get_replay_status() or {}
+        except Exception:
+            return
+        if not status.get("active"):
+            return
+        self._apply_replay_status(status)
+
+    def refresh_replay_status(self) -> None:
+        """Controller facade: repaint the Replay card (status line,
+        progress bar, Play/Stop enabledness) and the global replay banner
+        from the current controller state. Called by the controller after
+        every replay state change AND by the 500 ms tick. Fully
+        getattr-guarded — safe to fire during early startup before the
+        Sessions tab is built."""
+        ctrl = getattr(self, "controller", None)
+        getter = getattr(ctrl, "get_replay_status", None)
+        if getter is None:
+            return
+        try:
+            status = getter() or {}
+        except Exception:
+            return
+        self._apply_replay_status(status)
+
+    def _apply_replay_status(self, status: Dict[str, Any]) -> None:
+        active = bool(status.get("active"))
+        loading = bool(status.get("loading"))
+        sid = str(status.get("session_id") or "")
+        pos = float(status.get("position_ms") or 0.0)
+        dur = float(status.get("duration_ms") or 0.0)
+        try:
+            speed = float(status.get("speed") or 1.0)
+        except (TypeError, ValueError):
+            speed = 1.0
+
+        lbl = getattr(self, "replay_status_label", None)
+        bar = getattr(self, "replay_progress", None)
+        play = getattr(self, "replay_play_btn", None)
+        stop = getattr(self, "replay_stop_btn", None)
+        combo = getattr(self, "replay_session_combo", None)
+        busy = active or loading
+
+        if active:
+            if lbl is not None:
+                lbl.setText(
+                    f"▶ Replaying {sid} — "
+                    f"{_fmt_ms(pos)} / {_fmt_ms(dur)} ({speed:g}×)")
+            if bar is not None:
+                frac = (0 if dur <= 0
+                        else int(round(max(0.0, min(1.0, pos / dur)) * 1000)))
+                bar.setValue(frac)
+                bar.setVisible(True)
+        elif loading:
+            if lbl is not None:
+                lbl.setText(f"Loading {sid}…")
+            if bar is not None:
+                bar.setValue(0)
+                bar.setVisible(False)
+        else:
+            if lbl is not None:
+                lbl.setText("Not replaying")
+            if bar is not None:
+                bar.setValue(0)
+                bar.setVisible(False)
+
+        # Play only when idle with a session picked; Stop while loading
+        # (to cancel the parse) or replaying.
+        if play is not None:
+            has_sel = combo is not None and bool(combo.currentData())
+            play.setEnabled(has_sel and not busy)
+        if stop is not None:
+            stop.setEnabled(busy)
+
+        # Recording and replay are mutually exclusive — mirror the
+        # facade guard in the UI so the Record Start button can't invite
+        # a click it would only reject.
+        rec_start = getattr(self, "sessions_start_btn", None)
+        if rec_start is not None and busy:
+            rec_start.setEnabled(False)
+
+        # Global banner so the user never forgets live input is paused
+        # (only once replay is actually driving — during the async load
+        # the store isn't locked yet).
+        banner = getattr(self, "set_replay_banner", None)
+        if callable(banner):
+            try:
+                banner(bool(active), "▶ REPLAY — live OSC paused" if active
+                       else "")
+            except Exception:
+                pass
+
 
 # ----------------------------------------------------------
 # Formatting helpers (module-level — pure, testable)
@@ -464,6 +731,13 @@ def _fmt_duration(seconds: float) -> str:
         return f"{m}:{s:02d}"
     h, m = divmod(m, 60)
     return f"{h}:{m:02d}:{s:02d}"
+
+
+def _fmt_ms(ms: float) -> str:
+    """Format a millisecond position as M:SS (replay clock)."""
+    s = max(0, int(round(float(ms or 0) / 1000.0)))
+    m, s = divmod(s, 60)
+    return f"{m}:{s:02d}"
 
 
 def _fmt_when(unix_ts: Optional[float]) -> str:

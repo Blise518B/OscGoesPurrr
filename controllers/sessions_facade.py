@@ -89,6 +89,14 @@ class SessionsFacade:
         if a session is already running (idempotent guard)."""
         if self._session_logger.is_running:
             return self._session_logger.current_session and self._session_logger.current_session.get("id")
+        # Symmetric interlock with replay (start_replay refuses while
+        # recording): a recording started mid-replay would capture the
+        # reconstructed replayed stream as a fresh "live" session.
+        if getattr(self, "_replay_active", False) or \
+                getattr(self, "_replay_loading", False):
+            self.log_message("Can't record while replaying — stop replay "
+                             "first.")
+            return None
         # Retention pruning runs on every start (not on stop, not on a
         # timer) — see docs/SESSION_LOGGING.md.
         try:

@@ -929,7 +929,25 @@ class OscGoesPurrrUI(
         # stretching buttons across 4K — data-heavy pages (tables, logs,
         # device routing) stay full-width.
         self.main_stack = QStackedWidget()
-        root_layout.addWidget(self.main_stack, 1)
+        # Global replay banner — a thin colored strip pinned above the
+        # stacked views, shown whenever a session replay is active so the
+        # user never forgets live OSC input is paused (see
+        # set_replay_banner). Hidden by default; wrapping the stack in a
+        # vertical container is the least-disruptive place to hang it.
+        main_content = QWidget()
+        main_content_lay = _vbox(0, 0)
+        main_content.setLayout(main_content_lay)
+        self.replay_banner_label = QLabel("")
+        self.replay_banner_label.setObjectName("replayBanner")
+        self.replay_banner_label.setAlignment(Qt.AlignCenter)
+        self.replay_banner_label.setVisible(False)
+        self.replay_banner_label.setStyleSheet(
+            f"background: {COLOR_WARNING}; color: #101010; "
+            f"font-weight: bold; padding: 6px; border-radius: 4px;"
+        )
+        main_content_lay.addWidget(self.replay_banner_label)
+        main_content_lay.addWidget(self.main_stack, 1)
+        root_layout.addWidget(main_content, 1)
 
         view_names = ["Dashboard", "Overview", "Statistics", "Simple Mode",
                       "Device Routing", "SPS Sources",
@@ -1237,7 +1255,8 @@ class OscGoesPurrrUI(
                     "_repopulate_owo_zone_combos"),
             "Handy": ("_refresh_handy_status_only",
                       "_repopulate_handy_zone_combos"),
-            "Settings": ("_refresh_sessions_view",),
+            "Settings": ("_refresh_sessions_view",
+                         "_repopulate_replay_sessions"),
         }
         for name in arrival_refreshers.get(view_name, ()):
             fn = getattr(self, name, None)
@@ -1248,6 +1267,26 @@ class OscGoesPurrrUI(
                     # Arrival refresh is best-effort; the periodic tick
                     # lands within a second or two anyway.
                     pass
+
+    # ----------------------------------------------------------
+    # Global replay banner
+    # ----------------------------------------------------------
+
+    def set_replay_banner(self, active: bool, text: str = "") -> None:
+        """Show or hide the global replay indicator strip above the main
+        content. Called from refresh_replay_status(). Guarded for early
+        startup — the label may not exist yet."""
+        lbl = getattr(self, "replay_banner_label", None)
+        if lbl is None:
+            return
+        try:
+            if active:
+                lbl.setText(text or "▶ REPLAY — live OSC paused")
+                lbl.setVisible(True)
+            else:
+                lbl.setVisible(False)
+        except RuntimeError:
+            pass
 
     # ----------------------------------------------------------
     # Sidebar backend status dots

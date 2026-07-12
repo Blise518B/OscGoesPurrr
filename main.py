@@ -70,6 +70,7 @@ from controllers import (
     SessionsFacade,
     SpsSourcesFacade,
     StatsFacade,
+    ReplayFacade,
 )
 
 
@@ -98,6 +99,7 @@ class OscGoesPurrrApp(
     SessionsFacade,
     SpsSourcesFacade,
     StatsFacade,
+    ReplayFacade,
 ):
     def __init__(self):
         self.async_loop: asyncio.AbstractEventLoop = None
@@ -1195,6 +1197,13 @@ class OscGoesPurrrApp(
             
     def minimize_to_tray(self):
         """Hides the UI and spawns the system tray icon in a background thread."""
+        # Stop any replay first: hiding the window would leave it driving
+        # hardware from recorded data with the "live OSC paused" banner
+        # out of sight and no visible way to stop it.
+        try:
+            self.stop_replay()
+        except Exception:
+            pass
         self.ui.hide_window()
 
         image = create_default_icon()
@@ -1255,6 +1264,13 @@ class OscGoesPurrrApp(
                 self.mode_manager.app_settings.update_setting("window_geometry", current_geometry)
 
             self.save_profiles()
+
+        # Stop any active replay so the store's live-input lock is
+        # released (harmless at shutdown, but keeps the invariant clean).
+        try:
+            self.stop_replay()
+        except Exception:
+            pass
 
         # Close any active session file with a footer + final flush.
         # Best-effort: if the worker thread is wedged this just times

@@ -68,6 +68,12 @@ toys, SteamVR trackers, bHaptics suits, OWO suits, e-stim units
   touch) contact time — plus a summary of your last 20 sessions.
   Sampled once a second, completely off the haptic hot path, and
   resettable any time.
+* **Session logging & replay.** Record a VR session's contact stream to
+  disk as line-delimited JSON, then *replay* it back through the live
+  router — the recorded motion drives your current mode and chains with
+  no partner present, so you can feel and tune tweaks against real
+  captured contact. Live VRChat input is paused while replaying, and the
+  output still follows the active mode (the Off mode stays silent).
 * **Quality of life.** A launch-time update check against GitHub
   releases (opt-out; one HTTPS request, notice only — nothing
   auto-installs), automatic settings snapshots at every launch (newest

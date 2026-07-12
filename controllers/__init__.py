@@ -23,6 +23,7 @@ from .modes_facade import ModesFacade
 from .sessions_facade import SessionsFacade
 from .sps_sources_facade import SpsSourcesFacade
 from .stats_facade import StatsFacade
+from .replay_facade import ReplayFacade
 
 __all__ = [
     "IntifaceFacade",
@@ -38,4 +39,5 @@ __all__ = [
     "SessionsFacade",
     "SpsSourcesFacade",
     "StatsFacade",
+    "ReplayFacade",
 ]
