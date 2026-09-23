@@ -1,0 +1,245 @@
+/* ============================================================================
+   The 518 design system — web tokens.  Spec: _hub\design-518.md
+   Copy this file into a new program as-is and use the token names.
+   Do not retype hexes, do not invent a per-app accent.
+
+   Bare :root = NEON, the mode an app opens in.
+   :root[data-theme="midnight"] overrides ONLY the chrome tokens.
+   The identity hues are mode-independent by design — they never move.
+   ========================================================================= */
+
+:root {
+  /* ── four surfaces, one rule each: NEON (default) ────────────────────── */
+  --bg: #0a0c0a;        /* the window */
+  --panel: #0f120f;     /* bars and frames: header, status bar, group frames, tables */
+  --card: #121712;      /* things you look at: cards, chips, tiles, menus — THE GREY */
+  --well: #070907;      /* things you type into or read logs from */
+  --hover: #142418;     /* mouse over anything; pressed = hover + 1px nudge */
+
+  /* ── frame · accent · text: NEON ─────────────────────────────────────── */
+  --line: #36a35c;      /* THE FRAME — every 1px border, scrollbar, separators */
+  --tint: #143a22;      /* dark green fill behind accent text */
+  --accent: #31f272;    /* THE GREEN */
+  --accent2: #62ff97;   /* hover on a FILLED accent surface only */
+  --ink: #04150b;       /* text ON a filled accent — never white */
+  --txt: #e6efe8;       /* body text */
+  --muted: #94a698;     /* secondary text, chip labels */
+  --dim: #5f6f63;       /* hints, status bar, micro-labels, column headers */
+
+  /* ── identity palette: vibrant · mid · tint — THE SAME IN BOTH MODES ── */
+  --green: #4af58c;   --green-mid: #2f5e3f;   --green-tint: #10291a;
+  --cyan: #56d9f2;    --cyan-mid: #2f6b7a;    --cyan-tint: #0e2229;
+  --blue: #7aa7ff;    --blue-mid: #3a5384;    --blue-tint: #131c30;
+  --purple: #d78cff;  --purple-mid: #5e3f78;  --purple-tint: #221430;
+  --pink: #ff5da2;    --pink-mid: #66284a;    --pink-tint: #2a0f1d;
+  --red: #ff5561;     --red-mid: #5c2228;     --red-tint: #2a1014;
+  --orange: #f97316;  --orange-mid: #6b3a16;  --orange-tint: #2a1707;
+  --amber: #ffb454;   --amber-mid: #6b5320;   --amber-tint: #291f0c;
+  --yellow: #ffd60a;  --yellow-mid: #6b5a0f;  --yellow-tint: #2a2205;
+  --grey: #9aa5b3;    --grey-mid: #454f5c;    --grey-tint: #171b20;
+
+  /* ── semantic aliases — always go through these, never the hue ──────── */
+  --ok: var(--accent);   --ok-mid: var(--green-mid);    --ok-tint: var(--green-tint);
+  --run: var(--cyan);    --run-mid: var(--cyan-mid);    --run-tint: var(--cyan-tint);
+  --warn: var(--amber);  --warn-mid: var(--amber-mid);  --warn-tint: var(--amber-tint);
+  --err: var(--red);     --err-mid: var(--red-mid);     --err-tint: var(--red-tint);
+
+  /* ── type ───────────────────────────────────────────────────────────── */
+  --font: 13px/1.45 "Segoe UI", system-ui, sans-serif;
+  --mono: "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --title-font: "Aldrich", "Segoe UI", sans-serif;
+
+  /* ── radius: one value per role, not one radius everywhere ──────────── */
+  --r-group: 14px;   /* group frame */
+  --r-card: 12px;    /* card */
+  --r-gh: 9px;       /* group header bar */
+  --r-btn: 8px;      /* button, badge, tile, popup */
+  --r-in: 7px;       /* input, select */
+  --r-chip: 999px;   /* chip */
+
+  /* ── the only shadows in the system ─────────────────────────────────── */
+  --glow: 0 0 6px;                        /* live dots: --glow <hue @ 50%> */
+  --pop-shadow: 0 8px 30px rgba(0, 0, 0, .6);
+}
+
+/* ── MIDNIGHT (the alternate, behind the header toggle) ───────────────── */
+:root[data-theme="midnight"] {
+  --bg: #07090c;
+  --panel: #090d0a;
+  --card: #0b0f0c;
+  --well: #05070a;
+  --hover: #0d1712;
+  --line: #243029;      /* near-invisible hairline — cards float, not outline */
+  --tint: #10291a;
+  --accent: #4af58c;
+  --accent2: #7dffb0;
+  --ink: #04120a;
+  --txt: #c9d4cc;
+  --muted: #7c8a80;
+  --dim: #5f6f64;
+}
+
+/* Aldrich ships with the app; drop the .ttf next to it. Google Fonts also
+   serves it if the page may load remotely. */
+@font-face {
+  font-family: "Aldrich";
+  src: url("/fonts/Aldrich-Regular.ttf");
+  font-display: swap;
+}
+
+/* ============================================================================
+   Base shell — the parts every 518 app shares. Delete what a program
+   doesn't need; don't change the values.
+   ========================================================================= */
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--txt);
+  font: var(--font);
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3, h4 { margin: 0; font-weight: 600; }
+a { color: var(--blue); text-decoration: none; }
+a:hover { text-decoration: underline; }
+.mono { font-family: var(--mono); }
+.dim { color: var(--dim); } .muted { color: var(--muted); }
+.ok { color: var(--ok); } .run { color: var(--run); }
+.warn { color: var(--warn); } .err { color: var(--err); }
+.small { font-size: 11px; } .tiny { font-size: 10px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.spacer { flex: 1; }
+
+/* ── header: title top-left in Aldrich + version tag ──────────────────── */
+header.top {
+  position: sticky; top: 0; z-index: 20;
+  background: var(--panel); border-bottom: 1px solid var(--line);
+  padding: 8px 14px;
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+.brand {
+  font: 17px var(--title-font);
+  color: var(--accent); letter-spacing: 1px; white-space: nowrap;
+}
+.vb { color: var(--dim); font-size: 11px; white-space: nowrap; }  /* v1.2.3 · b318 */
+
+/* ── controls ─────────────────────────────────────────────────────────── */
+button, input, select, textarea {
+  font: inherit; font-size: 12px; color: var(--txt);
+  border: 1px solid var(--line); border-radius: var(--r-btn);
+  background: transparent;
+}
+button {
+  padding: 5px 11px; cursor: pointer; white-space: nowrap;
+  transition: border-color .12s, color .12s, background .12s;
+}
+button:hover:not(:disabled) { background: var(--hover); border-color: var(--accent); color: var(--accent); }
+button:active:not(:disabled) { transform: translateY(1px); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:disabled { opacity: .55; cursor: default; }
+/* THE ONE filled action per screen */
+button.primary {
+  background: var(--accent); border-color: var(--accent);
+  color: var(--ink); font-weight: 650;
+}
+button.primary:hover:not(:disabled) { background: var(--accent2); border-color: var(--accent2); color: var(--ink); }
+button.danger, button.stop { color: var(--err); border-color: var(--err-mid); font-weight: 700; }
+button.danger:hover:not(:disabled), button.stop:hover:not(:disabled) {
+  background: var(--err-tint); border-color: var(--err); color: var(--err);
+}
+button.ghost { border-color: transparent; color: var(--muted); }
+button.ghost:hover { border-color: var(--line); }
+/* a toggle that is currently on */
+button.active { background: var(--tint); border-color: var(--accent); color: var(--accent); }
+input, select, textarea { background: var(--well); padding: 5px 9px; border-radius: var(--r-in); }
+input:focus, select:focus, textarea:focus { outline: none; border-color: var(--accent); }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
+code, pre { background: var(--well); font-family: var(--mono); }
+
+/* ── cards ────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--r-card); padding: 12px 14px; min-width: 0;
+}
+.card > h3.ct {
+  font-size: 13px; font-weight: 600; color: var(--accent); letter-spacing: .3px;
+  margin: 0 0 8px; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+}
+.card > h3.ct .r { margin-left: auto; font-weight: 400; }
+/* group frame: set --gc / --gc-mid / --gc-tint to an identity hue on the element */
+.group {
+  background: var(--panel); border: 1px solid var(--gc-mid, var(--line));
+  border-radius: var(--r-group); padding: 8px;
+}
+.group > .gh {
+  background: var(--gc-tint, var(--tint)); color: var(--gc, var(--accent));
+  border-radius: var(--r-gh); padding: 4px 10px; font-weight: 700; font-size: 12px;
+  display: flex; gap: 8px; align-items: center;
+}
+.group > .gh .cnt { margin-left: auto; color: var(--dim); font-weight: 400; font-size: 11px; }
+
+/* ── chips · badges · dots ────────────────────────────────────────────── */
+.chip {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--line); border-radius: var(--r-chip);
+  padding: 2px 9px; font-size: 11px; color: var(--muted);
+  background: var(--card); white-space: nowrap;
+}
+.chip.ok { color: var(--ok); border-color: var(--ok-mid); }
+.chip.run { color: var(--run); border-color: var(--run-mid); }
+.chip.warn { color: var(--warn); border-color: var(--warn-mid); }
+.chip.err { color: var(--err); border-color: var(--err-mid); }
+/* badge: full tri-tone — vibrant text, mid border, tint fill */
+.b {
+  display: inline-flex; align-items: center; gap: 4px;
+  border: 1px solid currentColor; border-radius: var(--r-btn);
+  padding: 0 6px; font-size: 10px; font-weight: 700; letter-spacing: .4px;
+  line-height: 1.7; white-space: nowrap;
+}
+.b.ok { color: var(--ok); border-color: var(--ok-mid); background: var(--ok-tint); }
+.b.run { color: var(--run); border-color: var(--run-mid); background: var(--run-tint); }
+.b.warn { color: var(--warn); border-color: var(--warn-mid); background: var(--warn-tint); }
+.b.err { color: var(--err); border-color: var(--err-mid); background: var(--err-tint); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--dim); }
+.dot.ok { background: var(--ok); box-shadow: var(--glow) rgba(74, 245, 140, .5); }
+.dot.run { background: var(--run); box-shadow: var(--glow) rgba(86, 217, 242, .5); }
+.dot.warn { background: var(--warn); } .dot.err { background: var(--err); }
+
+/* ── tiles: big numbers, mono + tabular ───────────────────────────────── */
+.tile { background: var(--card); border: 1px solid var(--line); border-radius: var(--r-btn); padding: 6px 9px; }
+.tile .k { color: var(--dim); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; }
+.tile .v {
+  font-size: 17px; font-weight: 600; color: var(--txt);
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+}
+.tile .v small { font-size: 11px; color: var(--dim); font-weight: 400; }
+
+/* ── the hint line under every setting ────────────────────────────────── */
+.hint { color: var(--dim); font-size: 11px; margin: 2px 0 0; }
+
+/* ── status bar: what happened · job chips · made by Blise518B ─────────── */
+footer.sb {
+  position: fixed; left: 0; right: 0; bottom: 0; z-index: 15;
+  background: var(--panel); border-top: 1px solid var(--line);
+  color: var(--dim); font-size: 11px; padding: 4px 14px;
+  display: flex; gap: 10px; align-items: center; min-height: 26px;
+}
+footer.sb .stext { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+footer.sb .brand-tag { white-space: nowrap; color: var(--dim); }
+footer.sb .brand-tag b { color: var(--accent); font-weight: 600; }
+
+/* ── popups ───────────────────────────────────────────────────────────── */
+.pop, .menu {
+  background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--r-btn); padding: 4px; box-shadow: var(--pop-shadow);
+}
+
+/* ── scrollbars ───────────────────────────────────────────────────────── */
+* { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: transparent; }
+*::-webkit-scrollbar-thumb { background: var(--line); border-radius: 5px; }
+*::-webkit-scrollbar-thumb:hover { background: var(--accent); }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
