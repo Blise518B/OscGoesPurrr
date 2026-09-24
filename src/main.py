@@ -431,14 +431,22 @@ class OscGoesPurrrApp(
                     self._pending_update = info
                     self.log_message(
                         f"Update available: v{latest} — get it at {url}")
+                    # One-click install only when there is a verified exe
+                    # to swap AND we are the kind of build that can swap
+                    # it; otherwise the notice is a link.
+                    can_install = bool(
+                        info.get("asset")) and updater.is_self_updatable()
                     notice = getattr(self.ui, "show_update_notice", None)
                     if callable(notice):
-                        # One-click install only when there is a verified
-                        # exe to swap AND we are the kind of build that can
-                        # swap it; otherwise the notice is a link.
-                        can_install = bool(
-                            info.get("asset")) and updater.is_self_updatable()
                         notice(latest, url, can_install)
+                    # ...and a window in the middle of the app, unless the
+                    # user said "don't remind me" about this very version.
+                    popup = getattr(self.ui, "show_update_popup", None)
+                    skipped = self.get_app_setting(
+                        "update_popup_skipped_version", "")
+                    if callable(popup) and update_checker.should_show_popup(
+                            info, manual, skipped):
+                        popup(latest, __version__, url, can_install)
                 elif manual:
                     # Only the button-triggered check reports negative
                     # results; the automatic launch check stays silent.

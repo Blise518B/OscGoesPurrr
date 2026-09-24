@@ -139,13 +139,26 @@ def relaunch_self() -> None:
     failed spawn just leaves the app closed, exactly like a normal
     quit."""
     try:
+        env = None
         if getattr(sys, "frozen", False):
             cmd = [sys.executable] + sys.argv[1:]
+            env = fresh_instance_env()
         else:
             cmd = [sys.executable, os.path.abspath(sys.argv[0])] + sys.argv[1:]
-        subprocess.Popen(cmd, cwd=os.getcwd(), close_fds=True)
+        subprocess.Popen(cmd, cwd=os.getcwd(), close_fds=True, env=env)
     except Exception:
         pass
+
+
+def fresh_instance_env() -> dict:
+    """Environment for starting a NEW instance of this one-file exe.
+
+    A child of a PyInstaller one-file app inherits its _PYI_* variables and
+    reuses this process's unpacked _MEI folder — which is deleted as we
+    exit, so the new instance dies on its first compiled import
+    ("No module named 'pydantic_core._pydantic_core'"). This makes it
+    unpack its own copy (PyInstaller >= 6.9)."""
+    return dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1")
 
 
 def apply_window_frame_colors(hwnd: int,

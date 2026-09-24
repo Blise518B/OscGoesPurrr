@@ -144,3 +144,27 @@ class TestCheckForUpdate:
             monkeypatch, resp=_Resp(payload=_release("v1.3.0")))
         check_for_update("1.2.3", timeout_s=1.5)
         assert calls["timeout"] == 1.5
+
+
+class TestShouldShowPopup:
+    """The update window: launch check only, and not for the one version
+    the user said "don't remind me" about."""
+
+    AVAILABLE = {"available": True, "latest": "0.10.1", "url": "u", "asset": None}
+
+    def test_launch_check_with_a_newer_release_pops_up(self):
+        assert update_checker.should_show_popup(self.AVAILABLE, False, "") is True
+
+    def test_the_skipped_version_stays_quiet(self):
+        assert update_checker.should_show_popup(self.AVAILABLE, False, "0.10.1") is False
+
+    def test_a_later_release_pops_up_again(self):
+        newer = dict(self.AVAILABLE, latest="0.11.0")
+        assert update_checker.should_show_popup(newer, False, "0.10.1") is True
+
+    def test_manual_check_never_pops_up(self):
+        assert update_checker.should_show_popup(self.AVAILABLE, True, "") is False
+
+    @pytest.mark.parametrize("info", [None, {"available": False, "latest": "0.10.0"}])
+    def test_no_update_no_popup(self, info):
+        assert update_checker.should_show_popup(info, False, "") is False

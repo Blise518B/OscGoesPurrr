@@ -428,8 +428,9 @@ class SettingsMixin:
             "Asks GitHub once at launch whether a newer OscGoesPurrr "
             "release exists — a single HTTPS request; nothing is sent "
             "about you or your setup. When a newer version is found, a "
-            "link appears here and in the System Log. Nothing downloads "
-            "or installs by itself."
+            "window pops up (tick \"Don't remind me\" there to skip that "
+            "version) and a link appears here and in the System Log. "
+            "Nothing downloads or installs by itself."
         )
         upd_lay.addStretch(1)
         upd_btn = QPushButton("Check for updates now")
@@ -622,6 +623,93 @@ class SettingsMixin:
         if row is not None:
             row.setVisible(bool(can_install))
 
+    def show_update_popup(self, latest: str, current: str, url: str,
+                          can_install: bool = False) -> None:
+        """Controller facade: a window in the middle of the app when the
+        launch check finds a newer release, so nobody misses it. "Don't
+        remind me" is per version — the next release pops up again. The
+        quiet line in Settings stays either way."""
+        if getattr(self, "_update_popup", None) is not None:
+            return
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        dlg = QDialog(self.window)
+        dlg.setWindowTitle("Update available")
+        dlg.setWindowModality(Qt.WindowModal)
+        dlg.setMinimumWidth(460)
+        lay = _vbox(20, 12)
+        dlg.setLayout(lay)
+
+        title = QLabel(f"OscGoesPurrr v{_html_escape(str(latest))} is out")
+        title.setObjectName("sectionTitle")
+        lay.addWidget(title)
+        how = ("<b>Install now</b> downloads it, checks it and restarts the "
+               "app — your settings stay as they are."
+               if can_install else
+               "Get the new exe from the release page.")
+        body = QLabel(
+            f"You're on v{_html_escape(str(current))}. "
+            f'<a href="{_html_escape(str(url))}">See what\'s new</a>.<br><br>{how}')
+        body.setWordWrap(True)
+        body.setOpenExternalLinks(True)
+        lay.addWidget(body)
+
+        progress = QLabel("")
+        progress.setVisible(False)
+        lay.addWidget(progress)
+
+        skip = QCheckBox(f"Don't remind me about v{latest} again")
+        lay.addWidget(skip)
+
+        row = _hbox(0, 8)
+        row.addStretch(1)
+        later = QPushButton("Later")
+        later.setProperty("role", "secondary")
+        later.clicked.connect(lambda _=False: dlg.reject())
+        row.addWidget(later)
+        page = QPushButton("Release page" if can_install else "Open release page")
+        page.setProperty("role", "secondary" if can_install else "primary")
+
+        def _open_page(_=False):
+            QDesktopServices.openUrl(QUrl(str(url)))
+            dlg.accept()
+        page.clicked.connect(_open_page)
+        row.addWidget(page)
+        buttons = [later, page]
+        if can_install:
+            install = QPushButton("Install now")
+            install.setProperty("role", "primary")
+
+            def _install(_=False):
+                for b in buttons:
+                    b.setEnabled(False)
+                skip.setEnabled(False)
+                progress.setText("Starting download...")
+                progress.setVisible(True)
+                dlg.adjustSize()      # make room for the progress line
+                self._on_install_update_clicked()
+            install.clicked.connect(_install)
+            row.addWidget(install)
+            buttons.append(install)
+            install.setDefault(True)
+        lay.addLayout(row)
+
+        def _closed(_result):
+            if skip.isChecked():
+                self.controller.set_app_setting("update_popup_skipped_version", str(latest))
+            self._update_popup = None
+            self._update_popup_progress = None
+            self._update_popup_buttons = []
+        dlg.finished.connect(_closed)
+
+        self._update_popup = dlg
+        self._update_popup_progress = progress
+        self._update_popup_buttons = buttons
+        # open(), not exec(): this runs from the queue pump, and a nested
+        # event loop would re-enter it.
+        dlg.open()
+
     def _on_install_update_clicked(self) -> None:
         """Disable the button for the duration so a second click can't
         start a competing download, then hand off to the controller."""
@@ -637,16 +725,18 @@ class SettingsMixin:
         """Controller facade: paint download progress. `total` is 0 when
         the server sent no length, in which case we can only show how much
         has arrived so far."""
-        lbl = getattr(self, "update_progress_label", None)
-        if lbl is None:
-            return
         mb = done / (1024.0 * 1024.0)
         if total > 0:
             pct = int(done * 100 / total)
             total_mb = total / (1024.0 * 1024.0)
-            lbl.setText(f"Downloading... {pct}%  ({mb:.1f} / {total_mb:.1f} MB)")
+            text = f"Downloading... {pct}%  ({mb:.1f} / {total_mb:.1f} MB)"
         else:
-            lbl.setText(f"Downloading... {mb:.1f} MB")
+            text = f"Downloading... {mb:.1f} MB"
+        # The Settings row and, when the install started there, the popup.
+        for lbl in (getattr(self, "update_progress_label", None),
+                    getattr(self, "_update_popup_progress", None)):
+            if lbl is not None:
+                lbl.setText(text)
 
     def show_update_failed(self) -> None:
         """Controller facade: the download or its verification failed and
@@ -654,9 +744,12 @@ class SettingsMixin:
         btn = getattr(self, "update_install_btn", None)
         if btn is not None:
             btn.setEnabled(True)
-        lbl = getattr(self, "update_progress_label", None)
-        if lbl is not None:
-            lbl.setText("Download failed — nothing was changed.")
+        for lbl in (getattr(self, "update_progress_label", None),
+                    getattr(self, "_update_popup_progress", None)):
+            if lbl is not None:
+                lbl.setText("Download failed — nothing was changed.")
+        for b in getattr(self, "_update_popup_buttons", None) or []:
+            b.setEnabled(True)
 
     # ----------------------------------------------------------
     # Settings backups (launch snapshots)

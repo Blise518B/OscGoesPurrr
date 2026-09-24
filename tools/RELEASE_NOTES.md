@@ -15,17 +15,17 @@ update itself at launch.
 <!-- Replace this section before each release. Keep it short and concrete:
      what changed, and what a user would notice. -->
 
-- **Your toys in SteamVR.** Connected toys now show up in SteamVR's device
-  list, each with its own icon and battery level — just for fun. They're
-  listed as base stations with no position, so VRChat and full-body
-  tracking never pick one up as a tracker. Hovering one in SteamVR says
-  "Searching..." — that's SteamVR's wording for a base station, nothing
-  to worry about.
-- **On by default, one switch to turn it off.** Settings → SteamVR →
-  "Show toys in SteamVR". Off takes the toys out of the list and the
-  little SteamVR driver out of SteamVR. No SteamVR on your PC? Then
-  nothing is installed.
-- If SteamVR is already running when you update, restart it once and
-  your toys appear.
+- **Fixed: the app crashed after switching the colour mode** ("No module
+  named 'pydantic_core._pydantic_core'"). The restart now starts a clean
+  copy of the app.
+- **Fixed: the app didn't come back by itself after installing an
+  update.** This one is fixed from this version on — so if it stays
+  closed after installing *this* update, just start it again.
+- **Update window.** When a new version is out, a window now pops up in
+  the middle of the app with **Install now**. Tick "Don't remind me about
+  this version" to skip one; the next release pops up again.
+
+Your toys showing up in SteamVR (new in 0.10.0) is on by default; Settings
+→ SteamVR switches it off.
 
 More on the website: https://blise518b.github.io/OscGoesPurrr/

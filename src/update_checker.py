@@ -55,6 +55,17 @@ def _pad(a: Tuple[int, ...], b: Tuple[int, ...]):
     return a + (0,) * (n - len(a)), b + (0,) * (n - len(b))
 
 
+def should_show_popup(info: Optional[dict], manual: bool,
+                      skipped_version: str) -> bool:
+    """Whether a check result earns the update window. Only the launch
+    check pops it (the manual check's answer appears right next to its
+    button), and not for the exact version the user said "don't remind
+    me" about — a later release pops up again. Pure; exposed for tests."""
+    if manual or not info or not info.get("available"):
+        return False
+    return str(info.get("latest", "")) != str(skipped_version or "")
+
+
 def check_for_update(current_version: str,
                      timeout_s: float = 5.0) -> Optional[dict]:
     """Ask GitHub for the latest release and compare it to ours.

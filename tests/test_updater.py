@@ -304,6 +304,9 @@ class TestApplyUpdate:
         assert args[5].endswith("running.lock")
         # The helper must outlive us or it can never do the swap.
         assert captured["kwargs"]["close_fds"] is True
+        # ...and the exe it relaunches must unpack its own files, not look
+        # for ours (deleted by then).
+        assert captured["kwargs"]["env"]["PYINSTALLER_RESET_ENVIRONMENT"] == "1"
         with open(args[2], encoding="ascii") as fh:
             script = fh.read()
         assert "move /y" in script

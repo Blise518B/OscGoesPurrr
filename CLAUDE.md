@@ -90,6 +90,14 @@ build. Anything that changes how the exe is packaged (a `--onedir`
 build, an installer, a renamed asset) needs `is_self_updatable()` and
 `pick_exe_asset()` revisited in the same change.
 
+Anything that starts a **new instance** of the one-file exe — the updater's
+relaunch, `utilities.relaunch_self()` after a colour-mode switch or a
+settings restore — must pass `PYINSTALLER_RESET_ENVIRONMENT=1`
+(`utilities.fresh_instance_env()`). Without it the child inherits the
+`_PYI_*` variables, reuses the exiting parent's `_MEI` folder and dies on
+its first compiled import ("No module named
+'pydantic_core._pydantic_core'" — v0.10.0 did exactly that).
+
 ## Cloud sandbox caveat
 
 If you are running in a Linux cloud sandbox (e.g. the mobile Claude

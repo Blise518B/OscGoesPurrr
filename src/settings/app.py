@@ -60,8 +60,12 @@ DEFAULT_APP_SETTINGS = {
     # SteamVR again. Toys never appear as trackers.
     "show_toys_in_steamvr": True,
     # Ask GitHub once at launch whether a newer release exists (a single
-    # HTTPS request, notice only — nothing downloads or installs itself).
+    # HTTPS request — nothing downloads or installs itself). A newer release
+    # gets a line in Settings and a window at launch.
     "update_check_enabled": True,
+    # The release the user ticked "don't remind me" for in that window; a
+    # later release pops up again.
+    "update_popup_skipped_version": "",
     # Slowly drift the background gradient (~12 fps paint layer, paused
     # while minimized). Only engages on gradient color profiles (Purrple
     # gradient, Aurora, Custom with gradient); flat profiles ignore it.

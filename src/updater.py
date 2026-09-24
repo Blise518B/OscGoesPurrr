@@ -316,11 +316,17 @@ def apply_update(downloaded_exe: str,
         for flag in ("DETACHED_PROCESS", "CREATE_NEW_PROCESS_GROUP",
                      "CREATE_NO_WINDOW"):
             creationflags |= getattr(subprocess, flag, 0)
+        # The helper's `start` hands its environment to the new exe. Without
+        # the reset, that exe inherits our _PYI_* variables, looks for our
+        # unpacked _MEI folder (gone by then — we have exited) and never
+        # starts: the swap works but the app does not come back.
+        env = dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1")
         subprocess.Popen(
             ["cmd.exe", "/c", script_path, target, downloaded_exe, lock_path],
             creationflags=creationflags,
             close_fds=True,
             cwd=script_dir,
+            env=env,
         )
         return True
     except Exception:

@@ -17,7 +17,7 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import (
     QFont, QColor, QTextCharFormat, QTextCursor, QIcon, QLinearGradient,
-    QPixmap, QPainter, QPen, QBrush, QPainterPath, QPolygonF
+    QPixmap, QPainter, QPen, QBrush, QPainterPath, QPolygonF, QPalette
 )
 from PySide6.QtWidgets import (
     QStatusBar,
@@ -139,6 +139,12 @@ class OscGoesPurrrUI(
         self.qapp: QApplication = QApplication.instance() or QApplication(sys.argv)
         _theme.install_fonts()
         self.qapp.setStyleSheet(GLOBAL_QSS)
+        # Rich-text links (update notice, update window) in the accent, not
+        # Qt's default blue — the stylesheet cannot reach them, the palette can.
+        pal = self.qapp.palette()
+        for role in (QPalette.Link, QPalette.LinkVisited):
+            pal.setColor(role, QColor(_theme.CHROME["accent"]))
+        self.qapp.setPalette(pal)
 
         # Main window (intercepts X-button close).
         self.window: _MainWindow = _MainWindow()
