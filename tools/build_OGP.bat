@@ -142,6 +142,10 @@ REM payloads; this edition ships neither.)
     --add-data "src\Images;Images" ^
     --add-data "LICENSE;." ^
     --add-data "THIRD_PARTY_NOTICES.md;." ^
+    --add-data "src\steamvr_toy_driver\driver.vrdrivermanifest;steamvr_toy_driver" ^
+    --add-data "src\steamvr_toy_driver\bin\win64\driver_oscgoespurrr.dll;steamvr_toy_driver\bin\win64" ^
+    --add-data "src\steamvr_toy_driver\resources;steamvr_toy_driver\resources" ^
+    --add-data "src\steamvr_toy_driver\icon_assets_64;steamvr_toy_driver\icon_assets_64" ^
     %ENGINE_DATA% ^
     --name "!EXE_NAME!" ^
     src\main.py

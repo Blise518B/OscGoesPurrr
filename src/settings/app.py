@@ -54,6 +54,11 @@ DEFAULT_APP_SETTINGS = {
     # (the original behavior). See intiface_connection.py and the Settings →
     # Intiface Engine toggle.
     "use_integrated_intiface": True,
+    # Show connected toys in SteamVR's device list (icon + battery) through
+    # the bundled toy driver. On by default: installs a small SteamVR driver
+    # when SteamVR is on the PC; switching it off takes the driver out of
+    # SteamVR again. Toys never appear as trackers.
+    "show_toys_in_steamvr": True,
     # Ask GitHub once at launch whether a newer release exists (a single
     # HTTPS request, notice only — nothing downloads or installs itself).
     "update_check_enabled": True,

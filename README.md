@@ -41,6 +41,9 @@ New versions install themselves: the app lets you know when there's one.
   *that* toy.
 - 💡 **Explains itself** — hover over anything in the app to see what it
   does.
+- 🔋 **Toys in SteamVR** — your toys show up in SteamVR's device list
+  with their battery. Just for show, never trackers; one switch in
+  Settings turns it off.
 
 ## Coming later
 

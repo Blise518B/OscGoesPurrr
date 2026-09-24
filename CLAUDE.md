@@ -4,13 +4,21 @@ A VRChat OSC → haptic router for Buttplug.io toys via Intiface. Python
 3.10+, PySide6 UI, Windows-first.
 
 **This branch is the public, shareable build.** The seven other haptic
-backends — SteamVR tracker haptics + toy driver, bHaptics, PiShock,
-DG-Lab Coyote, OWO, The Handy, PSVR2 rumble — live on `main` and are
-deliberately *not* here. Don't re-add one on a whim: the point of this
-branch is a small surface a stranger can install and understand. If a
-backend genuinely needs to come back, follow ARCHITECTURE.md § "How to
-add a new haptic backend" and port it from `main` rather than
-reinventing it.
+backends — SteamVR tracker haptics, bHaptics, PiShock, DG-Lab Coyote,
+OWO, The Handy, PSVR2 rumble — live on `main` and are deliberately *not*
+here. Don't re-add one on a whim: the point of this branch is a small
+surface a stranger can install and understand. If a backend genuinely
+needs to come back, follow ARCHITECTURE.md § "How to add a new haptic
+backend" and port it from `main` rather than reinventing it.
+
+The one SteamVR piece this branch does carry is display-only: Settings →
+"Show toys in SteamVR" (on by default; off takes the driver out of
+SteamVR again; a PC without SteamVR is never touched) lists the connected
+toys in SteamVR's device strip through the toy driver in
+`src/steamvr_toy_driver/`.
+They are TrackingReference devices with no valid pose, so they can never
+be picked up as trackers — keep it that way (a toy that turned into a
+full-body tracker would wreck someone's FBT).
 
 Read [`README.md`](README.md) for the feature overview and
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for the layered design

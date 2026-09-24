@@ -12,6 +12,7 @@ projects, each under its own license.
 | intiface-engine (Buttplug) | 4.0.2 | BSD-3-Clause; contains evalexpr under AGPL-3.0-only | https://github.com/buttplugio/buttplug/tree/46d830b06b0105b294595fb733ccfce0a72d24ea |
 | PyInstaller bootloader | 6.20.0 | GPL-2.0-or-later WITH Bootloader-exception | https://github.com/pyinstaller/pyinstaller |
 | Aldrich font | - | OFL-1.1 | https://fonts.google.com/specimen/Aldrich |
+| OpenVR driver header (SteamVR toy driver) | 2.15.6 | BSD-3-Clause | https://github.com/ValveSoftware/openvr |
 | annotated-types | 0.7.0 | MIT License | https://github.com/annotated-types/annotated-types |
 | buttplug | 1.0.0 | BSD-3-Clause | https://github.com/buttplugio/buttplug-py |
 | certifi | 2026.5.20 | MPL-2.0 | https://github.com/certifi/python-certifi |
@@ -846,6 +847,38 @@ INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
 DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
 FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
 OTHER DEALINGS IN THE FONT SOFTWARE.
+```
+
+### OpenVR driver header 2.15.6
+
+```text
+Copyright (c) 2015, Valve Corporation
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+this list of conditions and the following disclaimer in the documentation and/or
+other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+may be used to endorse or promote products derived from this software without
+specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
 ### annotated-types 0.7.0

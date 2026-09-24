@@ -1,0 +1,8 @@
+{
+  "driver_oscgoespurrr": {
+    "enable": true,
+    "toy_device_class": 4,
+    "toy_pose_valid": false,
+    "toy_render_model": ""
+  }
+}

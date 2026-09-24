@@ -156,6 +156,19 @@ adding one back is adding files (see "How to add a new haptic backend").
       (Settings → Intiface Engine). The engine binary is not in the repo;
       it lives in `src/intiface-engine/` and is bundled by `tools/build_OGP.bat`.
 
+* **Toys in SteamVR (display only, not a backend).** `controllers/
+  steamvr_toys_facade.py` mirrors the connected toys — name, icon, battery
+  — to a small OpenVR driver (`src/steamvr_toy_driver/`, C++) through
+  `steamvr_toy_bridge.py`: newline JSON over `127.0.0.1:24855`, a full list
+  on every change, fire-and-forget. On by default:
+  `steamvr_toy_driver_installer.py` copies the driver to
+  `%LOCALAPPDATA%\OscGoesPurrr\steamvr_driver` and adds it to
+  `openvrpaths.vrpath` (leaving every other entry alone) only when SteamVR
+  has run on the PC; switching off removes the entry again. Toys
+  are TrackingReference devices with no valid pose, so nothing can bind
+  them as trackers; a toy that goes away stays listed as disconnected
+  until SteamVR restarts. Nothing here is on the haptics path.
+
 **Rule:** every engine owns its internal state. The outside world
 communicates with each one *exclusively* through its primitive-only
 public methods (and, where the engine has hot output, the

@@ -55,6 +55,7 @@ from controllers import (
     SpsSourcesFacade,
     StatsFacade,
     ReplayFacade,
+    SteamVRToysFacade,
 )
 
 
@@ -66,6 +67,7 @@ class OscGoesPurrrApp(
     SpsSourcesFacade,
     StatsFacade,
     ReplayFacade,
+    SteamVRToysFacade,
 ):
     def __init__(self):
         self.async_loop: asyncio.AbstractEventLoop = None
@@ -211,6 +213,13 @@ class OscGoesPurrrApp(
         self.auto_refresh_enabled = self.mode_manager.app_settings.get("auto_refresh", True)
         self.auto_connect_enabled = self.mode_manager.app_settings.get("auto_connect", True)
         
+        # Toys in SteamVR — before the UI, whose Settings page reads its
+        # status while it is built. A no-op unless the user switched it on.
+        try:
+            self._steamvr_toys_init()
+        except Exception as e:
+            print(f"[steamvr-toys] init failed: {e}")
+
         # Instantiate UI Component (must be after haptic_engine is created).
         # The UI owns its own root window so this controller stays
         # framework-agnostic.
@@ -315,14 +324,18 @@ class OscGoesPurrrApp(
                 # on every stored device frame so reconnects flip
                 # back to connected immediately.
                 self.ui.update_stored_devices_ui()
+                self._steamvr_toys_event(self.steamvr_toys_on_devices_changed)
             elif msg_type == "battery_update":
                 self.ui.update_battery_label(data["device_name"], data["level"])
+                self._steamvr_toys_event(self.steamvr_toys_on_battery,
+                                         data["device_name"], data["level"])
             elif msg_type == "device_removed":
                 device_name = data
                 self.log_message(f"Toy disconnected: {device_name}")
                 # Frame stays (the device is "stored"); just flip its
                 # connection-status icon from green to yellow.
                 self.ui.update_stored_devices_ui()
+                self._steamvr_toys_event(self.steamvr_toys_on_devices_changed)
             elif msg_type == "stored_devices_refresh":
                 self.ui.build_stored_devices_ui()
             elif msg_type == "osc_status":
@@ -453,6 +466,14 @@ class OscGoesPurrrApp(
         for device_name, val_float, motor_index in haptic_latest.values():
             self.update_device_target(device_name, val_float, motor_index)
     
+    def _steamvr_toys_event(self, handler, *args) -> None:
+        """Mirror a toy event into SteamVR; a failure there must never
+        break the toy pipeline, so it is logged and swallowed."""
+        try:
+            handler(*args)
+        except Exception as e:
+            self.log_message(f"[steamvr-toys] sync failed: {e}")
+
     def log_message(self, message: str):
         """Add a message to the log text box (main thread only)"""
         try:
@@ -1092,6 +1113,12 @@ class OscGoesPurrrApp(
         # released (harmless at shutdown, but keeps the invariant clean).
         try:
             self.stop_replay()
+        except Exception:
+            pass
+
+        # Take the toys off SteamVR's device list and close the bridge.
+        try:
+            self._steamvr_toys_shutdown()
         except Exception:
             pass
 

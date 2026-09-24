@@ -1,0 +1,8 @@
+{
+  "jsonid": "input_profile",
+  "controller_type": "oscgoespurrr_toy",
+  "device_class": "TrackedDeviceClass_TrackingReference",
+  "input_bindingui_mode": "hmd",
+  "input_source": {},
+  "default_bindings": []
+}

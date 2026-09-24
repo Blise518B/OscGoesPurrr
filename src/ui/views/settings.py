@@ -271,6 +271,46 @@ class SettingsMixin:
             "reconnects on its own.")
         parent_layout.addWidget(ife_card)
 
+        # ---- SteamVR Card ----
+        # Just for fun: connected toys appear in SteamVR's device list
+        # through a small bundled driver. Off by default.
+        svr_card = _Card()
+        svr_lay = _vbox(20, 6)
+        svr_card.setLayout(svr_lay)
+
+        hdr = QLabel("SteamVR")
+        hdr.setObjectName("sectionTitle")
+        svr_lay.addWidget(hdr)
+        svr_lay.addWidget(self._muted_label(
+            "Show your connected toys in SteamVR's device list, with their "
+            "icon and battery — just for fun. They are never used as "
+            "trackers, so full-body tracking is untouched."
+        ))
+        try:
+            svr_status = self.controller.get_steamvr_toys_status()
+        except Exception:
+            svr_status = {"supported": False, "enabled": False}
+        self.steamvr_toys_toggle = ToggleSwitch("Show toys in SteamVR")
+        self.steamvr_toys_toggle.setChecked(bool(svr_status.get("enabled")))
+        self.steamvr_toys_toggle.setEnabled(bool(svr_status.get("supported")))
+        self.steamvr_toys_toggle.toggled.connect(self._on_steamvr_toys_toggled)
+        svr_lay.addWidget(self.steamvr_toys_toggle)
+        self._explain(
+            self.steamvr_toys_toggle, "Show toys in SteamVR",
+            "Adds every connected toy to SteamVR's device list, next to your "
+            "headset and controllers, with its icon and battery level. On by "
+            "default.<br><br>"
+            "It works through a small SteamVR driver the app installs itself "
+            "— no admin rights, nothing inside Steam's folder. Toys are listed "
+            "as devices that are never tracked, so VRChat and full-body "
+            "tracking ignore them.<br><br>"
+            "<b>Off</b> takes the toys out of the list and the driver out of "
+            "SteamVR.")
+        self.steamvr_toys_note = self._muted_label("")
+        self.steamvr_toys_note.setVisible(False)
+        svr_lay.addWidget(self.steamvr_toys_note)
+        parent_layout.addWidget(svr_card)
+
         # ---- Quality of Life Card ----
         ql_card = _Card()
         ql_lay = _vbox(20, 8)
@@ -804,6 +844,35 @@ OscGoesPurrr is free and open source under the MIT license. It also uses other o
         license_lay.addWidget(lic_btn, 0, Qt.AlignLeft)
 
         inner_lay.addStretch(1)
+
+    def _on_steamvr_toys_toggled(self, checked: bool):
+        """Switch toys-in-SteamVR and say what happens next."""
+        try:
+            status = self.controller.set_steamvr_toys_enabled(bool(checked))
+        except Exception as e:
+            self.log_message(f"SteamVR toys: {e}")
+            return
+        kind = status.get("error_kind", "")
+        if not checked:
+            text = ("Off — your toys leave SteamVR's device list, and the "
+                    "driver is taken out of SteamVR.")
+        elif kind == "no_steamvr":
+            text = ("SteamVR isn't installed on this PC, so there's nowhere "
+                    "to show your toys yet.")
+        elif kind == "dll_locked":
+            text = ("SteamVR is using an older version of the driver, so it "
+                    "couldn't be updated. Close SteamVR, then switch this off "
+                    "and on again.")
+        elif kind:
+            text = "The SteamVR driver couldn't be installed — the System Log says why."
+        elif status.get("driver_loaded"):
+            text = "On — connected toys appear in SteamVR's device list."
+        else:
+            text = ("On — your toys appear in SteamVR's device list from its "
+                    "next start. If SteamVR is running right now, restart it "
+                    "once.")
+        self.steamvr_toys_note.setText(text)
+        self.steamvr_toys_note.setVisible(True)
 
     def _show_licenses(self):
         """LICENSE and THIRD_PARTY_NOTICES.md, as bundled with this build."""

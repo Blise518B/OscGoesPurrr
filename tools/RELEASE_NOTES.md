@@ -15,17 +15,17 @@ update itself at launch.
 <!-- Replace this section before each release. Keep it short and concrete:
      what changed, and what a user would notice. -->
 
-The first public release — the toys-only edition.
-
-- **Bluetooth toys through a built-in Intiface engine.** Nothing else to
-  install; VRChat and your toys are found by themselves.
-- **Four routing modes** decide which parts of your avatar drive which
-  toys — switch them in the app or from your avatar's menu in VRChat.
-- **Total output strength, Off and Sleep.** One bar scales everything,
-  Off is instant silence, and Sleep only wakes for real strokes.
-- **Everything explains itself.** Rest the pointer on any control and it
-  tells you what it does.
-- **One-click updates.** The app tells you when there's a new version and
-  installs it for you.
+- **Your toys in SteamVR.** Connected toys now show up in SteamVR's device
+  list, each with its own icon and battery level — just for fun. They're
+  listed as base stations with no position, so VRChat and full-body
+  tracking never pick one up as a tracker. Hovering one in SteamVR says
+  "Searching..." — that's SteamVR's wording for a base station, nothing
+  to worry about.
+- **On by default, one switch to turn it off.** Settings → SteamVR →
+  "Show toys in SteamVR". Off takes the toys out of the list and the
+  little SteamVR driver out of SteamVR. No SteamVR on your PC? Then
+  nothing is installed.
+- If SteamVR is already running when you update, restart it once and
+  your toys appear.
 
 More on the website: https://blise518b.github.io/OscGoesPurrr/

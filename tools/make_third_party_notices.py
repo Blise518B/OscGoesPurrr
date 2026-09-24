@@ -35,6 +35,37 @@ OUT = REPO / "THIRD_PARTY_NOTICES.md"
 ENGINE = REPO / "_engine_build" / "buttplug"
 FONT_OFL = REPO / "src" / "Images" / "fonts" / "Aldrich-OFL.txt"
 QT_LICENSES = "https://doc.qt.io/qt-6/licenses-used-in-qt.html"
+OPENVR_HEADER = REPO / "src" / "steamvr_toy_driver" / "include" / "openvr_driver.h"
+# OpenVR's license (BSD-3-Clause, Valve). The toy driver DLL is compiled
+# against openvr_driver.h, so the notice travels with the exe.
+OPENVR_LICENSE = """\
+Copyright (c) 2015, Valve Corporation
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification,
+are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+this list of conditions and the following disclaimer in the documentation and/or
+other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors
+may be used to endorse or promote products derived from this software without
+specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR
+ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES
+(INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES;
+LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
+ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE."""
 
 # Full, standard license texts, recognised by their opening line; each is
 # printed once at the end instead of once per package that carries it.
@@ -240,6 +271,12 @@ def main() -> int:
     except md.PackageNotFoundError:
         pyi_ver = "-"
     py_ver = ".".join(map(str, sys.version_info[:3]))
+    openvr_ver = "-"
+    if OPENVR_HEADER.exists():
+        hdr = OPENVR_HEADER.read_text(encoding="utf-8", errors="replace")
+        parts = [re.search(rf"k_nSteamVRVersion{p}\s*=\s*(\d+)", hdr) for p in ("Major", "Minor", "Build")]
+        if all(parts):
+            openvr_ver = ".".join(m.group(1) for m in parts)
     dists = python_packages()
     crates = rust_crates()
     commit, dirty = engine_source()
@@ -259,6 +296,8 @@ def main() -> int:
         ("PyInstaller bootloader", pyi_ver, "GPL-2.0-or-later WITH Bootloader-exception",
          "https://github.com/pyinstaller/pyinstaller"),
         ("Aldrich font", "-", "OFL-1.1", "https://fonts.google.com/specimen/Aldrich"),
+        ("OpenVR driver header (SteamVR toy driver)", openvr_ver, "BSD-3-Clause",
+         "https://github.com/ValveSoftware/openvr"),
     ]
     rows += [(d.metadata["Name"], d.version, _license_of(d), _source_of(d)) for d in dists]
 
@@ -286,6 +325,7 @@ def main() -> int:
         add_notice(f"Python {py_ver}", [py_license.read_text(encoding="utf-8", errors="replace")])
     add_notice(f"intiface-engine {engine_ver}", [(ENGINE / "LICENSE").read_text(encoding="utf-8")])
     add_notice("Aldrich font", [FONT_OFL.read_text(encoding="utf-8")])
+    add_notice(f"OpenVR driver header {openvr_ver}", [OPENVR_LICENSE])
     for d in dists:
         name = d.metadata["Name"]
         if _key(name) in QT_FAMILY:

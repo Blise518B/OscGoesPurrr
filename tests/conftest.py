@@ -47,6 +47,9 @@ def _never_touch_real_appdata(monkeypatch, tmp_path):
     for const, name in (("MODES_FILE", "modes.json"),):
         if hasattr(config_manager, const):
             monkeypatch.setattr(config_manager, const, tmp_path / name)
+    # The SteamVR toy driver installs under %LOCALAPPDATA% and edits
+    # SteamVR's openvrpaths.vrpath there — never the real ones.
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
 
 
 @pytest.fixture
