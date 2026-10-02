@@ -39,6 +39,11 @@ New versions install themselves: the app lets you know when there's one.
   avatar's menu ([setup guide](docs/VRCHAT_MENU.md)).
 - 🎯 **Feels right** — a signal chain per contact, so each toy feels like
   *that* toy.
+- 📈 **Every session, charted** — click a session for its timeline: each
+  toy's intensity, thrusts per minute, which zones were touched, and your
+  hottest five minutes. Plus lifetime fun facts, a when-you-play heatmap
+  and a month calendar. It all stays on your PC, and one switch in
+  Settings turns it off and deletes it.
 - 💡 **Explains itself** — hover over anything in the app to see what it
   does.
 - 🔋 **Toys in SteamVR** — your toys show up in SteamVR's device list

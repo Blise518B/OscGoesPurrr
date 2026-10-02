@@ -270,6 +270,19 @@ QFrame#chip {
     background-color: %(card)s;
     border: 1px solid %(line)s; border-radius: 10px;
 }
+/* Statistics: a clickable session row, and the number tiles. */
+QFrame#statsSessionRow {
+    background-color: transparent;
+    border: 1px solid transparent; border-radius: %(r_btn)spx;
+}
+QFrame#statsSessionRow:hover {
+    background-color: %(hover)s; border-color: %(line)s;
+}
+QFrame#statsTile {
+    background-color: %(panel)s;
+    border: 1px solid %(green_mid)s; border-radius: %(r_btn)spx;
+}
+QFrame#statsTile QLabel { background: transparent; }
 /* A toy is a GROUP FRAME: panel ground, radius 14, its identity hue as
    the border and a filled header bar (the per-hue variants are appended
    by build_qss). A chain block inside it is a card-level frame in the

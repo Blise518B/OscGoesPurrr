@@ -234,6 +234,9 @@ back:
     * `ui/geometry.py` — Tk-style geometry string parsing (kept for
       compat with on-disk settings written by older versions).
     * `ui/layout_helpers.py`, `ui/text_helpers.py` — small helpers.
+    * `ui/stats_charts.py` — the Statistics page's custom-painted charts
+      (session sparkline, weekday x hour heatmap, month calendar, session
+      timeline). Fed primitive data by the view; they read nothing.
     * `ui/views/` — one module per sidebar view (`overview`,
       `device_frame`, `sps_sources`, `sessions`, `statistics`,
       `diagnostics`, `settings`), plus `dashboard` — named for the page
@@ -310,8 +313,11 @@ back:
     * `controllers/sessions_facade.py` — `SessionsFacade` (session-logger
       lifecycle — see "Session logging" below)
     * `controllers/stats_facade.py` — `StatsFacade` (usage statistics:
-      owns the `StatsTracker`, samples usage at 1 Hz off the UI
-      heartbeat, exposes `get_stats_snapshot()` / `reset_stats()`)
+      owns the `StatsTracker` and the `StatsHistory`, samples usage at
+      1 Hz off the UI heartbeat, exposes `get_stats_snapshot()`,
+      `get_stats_sessions()`, `get_stats_session_detail()`,
+      `get_stats_patterns()`, `get_stats_month()`,
+      `get_stats_fun_facts()` / `reset_stats()`)
   * Adding a new engine means: write the engine + router, write a new
     `controllers/<name>_facade.py` mixin, add it to `OscGoesPurrrApp`'s
     base list, expose UI methods on the mixin. **No changes to the UI's
@@ -595,6 +601,40 @@ recalculate.
   `controllers/stats_facade.py` (`StatsFacade`), which samples toy
   outputs, zone contact, and the motor router's O(1) thrust counter at
   1 Hz off the UI heartbeat — never on a routing hot path.
+* `stats_history.py` — sealed companion to the tracker that keeps the
+  detail behind the Statistics charts: one timeline per session in
+  10-second buckets (`stats_sessions/<id>.json`; the running one is
+  `<id>.live.json`, rewritten about once a minute, and a `.live` file
+  left by a killed run is closed at the next launch and handed to the
+  tracker as a recovered session) plus active time and thrusts per
+  local clock hour (`stats_hours.json`). Deliberately separate from
+  `stats.json`: the full edition shares the AppData folder and rewrites
+  that file with only the keys it knows. Its pure helpers (`dense`,
+  `analyse`, `weekday_hour`, `month_days`, `fun_facts`) turn the stored
+  data into what `ui/stats_charts.py` draws.
+* `stats_gate.py` — the statistics' noise gate (`ActivityGate`). With a
+  toy running everything counts; without one, a stroke only counts with
+  a zone in contact (the thrust counter also fires on avatars nobody is
+  touching), and contact and strokes are held back until they make a
+  scene (20 thrusts with no pause over 10 s, or 60 s of contact within
+  any 3 minutes), then count from 30 s before it until half an hour of
+  quiet; anything less is dropped and never starts a session.
+  `StatsFacade` runs every 1 Hz sample through it before the tracker
+  and the history see it, and applies it after the fact
+  (`stats_history.regate`) to timelines recorded under an older
+  `GATE_VERSION`, discounting the tracker's totals to match and
+  dropping totals-only sessions that couldn't have passed it.
+* `stats_backfill.py` — pure, one-time estimate of the hours before the
+  hourly history existed, so the charts don't start empty: each saved
+  `stats.json` session's active time and thrusts are spread over the
+  hours its toys were connected (read from `ogp_debug.log` and its
+  rotations), and what the lifetime totals hold beyond those over the
+  latest earlier runs with a toy connected. `StatsFacade` runs it once at
+  launch; `StatsHistory` stores it apart from the measured hours (its
+  presence marks it done, a reset leaves it empty) and the page labels
+  estimated hours and days as such. It also keeps when each toy was
+  connected during the saved sessions, which their list rows and pages
+  draw in place of a timeline.
 * `session_replay.py` — sealed JSONL parser that reconstructs a recorded
   session's full OGB contact stream (snapshot baselines + incremental
   deltas) into time-ordered frames. Driven by

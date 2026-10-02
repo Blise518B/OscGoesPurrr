@@ -444,8 +444,8 @@ class OscGoesPurrrUI(
                     "and the active mode. Click a toy to set it up.",
         "Device Routing": "Set up each toy: which parts of your avatar drive "
                           "it, and how each motor responds.",
-        "Statistics": "How much your toys actually get used — lifetime "
-                      "totals and your recent sessions.",
+        "Statistics": "Your sessions with a timeline for each, lifetime "
+                      "totals and fun facts, and when you play.",
         "SPS Sources": "Build your own contact zones out of raw VRChat "
                        "contact receivers, for spots the standard SPS "
                        "zones don't cover.",

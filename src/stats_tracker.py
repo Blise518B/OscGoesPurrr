@@ -312,6 +312,84 @@ class StatsTracker:
         # Shutdown persistence is unconditional — one cheap atomic write.
         self.flush(force=True)
 
+    def add_recovered_session(self, summary: Dict[str, Any]) -> None:
+        """File a session that never got its clean shutdown (the app was
+        killed) — rebuilt from its timeline by StatsHistory at the next
+        launch. Its activity already reached the lifetime totals through
+        the periodic flush, so only the session count and the recent list
+        change. Idempotent per start time."""
+        started = _num(summary.get("started_ts"))
+        if any(abs(e["started_ts"] - started) < 1.0
+               for e in self.recent_sessions):
+            return
+        toys = summary.get("toys") or {}
+        zones = summary.get("zones") or {}
+        entry = {
+            "started_ts": started,
+            "duration_s": _num(summary.get("duration_s")),
+            "active_s": _num(summary.get("active_s")),
+            "thrusts": _count(summary.get("thrusts")),
+            "toys": {str(k): {"on_s": _num(v)} for k, v in toys.items()},
+            "zones": {str(k): {"type": str(k).split("/", 1)[0],
+                               "contact_s": _num(v)}
+                      for k, v in zones.items()},
+        }
+        self.lifetime["sessions"] += 1
+        self.recent_sessions.append(entry)
+        self.recent_sessions.sort(key=lambda e: e["started_ts"], reverse=True)
+        del self.recent_sessions[_RECENT_SESSIONS_CAP:]
+        self._dirty = True
+
+    def discount(self, started_ts: float, dropped: Dict[str, Any],
+                 remove: bool = False) -> None:
+        """Take activity that turned out not to count (the activity gate,
+        applied after the fact) off the lifetime totals and off that
+        session's recent entry; `remove` drops the session altogether."""
+        started = _num(started_ts)
+        self._subtract(self.lifetime, dropped)
+        for e in list(self.recent_sessions):
+            if abs(e["started_ts"] - started) < 2.0:
+                if remove:
+                    self.recent_sessions.remove(e)
+                else:
+                    self._subtract(e, dropped)
+        if remove:
+            self.lifetime["sessions"] = max(0, self.lifetime["sessions"] - 1)
+        self._dirty = True
+
+    def drop_sessions(self, keep: Callable[[Dict[str, Any]], bool]) -> List[Dict[str, Any]]:
+        """Remove every recent session `keep` rejects, taking its totals
+        off the lifetime ones. Returns the removed entries."""
+        removed = [e for e in self.recent_sessions if not keep(e)]
+        for e in removed:
+            self.recent_sessions.remove(e)
+            self._subtract(self.lifetime, {
+                "active_s": e["active_s"], "thrusts": e["thrusts"],
+                "toys": {k: v.get("on_s", 0.0) for k, v in e["toys"].items()},
+                "zones": {k: v.get("contact_s", 0.0) for k, v in e["zones"].items()},
+            })
+            self.lifetime["sessions"] = max(0, self.lifetime["sessions"] - 1)
+        if removed:
+            self._dirty = True
+        return removed
+
+    @staticmethod
+    def _subtract(acc: Dict[str, Any], dropped: Dict[str, Any]) -> None:
+        acc["active_s"] = max(0.0, acc["active_s"] - _num(dropped.get("active_s")))
+        acc["thrusts"] = max(0, acc["thrusts"] - _count(dropped.get("thrusts")))
+        for name, on in (dropped.get("toys") or {}).items():
+            entry = acc["toys"].get(name)
+            if entry is not None:
+                entry["on_s"] = max(0.0, entry["on_s"] - _num(on))
+                if entry["on_s"] <= 0:
+                    del acc["toys"][name]
+        for zone, s in (dropped.get("zones") or {}).items():
+            entry = acc["zones"].get(zone)
+            if entry is not None:
+                entry["contact_s"] = max(0.0, entry["contact_s"] - _num(s))
+                if entry["contact_s"] <= 0:
+                    del acc["zones"][zone]
+
     def reset_lifetime(self) -> None:
         """Zero everything — lifetime totals, recent sessions, and the
         live session's accumulators (the user asked for a clean slate;

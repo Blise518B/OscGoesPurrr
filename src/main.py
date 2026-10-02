@@ -743,6 +743,7 @@ class OscGoesPurrrApp(
         "feature_osc_inspector",
         "feature_intiface",
         "feature_osc_router_518",
+        "feature_statistics",
     )
 
     def get_feature_enabled(self, key: str) -> bool:
@@ -778,6 +779,10 @@ class OscGoesPurrrApp(
             else:
                 self.router518.stop()
                 self.log_message("518 router fallback OFF")
+        elif key == "feature_statistics":
+            # Off deletes everything recorded (the Settings switch asks
+            # first); on starts recording afresh.
+            self._stats_set_enabled(enabled)
         elif key == "feature_intiface":
             # Intiface toy communication. Turning it off disconnects any
             # active session and the auto-connect loop short-circuits on the

@@ -21,9 +21,11 @@ BACKUPS_DIRNAME = "backups"
 _TS_FORMAT = "%Y%m%d-%H%M%S"
 
 # Top-level *.json files that live in AppData but are NOT settings.
-# stats.json is the user's lifetime usage history — "restore my settings
-# from Tuesday" must never silently rewind a week of statistics.
-_EXCLUDE = frozenset({"stats.json"})
+# stats.json and stats_hours.json are the user's usage history — "restore
+# my settings from Tuesday" must never silently rewind a week of
+# statistics. (The session timelines live in stats_sessions/, a
+# subdirectory, which snapshots never descend into.)
+_EXCLUDE = frozenset({"stats.json", "stats_hours.json"})
 
 
 def _is_snapshot_name(name: str) -> bool:

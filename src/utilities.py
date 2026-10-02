@@ -161,6 +161,41 @@ def fresh_instance_env() -> dict:
     return dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1")
 
 
+def process_alive(pid: int) -> bool:
+    """True while a process with this id is running. Errs towards True when
+    it can't tell, so a caller deciding whether a file is orphaned leaves it
+    alone rather than taking over a running process's data."""
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,
+                                      False, pid)
+        if not handle:
+            # 5 = access denied: it exists but belongs to someone else.
+            return ctypes.GetLastError() == 5
+        try:
+            code = ctypes.c_ulong()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return True
+            return code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return True
+    return True
+
+
 def apply_window_frame_colors(hwnd: int,
                               border_hex: Any = None,
                               caption_hex: Any = None,

@@ -604,6 +604,7 @@ class DashboardMixin:
         # Device Routing is entirely about Intiface toy motor mapping, so hide
         # it when the user has turned Intiface off.
         "Device Routing":        ("feature_intiface",),
+        "Statistics":            ("feature_statistics",),
     }
 
     def _feature_allows_view(self, view_name: str) -> bool:

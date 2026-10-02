@@ -51,5 +51,12 @@ SESSIONS_SETTINGS_FILE = APPDATA_DIR / "sessions_settings.json"
 # stats_tracker.StatsTracker, not a settings manager.
 STATS_FILE = APPDATA_DIR / "stats.json"
 
+# Usage history behind the Statistics charts — one timeline per session
+# plus active time per clock hour. Owned by stats_history.StatsHistory.
+# Separate from stats.json on purpose: the full edition shares this folder
+# and rewrites stats.json with only the keys it knows.
+STATS_SESSIONS_DIR = APPDATA_DIR / "stats_sessions"
+STATS_HOURS_FILE = APPDATA_DIR / "stats_hours.json"
+
 
 os.makedirs(APPDATA_DIR, exist_ok=True)

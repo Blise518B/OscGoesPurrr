@@ -15,17 +15,23 @@ update itself at launch.
 <!-- Replace this section before each release. Keep it short and concrete:
      what changed, and what a user would notice. -->
 
-- **Fixed: the app crashed after switching the colour mode** ("No module
-  named 'pydantic_core._pydantic_core'"). The restart now starts a clean
-  copy of the app.
-- **Fixed: the app didn't come back by itself after installing an
-  update.** This one is fixed from this version on — so if it stays
-  closed after installing *this* update, just start it again.
-- **Update window.** When a new version is out, a window now pops up in
-  the middle of the app with **Install now**. Tick "Don't remind me about
-  this version" to skip one; the next release pops up again.
-
-Your toys showing up in SteamVR (new in 0.10.0) is on by default; Settings
-→ SteamVR switches it off.
+- **Statistics, charted.** The Statistics page now opens on your sessions:
+  click one for its timeline — how hard each toy ran, thrusts per minute,
+  which zones were touched — with your hottest five minutes, longest
+  break and favourite toy picked out. Below that: lifetime totals with a
+  few fun facts, a heatmap of when in the week you play, and a month
+  calendar.
+- **Only real play counts.** Stray contacts and lone strokes no longer
+  start a session: without a toy running, activity counts once it adds up
+  to 20 thrusts in a row or a minute of touching, and a stroke only counts
+  while something is touching you. Your existing statistics are cleaned up
+  the same way once (a backup is kept next to them).
+- **Your history fills in.** Hours from before this version are estimated
+  from the app's own log, so the charts don't start empty — they're
+  marked as estimated.
+- **A session survives a crash.** If the app is closed without shutting
+  down, its session still shows up at the next launch.
+- **Don't want any of it?** Settings → Features → Usage statistics turns
+  it off, hides the page and deletes everything recorded.
 
 More on the website: https://blise518b.github.io/OscGoesPurrr/

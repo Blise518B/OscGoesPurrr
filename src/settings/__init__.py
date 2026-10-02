@@ -15,6 +15,8 @@ from ._paths import (
     SESSIONS_SETTINGS_FILE,
     SPS_SOURCES_FILE,
     STATS_FILE,
+    STATS_HOURS_FILE,
+    STATS_SESSIONS_DIR,
 )
 from .app import AppSettingsManager, DEFAULT_APP_SETTINGS
 from .known_devices import KnownDevicesRegistry
@@ -30,6 +32,8 @@ __all__ = [
     "SESSIONS_SETTINGS_FILE",
     "SPS_SOURCES_FILE",
     "STATS_FILE",
+    "STATS_HOURS_FILE",
+    "STATS_SESSIONS_DIR",
     "AppSettingsManager",
     "DEFAULT_APP_SETTINGS",
     "KnownDevicesRegistry",

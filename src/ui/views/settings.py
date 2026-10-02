@@ -81,6 +81,11 @@ class SettingsMixin:
         "feature_osc_inspector":
             "The OSC Inspector page, which lists every parameter your "
             "avatar sends. Off: the page is hidden and stops its work.",
+        "feature_statistics":
+            "Your sessions, charts and lifetime totals, kept only on this "
+            "PC. Off: nothing is recorded any more, the Statistics page is "
+            "hidden, and everything recorded so far is deleted (it asks "
+            "first).",
     }
 
     def _build_settings_view(self, parent_layout: QVBoxLayout):
@@ -566,6 +571,7 @@ class SettingsMixin:
             "feature_intiface":         "Intiface toy communication (Buttplug.io)",
             "feature_osc_router_518":   "OSC Router 518 fallback (VRChat receive)",
             "feature_osc_inspector":    "OSC Inspector (debug view)",
+            "feature_statistics":       "Usage statistics",
         }
         try:
             flag_keys = list(self.controller.get_feature_flags().keys())
@@ -581,7 +587,7 @@ class SettingsMixin:
             tog = ToggleSwitch(label)
             tog.setChecked(bool(self.controller.get_feature_enabled(key)))
             tog.toggled.connect(
-                lambda checked, k=key: self.controller.set_feature_enabled(k, bool(checked))
+                lambda checked, k=key: self._on_feature_toggled(k, bool(checked))
             )
             feat_lay.addWidget(tog)
             self.feature_toggles[key] = tog
@@ -590,6 +596,28 @@ class SettingsMixin:
 
         parent_layout.addWidget(feat_card)
         parent_layout.addStretch(1)
+
+    def _on_feature_toggled(self, key: str, checked: bool) -> None:
+        """A Features switch was flipped. Switching statistics off deletes
+        everything recorded, so that one asks first — and flips back on
+        No."""
+        if key == "feature_statistics" and not checked:
+            resp = QMessageBox.question(
+                self.window, "Turn off statistics",
+                "Turn off usage statistics?\n\nNothing is recorded any more, "
+                "the Statistics page disappears, and everything recorded so "
+                "far (sessions, charts and lifetime totals) is deleted from "
+                "this PC. This cannot be undone.",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if resp != QMessageBox.Yes:
+                tog = self.feature_toggles.get(key)
+                if tog is not None:
+                    tog.blockSignals(True)
+                    tog.setChecked(True)
+                    tog.blockSignals(False)
+                return
+        self.controller.set_feature_enabled(key, checked)
 
     def _bold_label(self, text: str) -> QLabel:
         lbl = QLabel(text)
@@ -922,6 +950,9 @@ Rest the mouse on a control, a heading or a button for a moment and its explanat
   • app_settings.json        — global app preferences
   • sps_sources.json         — synthetic contact zones, shared by every mode
   • sessions_settings.json   — session-logger preferences
+  • stats.json, stats_hours.json, stats_sessions\\
+                             — usage statistics (Settings → Features →
+                               Usage statistics; switching it off deletes them)
 """)
 
         license_lay = section("License", """
