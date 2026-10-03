@@ -241,6 +241,80 @@ class SettingsMixin:
             "sidebar's button instead.")
         conn_lay.addWidget(self.osc_auto_connect_var)
 
+        self.toy_sounds_toggle = ToggleSwitch("Sound when a toy connects or disconnects")
+        self.toy_sounds_toggle.setChecked(bool(self.controller.get_toy_sounds_enabled()))
+        self.toy_sounds_toggle.toggled.connect(
+            lambda checked: self.controller.set_toy_sounds_enabled(bool(checked))
+        )
+        conn_lay.addWidget(self.toy_sounds_toggle)
+        self._explain(
+            self.toy_sounds_toggle, "Connect sounds",
+            "A short chime going up when a toy connects, and going down "
+            "when one drops — switched off, out of range or flat. Handy in "
+            "VR, where you can't see this window. It plays on your PC's "
+            "default sound output. Switching it on plays the connect chime "
+            "once so you know what to listen for. On by default.")
+
+        # Volume + Test, shown only while the switch is on: when they played
+        # with the switch off, the chimes looked enabled when they weren't.
+        # (Hidden rather than disabled: this theme doesn't dim disabled
+        # labels or secondary buttons, so a disabled row still looks live.)
+        snd_row = QWidget()
+        snd_lay = _hbox(0, 8)
+        # Indented to the switch's label, so the row reads as its own.
+        snd_lay.setContentsMargins(
+            ToggleSwitch._TRACK_W + ToggleSwitch._LABEL_SPACING, 0, 0, 0)
+        snd_row.setLayout(snd_lay)
+        snd_lay.addWidget(QLabel("Volume"))
+        vol_slider = QSlider(Qt.Horizontal)
+        vol_slider.setRange(0, 100)
+        vol_slider.setSingleStep(5)
+        vol_slider.setPageStep(10)
+        vol_slider.setFixedWidth(260)
+        vol_slider.setCursor(Qt.PointingHandCursor)
+        vol_slider.setValue(int(self.controller.get_toy_sounds_volume()))
+        snd_lay.addWidget(vol_slider)
+        vol_value = QLabel(f"{vol_slider.value()}%")
+        vol_value.setFixedWidth(40)
+        vol_value.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        snd_lay.addWidget(vol_value)
+        # Store (and play at the new level) once the slider settles, not
+        # on every step of a drag or a wheel spin.
+        vol_commit = QTimer(snd_row)
+        vol_commit.setSingleShot(True)
+        vol_commit.setInterval(300)
+        vol_commit.timeout.connect(
+            lambda: self.controller.set_toy_sounds_volume(vol_slider.value()))
+
+        def _on_volume(v: int) -> None:
+            vol_value.setText(f"{v}%")
+            vol_commit.start()
+        vol_slider.valueChanged.connect(_on_volume)
+
+        def _on_test(_=False) -> None:
+            # A level still waiting to be stored is stored first, quietly,
+            # so the test plays exactly what the slider shows.
+            if vol_commit.isActive():
+                vol_commit.stop()
+                self.controller.set_toy_sounds_volume(vol_slider.value(), preview=False)
+            self.controller.test_toy_sounds()
+        test_btn = QPushButton("Test")
+        test_btn.setProperty("role", "secondary")
+        test_btn.setCursor(Qt.PointingHandCursor)
+        test_btn.clicked.connect(_on_test)
+        snd_lay.addWidget(test_btn)
+        snd_lay.addStretch(1)
+        conn_lay.addWidget(snd_row)
+        snd_row.setVisible(self.toy_sounds_toggle.isChecked())
+        self.toy_sounds_toggle.toggled.connect(snd_row.setVisible)
+        self.toy_sounds_volume_slider = vol_slider
+        self._explain(
+            snd_lay, "Connect sound volume",
+            "How loud the chimes are, on top of your Windows volume. The "
+            "chime plays at the new level when you stop moving the "
+            "slider. <b>Test</b> plays the connect chime, then the "
+            "disconnect one.")
+
         parent_layout.addWidget(conn_card)
 
         # ---- Intiface Engine Card ----

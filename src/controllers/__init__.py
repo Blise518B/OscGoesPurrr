@@ -18,6 +18,7 @@ from .sps_sources_facade import SpsSourcesFacade
 from .stats_facade import StatsFacade
 from .replay_facade import ReplayFacade
 from .steamvr_toys_facade import SteamVRToysFacade
+from .toy_sounds_facade import ToySoundsFacade
 
 __all__ = [
     "IntifaceFacade",
@@ -28,4 +29,5 @@ __all__ = [
     "StatsFacade",
     "ReplayFacade",
     "SteamVRToysFacade",
+    "ToySoundsFacade",
 ]

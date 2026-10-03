@@ -30,6 +30,7 @@ New versions install themselves: the app lets you know when there's one.
 ## What you get
 
 - 🔌 **Just works** — finds VRChat and your toys by itself. No IPs, no ports.
+  A chime tells you when a toy connects or drops.
 - 🎚️ **One strength bar** — turn everything up or down without touching
   your tuning.
 - 💤 **Off and Sleep** — instant silence, or only wake for real strokes.

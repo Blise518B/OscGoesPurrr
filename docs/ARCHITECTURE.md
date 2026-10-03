@@ -318,6 +318,11 @@ back:
       `get_stats_sessions()`, `get_stats_session_detail()`,
       `get_stats_patterns()`, `get_stats_month()`,
       `get_stats_fun_facts()` / `reset_stats()`)
+    * `controllers/toy_sounds_facade.py` — `ToySoundsFacade` (the
+      optional connect / disconnect chimes: diffs the engine's
+      connected-toy list after `connection_status`, `devices_found` and
+      `device_removed`, and chimes once per real change; plus the
+      volume and the Settings page's Test)
   * Adding a new engine means: write the engine + router, write a new
     `controllers/<name>_facade.py` mixin, add it to `OscGoesPurrrApp`'s
     base list, expose UI methods on the mixin. **No changes to the UI's
@@ -643,6 +648,12 @@ recalculate.
   frames on the GUI thread via `apply_replay_frame` + `force_recalculate`
   — so recorded motion runs through the *current* mode/chain settings for
   feel-tuning with no partner present.
+* `toy_sounds.py` — the connect (low → high) and disconnect (high → low)
+  chimes, synthesized in memory as WAVs at the user's 0–100 % volume
+  (squared to amplitude, so the slider feels even) and played through
+  Windows' `PlaySound` on a short-lived daemon thread, so no caller waits
+  on audio; a no-op off Windows. Stdlib only. Driven by
+  `controllers/toy_sounds_facade.py`; never on a routing path.
 * `version.py` — single source of truth for `__version__`.
 * `settings/` — per-user settings managers, one JSON file per concern
   (see the Mode model section above).

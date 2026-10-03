@@ -59,6 +59,13 @@ DEFAULT_APP_SETTINGS = {
     # when SteamVR is on the PC; switching it off takes the driver out of
     # SteamVR again. Toys never appear as trackers.
     "show_toys_in_steamvr": True,
+    # A low→high chime when a toy connects, high→low when one drops (see
+    # toy_sounds.py). On by default — in VR it's the only sign a toy
+    # dropped; Settings → Connection Settings turns it off.
+    "toy_connect_sounds": True,
+    # Their volume, 0-100 % (toy_sounds.volume_to_peak maps it on a
+    # squared curve; 60 is about a third of full scale).
+    "toy_connect_sounds_volume": 60,
     # Ask GitHub once at launch whether a newer release exists (a single
     # HTTPS request — nothing downloads or installs itself). A newer release
     # gets a line in Settings and a window at launch.

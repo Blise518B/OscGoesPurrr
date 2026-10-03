@@ -56,6 +56,7 @@ from controllers import (
     StatsFacade,
     ReplayFacade,
     SteamVRToysFacade,
+    ToySoundsFacade,
 )
 
 
@@ -68,6 +69,7 @@ class OscGoesPurrrApp(
     StatsFacade,
     ReplayFacade,
     SteamVRToysFacade,
+    ToySoundsFacade,
 ):
     def __init__(self):
         self.async_loop: asyncio.AbstractEventLoop = None
@@ -325,6 +327,7 @@ class OscGoesPurrrApp(
                 # back to connected immediately.
                 self.ui.update_stored_devices_ui()
                 self._steamvr_toys_event(self.steamvr_toys_on_devices_changed)
+                self.toy_sounds_on_devices_changed()
             elif msg_type == "battery_update":
                 self.ui.update_battery_label(data["device_name"], data["level"])
                 self._steamvr_toys_event(self.steamvr_toys_on_battery,
@@ -336,6 +339,7 @@ class OscGoesPurrrApp(
                 # connection-status icon from green to yellow.
                 self.ui.update_stored_devices_ui()
                 self._steamvr_toys_event(self.steamvr_toys_on_devices_changed)
+                self.toy_sounds_on_devices_changed()
             elif msg_type == "stored_devices_refresh":
                 self.ui.build_stored_devices_ui()
             elif msg_type == "osc_status":

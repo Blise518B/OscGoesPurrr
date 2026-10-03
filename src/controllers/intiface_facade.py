@@ -20,6 +20,7 @@ Host attributes assumed (provided by OscGoesPurrrApp):
     ``_auto_connect_task`` / ``_auto_refresh_task`` future slots
   * ``_muted_devices`` (set), ``_is_updating_ui`` (bool)
   * ``get_feature_enabled()`` / ``set_app_setting()``
+  * ``toy_sounds_on_devices_changed()`` (ToySoundsFacade)
 """
 
 import asyncio
@@ -79,6 +80,10 @@ class IntifaceFacade:
 
         # Update UI via ui component
         self.ui.update_connection_status(connected, server)
+
+        # Toys arrive and leave with the connection; a manual Disconnect
+        # comes straight here rather than through the queue.
+        self.toy_sounds_on_devices_changed()
 
         if connected:
             # Kick off the periodic rescan so toys powered on AFTER connect get
