@@ -8,7 +8,13 @@ math non-deterministic in tests. We inject a clock through
 exact amounts and assert on the resulting smoothed signal.
 """
 
+import os
 from typing import Callable
+
+# Before anything imports `constants`: the suite asserts on the house
+# green's tokens, so it must not pick up a colour the developer chose in
+# their own Settings → Appearance.
+os.environ.setdefault("OGP_UI_ACCENT", "default")
 
 import pytest
 

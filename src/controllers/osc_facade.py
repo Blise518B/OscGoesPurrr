@@ -43,6 +43,16 @@ class OscFacade:
         except Exception:
             return "disconnected"
 
+    def is_osc_listening(self) -> bool:
+        """Facade: whether the OSC manager is up -- connected to VRChat or
+        still looking for it. False only when nothing will connect by
+        itself (auto-connect off, or the manager was stopped), which is
+        the one time the sidebar shows a Connect button. Rides the UI
+        tick: one attribute read."""
+        manager = getattr(self, "osc_manager", None)
+        return bool(manager is not None
+                    and getattr(manager, "is_listening", False))
+
     def get_osc_diagnostics(self) -> Dict[str, Any]:
         """Facade: dump VRChat OSC manager diagnostics. Empty dict when the
         manager isn't running yet. UI panels (or the user manually triggering

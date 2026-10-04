@@ -21,13 +21,13 @@ DEFAULT_APP_SETTINGS = {
     # it was worn and restores it on avatar change. OFF (default) = the
     # active mode simply carries across avatars.
     "avatar_modes_enabled": False,
-    # Anti-stuck safety cutoff for the toy (Device Routing / Buttplug) path.
+    # Anti-stuck safety cutoff for the toy (Buttplug) path.
     # VRChat OSC only fires on parameter change, so a frozen SPS proximity
     # (avatar swap, partner leaves, OSC routing loss) would otherwise drive a
     # motor at its last value forever. Two-timer model: a mid-range value
     # stuck for `active_s` is cut hard; a saturated (~100%) value gets the
     # longer `peaked_s` fuse then a gentle ramp. Configured from the
-    # Device Routing → Anti-stuck card.
+    # Settings → Toy Safety.
     "toy_antistuck_enabled": True,
     "toy_antistuck_active_s": 1,
     "toy_antistuck_peaked_s": 10,
@@ -76,9 +76,19 @@ DEFAULT_APP_SETTINGS = {
     # Slowly drift the background gradient (~12 fps paint layer, paused
     # while minimized). Only engages on gradient color profiles (Purrple
     # gradient, Aurora, Custom with gradient); flat profiles ignore it.
-    # 518 design system mode: "neon" (default) or "midnight"; applied on
-    # the next launch, like the colour profiles it replaced.
+    # 518 design system mode: "neon" (default) or "midnight" -- "Vibrant"
+    # and "Darker" in Settings → Appearance. Like the colour below it
+    # applies while the app runs.
     "ui_mode": "neon",
+    # The newest version whose "What's new" notes this install has been
+    # shown (whats_new.py); "" = none yet. A later build with notes opens
+    # the window once at launch.
+    "whats_new_seen_version": "",
+    # Settings → Appearance → Colour: the hue (OKLCH degrees, 0-360) every
+    # green in the UI is turned to, or None for the house green. Changing
+    # it applies while the app runs (ui/live_theme.py); constants.py reads
+    # it at import so the next launch starts in it.
+    "ui_accent_hue": None,
 }
 
 
@@ -87,6 +97,9 @@ class AppSettingsManager:
 
     def __init__(self):
         self.settings: Dict[str, Any] = {}
+        # True when this launch found no settings file: a first install,
+        # not an update (nothing to tell it about what changed).
+        self.created_fresh = False
         self._load_or_create_defaults()
 
     def _load_or_create_defaults(self) -> None:
@@ -101,6 +114,8 @@ class AppSettingsManager:
                     return
             except (json.JSONDecodeError, IOError) as e:
                 print(f"App settings load error: {e}, using defaults")
+        else:
+            self.created_fresh = True
 
         # Use defaults if file doesn't exist or has errors
         self.settings = DEFAULT_APP_SETTINGS.copy()

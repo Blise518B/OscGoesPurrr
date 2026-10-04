@@ -1,8 +1,8 @@
-"""The sidebar's mode + output controls and the Device Routing view.
+"""The sidebar's mode + output controls and Home's tuning-tools bar.
 
 (The module keeps its historical name; the Dashboard page it was named
-after is gone -- everything it held now lives in the sidebar, the
-Overview or Settings.)
+after is gone -- everything it held now lives in the sidebar, on Home
+or in Settings.)
 
 Mixin for ui_components.OscGoesPurrrUI. Relies on attributes initialised
 by OscGoesPurrrUI.__init__ (self.controller, self.invoker, etc.)."""
@@ -28,7 +28,6 @@ from PySide6.QtWidgets import (
     QMenu, QInputDialog,
 )
 from ui import lovense_icons as _lovense_icons
-from ui.motor_signal_chain import ChainOverviewPanel as _ChainOverviewPanel
 from mixer import WAVEFORMS as _SIM_WAVEFORMS, sample_pattern as _sample_pattern
 import time as _time
 
@@ -65,18 +64,20 @@ from ui.widgets import (
 class DashboardMixin:
 
     # ------------------------------------------------------------------
-    # Device Routing top bar — Anti-stuck · Simulator · Overview
+    # Tuning tools bar — Simulator · Signal graph
     # ------------------------------------------------------------------
 
     def _build_routing_top_bar(self) -> QWidget:
-        """One compact bar holding the page's three utility tools, as three
-        groups in a flow layout: one row on a wide window, wrapping to two
-        when the window is narrow -- never a horizontal scroll.
+        """One compact bar holding the two tuning tools, as two groups in
+        a flow layout: one row on a wide window, wrapping to two when the
+        window is narrow -- never a horizontal scroll. Home shows it
+        inside its Tuning tools fold.
 
-        Grouped here rather than spread through the page because none of
-        them is a per-motor concern: anti-stuck is global, the simulator
-        drives EVERY motor's chains with one set of parameters, and the
-        overview is one graph pointed at a chosen chain."""
+        Grouped here rather than spread through the page because neither
+        is a per-motor concern: the simulator drives EVERY motor's chains
+        with one set of parameters, and the signal graph is one graph
+        pointed at a chosen chain. (Anti-stuck used to sit here too; it is
+        a set-and-forget safety default, so it lives in Settings.)"""
         card = _Card()
         flow = _FlowLayout(margin=0, h_spacing=22, v_spacing=8)
         flow.setContentsMargins(14, 10, 14, 10)
@@ -87,55 +88,6 @@ class DashboardMixin:
             gl = _hbox(0, 8)
             g.setLayout(gl)
             return g, gl
-
-        # ---- Anti-stuck (compact; the old card's paragraph lives in
-        # the help badge now) ----
-        g_as, row = group()
-        self._explain(g_as,
-            "Anti-stuck",
-            "Safety cutoff for frozen inputs. VRChat only sends OSC on "
-            "parameter change — if an SPS input stops updating (avatar "
-            "swap, partner leaves, OSC routing loss), the last value "
-            "would drive the toy forever.<br><br>"
-            "A real tracked value between zero and one can never hold "
-            "perfectly still — animation and IK jitter it constantly — "
-            "so a mid-range value frozen for the <b>active</b> timeout "
-            "is cut aggressively (1s by default). Only saturated (100%) "
-            "values get the longer <b>peaked</b> fuse before a gentle "
-            "ramp, because all-the-way-in-and-held is a real state that "
-            "genuinely sits at a constant 1.0."
-        )
-        self.toy_antistuck_check = ToggleSwitch("Anti-stuck")
-        self.toy_antistuck_check.setChecked(
-            bool(self.controller.get_app_setting("toy_antistuck_enabled", True))
-        )
-        row.addWidget(self.toy_antistuck_check)
-        row.addWidget(QLabel("act"))
-        self.toy_antistuck_active_spin = QSpinBox()
-        self.toy_antistuck_active_spin.setRange(1, 600)
-        self.toy_antistuck_active_spin.setSuffix("s")
-        self.toy_antistuck_active_spin.setFixedWidth(86)
-        self.toy_antistuck_active_spin.setValue(
-            int(self.controller.get_app_setting("toy_antistuck_active_s", 1))
-        )
-        row.addWidget(self.toy_antistuck_active_spin)
-        row.addWidget(QLabel("peak"))
-        self.toy_antistuck_peaked_spin = QSpinBox()
-        self.toy_antistuck_peaked_spin.setRange(1, 600)
-        self.toy_antistuck_peaked_spin.setSuffix("s")
-        self.toy_antistuck_peaked_spin.setFixedWidth(86)
-        self.toy_antistuck_peaked_spin.setValue(
-            int(self.controller.get_app_setting("toy_antistuck_peaked_s", 10))
-        )
-        row.addWidget(self.toy_antistuck_peaked_spin)
-        # Connect AFTER seeding so the initial setValue/setChecked calls
-        # don't echo straight back into app settings.
-        self.toy_antistuck_check.toggled.connect(self._on_toy_antistuck_changed)
-        self.toy_antistuck_active_spin.valueChanged.connect(
-            self._on_toy_antistuck_changed)
-        self.toy_antistuck_peaked_spin.valueChanged.connect(
-            self._on_toy_antistuck_changed)
-        flow.addWidget(g_as)
 
         # ---- Simulator (one instance, drives every motor) ----
         g_sim, row = group()
@@ -186,28 +138,28 @@ class DashboardMixin:
         self._sim_send_toggle.toggled.connect(self._reapply_simulation)
         flow.addWidget(g_sim)
 
-        # ---- Overview (toggle + target; panel appears below the bar) ----
+        # ---- Signal graph (toggle + target; panel appears below the bar) ----
         g_ov, row = group()
         self._explain(g_ov,
-            "Overview",
+            "Signal graph",
             "One six-trace graph (raw depth/speed, shaped, combined, "
             "final output) for the selected motor and chain. Appears "
             "under this bar while the toggle is on; costs nothing while "
             "it is off."
         )
-        self._overview_toggle = ToggleSwitch("Overview")
-        self._overview_toggle.toggled.connect(self._on_overview_toggled)
-        row.addWidget(self._overview_toggle)
-        self._overview_target_combo = QComboBox()
-        self._overview_target_combo.setMinimumWidth(130)
-        self._overview_target_combo.currentIndexChanged.connect(
-            self._on_overview_target_changed)
-        row.addWidget(self._overview_target_combo)
-        self._overview_chain_combo = QComboBox()
-        self._overview_chain_combo.setMinimumWidth(96)
-        self._overview_chain_combo.currentIndexChanged.connect(
-            self._on_overview_target_changed)
-        row.addWidget(self._overview_chain_combo)
+        self._signal_graph_toggle = ToggleSwitch("Signal graph")
+        self._signal_graph_toggle.toggled.connect(self._on_signal_graph_toggled)
+        row.addWidget(self._signal_graph_toggle)
+        self._signal_graph_target_combo = QComboBox()
+        self._signal_graph_target_combo.setMinimumWidth(130)
+        self._signal_graph_target_combo.currentIndexChanged.connect(
+            self._on_signal_graph_target_changed)
+        row.addWidget(self._signal_graph_target_combo)
+        self._signal_graph_chain_combo = QComboBox()
+        self._signal_graph_chain_combo.setMinimumWidth(96)
+        self._signal_graph_chain_combo.currentIndexChanged.connect(
+            self._on_signal_graph_target_changed)
+        row.addWidget(self._signal_graph_chain_combo)
         flow.addWidget(g_ov)
         return card
 
@@ -313,13 +265,13 @@ class DashboardMixin:
                     pass
         self._sim_suppressed = set(want)
 
-    # ---- overview plumbing ----
+    # ---- signal graph plumbing ----
 
-    def _refresh_overview_targets(self) -> None:
+    def _refresh_signal_graph_targets(self) -> None:
         """Repopulate the target combo from the live wrapper registry.
         Called after every device-list rebuild. Preserves the current
         selection when the same target still exists."""
-        combo = getattr(self, "_overview_target_combo", None)
+        combo = getattr(self, "_signal_graph_target_combo", None)
         if combo is None:
             return
         current = combo.currentData()
@@ -332,15 +284,15 @@ class DashboardMixin:
             if idx >= 0:
                 combo.setCurrentIndex(idx)
         combo.blockSignals(False)
-        self._refresh_overview_chains()
+        self._refresh_signal_graph_chains()
 
-    def _refresh_overview_chains(self) -> None:
+    def _refresh_signal_graph_chains(self) -> None:
         from ui.motor_signal_chain import (
             _get_chain_count, _chain_display_name,
         )
-        combo = getattr(self, "_overview_chain_combo", None)
-        target = self._overview_target_combo.currentData() \
-            if getattr(self, "_overview_target_combo", None) else None
+        combo = getattr(self, "_signal_graph_chain_combo", None)
+        target = self._signal_graph_target_combo.currentData() \
+            if getattr(self, "_signal_graph_target_combo", None) else None
         if combo is None:
             return
         combo.blockSignals(True)
@@ -352,36 +304,36 @@ class DashboardMixin:
                 combo.addItem(
                     _chain_display_name(self.controller, dev, motor, c), c)
         combo.blockSignals(False)
-        self._apply_overview_target()
+        self._apply_signal_graph_target()
 
-    def _on_overview_target_changed(self, _idx: int) -> None:
+    def _on_signal_graph_target_changed(self, _idx: int) -> None:
         # Target combo changed → chain list may differ; chain combo
         # changed → just re-point the panel.
         sender = self.sender() if hasattr(self, "sender") else None
-        if sender is getattr(self, "_overview_target_combo", None):
-            self._refresh_overview_chains()
+        if sender is getattr(self, "_signal_graph_target_combo", None):
+            self._refresh_signal_graph_chains()
         else:
-            self._apply_overview_target()
+            self._apply_signal_graph_target()
 
-    def _apply_overview_target(self) -> None:
-        panel = getattr(self, "_page_overview", None)
+    def _apply_signal_graph_target(self) -> None:
+        panel = getattr(self, "_signal_graph_panel", None)
         if panel is None:
             return
-        target = self._overview_target_combo.currentData()
+        target = self._signal_graph_target_combo.currentData()
         if target is None:
             panel.set_target(None)
             return
         dev, motor = target
-        chain = self._overview_chain_combo.currentData()
+        chain = self._signal_graph_chain_combo.currentData()
         panel.set_target(dev, motor, int(chain or 0))
 
-    def _on_overview_toggled(self, checked: bool) -> None:
-        panel = getattr(self, "_page_overview", None)
+    def _on_signal_graph_toggled(self, checked: bool) -> None:
+        panel = getattr(self, "_signal_graph_panel", None)
         if panel is None:
             return
         if checked:
-            self._refresh_overview_targets()
-            self._apply_overview_target()
+            self._refresh_signal_graph_targets()
+            self._apply_signal_graph_target()
         panel.setVisible(bool(checked))
 
     def refresh_output_controls(self) -> None:
@@ -423,8 +375,7 @@ class DashboardMixin:
         """Repaint the sidebar mode buttons from controller.get_modes_info()
         -- text and active highlight, updated in place. The controller calls
         this after every mode change, including during early startup before
-        the buttons exist, so every widget access is guarded. The Overview's
-        Active Mode tile follows on its own refresh tick."""
+        the buttons exist, so every widget access is guarded."""
         ctl = self.controller
         if not hasattr(ctl, "get_modes_info"):
             return
@@ -447,7 +398,7 @@ class DashboardMixin:
         if 0 <= index < len(infos):
             current = str(infos[index].get("name", ""))
         new_name, ok = QInputDialog.getText(
-            self.window, "Rename Mode",
+            (getattr(self, "dialog_parent", None) or self.window), "Rename Mode",
             f"New name for '{current}':",
             text=current,
         )
@@ -462,7 +413,7 @@ class DashboardMixin:
         "A mode is a <b>routing</b> \u2014 which parts of your avatar drive "
         "which toys. Click to make this one live.<br><br>"
         "All four start out the same; what each does is up to you. Pick a "
-        "mode, then set each toy's zones in Device Routing \u2014 its Input "
+        "mode, then open a toy on Home and set its zones \u2014 the Input "
         "stage always edits the live mode. Your tuning, your toys and the "
         "strength stay the same whichever mode is on.<br><br>"
         "<b>Right-click</b> to rename it or change its icon. From inside "
@@ -474,8 +425,8 @@ class DashboardMixin:
         "it back up restores exactly the feel you had.<br><br>"
         "From inside VRChat: the <b>OGP/Strength</b> radial.<br><br>"
         "If one toy always feels stronger than the rest, leave this alone "
-        "and trim that toy instead: Device Routing \u2192 its chain \u2192 "
-        "Output \u2192 Gain."
+        "and trim that toy instead: Home \u2192 the toy \u2192 its chain "
+        "\u2192 Output \u2192 Gain."
     )
     _OFF_TIP = (
         "Panic silence. Every toy stops instantly, whatever the strength "
@@ -601,9 +552,6 @@ class DashboardMixin:
     # of its required feature flags is off.
     _FEATURE_VIEW_REQUIREMENTS = {
         "OSC Inspector":         ("feature_osc_inspector",),
-        # Device Routing is entirely about Intiface toy motor mapping, so hide
-        # it when the user has turned Intiface off.
-        "Device Routing":        ("feature_intiface",),
         "Statistics":            ("feature_statistics",),
     }
 
@@ -618,13 +566,22 @@ class DashboardMixin:
 
     def apply_feature_visibility(self):
         """Re-evaluate sidebar visibility after a feature toggle changes:
-        feature-gated pages disappear from the nav, the Intiface block with
-        the Intiface feature, and a page that just became hidden hands the
-        view back to the Overview."""
+        feature-gated pages disappear from the nav, the Intiface block and
+        Home's toy list with the Intiface feature, and a page that just
+        became hidden hands the view back to Home."""
         get = getattr(self.controller, "get_feature_enabled", None)
+        toys_on = bool(get("feature_intiface")) if get else True
         if self.intiface_sidebar_section is not None:
-            on = bool(get("feature_intiface")) if get else True
-            self.intiface_sidebar_section.setVisible(on)
+            self.intiface_sidebar_section.setVisible(toys_on)
+        # Home can't leave the nav the way Device Routing used to, so with
+        # the toy server off its toy list and tuning tools step aside for
+        # a one-line note instead.
+        for attr, show in (("devices_container_frame", toys_on),
+                           ("_tuning_tools", toys_on),
+                           ("_home_toys_off_note", not toys_on)):
+            w = getattr(self, attr, None)
+            if w is not None:
+                w.setVisible(show)
         for name, btn in self.nav_buttons.items():
             btn.setVisible(self._feature_allows_view(name))
         current = self.main_stack.currentWidget() if self.main_stack else None
@@ -632,79 +589,5 @@ class DashboardMixin:
             if page is current:
                 btn = self.nav_buttons.get(name)
                 if btn is not None and not btn.isVisible():
-                    self.select_view("Overview")
+                    self.select_view("Home")
                 break
-
-    # ----------------------------------------------------------
-    # Device Routing view
-    # ----------------------------------------------------------
-
-    def _build_device_routing_view(self, parent_layout: QVBoxLayout):
-        title = QLabel("Device Routing")
-        title.setObjectName("viewTitle")
-        title.setAlignment(Qt.AlignHCenter)
-        parent_layout.addWidget(title)
-
-        # ---- Top bar: Anti-stuck · Simulator · Overview, one row ----
-        # Three tools that used to each own vertical space they rarely
-        # earned: anti-stuck was a full card with a six-line explainer
-        # (now a help badge), the simulator was a per-motor panel
-        # repeated on every wrapper (now one instance driving them
-        # all), and the overview was a per-motor disclosure row (now a
-        # toggle, with the panel only existing while it is on).
-        parent_layout.addWidget(self._build_routing_top_bar())
-        # The overview panel lives directly under the bar and only
-        # appears while its toggle is on.
-        self._page_overview = _ChainOverviewPanel(self.controller)
-        self._page_overview.setVisible(False)
-        parent_layout.addWidget(self._page_overview)
-
-        self.devices_container_frame = _Card(dark_bg=True)
-        container_lay = _vbox(10, 6)
-        self.devices_container_frame.setLayout(container_lay)
-        parent_layout.addWidget(self.devices_container_frame, 1)
-
-        toys_hdr_row = QWidget()
-        thl = _hbox(0, 6)
-        toys_hdr_row.setLayout(thl)
-        thl.addStretch(1)
-        header = QLabel("Toys")
-        header.setObjectName("sectionTitle")
-        header.setAlignment(Qt.AlignHCenter)
-        thl.addWidget(header)
-        self._explain(thl,
-            "Toy cards",
-            "Every connected or remembered toy gets a card. Click the bar "
-            "to expand its per-motor signal chains (Input → Depth/Speed/"
-            "Punch → Combine → Wake → Envelope → Zero cut → Output — "
-            "click any stage to edit it). <b>Mute</b> "
-            "silences the toy without touching its "
-            "config; <b>Test</b> pulses the motors; the mini bars mirror "
-            "each motor's live output."
-        )
-        thl.addStretch(1)
-        container_lay.addWidget(toys_hdr_row)
-
-        # Scrollable list of device cards.
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        _install_rainbow_scrollbars(scroll)
-        inner = QWidget()
-        self.unified_devices_layout = _vbox(4, 8)
-        self.unified_devices_layout.addStretch(1)
-        inner.setLayout(self.unified_devices_layout)
-        scroll.setWidget(inner)
-        self.unified_devices_frame = inner
-        container_lay.addWidget(scroll, 1)
-
-    def _on_toy_antistuck_changed(self, *_):
-        """Persist the Device Routing anti-stuck settings. The live routing
-        tick reads them fresh each evaluation via the controller's
-        `_get_toy_antistuck`, so the change takes effect on the next tick with
-        no explicit recalc kick."""
-        self.controller.set_app_setting(
-            "toy_antistuck_enabled", bool(self.toy_antistuck_check.isChecked()))
-        self.controller.set_app_setting(
-            "toy_antistuck_active_s", int(self.toy_antistuck_active_spin.value()))
-        self.controller.set_app_setting(
-            "toy_antistuck_peaked_s", int(self.toy_antistuck_peaked_spin.value()))

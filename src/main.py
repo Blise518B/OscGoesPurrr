@@ -57,6 +57,8 @@ from controllers import (
     ReplayFacade,
     SteamVRToysFacade,
     ToySoundsFacade,
+    ToyPresenceFacade,
+    WhatsNewFacade,
 )
 
 
@@ -70,6 +72,8 @@ class OscGoesPurrrApp(
     ReplayFacade,
     SteamVRToysFacade,
     ToySoundsFacade,
+    ToyPresenceFacade,
+    WhatsNewFacade,
 ):
     def __init__(self):
         self.async_loop: asyncio.AbstractEventLoop = None
@@ -328,6 +332,7 @@ class OscGoesPurrrApp(
                 self.ui.update_stored_devices_ui()
                 self._steamvr_toys_event(self.steamvr_toys_on_devices_changed)
                 self.toy_sounds_on_devices_changed()
+                self.toy_presence_on_devices_changed()
             elif msg_type == "battery_update":
                 self.ui.update_battery_label(data["device_name"], data["level"])
                 self._steamvr_toys_event(self.steamvr_toys_on_battery,
@@ -335,11 +340,16 @@ class OscGoesPurrrApp(
             elif msg_type == "device_removed":
                 device_name = data
                 self.log_message(f"Toy disconnected: {device_name}")
-                # Frame stays (the device is "stored"); just flip its
-                # connection-status icon from green to yellow.
+                # A toy that dropped is the toy most likely to come back:
+                # search hard for a while (only takes effect while no toy
+                # is left connected -- see _toy_scan_pause).
+                self.note_toy_search_wanted()
+                # Frame stays (the device is "stored"); it just turns to
+                # its grey offline outline.
                 self.ui.update_stored_devices_ui()
                 self._steamvr_toys_event(self.steamvr_toys_on_devices_changed)
                 self.toy_sounds_on_devices_changed()
+                self.toy_presence_on_devices_changed()
             elif msg_type == "stored_devices_refresh":
                 self.ui.build_stored_devices_ui()
             elif msg_type == "osc_status":
@@ -377,6 +387,11 @@ class OscGoesPurrrApp(
                         self._send_ogp_state_out()
                     except Exception:
                         pass
+                    # ...and for the connected-toy parameters.
+                    try:
+                        self.toy_presence_send_all()
+                    except Exception:
+                        pass
                 else:
                     self.ui.log_message("VRChat OSC Disconnected. Waiting for VRChat to come back...")
                     # The OGP/Test release edge can never arrive on a dead
@@ -408,6 +423,8 @@ class OscGoesPurrrApp(
                     self._is_updating_ui = False  # Unlock
             elif msg_type == "avatar_change":
                 self._on_avatar_change(data)
+                # The swap reset every avatar parameter, these included.
+                self.toy_presence_send_all()
             elif msg_type == "ogp_mode":
                 # Expression-menu mode switch (OGP/Mode int from VRChat).
                 self._on_ogp_mode_osc(data)
@@ -705,6 +722,8 @@ class OscGoesPurrrApp(
         # would keep the settling tick alive forever and book phantom
         # on-time against the deleted toy in the statistics.
         self.motor_router.forget_device(device_name)
+        # Its "connected" avatar parameter, if it had one, goes false.
+        self.toy_presence_sync()
 
         # Remove from UI via the framework-agnostic facade
         self.ui.remove_device_frame(device_name)
@@ -726,7 +745,7 @@ class OscGoesPurrrApp(
         self.mode_manager.app_settings.set(key, value)
 
     def _get_toy_antistuck(self) -> Dict[str, Any]:
-        """Anti-stuck config for the toy (Device Routing) path, read from app
+        """Anti-stuck config for the toy path, read from app
         settings and reshaped into the `{enabled, active_s, peaked_s}` dict
         the motor router expects. Threaded into `reevaluate_state` each tick;
         a plain dict read on the GUI thread, so it holds the latency budget."""
@@ -868,7 +887,7 @@ class OscGoesPurrrApp(
 
     def _send_motor_param_out(self, device_config, motor_idx: int, value: float) -> None:
         """Mirror a motor's computed 0..1 output to a VRChat avatar parameter
-        when this motor has param-out configured (Device Routing → per-motor
+        when this motor has param-out configured (Home → a toy → per-motor
         "Mirror to VRChat parameter"). Fire-and-forget OSC send — no queue
         hop, no ack — so it holds the latency budget. No-op when OSC is down
         or the motor has no param-out address; never raises into the routing
@@ -917,15 +936,16 @@ class OscGoesPurrrApp(
         # (osc_link_state.LIVE_WINDOW_S). Change-gated — this rides the
         # 10 Hz tick, so an unchanged state must cost two attribute reads.
         state = self.get_osc_link_state()
-        if state != getattr(self, "_last_osc_link_state", None):
-            self._last_osc_link_state = state
+        listening = self.is_osc_listening()
+        if (state, listening) != getattr(self, "_last_osc_link_state", None):
+            self._last_osc_link_state = (state, listening)
             port = None
             try:
                 port = int(getattr(self.osc_manager, "local_listen_port", 0) or 0) or None
             except Exception:
                 pass
             if hasattr(self.ui, "update_osc_link_state"):
-                self.ui.update_osc_link_state(state, port)
+                self.ui.update_osc_link_state(state, port, listening)
 
         # Update SPS Zones Status
         if hasattr(self, 'osc_manager'):
@@ -984,9 +1004,9 @@ class OscGoesPurrrApp(
             self.ui.refresh_osc_diagnostics_view()
 
     def get_osc_status_snapshot(self) -> Dict[str, Any]:
-        """Quick snapshot of the VRChat OSC link's state for the
-        Overview view's System tile. UI gets primitives only — never
-        reaches into self.osc_manager directly."""
+        """Quick snapshot of the VRChat OSC link's state for the sidebar
+        pill's tooltip. UI gets primitives only — never reaches into
+        self.osc_manager directly."""
         mgr = getattr(self, "osc_manager", None)
         connected = bool(mgr and getattr(mgr, "is_connected", False))
         port = None
@@ -1002,7 +1022,7 @@ class OscGoesPurrrApp(
                 "link_state": self.get_osc_link_state()}
 
     def get_setup_status(self) -> Dict[str, bool]:
-        """Facade for the Overview's getting-started checklist: the three
+        """Facade for Home's getting-started checklist: the three
         things that have to line up before a toy responds.
 
         * ``osc``   -- VRChat's OSC is actually delivering data, not just
@@ -1098,11 +1118,10 @@ class OscGoesPurrrApp(
 
     def request_restart(self):
         """UI facade: run the normal clean shutdown, then relaunch the
-        app. Used by Settings → Appearance so a color-profile switch
-        repaints everything without the user manually restarting — the
-        palette is baked into every module at import time, so a fresh
-        process is the reliable way to apply it. The spawn happens in
-        run() only after the Qt loop has fully exited (see
+        app. Used after a settings restore, so every module reads the
+        restored files from scratch. (Settings → Appearance no longer
+        needs it: mode and colour change in the running app.) The spawn
+        happens in run() only after the Qt loop has fully exited (see
         utilities.relaunch_self)."""
         self._relaunch_requested = True
         self.quit_app()
@@ -1130,6 +1149,13 @@ class OscGoesPurrrApp(
         # released (harmless at shutdown, but keeps the invariant clean).
         try:
             self.stop_replay()
+        except Exception:
+            pass
+
+        # Tell the avatar no toy is connected any more, while the OSC link
+        # is still up.
+        try:
+            self.toy_presence_shutdown()
         except Exception:
             pass
 
@@ -1360,6 +1386,11 @@ class OscGoesPurrrApp(
         # so startup never waits on the network).
         if self.get_app_setting("update_check_enabled", True):
             self.ui.schedule_callback(3000, self._spawn_update_check)
+
+        # "What's new", once, when this is the first launch after an
+        # update. Ahead of the update check: an offer that arrives while
+        # the window is open waits for it to close.
+        self.ui.schedule_callback(1200, self.whats_new_on_launch)
 
         # Start the OSC debugger UI refresh loop
         self.refresh_debugger_ui()

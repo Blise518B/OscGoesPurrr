@@ -38,7 +38,7 @@ class SpsSourcesFacade:
         return self.mode_manager.sps_sources.list_sources()
 
     def get_sps_source_names_flat(self) -> List[str]:
-        """Flat list of all source names — for the Device Routing picker's
+        """Flat list of all source names — for the toy zone picker's
         'Custom Sources' section."""
         return [s["name"] for s in self.mode_manager.sps_sources.list_sources()
                 if s.get("name")]

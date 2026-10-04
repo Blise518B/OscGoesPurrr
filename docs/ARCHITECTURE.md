@@ -79,6 +79,12 @@ replicated per haptic backend.
   incremental `_zone_tuples` set, a `packets_received` counter, and a
   monotonic `_version` that the routers use to short-circuit unchanged
   ticks.
+* **Rising edges:** the live UDP path also counts every bool
+  False→True edge per key (`read_watched(keys)` returns the values and
+  the counts for just those keys, under one lock). An OnEnter contact
+  can be True for a single VRChat frame, so a poller that only reads the
+  current value misses most of them; a router compares the counts
+  against its last tick instead. OSCQuery snapshots never count.
 * **Rule:** UDP and OSCQuery snapshot writes lock and mutate it. The UI
   and all routers read from it via `.copy()` semantics (or the atomic
   `snapshot()` getter) to prevent dictionary size-change exceptions.
@@ -216,12 +222,55 @@ back:
   * **Look:** the 518 design system. `theme_tokens.py` is a verbatim
     copy of `_hub\design\theme_tokens.py` and the only place a colour
     is spelled out; `constants.py` resolves the persisted mode
-    (`ui_mode`: Neon default / Midnight, Qt-free so the router can
+    (`ui_mode`: `neon`, the default, or `midnight` — the user reads
+    them as **Vibrant** and **Darker**; Qt-free so the router can
     import it) into the `COLOR_*` names the app was written against;
     `ui/theme.py` builds the stylesheet from those tokens and declares
     OGP's semantic roles (live signal = pink, running = cyan,
-    warnings = amber, errors = red). A mode switch persists and
-    relaunches, because every module copies the colours at import.
+    warnings = amber, errors = red).
+  * **Mode and colour picker** (Settings → Appearance, `ui_mode` and
+    `ui_accent_hue`): `accent_shift.py` turns every green token — the
+    mode's chrome, the palette's green, the section-bar fill — by one
+    angle in OKLCH, so the turned colours keep the green's lightness
+    and contrast; the identity hues and the semantic roles are left
+    alone. A turned colour is always computed from a token, never
+    typed. Both the colour and the mode apply **while the app runs,
+    with no lag spike** — nothing restarts — in three parts:
+    * `theme.set_accent_hue()` / `theme.set_mode()` move the module
+      state at once: the tokens, and — through `retint.py`, which swaps
+      one hex for another by value — every `COLOR_*` copy, class-level
+      `QColor` and default argument in the colour-holding modules.
+      Swapping by value is safe because the table behind it
+      (`theme._table`: role → colour, for a mode at a turn) gives
+      **every role a colour of its own, in both modes**, and never
+      lands on an identity hue (`accent_shift.unique_table`). The
+      chrome is the tokens character for character at no turn; where
+      the tokens give two roles one colour — Midnight's accent is the
+      palette's green, Neon's frame line is the section bar's frame
+      tone — the secondary role (the palette's green, the bar) sits one
+      blue step beside its token, in both modes, so a mode switch can
+      tell them apart. What a mode decides beyond its tokens (filled or
+      tinted section bars, a toy frame's tone) is looked up by name
+      when a stylesheet is built or a frame painted — never copy it
+      into a widget.
+    * `ui/live_theme.py` sweeps what is already on screen. The
+      app-level stylesheet is set once at launch and never again —
+      re-styling the whole app takes seconds, and the Qt loop also
+      hosts the routing tick. Instead the UI registers **sections**
+      (the sidebar, each page, each Settings card, and on Home each
+      toy's bar and each motor's block); a change gives a section the
+      new stylesheet as its own and retints the colours its widgets
+      copied. Sections on screen go first, top to bottom, as a wave;
+      the rest follow one per event-loop turn once the picker rests.
+    * **Sections never contain one another** — Qt re-styles everything
+      under a widget whose stylesheet changes. So a container that
+      sections sit in must not be styled by QSS: the window ground and
+      the toy frames paint themselves (`ui.widgets.Canvas`, `ToyFrame`).
+      A new page or card that should follow the picker has to be
+      registered (`_style_root`); a new module that uses colours has to
+      be added to `retint.COLOUR_MODULES` (a test fails otherwise).
+      Dialogs are parented to `ui.dialog_parent`, a zero-size section,
+      so they open in the colour in use.
   * `ui_components.py` is the main `OscGoesPurrrUI` class — the
     controller-facing facade and the live update sinks.
   * The `ui/` subpackage contains the bits factored out so the main
@@ -237,27 +286,31 @@ back:
     * `ui/stats_charts.py` — the Statistics page's custom-painted charts
       (session sparkline, weekday x hour heatmap, month calendar, session
       timeline). Fed primitive data by the view; they read nothing.
-    * `ui/views/` — one module per sidebar view (`overview`,
-      `device_frame`, `sps_sources`, `sessions`, `statistics`,
-      `diagnostics`, `settings`), plus `dashboard` — named for the page
-      it used to build — which now holds the sidebar's control block
-      (modes, the total output strength bar, Off / Sleep) and the Device
-      Routing page. Each builds its view and calls *only* controller
-      facade methods. The app opens on the Overview.
+    * `ui/views/` — one module per sidebar view (`home`, `sps_sources`,
+      `sessions`, `statistics`, `diagnostics`, `settings`),
+      plus `device_frame` — the toy cards Home lists — and `dashboard` —
+      named for the page it used to build — which now holds the sidebar's
+      control block (modes, the total output strength bar, Off / Sleep)
+      and Home's tuning-tools bar. Each builds its view and calls *only*
+      controller facade methods. The app opens on Home: one page that is
+      both the at-a-glance overview (a bar per toy, offline ones in a
+      grey outline) and the editor (click a bar to open the toy's signal
+      chains in place). It replaced the separate Overview and Device
+      Routing pages, which showed the same toys twice.
     * `ui/motor_signal_chain.py` — the per-motor signal-chain widget
       (Input → Depth/Speed/Punch → Combine → Wake → Envelope →
       Zero cut → Output; Wake merges the old Gate + Arming into one
       two-mode stage, Envelope pairs Smoothing + Texture as two halves),
-      embedded in Device Routing's motor cards (see
+      embedded in each toy card on Home (see
       `MOTOR_SIGNAL_CHAIN.md`).
     * `ui/trace_graph.py` — custom-painted scrolling time-series plot used
-      by the chain mini-graphs and the chains' `▸ Overview` disclosure.
+      by the chain mini-graphs and the Tuning tools' signal graph.
     * `ui/fold_strip.py` — the chain's visual language (collapsible fold
       cards joined by painted arrows, purple→pink activity rings)
       extracted into reusable `FoldCard` / `FoldStrip` widgets.
     * `ui/osc_variable_picker.py` — modal picker listing live avatar
       parameters from `parameter_store`, with search + manual entry.
-      Shared by Device Routing motors and SPS Sources contacts.
+      Shared by the toy cards' motors and SPS Sources contacts.
     * `ui/tooltips.py` — hover explanations, the app's only in-place
       help: `explain(target, title, text)` puts a themed, word-wrapped
       tooltip on a widget, every widget in a layout, or a container whose
@@ -265,8 +318,6 @@ back:
       control carries one; the signal chain sets one per stage on the
       stage card (`_STAGE_TIPS`), so each knob inside inherits it. Tests
       open every stage and fail on a control without one.
-    * `ui/flow_layout.py` — a `FlowLayout` port (PySide6 ships none) for
-      the Overview tile grid.
 * **Rule:** It only knows how to draw widgets. If the user clicks a
   button it fires an event to the Controller (`main.py`). It never
   executes hardware or file-saving logic itself. Swapping toolkits
@@ -587,6 +638,18 @@ recalculate.
   (`check_for_update`); never raises, never blocks startup. The
   controller spawns a daemon thread around it and routes the result
   through `thread_queue` as an `update_checked` event.
+* `whats_new.py` — the "What's new" notes (one entry per release, newest
+  first: a title, a sentence or two, and optionally a place in the app)
+  and the rule for when they show: once, at the first launch after an
+  update (`whats_new_seen_version` in the app settings), never on a first
+  install. `controllers/whats_new_facade.py` is the launch hook;
+  `ui/views/whats_new.py` draws the window and makes the "Take me there"
+  jumps (`PLACES`: the page, and the card to scroll to and light up).
+  Add a release's entry in the same change as its features. A test
+  fails when an entry names a place that does not exist, and
+  `release.bat` refuses to publish while the newest notes sit under a
+  version later than `VERSION` (`tools/check_whats_new.py`) — they would
+  never be shown.
 * `updater.py` — sealed self-update for the frozen single-exe build:
   streams the release asset, verifies it against the size and SHA-256
   GitHub reports, and hands the swap to a detached `.cmd` that waits for

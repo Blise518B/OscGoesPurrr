@@ -22,7 +22,7 @@ and anything else [Buttplug.io](https://buttplug.io/) supports.
    (the exe isn't code-signed). Click **More info → Run anyway**.
 3. **Switch your toy on** and start VRChat with **OSC enabled**
    (Action menu → Options → OSC).
-4. Press **Test all** on the Overview. If you feel it, you're set.
+4. Press **Test all** on the Home page. If you feel it, you're set.
 
 You'll need an avatar with **OGB / SPS contacts** — the standard toy setup.
 New versions install themselves: the app lets you know when there's one.
@@ -47,6 +47,9 @@ New versions install themselves: the app lets you know when there's one.
   Settings turns it off and deletes it.
 - 💡 **Explains itself** — hover over anything in the app to see what it
   does.
+- 🎨 **Any colour you like** — one slider in Settings turns the whole app
+  from green to the colour you pick, in a Vibrant or a Darker look. Both
+  change while you watch.
 - 🔋 **Toys in SteamVR** — your toys show up in SteamVR's device list
   with their battery. Just for show, never trackers; one switch in
   Settings turns it off.

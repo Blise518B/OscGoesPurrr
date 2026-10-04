@@ -142,6 +142,41 @@ def icon_cross(color: str = COLOR_ALERT, size: int = 20) -> QIcon:
     return QIcon(pm)
 
 
+def icon_home(color: str = COLOR_SUCCESS, size: int = 20) -> QIcon:
+    """Line-art house for the sidebar's Home entry: a roof, walls and a
+    door, stroked in the accent. Painted once per display scale (1x, 2x,
+    3x) so it is drawn, not stretched, at whatever scaling the screen
+    runs; the straight strokes sit on pixel centres so they stay sharp
+    at 1x."""
+    icon = QIcon()
+    for scale in (1, 2, 3):
+        pm = QPixmap(size * scale, size * scale)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.scale(scale * size / 20.0, scale * size / 20.0)
+        pen = QPen(QColor(color), 1.5)
+        pen.setCapStyle(Qt.RoundCap)
+        pen.setJoinStyle(Qt.RoundJoin)
+        p.setPen(pen)
+        p.setBrush(Qt.NoBrush)
+        p.drawPolyline(QPolygonF([
+            QPointF(2.5, 10.0), QPointF(10.0, 3.0), QPointF(17.5, 10.0),
+        ]))
+        p.drawPolyline(QPolygonF([
+            QPointF(4.5, 8.5), QPointF(4.5, 16.5),
+            QPointF(15.5, 16.5), QPointF(15.5, 8.5),
+        ]))
+        p.drawPolyline(QPolygonF([
+            QPointF(8.5, 16.5), QPointF(8.5, 11.5),
+            QPointF(11.5, 11.5), QPointF(11.5, 16.5),
+        ]))
+        p.end()
+        pm.setDevicePixelRatio(scale)
+        icon.addPixmap(pm)
+    return icon
+
+
 def icon_no_battery(color: str = COLOR_TEXT, size: int = 20) -> QIcon:
     """Battery outline with a diagonal slash — for toys that don't report
     a battery level. Avoids the font-dependent Unicode glyph (U+1FAAB)."""

@@ -22,7 +22,7 @@ a "very specific spot" that the avatar doesn't expose as an OGB zone:
 
 The result is a single 0..1 value the routers treat exactly like an OGB
 zone contribution, so a synthetic source is selectable anywhere an SPS
-zone is — the Device Routing per-motor picker lists it under
+zone is — the per-motor zone picker on Home lists it under
 "Custom Sources".
 
 Pure functions only — `evaluate_sps_source` takes a definition dict and a

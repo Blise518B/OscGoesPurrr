@@ -52,8 +52,9 @@ the running version against the newest tag on
 `Blise518B/OscGoesPurrr`, so the two disagreeing means either silent
 missed updates or an endless "update available" nag.
 
-To publish: bump `VERSION`, update `tools/RELEASE_NOTES.md`, commit, run
-`tools\release.bat`. It runs the tests, builds the exe, then publishes **one
+To publish: bump `VERSION`, update `tools/RELEASE_NOTES.md` and the in-app
+notes in `src/whats_new.py` (the window a user sees once after updating,
+with its "Take me there" buttons), commit, run `tools\release.bat`. It runs the tests, builds the exe, then publishes **one
 squashed commit** to the `public` remote's `main` — this branch's files,
 stacked on the previous public release, authored with the GitHub noreply
 address — tags it, and creates the GitHub release with the exe attached.
@@ -91,8 +92,8 @@ build, an installer, a renamed asset) needs `is_self_updatable()` and
 `pick_exe_asset()` revisited in the same change.
 
 Anything that starts a **new instance** of the one-file exe — the updater's
-relaunch, `utilities.relaunch_self()` after a colour-mode switch or a
-settings restore — must pass `PYINSTALLER_RESET_ENVIRONMENT=1`
+relaunch, `utilities.relaunch_self()` after a settings restore — must
+pass `PYINSTALLER_RESET_ENVIRONMENT=1`
 (`utilities.fresh_instance_env()`). Without it the child inherits the
 `_PYI_*` variables, reuses the exiting parent's `_MEI` folder and dies on
 its first compiled import ("No module named

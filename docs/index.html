@@ -210,6 +210,8 @@ h1, h2, h3 { font-family: var(--title-font); font-weight: 400; letter-spacing: .
 .m-nav { display: flex; flex-direction: column; gap: 1px; margin-top: 4px; }
 .m-nav span { padding: 5px 9px; border-radius: 8px; color: var(--muted); font-size: 12px; }
 .m-nav span.on { background: var(--tint); color: var(--accent); }
+.m-nav span.home { margin-bottom: 3px; padding: 6px 9px; border: 1px solid var(--line); color: var(--txt); font-size: 13px; font-weight: 600; }
+.m-nav span.home.on { border-color: var(--accent); color: var(--accent); }
 .m-main { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .m-head { font-family: var(--title-font); color: var(--accent); text-align: center; font-size: 15px; letter-spacing: .6px; }
 .m-row { display: flex; align-items: center; gap: 8px; font-weight: 600; }
@@ -226,13 +228,14 @@ h1, h2, h3 { font-family: var(--title-font); font-weight: 400; letter-spacing: .
 .m-meter { height: 8px; margin: 0 4px; border-radius: 4px; background: var(--well); border: 1px solid var(--gc-mid); overflow: hidden; }
 .m-meter i { display: block; height: 100%; width: 0; background: var(--gc); box-shadow: 0 0 10px var(--gc); }
 .m-toy canvas { display: block; width: 100%; height: 42px; margin-top: 6px; }
-.m-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
-.m-tiles .tile { padding: 6px 8px; }
-.m-tiles .v2 { display: flex; align-items: center; gap: 6px; color: var(--txt); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.m-offline { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--dim); color: var(--muted); font-weight: 600; font-size: 12px; }
+.m-offline .ring { width: 6px; height: 6px; border-radius: 50%; border: 2px solid var(--dim); }
+.m-offline .off { margin-left: auto; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--dim); color: var(--dim); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
+.m-fold { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 12px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); color: var(--accent); font-weight: 600; font-size: 12px; }
+.m-fold .sum { color: var(--dim); font-weight: 400; font-size: 11px; white-space: nowrap; }
 @media (max-width: 700px) {
   .m-body { grid-template-columns: 150px minmax(0, 1fr); }
   .m-toys { grid-template-columns: 1fr; }
-  .m-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .m-nav span:nth-child(n+4) { display: none; }
   .m-main { padding: 9px; }
   .m-toy canvas { height: 30px; }
@@ -508,11 +511,11 @@ footer { margin-top: 110px; border-top: 1px solid var(--edge); padding: 50px 0 3
               <span class="m-btn" id="sleepbtn" data-tip="sleep">Sleep</span>
             </div>
             <div class="m-nav">
-              <span class="on">Overview</span><span>Device Routing</span><span>Statistics</span><span>SPS Sources</span><span>Settings</span>
+              <span class="home on">Home</span><span>Statistics</span><span>SPS Sources</span><span>OSC Inspector</span><span>Settings</span>
             </div>
           </div>
           <div class="m-main">
-            <div class="m-head">Overview</div>
+            <div class="m-head">Home</div>
             <div class="m-row">Toys <span class="m-btn" id="testbtn" data-tip="test">Test all</span></div>
             <div class="m-toys">
               <div class="m-toy" data-tip="toy" style="--gc:var(--cyan);--gc-mid:var(--cyan-mid);--gc-tint:var(--cyan-tint)">
@@ -528,13 +531,8 @@ footer { margin-top: 110px; border-top: 1px solid var(--edge); padding: 50px 0 3
                 <canvas></canvas>
               </div>
             </div>
-            <div class="m-row">System</div>
-            <div class="m-tiles">
-              <div class="tile" data-tip="vrchat"><div class="k">VRChat OSC</div><div class="v2"><span class="dot ok"></span>Connected</div></div>
-              <div class="tile" data-tip="modetile"><div class="k">Active mode</div><div class="v2" id="modetile">&#128279; Combined</div></div>
-              <div class="tile" data-tip="engine"><div class="k">Intiface</div><div class="v2"><span class="dot ok"></span>Built in</div></div>
-              <div class="tile" data-tip="toy"><div class="k">Toys</div><div class="v2">2 connected</div></div>
-            </div>
+            <div class="m-offline" data-tip="offline"><span class="ring"></span>Lovense Domi <span class="off">Offline</span></div>
+            <div class="m-fold" data-tip="tools"><span>&#9656; Tuning tools</span><span class="sum">Simulator &middot; signal graph</span></div>
           </div>
         </div>
       </div>
@@ -671,7 +669,7 @@ footer { margin-top: 110px; border-top: 1px solid var(--edge); padding: 50px 0 3
           follow depth.</p></div>
       <div class="card reveal d2"><div class="ico">&#129694;</div><h3>Mirror to your avatar</h3>
         <p>Send any toy's output back to VRChat as a parameter to drive a glow, a blendshape or a meter &mdash; even with no
-          toy connected.</p></div>
+          toy connected. A second parameter can tell your avatar whether a toy, or one particular toy, is connected.</p></div>
       <div class="card reveal"><div class="ico">&#128737;&#65039;</div><h3>Never stuck on</h3>
         <p>OSC only sends changes, so a frozen contact could hold a motor on forever &mdash; after an avatar swap, or when
           your partner leaves. Anti-stuck timers cut it.</p></div>
@@ -686,10 +684,15 @@ footer { margin-top: 110px; border-top: 1px solid var(--edge); padding: 50px 0 3
           with your hottest five minutes and longest break picked out. Lifetime totals come with a few fun facts, a heatmap
           shows when in the week you play, and a calendar fills in month by month. All of it stays on your PC, and
           one switch in Settings turns it off and deletes it.</p></div></div>
+      <div class="card wide reveal"><div class="ico">&#127912;</div><div><h3>Any colour you like</h3>
+        <p>Not a green person? One slider in Settings turns the whole app &mdash; frames, buttons, highlights, even the
+          tint of the background &mdash; to the colour you pick, in a Vibrant look or a Darker one. It changes while you watch,
+          every colour stays as readable as the green, and one click brings the green back.</p></div></div>
       <div class="card wide reveal"><div class="ico">?</div><div><h3>It explains itself</h3>
         <p>No manual to read first and no help mode to switch on. Rest the pointer on any button, slider, toggle or heading
           and it tells you what it does &mdash; down to each knob of a signal chain. And when a new version is out, one click
-          downloads it, checks it and restarts.</p></div></div>
+          downloads it, checks it and restarts &mdash; and a small window shows you what changed, with a button that
+          takes you to each new thing.</p></div></div>
     </div>
   </div>
 </section>
@@ -759,7 +762,7 @@ footer { margin-top: 110px; border-top: 1px solid var(--edge); padding: 50px 0 3
         <p>The first time, Windows shows a blue &ldquo;Windows protected your PC&rdquo; box because the exe isn't
           code-signed. Click <kbd>More info</kbd> &rarr; <kbd>Run anyway</kbd>.</p></div>
       <div class="glass step reveal d2"><div class="num">3</div><h3>Switch on and play</h3>
-        <p>Turn your toy on and start VRChat with OSC enabled. The Overview ticks off each step &mdash; press
+        <p>Turn your toy on and start VRChat with OSC enabled. The Home page ticks off each step &mdash; press
           <kbd>Test all</kbd>, and if you feel it, you're set.</p></div>
     </div>
     <div class="needs reveal">
@@ -983,7 +986,7 @@ footer { margin-top: 110px; border-top: 1px solid var(--edge); padding: 50px 0 3
   var mock = document.getElementById('mock');
   var range = document.getElementById('strength'), strval = document.getElementById('strval');
   var offBtn = document.getElementById('offbtn'), sleepBtn = document.getElementById('sleepbtn');
-  var modeTile = document.getElementById('modetile'), testUntil = 0, now = 0;
+  var testUntil = 0, now = 0;
   function setStrength() { mock.style.setProperty('--k', range.value / 100); strval.textContent = range.value + '%'; }
   range.addEventListener('input', setStrength);
   range.addEventListener('pointerdown', function () { dragging = true; });
@@ -996,7 +999,6 @@ footer { margin-top: 110px; border-top: 1px solid var(--edge); padding: 50px 0 3
     b.addEventListener('click', function () {
       document.querySelectorAll('#modes .m-btn').forEach(function (x) { x.classList.remove('on'); });
       b.classList.add('on');
-      modeTile.textContent = b.querySelector('i').textContent + ' ' + b.getAttribute('data-mode');
     });
   });
 
@@ -1120,14 +1122,13 @@ footer { margin-top: 110px; border-top: 1px solid var(--edge); padding: 50px 0 3
            'seconds, so a brush against a sleeping partner does nothing.<br><br>From inside VRChat: <b>OGP/Sleep</b>.'],
     test: ['Test all', 'Buzzes every connected toy at a low level for a moment, so you know they’re all ' +
            'wired up.'],
-    toy: ['Your toys', 'Every connected toy with its live output and battery. Click one to open it in ' +
-           'Device Routing and choose which zones drive it.'],
-    vrchat: ['VRChat OSC', 'Found by itself — no IP or port to type. Goes green as soon as your avatar’s ' +
-           'data is coming in.'],
-    engine: ['Intiface engine', 'The Buttplug server that talks to your toys. It ships inside the app and starts ' +
-           'with it — nothing else to install or run.'],
-    modetile: ['Active mode', 'The routing that’s live right now. Switch it in the sidebar or from ' +
-           'your avatar’s menu in VRChat.']
+    toy: ['Your toys', 'Every connected toy with its live output and battery. Click one to open it right ' +
+           'there and choose which zones drive it and how each motor responds.'],
+    offline: ['Offline', 'Switched off or out of range. Everything you set up for it is kept, and it comes ' +
+           'back to life the moment it reconnects.'],
+    tools: ['Tuning tools', 'For when you are shaping how a toy responds: an ' +
+           'input simulator to tune against without a partner, and a live graph of the signal. Folded away ' +
+           'until you want them.']
   };
   var tip = document.getElementById('tip'), timer = null, current = null;
   function place(el) {

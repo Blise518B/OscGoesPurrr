@@ -23,7 +23,18 @@ def _token_hexes():
     out.add(theme.NEON_CAT_BAR.lower())
     for fill, border in theme.NEON_CAT_BARS.values():
         out.update((fill.lower(), border.lower()))
+    # The palette's green as the app wears it: its tokens, or one blue
+    # step beside them (see TestModes.test_every_role_is_its_token...).
+    out.update(v.lower() for v in theme.PALETTE["green"])
     return out
+
+
+def _blue_steps(a: str, b: str) -> int:
+    """How far apart two colours are, when only the blue channel differs
+    (a large number otherwise)."""
+    if a[:5].lower() != b[:5].lower():
+        return 999
+    return abs(int(a[5:7], 16) - int(b[5:7], 16))
 
 
 class TestTokens:
@@ -93,13 +104,36 @@ class TestModes:
     def test_legacy_broker_alias_resolves_to_midnight(self):
         assert theme.normalize_mode("broker") == "midnight"
 
+    def test_the_user_reads_vibrant_and_darker(self):
+        """The design system's names stay the stored ones; the labels are
+        this app's."""
+        assert theme.MODE_ORDER == ["neon", "midnight"]
+        assert theme.MODE_LABELS == {"neon": "Vibrant", "midnight": "Darker"}
+
+    def test_every_role_is_its_token_or_one_blue_step_beside_it(self):
+        """The chrome is the tokens, character for character. The
+        palette's green and the section bar share a colour with a chrome
+        token in one mode (Midnight's accent IS the palette's green,
+        Neon's line IS the bar's frame tone); so that a mode switch can
+        tell them apart by value, they sit one blue step aside -- the same
+        in both modes."""
+        tables = {m: theme._table(0.0, m) for m in T.MODE_ORDER}
+        for mode, table in tables.items():
+            for key, token in T.MODES[mode].items():
+                assert table[key] == token.lower(), (mode, key)
+        sources = dict(zip(("green.0", "green.1", "green.2"), T.PALETTE["green"]))
+        sources.update(zip(("bar.0", "bar.1"), theme._GREEN_BAR))
+        for role, token in sources.items():
+            values = {table[role] for table in tables.values()}
+            assert len(values) == 1, role                   # mode-independent
+            assert _blue_steps(values.pop(), token) <= 1, role
+
+    def test_the_default_sheet_is_the_one_for_the_mode_in_use(self):
+        assert theme.build_qss() == theme.build_qss(theme.MODE)
+        assert theme.qss_vars() == theme.qss_vars(theme.MODE)
+
     def test_unknown_mode_falls_back_to_neon(self):
         assert theme.normalize_mode("purrple") == "neon"
-
-    def test_other_mode_flips(self):
-        assert theme.other_mode("neon") == "midnight"
-        assert theme.other_mode("midnight") == "neon"
-        assert theme.other_mode("broker") == "neon"
 
     def test_constants_are_qt_free_and_token_backed(self):
         import sys
@@ -240,14 +274,60 @@ class TestIdentityHues:
         for mode in ("neon", "midnight"):
             sheet = theme.build_qss(mode)
             for hue in theme.TOY_HUES:
-                assert f'QFrame#toyFrame[hue="{hue}"]' in sheet
                 assert f'QWidget#toyBar[hue="{hue}"]' in sheet
+            # The toy's FRAME is painted (it contains the toy's sections,
+            # see ui/live_theme.py), so no rule may try to style it.
+            assert "toyFrame" not in sheet
             for hue in set(theme.CHAIN_TYPE_HUES.values()):
                 assert f'QFrame#chainFoldBar[hue="{hue}"]' in sheet
                 assert f'QFrame#motorBlock[hue="{hue}"]' in sheet
 
-    def test_neon_bars_are_the_reference_fills_and_midnight_the_tints(self):
+    def test_an_offline_toy_is_outlined_in_dim_with_no_hue_fill(self):
+        """Remembered but not connected: the disabled tone, never red and
+        never one of the identity hues."""
+        assert theme.OFFLINE_HUE not in theme.TOY_HUES
+        off = theme.OFFLINE_HUE
+        # Neon: the chrome's dim. Midnight: grey's mid, because dim would
+        # outshine the mid-tone frames of the toys that ARE connected.
+        edges = {"neon": theme.T.NEON["dim"],
+                 "midnight": theme.PALETTE["grey"][1]}
+        for mode, edge in edges.items():
+            outline, ground = theme.toy_frame_colors(off, mode)
+            assert outline == edge and ground is None
+            assert outline not in theme.PALETTE["red"]
+            sheet = theme.build_qss(mode)
+            assert "dashed" not in sheet and "dotted" not in sheet
+
+    def test_midnight_keeps_the_home_entry_framed(self):
+        """Midnight's `line` is a near-invisible hairline; the Home entry
+        would lose the frame that sets it apart."""
+        sheet = theme.build_qss("midnight")
+        i = sheet.index('QPushButton[role="navHome"] {')
+        block = sheet[i:sheet.index("}", i)]
+        assert f"border: 1px solid {theme.PALETTE['green'][1]}" in block
+        assert theme.T.MIDNIGHT["line"] not in block
+
+    def test_home_is_the_one_framed_nav_entry(self):
+        sheet = theme.build_qss("neon")
+        i = sheet.index('QPushButton[role="navHome"] {')
+        block = sheet[i:sheet.index("}", i)]
+        assert f"border: 1px solid {theme.T.NEON['line']}" in block
+        j = sheet.index('QPushButton[role="nav"] {')
+        assert "border: 1px solid transparent" in sheet[j:sheet.index("}", j)]
+
+    def test_a_toy_is_a_thin_outline_in_its_hue_with_nothing_filled(self):
+        """The lightweight toy row: the hue is the frame and the name.
+        Neon outlines in the reference apps' brighter frame tone, Midnight
+        in the hue's mid; neither fills the bar."""
         neon, mid = theme.build_qss("neon"), theme.build_qss("midnight")
-        assert theme.NEON_CAT_BARS["cyan"][0] in neon
-        assert theme.PALETTE["cyan"][2] in mid          # tint fill
-        assert theme.NEON_CAT_BARS["cyan"][0] not in mid
+        vib, mid_tone, _tint = theme.PALETTE["cyan"]
+        fill, frame = theme.NEON_CAT_BARS["cyan"]
+        assert theme.toy_frame_colors("cyan", "neon") == (
+            frame, theme.T.NEON["panel"])
+        assert theme.toy_frame_colors("cyan", "midnight") == (
+            mid_tone, theme.T.MIDNIGHT["panel"])
+        for sheet in (neon, mid):
+            assert (f'QWidget#toyBar[hue="cyan"] QLabel#deviceName '
+                    f'{{ color: {vib}; }}' in sheet)
+            assert 'QWidget#toyBar[hue="cyan"] { background-color' not in sheet
+            assert fill not in sheet

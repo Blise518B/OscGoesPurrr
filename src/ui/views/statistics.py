@@ -520,7 +520,7 @@ class StatisticsMixin:
 
     def _stats_tick(self) -> None:
         """Timer slot — early-outs while the page is hidden (same gate
-        as the Overview refresh timer); select_view refreshes once on
+        as the Home refresh timer); select_view refreshes once on
         arrival so the page never shows stale data."""
         view = self.views.get("Statistics") if hasattr(self, "views") else None
         if view is not None and not view.isVisible():
@@ -998,7 +998,7 @@ class StatisticsMixin:
 
     def _on_stats_reset(self) -> None:
         confirm = QMessageBox.question(
-            self.window, "Reset statistics",
+            (getattr(self, "dialog_parent", None) or self.window), "Reset statistics",
             "Reset ALL statistics: the lifetime totals, every session and "
             "its timeline, and the charts? This cannot be undone.",
             QMessageBox.Yes | QMessageBox.No,

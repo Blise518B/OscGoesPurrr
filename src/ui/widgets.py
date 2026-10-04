@@ -163,10 +163,24 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self._close_handler: Optional[Callable] = None
+        self._activate_handler: Optional[Callable] = None
         self._allow_close = False
 
     def set_close_handler(self, cb: Callable) -> None:
         self._close_handler = cb
+
+    def set_activate_handler(self, cb: Callable) -> None:
+        """Call `cb` whenever the user brings this window to the front."""
+        self._activate_handler = cb
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if (event.type() == QEvent.ActivationChange and self.isActiveWindow()
+                and self._activate_handler is not None):
+            try:
+                self._activate_handler()
+            except Exception:
+                pass      # a notification; never worth breaking the window
 
     def allow_close(self) -> None:
         self._allow_close = True
@@ -182,6 +196,47 @@ class MainWindow(QMainWindow):
             event.accept()
             return
         event.ignore()
+
+
+class Canvas(QWidget):
+    """The window's ground: one flat fill in the `bg` token, read when it
+    paints. Painted rather than styled because everything else sits inside
+    it -- a container the app's sections live in must not take its look
+    from a stylesheet, or changing the colour would re-style them all at
+    once (see ui/live_theme.py)."""
+
+    def paintEvent(self, _ev) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(_C.COLOR_BG))
+        p.end()
+
+
+class ToyFrame(QFrame):
+    """A toy's frame on Home: a thin rounded outline in the toy's identity
+    hue on the panel ground, or a quiet grey one on no ground while the
+    toy is offline. Painted, for the same reason as Canvas: it contains
+    the toy's sections."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._hue = ""
+
+    def set_hue(self, hue: str) -> None:
+        if hue != self._hue:
+            self._hue = hue
+            self.update()
+
+    def paintEvent(self, _ev) -> None:  # noqa: N802
+        from ui import theme as _theme      # late: theme imports nothing of ours
+        outline, ground = _theme.toy_frame_colors(self._hue)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        radius = float(_theme.RADIUS["card"])
+        box = QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0)
+        p.setPen(QPen(QColor(outline), 1.0))
+        p.setBrush(QBrush(QColor(ground)) if ground else Qt.NoBrush)
+        p.drawRoundedRect(box, radius, radius)
+        p.end()
 
 
 class Card(QFrame):

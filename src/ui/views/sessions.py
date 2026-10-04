@@ -382,7 +382,7 @@ class SessionsMixin:
             sid = self.controller.start_session_logging()
         except Exception as e:
             self.log_message(f"Session start failed: {e}")
-            QMessageBox.warning(self.window, "Session logger",
+            QMessageBox.warning((getattr(self, "dialog_parent", None) or self.window), "Session logger",
                                 f"Could not start session: {e}")
             return
         if sid:
@@ -400,7 +400,7 @@ class SessionsMixin:
         if not session_id:
             return
         confirm = QMessageBox.question(
-            self.window, "Delete session",
+            (getattr(self, "dialog_parent", None) or self.window), "Delete session",
             f"Delete '{session_id}.jsonl' permanently?",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
@@ -416,7 +416,7 @@ class SessionsMixin:
 
     def _on_sessions_delete_all(self) -> None:
         confirm = QMessageBox.question(
-            self.window, "Delete all sessions",
+            (getattr(self, "dialog_parent", None) or self.window), "Delete all sessions",
             "Delete every saved session file? This cannot be undone.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
@@ -439,7 +439,7 @@ class SessionsMixin:
             ok = False
         if not ok:
             QMessageBox.information(
-                self.window, "Sessions folder",
+                (getattr(self, "dialog_parent", None) or self.window), "Sessions folder",
                 "Could not open the sessions folder. Check the path in "
                 "the Saved to: line above."
             )
@@ -520,7 +520,7 @@ class SessionsMixin:
 
         # Seed the session list + button/banner state, then start a 500 ms
         # tick that advances the progress bar while a replay runs and this
-        # panel is on screen (mirrors the Overview timer's visibility
+        # panel is on screen (mirrors the Home timer's visibility
         # gate). The controller also pushes state changes via
         # refresh_replay_status(); this timer only fills the gaps between
         # them so the position counter moves smoothly.

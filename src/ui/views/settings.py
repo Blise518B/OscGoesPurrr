@@ -71,7 +71,7 @@ class SettingsMixin:
     _FEATURE_TIPS = {
         "feature_intiface":
             "Everything to do with toys. Off: the app stops talking to "
-            "the toy server and hides Device Routing — only useful if "
+            "the toy server and hides the toy list on Home — only useful if "
             "you run the app purely to drive avatar parameters.",
         "feature_osc_router_518":
             "After a few hours VRChat can stop announcing itself to new OSC "
@@ -111,6 +111,7 @@ class SettingsMixin:
         tabs.addTab(general_tab, "General")
         tabs.addTab(sessions_tab, "Sessions")
         parent_layout.addWidget(tabs)
+        self._settings_tabs = tabs          # ui/views/whats_new.py jumps here
 
         # SessionsMixin renders the Sessions tab content; General keeps
         # the original card stack.
@@ -203,15 +204,23 @@ class SettingsMixin:
         self.auto_refresh_var.setChecked(
             bool(self.controller.get_app_setting("auto_refresh", True))
         )
-        self.auto_refresh_var.toggled.connect(
-            lambda _=False: self.controller.toggle_auto_refresh()
-        )
+        def _on_auto_refresh(_=False) -> None:
+            self.controller.toggle_auto_refresh()
+            # The sidebar's Find toys button stands in while this is off.
+            refresh = getattr(self, "refresh_link_buttons", None)
+            if callable(refresh):
+                refresh()
+
+        self.auto_refresh_var.toggled.connect(_on_auto_refresh)
         conn_lay.addWidget(self.auto_refresh_var)
         self._explain(
             self.auto_refresh_var, "Auto refresh devices",
-            "Look for newly switched-on toys every so often, so a toy you "
-            "turn on later shows up by itself. Off: only the sidebar's "
-            "Refresh looks for new toys.")
+            "Keep looking for toys by itself, so one you switch on shows up "
+            "without pressing anything: every 5 seconds while no toy is "
+            "connected and one is expected (the first minutes after "
+            "launch, after a toy drops, or when you open this window), "
+            "every 30 seconds otherwise. Off: a Find toys button appears "
+            "in the sidebar instead.")
 
         self.auto_connect_var = ToggleSwitch("Auto Connect (Intiface)")
         self.auto_connect_var.setChecked(
@@ -224,8 +233,8 @@ class SettingsMixin:
         self._explain(
             self.auto_connect_var, "Auto connect (Intiface)",
             "Connect to the toy server when the app starts, and keep "
-            "reconnecting if the link drops. Off: connect with the "
-            "sidebar's button instead.")
+            "reconnecting if the link drops. Off: a Connect button appears "
+            "in the sidebar instead.")
 
         self.osc_auto_connect_var = ToggleSwitch("Auto Connect (VRChat OSC)")
         self.osc_auto_connect_var.setChecked(
@@ -237,8 +246,8 @@ class SettingsMixin:
         self._explain(
             self.osc_auto_connect_var, "Auto connect (VRChat OSC)",
             "Start listening for VRChat as soon as the app opens, and pick "
-            "it up again when VRChat restarts. Off: connect with the "
-            "sidebar's button instead.")
+            "it up again when VRChat restarts. Off: a Connect button "
+            "appears in the sidebar instead.")
         conn_lay.addWidget(self.osc_auto_connect_var)
 
         self.toy_sounds_toggle = ToggleSwitch("Sound when a toy connects or disconnects")
@@ -315,7 +324,31 @@ class SettingsMixin:
             "slider. <b>Test</b> plays the connect chime, then the "
             "disconnect one.")
 
+        # The whole-rig "a toy is connected" avatar parameter. Each toy has
+        # its own on its card (Home); this is the one for "any of them".
+        getter = getattr(self.controller, "get_toy_presence_param", None)
+        if callable(getter):
+            any_on, any_param = getter()
+            conn_lay.addWidget(self._build_connected_param_row(
+                "Tell VRChat while any toy is connected", any_on, any_param,
+                lambda on, name: self.controller.set_toy_presence_param(on, name),
+                "Tell VRChat while any toy is connected",
+                "Sends a Bool avatar parameter that is <b>true while at "
+                "least one toy is connected</b> and false while none is "
+                "— so your avatar can show that your toys are live. Add "
+                "a Bool with this name to your avatar's parameters; the "
+                "name is yours to change, or <b>Pick…</b> one your "
+                "avatar already sends.<br><br>"
+                "It is sent again whenever you change avatar, and goes "
+                "false when you close the app. Each toy has its own switch "
+                "for \"this toy is connected\": open the toy on Home."))
+
         parent_layout.addWidget(conn_card)
+        self._connection_card = conn_card
+
+        # ---- Toy Safety Card ----
+        self._toy_safety_card = self._build_toy_safety_card()
+        parent_layout.addWidget(self._toy_safety_card)
 
         # ---- Intiface Engine Card ----
         # How the Buttplug toy server is provided: the built-in engine we
@@ -512,6 +545,19 @@ class SettingsMixin:
             "Nothing downloads or installs by itself."
         )
         upd_lay.addStretch(1)
+        # The notes of the version in use -- they open by themselves once
+        # after an update; this is how to see them again.
+        news = getattr(self.controller, "get_whats_new", None)
+        if callable(news) and news():
+            news_btn = QPushButton("What's new")
+            news_btn.setProperty("role", "secondary")
+            news_btn.clicked.connect(lambda _=False: self.open_whats_new())
+            self._explain(
+                news_btn, "What's new",
+                "What changed in this version, each with a button that "
+                "takes you to it. Opens by itself once after an update.")
+            upd_lay.addWidget(news_btn)
+            self.whats_new_button = news_btn
         upd_btn = QPushButton("Check for updates now")
         upd_btn.setProperty("role", "secondary")
         upd_btn.clicked.connect(
@@ -575,52 +621,18 @@ class SettingsMixin:
         parent_layout.addWidget(ql_card)
 
         # ---- Appearance Card ----
-        # The 518 design system ships two modes. The palette is copied into
-        # every module (and the generated stylesheet) at import time, so a
-        # switch applies on the next launch rather than live.
+        # Two modes and one colour. Both apply while the app runs
+        # (ui/live_theme.py) -- nothing on this card restarts anything.
         ap_card = _Card()
-        ap_lay = _vbox(14, 8)
+        ap_lay = _vbox(20, 8)
         ap_card.setLayout(ap_lay)
         ap_hdr = QLabel("Appearance")
         ap_hdr.setObjectName("sectionTitle")
         ap_lay.addWidget(ap_hdr)
-        ap_row = _hbox(0, 8)
-        ap_row.addWidget(QLabel("Mode:"))
-        current_mode = _theme.normalize_mode(
-            self.controller.get_app_setting("ui_mode", _theme.MODE))
-        self._mode_buttons = {}
-
-        def _pick_mode(key: str) -> None:
-            if key == current_mode:
-                self._appearance_note.setText("This mode is already active.")
-                return
-            self.controller.set_app_setting("ui_mode", key)
-            self._appearance_note.setText(
-                f"Applying {_theme.MODE_LABELS.get(key, key)} — restarting…")
-            QTimer.singleShot(200, self.controller.request_restart)
-
-        for key in _theme.MODE_ORDER:
-            btn = QPushButton(_theme.MODE_LABELS.get(key, key))
-            btn.setProperty("role", "segActive" if key == current_mode else "segIdle")
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.clicked.connect(lambda _=False, k=key: _pick_mode(k))
-            ap_row.addWidget(btn)
-            self._mode_buttons[key] = btn
-        self._explain(ap_row,
-            "Neon / Midnight",
-            "<b>Neon</b> outlines every card and chip in the frame green; "
-            "<b>Midnight</b> uses a near-invisible hairline so cards float. "
-            "Same shapes, spacing and type in both — only the chrome swaps. "
-            "The ◐ button beside the app title switches too. Changing mode "
-            "restarts OscGoesPurrr so every widget repaints."
-        )
-        ap_row.addStretch(1)
-        ap_lay.addLayout(ap_row)
-        self._appearance_note = self._muted_label(
-            "Neon is the default. Switching restarts the app — takes a second."
-        )
-        ap_lay.addWidget(self._appearance_note)
+        ap_lay.addWidget(self._build_ui_mode_row())
+        ap_lay.addWidget(self._build_accent_picker())
         parent_layout.addWidget(ap_card)
+        self._appearance_card = ap_card
 
         # ---- Features Card ----
         # Lets the user turn off subsystems they don't need. Disabling a
@@ -671,13 +683,25 @@ class SettingsMixin:
         parent_layout.addWidget(feat_card)
         parent_layout.addStretch(1)
 
+        # This page's sections for the live colour sweep: the title, the
+        # tab bar, each card and the Sessions tab -- so a colour picked
+        # here runs down the page card by card instead of all at once.
+        # (The cards are built once and never added to later.)
+        style_root = getattr(self, "_style_root", None)
+        if callable(style_root):
+            style_root(title)
+            style_root(tabs.tabBar())
+            for i in range(general_lay.count()):
+                style_root(general_lay.itemAt(i).widget())
+            style_root(sessions_tab)
+
     def _on_feature_toggled(self, key: str, checked: bool) -> None:
         """A Features switch was flipped. Switching statistics off deletes
         everything recorded, so that one asks first — and flips back on
         No."""
         if key == "feature_statistics" and not checked:
             resp = QMessageBox.question(
-                self.window, "Turn off statistics",
+                (getattr(self, "dialog_parent", None) or self.window), "Turn off statistics",
                 "Turn off usage statistics?\n\nNothing is recorded any more, "
                 "the Statistics page disappears, and everything recorded so "
                 "far (sessions, charts and lifetime totals) is deleted from "
@@ -733,10 +757,15 @@ class SettingsMixin:
         quiet line in Settings stays either way."""
         if getattr(self, "_update_popup", None) is not None:
             return
+        if getattr(self, "_whats_new_dialog", None) is not None:
+            # One window at a time: the offer opens when "What's new"
+            # closes (ui/views/whats_new.py).
+            self._update_popup_waiting = (latest, current, url, can_install)
+            return
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QDesktopServices
 
-        dlg = QDialog(self.window)
+        dlg = QDialog((getattr(self, "dialog_parent", None) or self.window))
         dlg.setWindowTitle("Update available")
         dlg.setWindowModality(Qt.WindowModal)
         dlg.setMinimumWidth(460)
@@ -892,7 +921,7 @@ class SettingsMixin:
             return
         label = combo.currentText()
         resp = QMessageBox.question(
-            self.window, "Restore settings",
+            (getattr(self, "dialog_parent", None) or self.window), "Restore settings",
             f"Restore settings from {label}?\n\nCurrent settings will be "
             "replaced and the app restarts.",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
@@ -901,7 +930,7 @@ class SettingsMixin:
             return
         if not self.controller.restore_settings_snapshot(str(name)):
             QMessageBox.warning(
-                self.window, "Restore failed",
+                (getattr(self, "dialog_parent", None) or self.window), "Restore failed",
                 "That backup could not be restored — see the System Log "
                 "for details.")
 
@@ -933,13 +962,23 @@ class SettingsMixin:
             inner_lay.addWidget(card)
             return lay
 
-        section("Overview — what this app does", """
+        section("What this app does", """
 OscGoesPurrr listens to VRChat OSC parameters once, then fans them out to independent output pipelines:
 
-  • Device Routing — Bluetooth toys via Intiface / Buttplug.io
+  • Home — your Bluetooth toys via Intiface / Buttplug.io
   • OSC Inspector — live read-out of every parameter your avatar broadcasts
 
 Each section is self-contained: a failure in one never affects the others.
+""")
+
+        section("Home — your toys", """
+Home is where the app opens. Every toy you have connected gets a row outlined in its own colour, showing what drives it in the active mode, its battery and a live meter per motor, with Mute and Test right there. Toys you've used before but that are switched off stay listed in a grey outline, so their setup is always reachable. Test all buzzes every connected toy at once.
+
+Click a toy's bar to open it: each motor's signal chains appear in place (Input → Depth/Speed/Punch → Combine → Wake → Envelope → Zero cut → Output). Click any stage to edit it. Click the bar again to fold the toy away.
+
+Tuning tools, at the bottom, holds the two things you only need while shaping a response: the input simulator and the signal graph. It stays folded until you open it and remembers how you left it.
+
+Anti-stuck — the safety cutoff that stops a toy when a contact's value freezes (an avatar swap, a partner leaving) — is on by default and lives in Settings → Toy Safety.
 """)
 
         section("Modes — what they are", """
@@ -962,7 +1001,7 @@ Beside it are two toggles. Neither is remembered across restarts, deliberately �
   • Off — panic silence. Everything stops instantly whatever the slider says; switch it back off and your level returns untouched.
   • Sleep — makes your toys hard to wake: every chain's Wake stage switches to the stroke counter, so nothing plays until three full strokes land within six seconds. A brush against a sleeping partner does nothing. Your own Wake settings are untouched and come straight back. Buttplug toys only — no other backend has a Wake stage.
 
-If ONE toy always feels stronger than the rest, leave the slider alone and trim that motor instead: Device Routing → its chain → Output → Gain. If instead a motor does nothing until it is well up its range, or gets unpleasant near the top, set Output → Range to the part it actually uses. Both are per-motor calibration and hold across every mode.
+If ONE toy always feels stronger than the rest, leave the slider alone and trim that motor instead: Home → the toy → its chain → Output → Gain. If instead a motor does nothing until it is well up its range, or gets unpleasant near the top, set Output → Range to the part it actually uses. Both are per-motor calibration and hold across every mode.
 """)
 
         section("What is saved per mode vs. shared", """
@@ -986,6 +1025,15 @@ The optional "Remember mode per avatar" setting (Settings → Modes) restores th
 The red "Delete" button on a toy card forgets that toy entirely — it is removed from the wiring and every mode, and from the global known-toys list. To use the toy again, simply reconnect it; it will be re-registered automatically.
 """)
 
+        section("Showing connected toys on your avatar", """
+The app can tell your avatar whether a toy is connected, as a Bool avatar parameter — for a light, an icon, anything your avatar can switch on.
+
+  • Any toy — Settings → Connection Settings → "Tell VRChat while any toy is connected". True while at least one toy is connected.
+  • One toy — open the toy on Home → "Tell VRChat while this toy is connected". True while that toy is connected. It is the same in every mode.
+
+Each has a name you can change; add a Bool with that name to your avatar's parameters. The values are sent again whenever you change avatar or VRChat reconnects, and all go false when you close the app. Setup details: docs/VRCHAT_MENU.md.
+""")
+
         section("Custom OSC addresses on a motor", """
 Under each motor, the "+ Add Variable" button lets you map any number of OSC parameters to that motor. The motor's output is the maximum of all mapped parameters' normalized values (plus any contribution from selected SPS zones).
 
@@ -1000,7 +1048,7 @@ The SPS Sources tab lets you build a "virtual" SPS zone out of raw VRChat contac
   • Velocity — binary on-enter contacts. While any of them fires, the output is multiplied by the "Velocity ×" amount (a thrust/speed boost).
   • Max value — caps the raw proximity before the multiplier is applied.
 
-Type all the contact parameter names comma-separated (the /avatar/parameters/ prefix is optional). Each source you define then appears — by its name — in the Device Routing zone picker (under "Custom Sources"), where it routes exactly like an auto-detected zone. The sources are global (shared by every mode).
+Type all the contact parameter names comma-separated (the /avatar/parameters/ prefix is optional). Each source you define then appears — by its name — in every toy's zone picker on Home (under "Custom Sources"), where it routes exactly like an auto-detected zone. The sources are global (shared by every mode).
 """)
 
         section("Real-Time OSC Inspector", """
@@ -1043,6 +1091,298 @@ OscGoesPurrr is free and open source under the MIT license. It also uses other o
 
         inner_lay.addStretch(1)
 
+        # Sections for the live colour sweep: the title and each card. As
+        # one section this page is the app's most expensive slice -- a
+        # dozen long word-wrapped texts laid out again in one go.
+        style_root = getattr(self, "_style_root", None)
+        if callable(style_root):
+            style_root(title)
+            for i in range(inner_lay.count()):
+                style_root(inner_lay.itemAt(i).widget())
+
+    # ----------------------------------------------------------
+    # Appearance: the mode and the colour picker
+    # ----------------------------------------------------------
+
+    # "Mode:" and "Colour:" share a column, so what follows them lines up.
+    _APPEARANCE_LABEL_W = 52
+
+    _UI_MODE_TIP = (
+        "<b>Vibrant</b> draws every card, button and chip with an outline "
+        "in your colour. <b>Darker</b> turns those outlines down to a "
+        "faint hairline and deepens the blacks, so only what matters "
+        "lights up. Same layout in both.<br><br>"
+        "Switches as you click — nothing restarts."
+    )
+
+    def _build_ui_mode_row(self) -> QWidget:
+        """Mode: one button per mode, the one in use lit."""
+        host = QWidget()
+        row = _hbox(0, 8)
+        host.setLayout(row)
+        label = QLabel("Mode:")
+        label.setFixedWidth(self._APPEARANCE_LABEL_W)
+        row.addWidget(label)
+        self._ui_mode_buttons = {}
+        for key in _theme.MODE_ORDER:
+            btn = QPushButton(_theme.MODE_LABELS.get(key, key))
+            btn.setProperty(
+                "role", "segActive" if key == _theme.MODE else "segIdle")
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(lambda _=False, k=key: self._set_ui_mode(k))
+            row.addWidget(btn)
+            self._ui_mode_buttons[key] = btn
+        self._explain(row, "Vibrant / Darker", self._UI_MODE_TIP)
+        row.addStretch(1)
+        return host
+
+    def _set_ui_mode(self, key: str) -> None:
+        """Switch between the two modes, now: the page in view first, the
+        rest of the app right behind it (the same sweep as a colour)."""
+        key = _theme.normalize_mode(key)
+        live = getattr(self, "live_theme", None)
+        if live is None or not live.set_mode(key):
+            return
+        self.controller.set_app_setting("ui_mode", key)
+        for k, btn in self._ui_mode_buttons.items():
+            btn.setProperty("role", "segActive" if k == key else "segIdle")
+            self._repolish(btn)
+        # The picker shows this mode's version of every colour.
+        self._paint_accent_picker()
+
+    _ACCENT_TIP = (
+        "Turns everything that is green — frames, buttons, highlights, "
+        "even the faint tint of the background — to the colour you pick, "
+        "as you pick it. Brightness and contrast stay as they are, so "
+        "every colour reads as well as the green does.<br><br>"
+        "The colours that <i>mean</i> something keep theirs: each toy's "
+        "own colour, pink for the live signal, amber for warnings, red "
+        "for errors.<br><br>"
+        "Nothing restarts: what you are looking at changes first and the "
+        "rest of the app follows a moment later. <b>Green</b> brings the "
+        "original back."
+    )
+
+    # The slider reports every pixel of a drag; the app follows at most
+    # this often. One step re-styles what is on screen (two or three
+    # sections), so this is also the frame rate of the live preview.
+    _ACCENT_LIVE_MS = 40
+    # The choice is written to disk once the picker has been still this long.
+    _ACCENT_SAVE_MS = 600
+
+    def _build_accent_picker(self) -> QWidget:
+        """Colour: presets and a hue slider. The whole app is the preview:
+        a choice is applied as it is made (ui/live_theme.py sweeps it
+        through the app in slices) and saved once the picker rests."""
+        host = QWidget()
+        lay = _vbox(0, 8)
+        host.setLayout(lay)
+
+        self._accent_pick = _theme.ACCENT_HUE
+
+        # ---- presets ----
+        row = _hbox(0, 8)
+        colour_label = QLabel("Colour:")
+        colour_label.setFixedWidth(self._APPEARANCE_LABEL_W)
+        row.addWidget(colour_label)
+        self._accent_preset_buttons = []
+        for name, hue in _theme.ACCENT_PRESETS:
+            btn = QPushButton("")
+            btn.setFixedSize(24, 24)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setToolTip(name)
+            # Shows a colour that is not the current one, on purpose.
+            btn.setProperty("noRetint", True)
+            btn.clicked.connect(lambda _=False, h=hue: self._set_accent_pick(h))
+            row.addWidget(btn)
+            self._accent_preset_buttons.append((btn, hue))
+        row.addStretch(1)
+        lay.addLayout(row)
+
+        # ---- hue slider: its track is the colours it leads to ----
+        slider = QSlider(Qt.Horizontal)
+        slider.setRange(0, 359)
+        slider.setPageStep(15)
+        slider.setFixedHeight(24)
+        slider.setMaximumWidth(420)
+        slider.setCursor(Qt.PointingHandCursor)
+        slider.setProperty("noRetint", True)
+        self._accent_slider = slider
+        slider.valueChanged.connect(
+            lambda v: self._set_accent_pick(float(v), from_slider=True))
+        lay.addWidget(slider)
+
+        self._accent_note = self._muted_label(
+            "Mode and colour change as you pick — no restart.")
+        lay.addWidget(self._accent_note)
+
+        # Coalesce a drag into steps the app can keep up with, and save
+        # once it stops.
+        self._accent_live_timer = QTimer(host)
+        self._accent_live_timer.setSingleShot(True)
+        self._accent_live_timer.setInterval(self._ACCENT_LIVE_MS)
+        self._accent_live_timer.timeout.connect(self._apply_accent_pick)
+        self._accent_save_timer = QTimer(host)
+        self._accent_save_timer.setSingleShot(True)
+        self._accent_save_timer.setInterval(self._ACCENT_SAVE_MS)
+        self._accent_save_timer.timeout.connect(self._save_accent_pick)
+
+        self._explain(lay, "Colour", self._ACCENT_TIP)
+        self._paint_accent_picker()
+        return host
+
+    def _set_accent_pick(self, hue, from_slider: bool = False) -> None:
+        """Take a choice (None = the house green) from a preset or the
+        slider. A preset applies at once; a drag is coalesced."""
+        default = _theme.DEFAULT_ACCENT_HUE
+        if from_slider and hue is not None and round(hue) == round(default):
+            hue = None                    # the green's own spot on the track
+        self._accent_pick = hue
+        if from_slider:
+            if not self._accent_live_timer.isActive():
+                self._accent_live_timer.start()
+        else:
+            self._accent_live_timer.stop()
+            self._apply_accent_pick()
+
+    def _apply_accent_pick(self) -> None:
+        """Turn the app to the picked colour, now."""
+        hue = self._accent_pick
+        live = getattr(self, "live_theme", None)
+        if live is not None:
+            live.set_hue(hue)
+        self._paint_accent_picker()
+        self._accent_save_timer.start()
+
+    def _save_accent_pick(self) -> None:
+        hue = self._accent_pick
+        self.controller.set_app_setting(
+            "ui_accent_hue", None if hue is None else round(float(hue), 1))
+
+    def _paint_accent_picker(self) -> None:
+        """Repaint the picker around the current choice: the slider's
+        position, its handle and track, and the ring on the chosen preset."""
+        hue = self._accent_pick
+        now = _theme.CHROME
+        accent = _theme.accent_preview(hue)["accent"]
+
+        slider = self._accent_slider
+        want = int(round(_theme.DEFAULT_ACCENT_HUE if hue is None else hue)) % 360
+        if slider.value() != want and not slider.isSliderDown():
+            slider.blockSignals(True)
+            slider.setValue(want)
+            slider.blockSignals(False)
+        stops = ", ".join(
+            f"stop:{i / 12:.4f} {_theme.accent_preview(i * 30.0)['accent']}"
+            for i in range(13))
+        slider.setStyleSheet(
+            "QSlider::groove:horizontal { height: 10px; "
+            f"border: 1px solid {now['line']}; border-radius: 6px; "
+            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:0, {stops}); }}"
+            "QSlider::sub-page:horizontal { background: transparent; }"
+            "QSlider::handle:horizontal { width: 14px; height: 14px; "
+            "margin: -4px 0; border-radius: 9px; "
+            f"background: {accent}; border: 2px solid {now['txt']}; }}")
+
+        for btn, preset in self._accent_preset_buttons:
+            chosen = _theme.same_accent(preset, hue)
+            fill = _theme.accent_preview(preset)["accent"]
+            ring = now["txt"] if chosen else now["panel"]
+            btn.setStyleSheet(
+                f"QPushButton {{ background-color: {fill}; "
+                f"border: 2px solid {ring}; border-radius: 12px; padding: 0; }}"
+                f"QPushButton:hover {{ background-color: {fill}; "
+                f"border-color: {now['txt']}; }}")
+
+    def _build_toy_safety_card(self) -> QWidget:
+        """Anti-stuck, the safety cutoff for a frozen input. It is on by
+        default and rarely touched, so it lives here rather than among
+        Home's tuning tools."""
+        card = _Card()
+        lay = _vbox(20, 8)
+        card.setLayout(lay)
+
+        hdr = QLabel("Toy Safety")
+        hdr.setObjectName("sectionTitle")
+        lay.addWidget(hdr)
+        lay.addWidget(self._muted_label(
+            "VRChat only sends a value when it changes. If a contact stops "
+            "updating — you swap avatar, your partner leaves, the link "
+            "drops — its last value would keep a toy running. Anti-stuck "
+            "notices a value that has frozen and stops the toy. On by "
+            "default."
+        ))
+
+        self.toy_antistuck_check = ToggleSwitch("Anti-stuck")
+        self.toy_antistuck_check.setChecked(
+            bool(self.controller.get_app_setting("toy_antistuck_enabled", True))
+        )
+        lay.addWidget(self.toy_antistuck_check)
+
+        # The two timeouts, shown only while the switch is on (hidden
+        # rather than disabled, like the chime volume row above).
+        times_row = QWidget()
+        times_lay = _hbox(0, 8)
+        # Indented to the switch's label, so the row reads as its own.
+        times_lay.setContentsMargins(
+            ToggleSwitch._TRACK_W + ToggleSwitch._LABEL_SPACING, 0, 0, 0)
+        times_row.setLayout(times_lay)
+
+        def seconds_spin(key: str, default: int) -> QSpinBox:
+            spin = QSpinBox()
+            spin.setRange(1, 600)
+            spin.setSuffix("s")
+            spin.setFixedWidth(86)
+            spin.setValue(int(self.controller.get_app_setting(key, default)))
+            return spin
+
+        times_lay.addWidget(QLabel("Frozen part-way: stop after"))
+        self.toy_antistuck_active_spin = seconds_spin("toy_antistuck_active_s", 1)
+        times_lay.addWidget(self.toy_antistuck_active_spin)
+        times_lay.addSpacing(14)
+        times_lay.addWidget(QLabel("Held at 100%: ease off after"))
+        self.toy_antistuck_peaked_spin = seconds_spin("toy_antistuck_peaked_s", 10)
+        times_lay.addWidget(self.toy_antistuck_peaked_spin)
+        times_lay.addStretch(1)
+        lay.addWidget(times_row)
+        times_row.setVisible(self.toy_antistuck_check.isChecked())
+        self.toy_antistuck_check.toggled.connect(times_row.setVisible)
+
+        self._explain(
+            (self.toy_antistuck_check, times_lay), "Anti-stuck",
+            "Safety cutoff for frozen inputs. VRChat only sends OSC on "
+            "parameter change — if an SPS input stops updating (avatar "
+            "swap, partner leaves, OSC routing loss), the last value "
+            "would drive the toy forever.<br><br>"
+            "A real tracked value between zero and one can never hold "
+            "perfectly still — animation and IK jitter it constantly "
+            "— so a value frozen <b>part-way</b> is cut quickly (1s by "
+            "default). Only a value held at <b>100%</b> gets the longer "
+            "fuse before a gentle ramp down, because all-the-way-in-and-"
+            "held is a real state that genuinely sits at a constant 1.0."
+        )
+
+        # Connect AFTER seeding so the initial setValue/setChecked calls
+        # don't echo straight back into app settings.
+        self.toy_antistuck_check.toggled.connect(self._on_toy_antistuck_changed)
+        self.toy_antistuck_active_spin.valueChanged.connect(
+            self._on_toy_antistuck_changed)
+        self.toy_antistuck_peaked_spin.valueChanged.connect(
+            self._on_toy_antistuck_changed)
+        return card
+
+    def _on_toy_antistuck_changed(self, *_):
+        """Persist the toy anti-stuck settings. The live routing
+        tick reads them fresh each evaluation via the controller's
+        `_get_toy_antistuck`, so the change takes effect on the next tick with
+        no explicit recalc kick."""
+        self.controller.set_app_setting(
+            "toy_antistuck_enabled", bool(self.toy_antistuck_check.isChecked()))
+        self.controller.set_app_setting(
+            "toy_antistuck_active_s", int(self.toy_antistuck_active_spin.value()))
+        self.controller.set_app_setting(
+            "toy_antistuck_peaked_s", int(self.toy_antistuck_peaked_spin.value()))
+
     def _on_steamvr_toys_toggled(self, checked: bool):
         """Switch toys-in-SteamVR and say what happens next."""
         try:
@@ -1082,7 +1422,7 @@ OscGoesPurrr is free and open source under the MIT license. It also uses other o
             except OSError:
                 texts.append(f"{name} is missing from this build — it is also in the "
                              f"project's GitHub repository.")
-        dlg = QDialog(self.window)
+        dlg = QDialog((getattr(self, "dialog_parent", None) or self.window))
         dlg.setWindowTitle("Licenses")
         dlg.resize(920, 720)
         lay = _vbox(12, 8)

@@ -10,10 +10,19 @@ from pathlib import Path as _Path
 # and NOTHING in this project retypes a hex; everything below is a name
 # for a token. The stylesheet itself is built in `ui/theme.py`.
 #
-# The mode is read straight from app_settings.json here (constants must
-# stay import-safe: no project imports, no Qt), and every module copies
-# these values at import, so a mode switch applies on the next launch --
-# the same contract the colour profiles this replaced had.
+# The one thing a user can change is the hue of "the green": Settings ->
+# Appearance turns every green token by one angle (see accent_shift.py).
+# The tokens stay the source; a turned colour is computed from one,
+# never typed.
+#
+# The mode and that hue are read straight from app_settings.json here
+# (constants must stay import-safe: no Qt, nothing that imports the app),
+# and every module copies these values at import. Both can change while
+# the app runs: theme.set_mode / theme.set_accent_hue rebind every copy
+# (retint.py) and ui/live_theme.py sweeps the change across what is on
+# screen.
+from functools import lru_cache as _lru_cache
+
 import theme_tokens as _tokens
 
 
@@ -39,11 +48,86 @@ def _load_ui_mode() -> str:
     return key if key in _tokens.MODES else _tokens.DEFAULT_MODE
 
 
+def _load_ui_accent_hue():
+    """Persisted `ui_accent_hue`: the hue (OKLCH degrees, 0-360) the user
+    turned the app's green to in Settings -> Appearance, or None for the
+    house green. Read the same way and for the same reason as the mode
+    above; `OGP_UI_ACCENT` in the environment wins over the file (a number,
+    or `default`) so tests and screenshots never depend on -- or rewrite --
+    the user's settings."""
+    import os as _os
+    forced = _os.environ.get("OGP_UI_ACCENT")
+    if forced is None:
+        try:
+            p = (_Path.home() / "AppData" / "Roaming" / "OscGoesPurrr"
+                 / "app_settings.json")
+            with open(p, "r", encoding="utf-8") as f:
+                forced = _json.load(f).get("ui_accent_hue")
+        except Exception:
+            return None
+    try:
+        return float(forced) % 360.0
+    except (TypeError, ValueError):
+        return None          # absent, null, "default" or junk: the green
+
+
 UI_MODE = _load_ui_mode()
-UI_MODE_LABELS = dict(_tokens.MODE_LABELS)
+# What the two modes are called in THIS app. The design system's names
+# (and the stored setting, and OGP_UI_MODE) stay `neon` / `midnight`.
+UI_MODE_LABELS = {"neon": "Vibrant", "midnight": "Darker"}
 UI_MODE_ORDER = list(_tokens.MODE_ORDER)
-CHROME = dict(_tokens.mode(UI_MODE))
-PALETTE = _tokens.PALETTE
+# The colour picker: every green token is turned by one angle, measured
+# from the Neon accent so both modes turn alike. 0.0 leaves the tokens
+# untouched, character for character. (accent_shift is pure maths -- as
+# import-safe as the token file.)
+import accent_shift as _accent
+
+
+# The palette's green, as roles of the table below.
+GREEN_ROLES = ("green.0", "green.1", "green.2")
+
+
+def accent_table(delta: float, mode_name: str = "") -> dict:
+    """`{role: its colour with the green turned by delta degrees}` for
+    every green token of a mode: its chrome (the roles are the token
+    names -- `bg`, `line`, `accent`, ...) and the palette's green
+    (GREEN_ROLES). The one place that decides what "a green token" is;
+    `ui/theme.py` extends it with the section-bar fill.
+
+    Every role has a colour of its own, in every mode: no two roles share
+    one and none lands on an identity hue (accent_shift.unique_table) --
+    which is what lets the running app be recoloured by value, across a
+    change of hue AND of mode. The chrome is the tokens, character for
+    character, at no turn; the palette's green is the same in every mode
+    and steps one blue level aside where a mode's chrome uses the same
+    colour (Midnight's accent IS the palette's green)."""
+    key = mode_name or UI_MODE
+    key = _tokens.LEGACY_MODE_ALIASES.get(key, key)
+    if key not in _tokens.MODES:
+        key = _tokens.DEFAULT_MODE
+    return dict(_accent_table(float(delta), key))
+
+
+@_lru_cache(maxsize=1024)
+def _accent_table(delta: float, mode_name: str) -> dict:
+    protected = [tone for name, tri in _tokens.PALETTE.items()
+                 if name != "green" for tone in tri]
+    chromes = {name: _accent.unique_table(dict(tokens), delta, protected)
+               for name, tokens in _tokens.MODES.items()}
+    taken = protected + [c for chrome in chromes.values()
+                         for c in chrome.values()]
+    green = _accent.unique_table(
+        dict(zip(GREEN_ROLES, _tokens.PALETTE["green"])), delta, taken)
+    return {**chromes[mode_name], **green}
+
+
+UI_ACCENT_HUE = _load_ui_accent_hue()
+UI_ACCENT_DELTA = _accent.delta_for(UI_ACCENT_HUE, _tokens.NEON["accent"])
+_startup_table = accent_table(UI_ACCENT_DELTA)
+CHROME = {k: _startup_table[k] for k in _tokens.mode(UI_MODE)}
+PALETTE = dict(_tokens.PALETTE)
+PALETTE["green"] = tuple(_startup_table[r] for r in GREEN_ROLES)
+del _startup_table
 
 # The four surfaces + the frame, by their token names.
 COLOR_BG = CHROME["bg"]            # the window
@@ -126,8 +210,8 @@ SIM_ADDRESSES = (SIM_PEN_ADDRESS, SIM_TOUCH_ADDRESS)
 
 # --- UI Dimensions ---
 WINDOW_GEOMETRY = "1100x700"
-# Sidebar: the Aldrich title (19px, +1px tracking) plus the mode toggle
-# beside it need ~210px, and when the nav overflows vertically the 10px
+# Sidebar: the two-column block of mode buttons and the link rows (name +
+# status pill) need ~210px, and when the nav overflows vertically the 10px
 # scrollbar eats into that -- 240 keeps the content clear of both.
 SIDEBAR_WIDTH = 240
 BTN_HEIGHT_LARGE = 35
@@ -186,6 +270,19 @@ QUEUE_POLL_RATE_MS = 50
 UI_REFRESH_RATE_MS = 250
 OSC_BOOT_DELAY_MS = 500
 AUTO_REFRESH_RATE_S = 30.0
+# --- Looking for toys ---
+# One scan is TOY_SCAN_SECONDS of Bluetooth listening. With a toy connected
+# the app rescans every AUTO_REFRESH_RATE_S and no faster: scanning shares
+# the radio with the toy's own link, and that link's latency comes first.
+# With NO toy connected there is nothing to protect, so the app searches
+# hard -- a scan starts every TOY_SEARCH_RATE_S -- but only for
+# TOY_SEARCH_WINDOW_S after the last reason to expect a toy (the toy server
+# came up, a toy dropped, the user opened the window). Unbounded, it would
+# keep the radio 40% busy and add ~3.5 MB a day to the toy server's log for
+# every session spent with the toys switched off.
+TOY_SCAN_SECONDS = 2.0
+TOY_SEARCH_RATE_S = 5.0
+TOY_SEARCH_WINDOW_S = 180.0
 
 # --- OGP avatar parameters (VRChat expression-menu control) ---
 # Stored/compared in the bare parameter_store form (the OSC prefix is

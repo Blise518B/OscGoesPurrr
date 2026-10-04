@@ -77,6 +77,28 @@ animations — you don't need an animator controller at all. Two assets:
 Upload, and you're done. (If you'd rather not click through Unity
 inspectors, use Option A above — same result, one menu click.)
 
+## Showing on your avatar which toys are connected
+
+The app can also tell your avatar whether a toy is connected, so the
+avatar can light an icon, swap a material or switch an object on. These
+are plain **Bool** parameters you name yourself; both kinds are off until
+you switch them on.
+
+| What | Where to switch it on | Default name | True while |
+|---|---|---|---|
+| Any toy | Settings → Connection Settings → *Tell VRChat while any toy is connected* | `OGP/ToyConnected` | at least one toy is connected |
+| One toy | Home → open the toy → *Tell VRChat while this toy is connected* | `OGP/<ToyName>Connected` | that toy is connected |
+
+Add a Bool with the same name to your avatar's Expression Parameters
+(unsynced is fine if only you need to see it; synced if others should),
+and drive whatever you like from it in your FX layer. Two toys given the
+same name share one parameter — true while either is connected.
+
+The app sends the values again every time you change avatar or VRChat
+reconnects, and sets them all to false when you close it, so an avatar is
+never left showing a toy that is gone. If your parameter is a Float or
+Int instead of a Bool it receives 1 and 0.
+
 ## Troubleshooting
 
 * **Nothing happens when you tap the menu** — VRChat caches a per-avatar
@@ -94,4 +116,4 @@ inspectors, use Option A above — same result, one menu click.)
   trigger it.
 * **Switching modes did nothing** — modes are routings. If both modes
   route the same motors from the same zones, they feel identical; set them
-  apart in Device Routing → the motor's chain → Input.
+  apart on Home → the toy → the motor's chain → Input.

@@ -25,10 +25,14 @@ Host attributes assumed (provided by OscGoesPurrrApp):
 
 import asyncio
 import threading
+import time
 from typing import Any, Dict
 
 import debug_log
-from constants import AUTO_REFRESH_RATE_S
+from constants import (
+    AUTO_REFRESH_RATE_S, TOY_SCAN_SECONDS, TOY_SEARCH_RATE_S,
+    TOY_SEARCH_WINDOW_S,
+)
 
 
 class IntifaceFacade:
@@ -84,6 +88,7 @@ class IntifaceFacade:
         # Toys arrive and leave with the connection; a manual Disconnect
         # comes straight here rather than through the queue.
         self.toy_sounds_on_devices_changed()
+        self.toy_presence_on_devices_changed()
 
         if connected:
             # Kick off the periodic rescan so toys powered on AFTER connect get
@@ -92,6 +97,8 @@ class IntifaceFacade:
             # or reconnect-after-drop) — previously only the manual button
             # started it, so a startup auto-connect never rescanned and newly
             # powered-on toys never appeared without a manual reconnect.
+            # A fresh toy server is the first reason to expect a toy.
+            self.note_toy_search_wanted()
             self._ensure_auto_refresh_running()
         else:
             # Disconnected — including an unexpected engine/websocket drop. Make
@@ -372,7 +379,7 @@ class IntifaceFacade:
             known_devices = set(self.haptic_engine.list_connected_device_names())
 
             # Run a one-shot scan through the engine facade.
-            await self.haptic_engine.async_start_scan(scan_seconds=2.0)
+            await self.haptic_engine.async_start_scan(scan_seconds=TOY_SCAN_SECONDS)
 
             # Snapshot every connected device (primitives only) and pick out
             # the new ones — never reach into buttplug_client here.
@@ -395,11 +402,46 @@ class IntifaceFacade:
         except Exception as e:
             self.log_message(f"Scan error: {e}")
 
+    def note_toy_search_wanted(self) -> None:
+        """Facade: there is a reason to expect a toy about now -- the toy
+        server just came up, a toy dropped, or the user opened the window.
+        (Re)opens the fast-search window; see _toy_scan_pause. Cheap and
+        safe from any thread: one float store."""
+        self._toy_search_until = time.monotonic() + TOY_SEARCH_WINDOW_S
+
+    def _toy_scan_pause(self) -> float:
+        """Seconds to rest between two scans, decided by what is at stake.
+
+        A toy is connected: AUTO_REFRESH_RATE_S, as ever -- a scan shares
+        the radio with that toy's link, and its latency comes first.
+        No toy is connected and one is expected (inside the search
+        window): scan again as soon as the TOY_SEARCH_RATE_S beat allows.
+        No toy and no reason to expect one: the slow beat again, so a
+        session spent with the toys off costs what it always did."""
+        try:
+            no_toys = not self.haptic_engine.list_connected_device_names()
+        except Exception:
+            no_toys = False
+        searching = no_toys and (
+            time.monotonic() < getattr(self, "_toy_search_until", 0.0))
+        if searching:
+            return max(1.0, TOY_SEARCH_RATE_S - TOY_SCAN_SECONDS)
+        return AUTO_REFRESH_RATE_S
+
     async def _async_auto_refresh_loop(self):
-        """Background task for periodic device scanning"""
-        scan_interval = AUTO_REFRESH_RATE_S
+        """Background task for periodic device scanning.
+
+        Ticks once a second and scans when the current pause is over,
+        rather than sleeping the whole pause: the pause can shorten while
+        we wait (the only toy drops, the user opens the window), and the
+        search should start then, not up to half a minute later."""
+        rested = 0.0
         while self.auto_refresh_enabled and self.haptic_engine.is_connected:
-            await asyncio.sleep(scan_interval)
+            await asyncio.sleep(1.0)
+            rested += 1.0
+            if rested < self._toy_scan_pause():
+                continue
+            rested = 0.0
             if self.auto_refresh_enabled and self.haptic_engine.is_connected:
                 try:
                     await self._async_start_scanning()
@@ -439,7 +481,7 @@ class IntifaceFacade:
 
     def get_intiface_status(self) -> Dict[str, Any]:
         """Quick snapshot of the Buttplug/Intiface backend's state for
-        the Overview view's System tile. UI gets primitives only —
+        the UI. It gets primitives only and
         never reaches into self.haptic_engine directly."""
         engine = getattr(self, "haptic_engine", None)
         connected = bool(engine and engine.is_connected)
@@ -684,7 +726,7 @@ class IntifaceFacade:
             self.log_message(f"test_device({device_name}) failed: {e}")
 
     def trigger_purr_check(self):
-        """Overview -> "Test all": pulse every connected toy's vibrate
+        """Home -> "Test all": pulse every connected toy's vibrate
         motors at a low level for ~1 s.
 
         Fire-and-forget, like test_device. The check sleeps a full second

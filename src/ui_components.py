@@ -53,17 +53,20 @@ from ui.icons import (
     icon_trash as _icon_trash,
     icon_check as _icon_check,
     icon_cross as _icon_cross,
+    icon_home as _icon_home,
 )
 from ui.widgets import (
     ToggleSwitch,
     Invoker as _Invoker,
     MainWindow as _MainWindow,
     Card as _Card,
+    Canvas as _Canvas,
     SliderProxy as _SliderProxy,
     ProgressProxy as _ProgressProxy,
     RainbowMeter as _RainbowMeter,
     install_rainbow_scrollbars as _install_rainbow_scrollbars,
 )
+from ui.live_theme import LiveTheme as _LiveTheme
 
 # View mixins extracted from this file (see step 4 of the structural
 # refactor). Each mixin owns a coherent slice of the UI; this class
@@ -75,9 +78,10 @@ from ui.views.diagnostics import DiagnosticsMixin
 from ui.views.settings import SettingsMixin
 from ui.views.sessions import SessionsMixin
 from ui.views.device_frame import DeviceFrameMixin
-from ui.views.overview import OverviewMixin
+from ui.views.home import HomeMixin
 from ui.views.sps_sources import SpsSourcesMixin
 from ui.views.statistics import StatisticsMixin
+from ui.views.whats_new import WhatsNewMixin
 
 
 # ============================================================
@@ -116,15 +120,33 @@ class _StatusLabel(QLabel):
         self.setText(self.fontMetrics().elidedText(self._full, Qt.ElideRight, avail))
 
 
+class _LiveTipLabel(QLabel):
+    """A label whose tooltip is put together at the moment it is asked
+    for, so it can carry live numbers without anything refreshing it."""
+
+    def __init__(self, text: str = "", parent=None):
+        super().__init__(text, parent)
+        self.tip_fn: Optional[Callable[[], str]] = None
+
+    def event(self, ev) -> bool:
+        if ev.type() == QEvent.ToolTip and self.tip_fn is not None:
+            try:
+                self.setToolTip(self.tip_fn())
+            except Exception:
+                pass
+        return super().event(ev)
+
+
 class OscGoesPurrrUI(
     DashboardMixin,
     DiagnosticsMixin,
     SettingsMixin,
     SessionsMixin,
     DeviceFrameMixin,
-    OverviewMixin,
+    HomeMixin,
     SpsSourcesMixin,
     StatisticsMixin,
+    WhatsNewMixin,
 ):
     """UI Component class — handles all GUI rendering and updates."""
 
@@ -154,6 +176,18 @@ class OscGoesPurrrUI(
         # bit of breathing room for the scrollable content area.
         self.window.setMinimumSize(SIDEBAR_WIDTH + 200, 360)
         self.window.resize(1100, 700)
+        self.window.set_activate_handler(self._on_window_activated)
+        # The colour picker's engine: the app-level stylesheet above is set
+        # once and never again; a colour change is swept through the
+        # sections registered with this, a slice per event-loop turn.
+        self.live_theme = _LiveTheme(self.window)
+        self.live_theme.on_change(self._after_colour_change)
+        # Dialogs and message boxes are parented to this (invisible, zero
+        # size) section instead of the window, so they open in the colour
+        # in use rather than the one the app was launched with.
+        self.dialog_parent = QWidget(self.window)
+        self.dialog_parent.setFixedSize(0, 0)
+        self.live_theme.add_root(self.dialog_parent)
 
         # Native frame tint (Windows 11 DWM). The purrple profile defines
         # no frame colors, so this block is skipped entirely and the system
@@ -203,7 +237,6 @@ class OscGoesPurrrUI(
         self.osc_status_label: Optional[QLabel] = None
         self.osc_port_label: Optional[QLabel] = None
         self.osc_connection_button: Optional[QPushButton] = None
-        self.osc_refresh_button: Optional[QPushButton] = None
         self.intiface_sidebar_section: Optional[QWidget] = None
 
         # Settings checkboxes (referenced by facade getters)
@@ -211,7 +244,7 @@ class OscGoesPurrrUI(
         self.auto_refresh_var: Optional[QCheckBox] = None
         self.osc_auto_connect_var: Optional[QCheckBox] = None
 
-        # Device routing view
+        # Home's toy list
         self.devices_container_frame: Optional[QFrame] = None
         self.unified_devices_frame: Optional[QWidget] = None
         self.unified_devices_layout: Optional[QVBoxLayout] = None
@@ -242,10 +275,9 @@ class OscGoesPurrrUI(
     # ----------------------------------------------------------
 
     def setup_ui(self):
-        root = QWidget()
+        # Painted, not styled: every section sits inside it (ui.widgets.Canvas).
+        root = _Canvas()
         root.setObjectName("root")
-        # Kept for the animated-background layer, which paints this
-        # widget's background in place of its static QSS gradient.
         self._root_widget = root
         root_layout = _hbox(0, 0)
         root.setLayout(root_layout)
@@ -267,13 +299,14 @@ class OscGoesPurrrUI(
         _install_rainbow_scrollbars(sidebar_scroll)
         sidebar_scroll.setWidget(self.sidebar_frame)
         root_layout.addWidget(sidebar_scroll)
+        self.live_theme.add_root(sidebar_scroll)
 
         # Main content area (stacked views). Each page sits inside its own
         # QScrollArea so the window can shrink below the page's natural size
         # without Qt locking the central widget. Form-style pages also get a
         # max-width cap so they hug the left side on wide monitors instead of
         # stretching buttons across 4K — data-heavy pages (tables, logs,
-        # device routing) stay full-width.
+        # the toy list) stay full-width.
         self.main_stack = QStackedWidget()
         # Global replay banner — a thin colored strip pinned above the
         # stacked views, shown whenever a session replay is active so the
@@ -295,14 +328,13 @@ class OscGoesPurrrUI(
         main_content_lay.addWidget(self.main_stack, 1)
         root_layout.addWidget(main_content, 1)
 
-        view_names = ["Overview", "Device Routing", "Statistics",
+        view_names = ["Home", "Statistics",
                       "SPS Sources",
                       "OSC Inspector", "OSC Diagnostics", "System Log",
                       "Settings", "Help"]
         builders = {
-            "Overview": self._build_overview_view,
+            "Home": self._build_home_view,
             "Statistics": self._build_statistics_view,
-            "Device Routing": self._build_device_routing_view,
             "SPS Sources": self._build_sps_sources_view,
             "OSC Inspector": self._build_network_debug_view,
             "OSC Diagnostics": self._build_osc_diagnostics_view,
@@ -321,17 +353,23 @@ class OscGoesPurrrUI(
             wrapper = self._wrap_page(name, page)
             self.views[name] = wrapper
             self.main_stack.addWidget(wrapper)
+            # One section per page -- except those that register finer
+            # ones themselves: Home (a toy's bar, a motor's block: its
+            # page holds every toy), Settings (card by card, where the
+            # colour is picked) and Help (card by card: long texts).
+            if name not in ("Home", "Settings", "Help"):
+                self.live_theme.add_root(wrapper)
 
         self.window.setCentralWidget(root)
         self._stretch_section_titles(root)
 
 
         # Hide feature-gated pages (and the Intiface block when that feature
-        # is off), then open on the Overview -- every launch, whatever page
-        # was open last time. It is the one page that shows the whole rig at
-        # a glance and leads everywhere else.
+        # is off), then open on Home -- every launch, whatever page was open
+        # last time. It is the one page that shows the whole rig at a
+        # glance, and where every toy is set up.
         self.apply_feature_visibility()
-        self.select_view("Overview")
+        self.select_view("Home")
 
     @staticmethod
     def _stretch_section_titles(root: QWidget) -> None:
@@ -392,7 +430,7 @@ class OscGoesPurrrUI(
         return scroll
 
     # ----------------------------------------------------------
-    # 518 shell: status bar + mode toggle
+    # 518 shell: status bar
     # ----------------------------------------------------------
 
     def _build_status_bar(self) -> None:
@@ -410,6 +448,7 @@ class OscGoesPurrrUI(
         tag.setTextFormat(Qt.RichText)
         bar.addPermanentWidget(tag)
         self.window.setStatusBar(bar)
+        self.live_theme.add_root(bar)
         self._status_message_full = ""
 
     def set_status_message(self, text: str) -> None:
@@ -421,29 +460,15 @@ class OscGoesPurrrUI(
         self._status_message_full = text
         lbl.set_full_text(text)
 
-    def _toggle_ui_mode(self) -> None:
-        """Header toggle between Neon and Midnight. The palette is copied
-        into every module at import, so the switch persists and relaunches
-        the app -- the same contract the colour profiles had."""
-        current = str(self.controller.get_app_setting("ui_mode", _theme.MODE))
-        target = _theme.other_mode(current)
-        self.controller.set_app_setting("ui_mode", target)
-        self.set_status_message(
-            f"Switching to {_theme.MODE_LABELS.get(target, target)} — restarting…")
-        restart = getattr(self.controller, "request_restart", None)
-        if callable(restart):
-            QTimer.singleShot(200, restart)
-
     # ----------------------------------------------------------
     # Sidebar
     # ----------------------------------------------------------
 
     # What each page is for, shown when you rest the mouse on its entry.
     _NAV_TIPS = {
-        "Overview": "Home: every connected toy at a glance, the VRChat link "
-                    "and the active mode. Click a toy to set it up.",
-        "Device Routing": "Set up each toy: which parts of your avatar drive "
-                          "it, and how each motor responds.",
+        "Home": "Your toys, live: what's connected, battery and output at "
+                "a glance, with Test and Mute. Click a toy to set up which "
+                "parts of your avatar drive it and how each motor responds.",
         "Statistics": "Your sessions with a timeline for each, lifetime "
                       "totals and fun facts, and when you play.",
         "SPS Sources": "Build your own contact zones out of raw VRChat "
@@ -469,23 +494,18 @@ class OscGoesPurrrUI(
         sidebar.setLayout(lay)
 
         # 518 headline: Aldrich title top-left, the version/build tag in
-        # dim under it, and the Neon/Midnight toggle on the right.
+        # dim under it. (No Neon/Midnight toggle beside it: the mode is a
+        # set-once choice and lives in Settings → Appearance.)
         head = QWidget()
         hl = _hbox(0, 6)
         head.setLayout(hl)
         title = QLabel("OscGoesPurrr")
         title.setObjectName("sidebarTitle")
+        # The app name is a way home too, like a site's logo.
+        title.setCursor(Qt.PointingHandCursor)
+        title.mousePressEvent = lambda _ev: self.select_view("Home")
         hl.addWidget(title)
         hl.addStretch(1)
-        self.mode_toggle_button = QPushButton("◐")
-        self.mode_toggle_button.setObjectName("modeToggle")
-        self.mode_toggle_button.setCursor(Qt.PointingHandCursor)
-        self.mode_toggle_button.setFixedSize(26, 22)
-        self.mode_toggle_button.setToolTip(
-            f"Switch to {_theme.MODE_LABELS.get(_theme.other_mode(_theme.MODE))} "
-            "(restarts the app)")
-        self.mode_toggle_button.clicked.connect(self._toggle_ui_mode)
-        hl.addWidget(self.mode_toggle_button)
         lay.addSpacing(4)
         lay.addWidget(head)
         build_tag = QLabel(_theme.title_tag(_APP_VERSION, _build_number()))
@@ -500,13 +520,14 @@ class OscGoesPurrrUI(
         lay.addWidget(self._build_mode_grid())
         lay.addSpacing(8)
 
-        nav_buttons = ["Overview", "Device Routing", "Statistics",
-                       "SPS Sources",
-                       "OSC Inspector", "OSC Diagnostics", "System Log",
-                       "Settings", "Help"]
-        for name in nav_buttons:
+        # Home is the landing page -- where the app opens and where the
+        # toys are -- so it is the one entry that is framed, larger and
+        # has an icon. The rest follow in the order they are reached for:
+        # the everyday pages, the tools for digging into OSC, then
+        # Settings and Help.
+        def nav_button(name: str, role: str = "nav") -> QPushButton:
             btn = QPushButton(name)
-            btn.setProperty("role", "nav")
+            btn.setProperty("role", role)
             btn.setProperty("active", "false")
             btn.setCursor(Qt.PointingHandCursor)
             btn.clicked.connect(lambda _=False, n=name: self.select_view(n))
@@ -514,141 +535,167 @@ class OscGoesPurrrUI(
                 self._explain(btn, name, self._NAV_TIPS[name])
             lay.addWidget(btn)
             self.nav_buttons[name] = btn
+            return btn
+
+        home = nav_button("Home", role="navHome")
+        home.setIcon(_icon_home(COLOR_ACCENT))
+        home.setIconSize(QSize(20, 20))
+        # Drawn into a pixmap, so the colour picker has to redraw it.
+        self.live_theme.on_change(
+            lambda: home.setIcon(_icon_home(COLOR_ACCENT)))
+        lay.addSpacing(2)
+        for name in ("Statistics",):
+            nav_button(name)
+        # The same break before each of the two lower groups; the TOOLS
+        # label sits tight above the group it names.
+        lay.addSpacing(self._NAV_GROUP_GAP)
+        tools = QLabel("TOOLS")
+        tools.setObjectName("navGroup")
+        lay.addWidget(tools)
+        for name in ("SPS Sources", "OSC Inspector", "OSC Diagnostics",
+                     "System Log"):
+            nav_button(name)
+        lay.addSpacing(self._NAV_GROUP_GAP)
+        for name in ("Settings", "Help"):
+            nav_button(name)
 
         # Stretch pushes the bottom section down
         lay.addStretch(1)
 
         # ===== Bottom status / connection block =====
-        # --- VRChat OSC Section ---
-        lay.addWidget(self._sidebar_section_row(
-            "VRChat OSC",
+        # Both links connect, reconnect and recover on their own, so each is
+        # one quiet line: its name and the live status pill. A button shows
+        # only when it has something to do -- Connect while a link is down
+        # and nothing will bring it up by itself, Find toys while the toy
+        # server is up. There is no Disconnect (quit the app, or use Off)
+        # and no VRChat refresh (a silent link re-handshakes itself; the
+        # manual buttons live on OSC Diagnostics).
+        sep = QFrame()
+        sep.setObjectName("separator")
+        lay.addWidget(sep)
+        lay.addSpacing(6)
+
+        # --- VRChat OSC ---
+        self.osc_status_label = _LiveTipLabel("DISCONNECTED")
+        self.osc_status_label.setProperty("role", "pill")
+        self.osc_status_label.setProperty("tone", "off")
+        self.osc_status_label.setAlignment(Qt.AlignCenter)
+        # The listening port, the packet count and the avatar ride in the
+        # pill's tooltip (see _osc_pill_tip) instead of dedicated label
+        # rows, to keep the sidebar compact. osc_port_label stays None.
+        self._osc_pill_base_tip = "Listening on Port: --"
+        self.osc_status_label.setToolTip(self._osc_pill_base_tip)
+        self.osc_status_label.tip_fn = self._osc_pill_tip
+        lay.addWidget(self._sidebar_link_row(
+            "VRChat", self.osc_status_label,
             "VRChat OSC",
             "The link to VRChat's OSC bus — where every avatar contact "
             "signal comes from. The app waits for VRChat to appear "
             "(mDNS/OSCQuery discovery) before binding a port; hover the "
-            "pill for the live port. <b>🔍 Refresh</b> re-handshakes a "
-            "\"connected but silent\" link without a full reconnect."
+            "pill for the live port. A link that says connected but goes "
+            "silent re-handshakes by itself within a minute; OSC "
+            "Diagnostics has the manual buttons."
         ))
 
-        # Matches the Intiface pill exactly: "CONNECTED"/"DISCONNECTED" with the
-        # same rounded pill styling and ok/err tones (set in update_osc_status).
-        self.osc_status_label = QLabel("DISCONNECTED")
-        self.osc_status_label.setProperty("role", "pill")
-        self.osc_status_label.setProperty("tone", "off")
-        self.osc_status_label.setAlignment(Qt.AlignCenter)
-        # The listening port now rides in the pill's tooltip (set in
-        # update_osc_status) instead of a dedicated label row, to keep the
-        # sidebar compact. osc_port_label stays None.
-        self.osc_status_label.setToolTip("Listening on Port: --")
-        lay.addWidget(self.osc_status_label, 0, Qt.AlignHCenter)
-
-        self.osc_connection_button = QPushButton("Connect to VRChat")
-        self.osc_connection_button.setMinimumHeight(BTN_HEIGHT_LARGE)
+        # Only there while the app is NOT listening for VRChat -- auto
+        # connect switched off in Settings, or the listener stopped.
+        self.osc_connection_button = QPushButton("Connect")
         self.osc_connection_button.clicked.connect(self.controller.toggle_osc_connection)
         self._explain(
-            self.osc_connection_button, "VRChat connection",
-            "Normally you never press this: the app finds VRChat on its own "
-            "when either one starts. Use it to disconnect, or to connect "
-            "again after disconnecting.")
-        lay.addWidget(self.osc_connection_button)
+            self.osc_connection_button, "Connect to VRChat",
+            "Starts listening for VRChat. You only see this while the app "
+            "isn't listening by itself — with \"Auto Connect (VRChat OSC)\" "
+            "switched off in Settings, or after the link stopped.")
+        self._osc_connect_row = self._sidebar_link_buttons(
+            self.osc_connection_button)
+        self._osc_connect_row.setVisible(False)
+        lay.addWidget(self._osc_connect_row)
+        lay.addSpacing(4)
 
-        # Full-width refresh for the VRChat/OSC link: re-poll VRChat's OSCQuery
-        # and re-handshake — recovers a "connected but silent" link without a
-        # full disconnect/connect. Mirrors the Intiface refresh, same width as
-        # the connect button.
-        self.osc_refresh_button = QPushButton("🔍 Refresh")
-        self.osc_refresh_button.setMinimumHeight(BTN_HEIGHT_LARGE)
-        self.osc_refresh_button.setProperty("role", "secondary")
-        self._explain(
-            self.osc_refresh_button, "Refresh VRChat link",
-            "Asks VRChat again for its connection details. Fixes a link "
-            "that says connected but gets no data, without a full "
-            "disconnect.")
-        self.osc_refresh_button.setCursor(Qt.PointingHandCursor)
-        self.osc_refresh_button.clicked.connect(self.controller.force_osc_rehandshake)
-        lay.addWidget(self.osc_refresh_button)
-        lay.addSpacing(8)
-
-        # --- Intiface Central Section ---
-        # Wrapped in a container so the whole block (separator + title +
-        # status + button) hides cleanly when the Intiface feature is off.
+        # --- Intiface ---
+        # Wrapped in a container so the whole block hides cleanly when the
+        # Intiface feature is off.
         self.intiface_sidebar_section = QWidget()
-        intiface_lay = _vbox(0, 6)
+        intiface_lay = _vbox(0, 3)
         self.intiface_sidebar_section.setLayout(intiface_lay)
-
-        sep = QFrame()
-        sep.setObjectName("separator")
-        intiface_lay.addWidget(sep)
-        intiface_lay.addSpacing(8)
-
-        intiface_lay.addWidget(self._sidebar_section_row(
-            "Intiface Central",
-            "Intiface",
-            "The Buttplug.io server that talks to your Bluetooth toys. "
-            "OscGoesPurrr runs its own copy, so there is nothing else to "
-            "start. (To use a separately running Intiface Central "
-            "instead, switch off the built-in engine in Settings.) "
-            "<b>Refresh</b> looks for toys switched on since the last "
-            "scan; a scan also runs on its own every so often."
-        ))
 
         self.status_label = QLabel("DISCONNECTED")
         self.status_label.setProperty("role", "pill")
         self.status_label.setProperty("tone", "off")
         self.status_label.setAlignment(Qt.AlignCenter)
-        intiface_lay.addWidget(self.status_label, 0, Qt.AlignHCenter)
+        intiface_lay.addWidget(self._sidebar_link_row(
+            "Intiface", self.status_label,
+            "Intiface",
+            "The Buttplug.io server that talks to your Bluetooth toys. "
+            "OscGoesPurrr runs its own copy, so there is nothing else to "
+            "start. (To use a separately running Intiface Central "
+            "instead, switch off the built-in engine in Settings.) It "
+            "connects and reconnects by itself."
+        ))
 
-        self.connection_button = QPushButton("Connect to Intiface")
-        self.connection_button.setMinimumHeight(BTN_HEIGHT_LARGE)
+        # One button slot, mostly empty: Connect while the toy server is
+        # down (normally a moment at launch; longer with auto connect off
+        # or the engine missing); Find toys only with Auto Refresh Devices
+        # off -- otherwise the app looks by itself (refresh_link_buttons).
+        self.connection_button = QPushButton("Connect")
         self.connection_button.clicked.connect(self.controller.connect_to_intiface)
         self._explain(
-            self.connection_button, "Toy server connection",
+            self.connection_button, "Connect to the toy server",
             "Normally automatic: the app starts its toy server and connects "
-            "on launch. Use it to disconnect every toy at once, or to "
-            "connect again afterwards.")
-        intiface_lay.addWidget(self.connection_button)
+            "on launch, and reconnects if the link drops. You only need "
+            "this with \"Auto Connect (Intiface)\" switched off in Settings, "
+            "or after a failed start.")
 
-        # Full-width refresh: rescan for toys powered on AFTER connecting. The
-        # engine auto-rescans every AUTO_REFRESH_RATE_S; this triggers an
-        # immediate scan. Same width as the connect button; disabled until
-        # connected (the controller facade also no-ops while disconnected).
-        self.scan_toys_button = QPushButton("🔍 Refresh")
-        self.scan_toys_button.setMinimumHeight(BTN_HEIGHT_LARGE)
-        self.scan_toys_button.setProperty("role", "secondary")
+        # A manual scan for toys powered on after connecting -- the stand-in
+        # for the automatic search, so it is only offered while that is
+        # switched off.
+        self.scan_toys_button = QPushButton("Find toys")
         self._explain(
-            self.scan_toys_button, "Look for toys",
-            "Scans for toys switched on since the last scan. The app also "
-            "scans on its own every so often.")
-        self.scan_toys_button.setCursor(Qt.PointingHandCursor)
-        self.scan_toys_button.setEnabled(False)
+            self.scan_toys_button, "Find toys",
+            "Looks for toys right now. You only see this with \"Auto "
+            "Refresh Devices\" switched off in Settings — otherwise the app "
+            "looks by itself.")
+        self.scan_toys_button.setVisible(False)
         self.scan_toys_button.clicked.connect(self.controller.scan_for_toys)
-        intiface_lay.addWidget(self.scan_toys_button)
-        intiface_lay.addSpacing(8)
+        self._toy_buttons_row = self._sidebar_link_buttons(
+            self.connection_button, self.scan_toys_button)
+        intiface_lay.addWidget(self._toy_buttons_row)
+        intiface_lay.addSpacing(4)
 
         lay.addWidget(self.intiface_sidebar_section)
 
         return sidebar
 
-    def _sidebar_section_title(self, text: str) -> QLabel:
-        lbl = QLabel(text)
-        f = lbl.font()
-        f.setBold(True)
-        f.setPointSize(11)
-        lbl.setFont(f)
-        lbl.setAlignment(Qt.AlignHCenter)
-        return lbl
+    def _sidebar_link_row(self, text: str, pill: QLabel, help_title: str,
+                          help_text: str) -> QWidget:
+        """`Name ........ [STATUS]` -- a link's name and its live status pill
+        on one line. The name explains the link on hover."""
+        row = QWidget()
+        rl = _hbox(0, 6)
+        rl.setContentsMargins(2, 0, 0, 0)
+        row.setLayout(rl)
+        title = QLabel(text)
+        title.setObjectName("sidebarLinkTitle")
+        self._explain(title, help_title, help_text)
+        rl.addWidget(title)
+        rl.addStretch(1)
+        rl.addWidget(pill, 0, Qt.AlignVCenter)
+        return row
 
-    def _sidebar_section_row(self, text: str, help_title: str,
-                             help_text: str) -> QWidget:
-        """Sidebar section title that explains itself on hover."""
+    def _sidebar_link_buttons(self, *buttons: QPushButton) -> QWidget:
+        """A link's rarely-needed buttons: small, quiet, sharing one row."""
         row = QWidget()
         rl = _hbox(0, 4)
         row.setLayout(rl)
-        rl.addStretch(1)
-        rl.addWidget(self._sidebar_section_title(text))
-        self._explain(rl, help_title, help_text)
-        rl.addStretch(1)
+        for btn in buttons:
+            btn.setProperty("role", "sideSmall")
+            btn.setFixedHeight(self._SIDEBAR_LINK_BTN_H)
+            btn.setCursor(Qt.PointingHandCursor)
+            rl.addWidget(btn, 1)
         return row
+
+    _SIDEBAR_LINK_BTN_H = 26
+    _NAV_GROUP_GAP = 10
 
     # ----------------------------------------------------------
     # View switching
@@ -676,7 +723,7 @@ class OscGoesPurrrUI(
         # once on arrival so it never shows data older than one tick.
         # Now that setCurrentWidget has run, the visibility checks pass.
         arrival_refreshers = {
-            "Overview": ("_refresh_overview_dynamic",),
+            "Home": ("_refresh_home_dynamic",),
             "Statistics": ("_refresh_statistics_view",),
             "Settings": ("_refresh_sessions_view",
                          "_repopulate_replay_sessions"),
@@ -734,24 +781,59 @@ class OscGoesPurrrUI(
     # Connection status displays
     # ----------------------------------------------------------
 
+    def _on_window_activated(self) -> None:
+        """The user brought the window to the front. If a toy is missing
+        they are probably waiting for it, so ask for the fast search -- the
+        controller only acts on it while no toy is connected."""
+        note = getattr(self.controller, "note_toy_search_wanted", None)
+        if callable(note):
+            note()
+
+    def _after_colour_change(self) -> None:
+        """The colour picker changed the tokens. Two things are neither a
+        stylesheet nor a stored colour: rich-text links take theirs from
+        the application palette (cheap to set -- unlike the app's
+        stylesheet, it re-styles nothing), and the no-battery glyphs are
+        pixmaps drawn in the text colour, which carries a trace of the
+        accent's hue."""
+        pal = self.qapp.palette()
+        for role in (QPalette.Link, QPalette.LinkVisited):
+            pal.setColor(role, QColor(_theme.CHROME["accent"]))
+        self.qapp.setPalette(pal)
+        for data in self.device_ui_frames.values():
+            label = data.get("battery_label")
+            try:
+                if label is not None and not label.text():
+                    self._show_no_battery_glyph(label)
+            except RuntimeError:
+                pass          # card rebuilt meanwhile
+
+    def refresh_link_buttons(self) -> None:
+        """Show each sidebar button only while it has something to do:
+        Connect while the toy server is down; Find toys while it is up AND
+        the app is not looking by itself (Auto Refresh Devices off)."""
+        connected = bool(getattr(self, "_toy_server_connected", False))
+        try:
+            auto = bool(self.controller.get_app_setting("auto_refresh", True))
+        except Exception:
+            auto = True
+        show_connect, show_find = not connected, connected and not auto
+        if self.connection_button is not None:
+            self.connection_button.setVisible(show_connect)
+        if self.scan_toys_button is not None:
+            self.scan_toys_button.setVisible(show_find)
+        row = getattr(self, "_toy_buttons_row", None)
+        if row is not None:
+            row.setVisible(show_connect or show_find)
+
     def update_connection_status(self, connected: bool, server: str):
         # Sync haptic engine flag through the controller facade
         # (preserves prior behaviour without holding a reference to the engine).
         if hasattr(self.controller, 'set_haptic_connected'):
             self.controller.set_haptic_connected(connected)
 
-        if self.connection_button is not None:
-            if connected:
-                self.connection_button.setText("Disconnect from Intiface")
-                self.connection_button.setProperty("role", "danger")
-            else:
-                self.connection_button.setText("Connect to Intiface")
-                self.connection_button.setProperty("role", "")
-            self._repolish(self.connection_button)
-
-        if self.scan_toys_button is not None:
-            # A manual rescan only makes sense once the server is up.
-            self.scan_toys_button.setEnabled(connected)
+        self._toy_server_connected = bool(connected)
+        self.refresh_link_buttons()
 
         if self.status_label is not None:
             self.status_label.setProperty("role", "pill")
@@ -791,26 +873,58 @@ class OscGoesPurrrUI(
                         "the moment VRChat delivers directly again."),
     }
 
-    def update_osc_link_state(self, state: str, port: int = None):
+    #: Not connected, but the app is up and looking for VRChat: nothing for
+    #: the user to press, so the pill says what it is waiting for.
+    _OSC_SEARCHING_FACE = (
+        "SEARCHING", "off",
+        "Looking for VRChat. Start VRChat with OSC turned on (Action menu "
+        "→ Options → OSC) and it connects by itself.")
+
+    def update_osc_link_state(self, state: str, port: int = None,
+                              listening: Optional[bool] = None):
         """Four-state truthful status pill. Yellow means exactly 'handshake
-        but no data' — the failure that used to masquerade as CONNECTED."""
+        but no data' — the failure that used to masquerade as CONNECTED.
+
+        `listening` is whether the app is up and looking for VRChat by
+        itself. Only when it is not (auto connect off, listener stopped)
+        does the Connect button appear; callers that don't know leave it
+        None and any state but 'disconnected' counts as listening."""
         if self.osc_status_label is None:
             return
-        text, tone, tooltip = self._OSC_LINK_FACES.get(
-            state, self._OSC_LINK_FACES["disconnected"])
+        if listening is None:
+            listening = state != "disconnected"
+        if state == "disconnected" and listening:
+            text, tone, tooltip = self._OSC_SEARCHING_FACE
+        else:
+            text, tone, tooltip = self._OSC_LINK_FACES.get(
+                state, self._OSC_LINK_FACES["disconnected"])
         self.osc_status_label.setProperty("role", "pill")
         self.osc_status_label.setText(text)
         self.osc_status_label.setProperty("tone", tone)
-        self.osc_status_label.setToolTip(tooltip.format(port=port or "--"))
-        if self.osc_connection_button is not None:
-            if state == "disconnected":
-                self.osc_connection_button.setText("Connect to VRChat")
-                self.osc_connection_button.setProperty("role", "")
-            else:
-                self.osc_connection_button.setText("Disconnect VRChat")
-                self.osc_connection_button.setProperty("role", "danger")
-            self._repolish(self.osc_connection_button)
+        self._osc_pill_base_tip = tooltip.format(port=port or "--")
+        self.osc_status_label.setToolTip(self._osc_pill_base_tip)
+        row = getattr(self, "_osc_connect_row", None)
+        if row is not None:
+            row.setVisible(not listening)
         self._repolish(self.osc_status_label)
+
+    def _osc_pill_tip(self) -> str:
+        """The VRChat pill's tooltip, composed on hover: what the link
+        state means, then the live packet count and the avatar VRChat
+        last reported."""
+        lines = [getattr(self, "_osc_pill_base_tip", "")]
+        try:
+            snap = self.controller.get_osc_status_snapshot() or {}
+            lines.append(f"Packets received: {int(snap.get('packets', 0)):,}")
+        except Exception:
+            pass
+        try:
+            avatar = self.controller.get_current_avatar_id() or ""
+        except Exception:
+            avatar = ""
+        lines.append("Avatar: " + (_html_escape(avatar) if avatar
+                                   else "none reported yet"))
+        return "<br>".join(line for line in lines if line)
 
     def _repolish(self, w: QWidget) -> None:
         w.style().unpolish(w)

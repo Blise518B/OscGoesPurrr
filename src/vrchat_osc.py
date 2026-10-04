@@ -304,6 +304,10 @@ class VRChatOSCManager:
         self.http_port = None
         self.local_listen_port = local_listen_port # If 0, OS picks a free port
         self.is_connected = False
+        # True from start() until stop(): the manager is up and either
+        # talking to VRChat or looking for it. The sidebar offers a manual
+        # Connect only while this is False.
+        self.is_listening = False
 
         # Service info for advertisement
         self.service_info = None
@@ -526,6 +530,7 @@ class VRChatOSCManager:
         most-reliable reference implementation (VRCFT) eliminates that race.
         """
         self._shutdown.clear()
+        self.is_listening = True
         self._vrchat_first_discovered_done = False
         self._log(
             f"start(): VRCFT-style deferred bind. We will NOT bind OSC/HTTP "
@@ -1628,6 +1633,7 @@ class VRChatOSCManager:
 
     def stop(self):
         """Unregister services and shut down."""
+        self.is_listening = False
         # Wake the health-check loop so it exits promptly.
         self._shutdown.set()
         # Cancel any pending trailing-flush send.

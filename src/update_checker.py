@@ -55,6 +55,17 @@ def _pad(a: Tuple[int, ...], b: Tuple[int, ...]):
     return a + (0,) * (n - len(a)), b + (0,) * (n - len(b))
 
 
+def compare_versions(a, b) -> Optional[int]:
+    """-1, 0 or 1 as version `a` is older than, the same as or newer than
+    `b`, by their numeric cores ("0.12" == "0.12.0", "0.12.0-dev(3)" ==
+    "0.12.0"). None when either is not a version. Pure."""
+    pa, pb = _parse_version(a), _parse_version(b)
+    if pa is None or pb is None:
+        return None
+    pa, pb = _pad(pa, pb)
+    return (pa > pb) - (pa < pb)
+
+
 def should_show_popup(info: Optional[dict], manual: bool,
                       skipped_version: str) -> bool:
     """Whether a check result earns the update window. Only the launch

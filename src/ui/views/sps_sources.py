@@ -10,8 +10,8 @@ VRChat contact receivers into a single SPS-style signal:
                  multiplied by the shared multiplier
   * max value  — clamp on the raw proximity before the multiplier
 
-The result shows up in the Device Routing zone picker and the
-Cross-Routing picker, so it routes exactly like an auto-detected SPS zone.
+The result shows up in every toy's zone picker on Home, so it routes
+exactly like an auto-detected SPS zone.
 All persistence + math goes through the controller facade; this file only
 draws widgets and forwards primitive values (Demeter rule).
 """
@@ -51,7 +51,7 @@ class SpsSourcesMixin:
             "gate it to a specific spot (the signal only counts while one is "
             "firing); 'velocity' on-enter contacts boost the output by the "
             "multiplier; and the max value caps the raw proximity. Each source "
-            "becomes selectable in Device Routing."
+            "becomes a zone you can pick for any toy on Home."
         ))
 
         top_row = _hbox(0, 8)
@@ -67,7 +67,7 @@ class SpsSourcesMixin:
         self._explain(
             add_btn, "Add source",
             "Creates a new, empty source. Give it at least one proximity "
-            "contact and it becomes a zone you can pick in Device Routing, "
+            "contact and it becomes a zone you can pick for any toy on Home, "
             "like the ones your avatar's SPS provides.")
         top_row.addWidget(add_btn)
         parent_layout.addLayout(top_row)
@@ -153,7 +153,7 @@ class SpsSourcesMixin:
             "its contacts and settings. Switch it back on to use it again.")
         self._explain(
             name_edit, "Source name",
-            "What this source is called in Device Routing's zone picker.")
+            "What this source is called in a toy's zone picker on Home.")
         self._explain(
             value_label, "Live value",
             "What this source is producing right now, from 0 to 1 — "
@@ -310,7 +310,7 @@ class SpsSourcesMixin:
             self._push_sps_source(idx)
 
         open_osc_variable_picker(
-            self.window, on_pick, allow_wildcards=False,
+            (getattr(self, "dialog_parent", None) or self.window), on_pick, allow_wildcards=False,
             subtitle="Pick the contact receiver parameter (double-click to "
                      "add) or enter one manually.",
         )

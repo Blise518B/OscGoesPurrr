@@ -193,7 +193,7 @@ class MotorRouter:
     # smoothing envelope are never perturbed — forcing d_raw->0 would spoof
     # a |Δ|/dt motion spike straight through the speed channel and could
     # make a stuck motor pulse *harder*. Timeouts come from app settings
-    # (Device Routing → Anti-stuck card); these are only the hardcoded
+    # (Settings → Toy Safety); these are only the hardcoded
     # detection thresholds.
     _ANTISTUCK_EPSILON = 0.001     # |Δd_raw| at or below this == "unchanged"
     _ANTISTUCK_SATURATED = 0.95    # d_raw at/above this is treated as peaked

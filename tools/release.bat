@@ -86,6 +86,23 @@ set "TAG=v!REL_VERSION!"
 echo Releasing: !TAG!
 echo.
 
+REM ---- 3b. The in-app "What's new" notes (src\whats_new.py) are filed
+REM ---- under the version they ship as. Notes under a LATER version would
+REM ---- never be shown, so that stops the release; a version without notes
+REM ---- only gets a reminder -- no window opens after that update.
+"%VENV_PY%" tools\check_whats_new.py "!REL_VERSION!"
+if errorlevel 2 (
+    echo [ERROR] src\whats_new.py has notes for a version later than !REL_VERSION!.
+    echo         File them under !REL_VERSION! or bump VERSION in version.py.
+    pause
+    exit /b 1
+)
+if errorlevel 1 (
+    echo [NOTE] No "What's new" notes for !REL_VERSION! in src\whats_new.py -
+    echo        nothing will open after this update.
+    echo.
+)
+
 REM ---- 4. Refuse to reuse a tag. Re-tagging a published release silently
 REM ---- changes what users downloaded under that name.
 git rev-parse -q --verify "refs/tags/!TAG!" >nul 2>&1
