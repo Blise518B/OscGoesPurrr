@@ -1,6 +1,7 @@
 # constants.py
 
 import json as _json
+import sys as _sys
 from pathlib import Path as _Path
 
 # --- Theme & Colors ---
@@ -346,3 +347,8 @@ INTIFACE_ENGINE_STARTUP_GRACE_S = 2.0
 
 # --- Application Data ---
 APP_NAME = "OscGoesPurrr"
+# The settings folder as help texts and tooltips write it. The real path is
+# settings._paths.APPDATA_DIR (on Linux $XDG_CONFIG_HOME can move it).
+SETTINGS_DIR_DISPLAY = ("%APPDATA%\\" + APP_NAME
+                        if _sys.platform == "win32"
+                        else "~/.config/" + APP_NAME)

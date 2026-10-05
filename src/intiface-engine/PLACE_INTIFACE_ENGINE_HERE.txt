@@ -58,9 +58,14 @@ Notes:
     `buttplug-device-config.json` in this folder; it is auto-detected and
     passed via --device-config-file.
   - The engine's stdout/stderr is captured to
-    %APPDATA%\OscGoesPurrr\intiface_engine.log for troubleshooting.
+    %APPDATA%\OscGoesPurrr\intiface_engine.log (Linux:
+    ~/.config/OscGoesPurrr/intiface_engine.log) for troubleshooting.
   - tools\build_OGP.bat bundles this binary into the frozen .exe automatically when
     it is present (and silently builds without it when it is not).
+  - Linux: tools/build_linux.sh builds the engine itself (from the Buttplug
+    commit THIRD_PARTY_NOTICES.md names) and bundles it into the AppImage;
+    GitHub Actions runs it for every release. Building by hand needs
+    pkg-config, libdbus-1-dev and libudev-dev.
 
 Don't have / don't want to build the binary? Turn off "Use built-in Intiface
 engine" in Settings -> Intiface Engine and OscGoesPurrr will connect to a copy

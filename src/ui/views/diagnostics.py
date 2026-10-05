@@ -272,7 +272,7 @@ class DiagnosticsMixin:
         open_log_btn = QPushButton("Open log folder")
         open_log_btn.setProperty("role", "secondary")
         open_log_btn.setToolTip(
-            "Open %APPDATA%/OscGoesPurrr in Explorer. The persistent OSC "
+            f"Open {SETTINGS_DIR_DISPLAY} in your file browser. The persistent OSC "
             "diagnostics log lives here as osc_diagnostics.log."
         )
         open_log_btn.clicked.connect(self.controller.open_osc_log_folder)

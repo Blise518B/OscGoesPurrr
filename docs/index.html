@@ -3,26 +3,32 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OscGoesPurrr — every touch in VRChat, felt for real</title>
+<title>OscGoesPurrr — VRChat avatar contacts to your Bluetooth toys</title>
 <!--
   The OscGoesPurrr website, served by GitHub Pages from /docs on the public
   repo's main branch -- so it goes live with each release.
 
+  The page says what the app does and shows it doing it. The window under
+  the headline is a working copy of the real one (assets/demo.css + demo.js,
+  built against screenshots of the app), and every moving graph on the page
+  is fed by the app's own signal chain -- assets/ogp-chain.js is a port of
+  src/motor_router.py, checked against it number for number. Nothing here
+  is animated for show: if a plot moves, that is what a toy would be sent.
+
   The palette is the 518 green: assets/tokens.css is a verbatim copy of
   _hub\design\tokens.css, and every colour below is a token or a mix of one
-  (color-mix), never a new hex. The page is an advert, so it allows itself
-  more than an app would: glows, gradients, motion. All motion stops under
-  prefers-reduced-motion. Images come from tools/make_site_images.py.
+  (color-mix), never a new hex. Images come from tools/make_site_images.py.
 
-  Editing: "Features" lists only what this release ships (README.md says the
-  same at more length). "On the roadmap" is what's coming -- move an item
-  into Features when it lands in a release.
+  Editing: "What it does" lists only what this release ships (README.md
+  says the same). "Not in this edition yet" is what's coming -- move an
+  item up when it lands in a release. When the app's look changes, bring
+  the demo back in line with it.
 -->
-<meta name="description" content="OscGoesPurrr turns your VRChat avatar's contacts into smooth, real-time output on your Bluetooth toys through Intiface / Buttplug.io. One file for Windows, no setup, updates itself.">
+<meta name="description" content="OscGoesPurrr reads the contacts on your VRChat avatar over OSC and turns them into output for your Bluetooth toys through Intiface / Buttplug.io. One file for Windows or Linux, no setup, updates itself.">
 <meta name="theme-color" content="#0a0c0a">
 <meta property="og:type" content="website">
 <meta property="og:title" content="OscGoesPurrr">
-<meta property="og:description" content="Every touch in VRChat, felt for real. VRChat OSC to Bluetooth toys via Intiface: one file for Windows, no setup, updates itself.">
+<meta property="og:description" content="VRChat avatar contacts to your Bluetooth toys, through a signal chain you can watch and tune. One file for Windows or Linux, no setup, updates itself.">
 <meta property="og:url" content="https://blise518b.github.io/OscGoesPurrr/">
 <meta property="og:image" content="https://blise518b.github.io/OscGoesPurrr/assets/og-card.png">
 <meta property="og:image:width" content="1200">
@@ -32,7 +38,8 @@
 <link rel="icon" href="assets/ogp-icon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
 <link rel="stylesheet" href="assets/tokens.css">
-<script>document.documentElement.classList.add('js');</script>
+<link rel="stylesheet" href="assets/demo.css">
+<link rel="stylesheet" href="assets/demo-stats.css">
 <style>
 /* tokens.css points its @font-face at /fonts/, an app's root; this site
    lives under /OscGoesPurrr/. The page's own face gets its own name so the
@@ -45,412 +52,195 @@
 
 :root {
   --title-font: "Aldrich Site", "Segoe UI", sans-serif;
-  --grad: linear-gradient(100deg, var(--accent) 0%, var(--cyan) 100%);
-  --glow: color-mix(in srgb, var(--accent) 45%, transparent);
-  --glow-soft: color-mix(in srgb, var(--accent) 16%, transparent);
   --edge: color-mix(in srgb, var(--line) 42%, transparent);
-  --glass: color-mix(in srgb, var(--card) 78%, transparent);
-  --ease: cubic-bezier(.22, .61, .36, 1);
   --maxw: 1140px;
 }
 
 /* ── base ─────────────────────────────────────────────────────────────── */
-html { scroll-behavior: smooth; scroll-padding-top: 72px; }
+html { scroll-behavior: smooth; scroll-padding-top: 76px; }
 body { font-size: 16px; line-height: 1.6; overflow-x: hidden; }
+body::before {                       /* one quiet wash of the accent behind the headline */
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: radial-gradient(60% 40% at 50% -8%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 65%);
+}
 a:hover { text-decoration: none; }
 p { margin: 0; }
 img { display: block; max-width: 100%; }
 .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 22px; }
 .inl { color: var(--accent); }
 .inl:hover { text-decoration: underline; }
-h1, h2, h3 { font-family: var(--title-font); font-weight: 400; letter-spacing: .5px; }
-.gtext {
-  background: linear-gradient(100deg, var(--accent), var(--cyan), var(--accent));
-  background-size: 200% auto; -webkit-background-clip: text; background-clip: text; color: transparent;
-  animation: shine 7s linear infinite;
+h1, h2, h3 { font-family: var(--title-font); font-weight: 400; letter-spacing: .5px; margin: 0; }
+kbd, code, .mono {
+  font: 13px "Cascadia Mono", Consolas, ui-monospace, monospace; padding: 1px 6px; border-radius: 5px;
+  border: 1px solid var(--edge); color: var(--txt); background: var(--well);
 }
-@keyframes shine { to { background-position: 200% center; } }
-
-/* ── ambience: glow, grid, drifting orbs ──────────────────────────────── */
-.fx { position: fixed; inset: 0; z-index: -1; pointer-events: none; overflow: hidden; }
-.fx::before {
-  content: ""; position: absolute; inset: 0;
-  background:
-    radial-gradient(60% 45% at 50% -10%, color-mix(in srgb, var(--accent) 17%, transparent), transparent 65%),
-    radial-gradient(40% 40% at 100% 8%, color-mix(in srgb, var(--cyan) 11%, transparent), transparent 60%),
-    radial-gradient(45% 40% at 0% 45%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 60%);
-}
-.fx .grid {
-  position: absolute; inset: 0; opacity: .55;
-  background-image:
-    linear-gradient(color-mix(in srgb, var(--line) 16%, transparent) 1px, transparent 1px),
-    linear-gradient(90deg, color-mix(in srgb, var(--line) 16%, transparent) 1px, transparent 1px);
-  background-size: 48px 48px;
-  -webkit-mask-image: radial-gradient(110% 70% at 50% 0%, black, transparent 72%);
-  mask-image: radial-gradient(110% 70% at 50% 0%, black, transparent 72%);
-}
-.orb { position: absolute; border-radius: 50%; filter: blur(80px); opacity: .5; animation: drift 24s var(--ease) infinite alternate; }
-.orb.a { width: 460px; height: 460px; top: -140px; left: -90px; background: color-mix(in srgb, var(--accent) 30%, transparent); }
-.orb.b { width: 520px; height: 520px; top: 32vh; right: -170px; background: color-mix(in srgb, var(--cyan) 20%, transparent); animation-duration: 31s; }
-.orb.c { width: 400px; height: 400px; top: 78vh; left: 18vw; background: color-mix(in srgb, var(--purple) 12%, transparent); animation-duration: 27s; }
-@keyframes drift { to { transform: translate3d(50px, 70px, 0) scale(1.12); } }
 
 /* ── nav ──────────────────────────────────────────────────────────────── */
 .nav { position: sticky; top: 0; z-index: 50; border-bottom: 1px solid transparent; transition: background .3s, border-color .3s; }
 .nav.scrolled {
-  background: color-mix(in srgb, var(--panel) 80%, transparent);
+  background: color-mix(in srgb, var(--panel) 82%, transparent);
   -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); border-bottom-color: var(--edge);
 }
 .nav-in { max-width: var(--maxw); margin: 0 auto; padding: 0 22px; height: 64px; display: flex; align-items: center; gap: 14px; }
 .logo-l { display: flex; align-items: center; gap: 10px; font: 19px var(--title-font); color: var(--accent); letter-spacing: 1px; }
-.logo-l img { width: 30px; height: 30px; filter: drop-shadow(0 0 10px var(--glow)); }
+.logo-l img { width: 30px; height: 30px; }
 .nav-links { margin-left: auto; display: flex; gap: 2px; align-items: center; }
-.nav-links a { color: var(--muted); padding: 8px 12px; border-radius: 10px; font-size: 14.5px; font-weight: 500; transition: color .2s, background .2s; }
-.nav-links a:hover { color: var(--txt); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.nav-links a { color: var(--muted); padding: 8px 12px; border-radius: 8px; font-size: 14.5px; font-weight: 500; }
+.nav-links a:hover { color: var(--txt); background: var(--hover); }
 .nav-links a.gh { display: inline-flex; gap: 8px; align-items: center; color: var(--txt); border: 1px solid var(--edge); margin-left: 6px; }
-.nav-links a.gh:hover { border-color: var(--accent); box-shadow: 0 0 0 3px var(--glow-soft); }
+.nav-links a.gh:hover { border-color: var(--accent); }
 .nav-links a.gh svg { width: 16px; height: 16px; }
-@media (max-width: 800px) { .nav-links a.hide-sm { display: none; } }
 
 /* ── buttons ──────────────────────────────────────────────────────────── */
 .btn {
-  position: relative; overflow: hidden; display: inline-flex; align-items: center; justify-content: center; gap: 10px;
-  font-weight: 650; font-size: 16px; padding: 14px 26px; border-radius: 14px; border: 1px solid transparent;
-  transition: transform .2s var(--ease), box-shadow .25s, border-color .2s, color .2s; white-space: nowrap;
+  display: inline-flex; align-items: center; justify-content: center; gap: 10px; white-space: nowrap;
+  font-weight: 650; font-size: 16px; padding: 13px 24px; border-radius: 10px; border: 1px solid var(--line); color: var(--txt);
 }
 .btn svg { width: 19px; height: 19px; flex: none; }
-.btn-primary { background: var(--grad); color: var(--ink); animation: breathe 3.6s ease-in-out infinite; }
-.btn-primary::after {
-  content: ""; position: absolute; inset: 0; transform: translateX(-120%); transition: transform .8s var(--ease);
-  background: linear-gradient(110deg, transparent 30%, color-mix(in srgb, var(--txt) 55%, transparent) 50%, transparent 70%);
-}
-.btn-primary:hover { transform: translateY(-2px); }
-.btn-primary:hover::after { transform: translateX(120%); }
-@keyframes breathe {
-  0%, 100% { box-shadow: 0 10px 34px -12px var(--glow), 0 0 0 0 var(--glow-soft); }
-  50% { box-shadow: 0 14px 44px -10px var(--glow), 0 0 0 6px transparent; }
-}
-.btn-ghost { background: var(--glass); border-color: var(--edge); color: var(--txt); }
-.btn-ghost:hover { transform: translateY(-2px); border-color: var(--accent); color: var(--accent); }
+.btn:hover { border-color: var(--accent); color: var(--accent); background: var(--hover); }
+.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--ink); }
+.btn-primary:hover { background: var(--accent2); border-color: var(--accent2); color: var(--ink); }
 
 /* ── hero ─────────────────────────────────────────────────────────────── */
-.hero { text-align: center; padding-top: 64px; }
-.mark { position: relative; width: 150px; height: 150px; margin: 0 auto 24px; display: grid; place-items: center; }
-.mark img { width: 112px; height: 112px; position: relative; z-index: 1; filter: drop-shadow(0 0 28px var(--glow)); animation: float 6s ease-in-out infinite; }
-.mark .ring { position: absolute; inset: 8px; border-radius: 30%; border: 2px solid color-mix(in srgb, var(--accent) 60%, transparent); animation: purr 3.2s var(--ease) infinite; }
-.mark .ring.r2 { animation-delay: 1.07s; }
-.mark .ring.r3 { animation-delay: 2.13s; }
-@keyframes purr { 0% { transform: scale(.75); opacity: .85; } 100% { transform: scale(1.6); opacity: 0; } }
-@keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
-.eyebrow {
-  display: inline-flex; gap: 9px; align-items: center; font-size: 13px; font-weight: 600; letter-spacing: .08em;
-  text-transform: uppercase; color: var(--muted); background: var(--glass); border: 1px solid var(--edge);
-  padding: 7px 15px; border-radius: 999px; margin-bottom: 22px;
-}
-.eyebrow .live { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 10px var(--accent); animation: blink 2s infinite; }
-@keyframes blink { 50% { opacity: .3; } }
-.hero h1 { font-size: clamp(36px, 6.6vw, 72px); line-height: 1.07; margin: 0 0 20px; color: var(--txt); text-wrap: balance; }
-.lede { max-width: 680px; margin: 0 auto 32px; color: var(--muted); font-size: clamp(16px, 2.1vw, 19.5px); }
+.hero { text-align: center; padding: 46px 0 34px; }
+.hero .mark { width: 76px; height: 76px; margin: 0 auto 18px; }
+.eyebrow { display: inline-block; color: var(--muted); font-size: 13px; letter-spacing: .14em; text-transform: uppercase; margin-bottom: 14px; }
+.hero h1 { font-size: clamp(34px, 5.6vw, 60px); line-height: 1.08; color: var(--txt); }
+.hero h1 span { color: var(--accent); }
+.lede { max-width: 720px; margin: 20px auto 0; font-size: 18.5px; color: var(--muted); }
 .lede b { color: var(--txt); font-weight: 600; }
-.cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
-.dlmeta { color: var(--dim); font-size: 13px; margin-top: 14px; }
-.pills { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin-top: 22px; }
-.pill { font-size: 13px; color: var(--muted); background: var(--glass); border: 1px solid var(--edge); padding: 6px 14px; border-radius: 999px; }
-.pill b { color: var(--accent); font-weight: 600; }
-
-/* ── the product shot: a live model of the real app ───────────────────── */
-.shot-wrap { position: relative; max-width: 880px; margin: 60px auto 0; perspective: 1600px; }
-.shot { position: relative; transform: rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg)); transition: transform .6s var(--ease); }
-.shot-glow { position: absolute; inset: -60px -40px; z-index: 0; pointer-events: none; filter: blur(40px);
-  background: radial-gradient(closest-side, color-mix(in srgb, var(--accent) 26%, transparent), transparent); }
-.shot-cap { color: var(--dim); font-size: 13px; margin-top: 16px; }
-.float {
-  position: absolute; z-index: 3; display: inline-flex; gap: 8px; align-items: center; padding: 9px 14px;
-  border-radius: 12px; font-size: 13px; color: var(--txt); white-space: nowrap; pointer-events: none;
-  background: color-mix(in srgb, var(--card) 90%, transparent); border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
-  -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
-  box-shadow: 0 14px 34px -14px rgba(0, 0, 0, .8), 0 0 22px -8px var(--glow); animation: bob 5.5s ease-in-out infinite;
-}
-.float i { font-style: normal; }
-.float.f1 { top: 10%; right: calc(100% - 8px); }
-.float.f2 { top: 30%; left: calc(100% - 8px); animation-delay: -1.4s; }
-.float.f3 { top: 58%; right: calc(100% - 8px); animation-delay: -2.8s; }
-.float.f4 { top: 80%; left: calc(100% - 8px); animation-delay: -4.1s; }
-@keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-9px); } }
-@media (max-width: 1380px) { .float { display: none; } }
-
-.mock {
-  position: relative; z-index: 1; text-align: left; background: var(--bg); border: 1px solid var(--line);
-  border-radius: 14px; overflow: hidden; font-size: 12.5px; line-height: 1.35; user-select: none;
-  box-shadow: 0 40px 90px -40px rgba(0, 0, 0, .9), 0 0 0 1px color-mix(in srgb, var(--accent) 12%, transparent);
-  --k: .8;
-}
-.m-titlebar { display: flex; align-items: center; gap: 7px; padding: 7px 12px; background: var(--panel); border-bottom: 1px solid var(--line); color: var(--muted); font-size: 11.5px; }
-.m-titlebar img { width: 15px; height: 15px; }
-.m-titlebar .dots { margin-left: auto; letter-spacing: 7px; color: var(--dim); }
-.m-body { display: grid; grid-template-columns: 206px minmax(0, 1fr); }
-.m-side { background: var(--panel); border-right: 1px solid var(--line); padding: 12px 10px; display: flex; flex-direction: column; gap: 8px; }
-.m-brand { font-family: var(--title-font); color: var(--accent); font-size: 15px; letter-spacing: .6px; }
-.m-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
-.m-btn { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-height: 42px; padding: 3px 4px;
-  border: 1px solid var(--line); border-radius: 8px; color: var(--txt); font-size: 11.5px; cursor: pointer; transition: background .12s, color .12s, border-color .12s; }
-.m-btn i { font-style: normal; font-size: 13px; line-height: 1; }
-.m-btn:hover { background: var(--hover); border-color: var(--accent); color: var(--accent); }
-.m-btn.on { background: var(--tint); border-color: var(--accent); color: var(--accent); }
-.m-btn.off.on { background: var(--warn-tint); border-color: var(--warn); color: var(--warn); }
-.m-str { display: flex; align-items: baseline; justify-content: space-between; margin-top: 2px; font-size: 11.5px; }
-.m-str b { font-family: var(--title-font); font-weight: 400; color: var(--accent); font-size: 16px; }
-.m-range { -webkit-appearance: none; appearance: none; width: 100%; height: 26px; margin: 0; padding: 0; border: 0; background: transparent; cursor: pointer; }
-.m-range::-webkit-slider-runnable-track { height: 12px; border-radius: 6px; border: 1px solid var(--line);
-  background: linear-gradient(90deg, var(--accent) calc(var(--k) * 100%), var(--well) 0); }
-.m-range::-moz-range-track { height: 10px; border-radius: 6px; border: 1px solid var(--line); background: var(--well); }
-.m-range::-moz-range-progress { height: 10px; border-radius: 6px; background: var(--accent); }
-.m-range::-webkit-slider-thumb { -webkit-appearance: none; width: 22px; height: 22px; margin-top: -6px; border-radius: 50%; background: var(--accent); border: 3px solid var(--panel); box-shadow: 0 0 10px var(--glow); }
-.m-range::-moz-range-thumb { width: 16px; height: 16px; border-radius: 50%; background: var(--accent); border: 3px solid var(--panel); }
-.m-nav { display: flex; flex-direction: column; gap: 1px; margin-top: 4px; }
-.m-nav span { padding: 5px 9px; border-radius: 8px; color: var(--muted); font-size: 12px; }
-.m-nav span.on { background: var(--tint); color: var(--accent); }
-.m-nav span.home { margin-bottom: 3px; padding: 6px 9px; border: 1px solid var(--line); color: var(--txt); font-size: 13px; font-weight: 600; }
-.m-nav span.home.on { border-color: var(--accent); color: var(--accent); }
-.m-main { padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.m-head { font-family: var(--title-font); color: var(--accent); text-align: center; font-size: 15px; letter-spacing: .6px; }
-.m-row { display: flex; align-items: center; gap: 8px; font-weight: 600; }
-.m-row .m-btn { min-height: 0; padding: 2px 10px; flex-direction: row; font-weight: 400; }
-.m-toys { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.m-toy { padding: 6px; border-radius: 12px; background: var(--panel); border: 1px solid var(--gc-mid); cursor: pointer; }
-.m-toy .gh { display: flex; align-items: center; gap: 6px; padding: 4px 9px; border-radius: 8px; background: var(--gc-tint); color: var(--gc); font-weight: 700; font-size: 12px; }
-.m-toy .gh .batt { margin-left: auto; color: var(--muted); font-weight: 400; font-family: var(--mono); font-size: 11px; }
-.m-toy .zz { display: none; color: var(--muted); font-weight: 400; font-size: 11px; }
-.mock.is-asleep .m-toy .zz { display: inline; }
-.m-out { display: flex; align-items: baseline; justify-content: space-between; padding: 7px 4px 4px; }
-.m-out .lbl { color: var(--dim); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
-.m-out .pct { font: 16px var(--mono); color: var(--gc); font-variant-numeric: tabular-nums; }
-.m-meter { height: 8px; margin: 0 4px; border-radius: 4px; background: var(--well); border: 1px solid var(--gc-mid); overflow: hidden; }
-.m-meter i { display: block; height: 100%; width: 0; background: var(--gc); box-shadow: 0 0 10px var(--gc); }
-.m-toy canvas { display: block; width: 100%; height: 42px; margin-top: 6px; }
-.m-offline { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--dim); color: var(--muted); font-weight: 600; font-size: 12px; }
-.m-offline .ring { width: 6px; height: 6px; border-radius: 50%; border: 2px solid var(--dim); }
-.m-offline .off { margin-left: auto; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--dim); color: var(--dim); font-size: 10px; letter-spacing: 1px; text-transform: uppercase; }
-.m-fold { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 12px; border-radius: 10px; background: var(--card); border: 1px solid var(--line); color: var(--accent); font-weight: 600; font-size: 12px; }
-.m-fold .sum { color: var(--dim); font-weight: 400; font-size: 11px; white-space: nowrap; }
-@media (max-width: 700px) {
-  .m-body { grid-template-columns: 150px minmax(0, 1fr); }
-  .m-toys { grid-template-columns: 1fr; }
-  .m-nav span:nth-child(n+4) { display: none; }
-  .m-main { padding: 9px; }
-  .m-toy canvas { height: 30px; }
-}
-.tip { position: absolute; z-index: 60; max-width: 300px; padding: 10px 12px; font-size: 13px; line-height: 1.45; text-align: left;
-  background: var(--card); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--pop-shadow);
-  color: var(--txt); pointer-events: none; opacity: 0; transform: translateY(4px); transition: opacity .15s, transform .15s; }
-.tip.show { opacity: 1; transform: none; }
-.tip b.t { display: block; color: var(--accent); margin-bottom: 3px; }
-
-/* ── marquee ──────────────────────────────────────────────────────────── */
-.marquee { margin-top: 90px; }
-.marquee-cap { text-align: center; color: var(--dim); font-size: 12px; font-weight: 600; letter-spacing: .16em; text-transform: uppercase; margin-bottom: 14px; }
-.mq { border-block: 1px solid var(--edge); padding: 18px 0; overflow: hidden;
-  -webkit-mask-image: linear-gradient(90deg, transparent, black 12%, black 88%, transparent);
-  mask-image: linear-gradient(90deg, transparent, black 12%, black 88%, transparent); }
-.mrow { display: flex; gap: 34px; width: max-content; animation: scrollX 48s linear infinite; }
-.mq:hover .mrow { animation-play-state: paused; }
-.mrow span { color: var(--muted); font: 18px var(--title-font); letter-spacing: .6px; white-space: nowrap; display: inline-flex; align-items: center; gap: 34px; }
-.mrow span::after { content: "\2726"; color: var(--accent); font-size: 12px; }
-@keyframes scrollX { to { transform: translateX(-50%); } }
+.cta { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin-top: 28px; }
+.dlmeta { margin-top: 12px; color: var(--dim); font-size: 13.5px; }
 
 /* ── sections ─────────────────────────────────────────────────────────── */
-.section { padding-top: 110px; position: relative; }
-.head { max-width: 720px; margin: 0 auto 50px; text-align: center; }
-.kicker { color: var(--accent); font-weight: 700; font-size: 13px; letter-spacing: .16em; text-transform: uppercase; margin-bottom: 12px; }
-.head h2 { font-size: clamp(28px, 4.4vw, 46px); line-height: 1.12; margin-bottom: 14px; color: var(--txt); text-wrap: balance; }
-.head p { color: var(--muted); font-size: 17.5px; }
-.head .kicker { color: var(--accent); font-size: 13px; }
-@media (max-width: 600px) { .section { padding-top: 80px; } .head { margin-bottom: 36px; } }
+.section { padding: 74px 0 0; }
+.head { max-width: 780px; margin: 0 0 26px; }
+.kicker { color: var(--accent); font-size: 13px; letter-spacing: .14em; text-transform: uppercase; margin-bottom: 8px; }
+.head h2 { font-size: clamp(26px, 3.6vw, 38px); line-height: 1.15; color: var(--txt); }
+.head p { color: var(--muted); margin-top: 12px; font-size: 17px; }
+.head p.kicker { color: var(--accent); margin-top: 0; font-size: 13px; }
 
-.glass {
-  position: relative; background: var(--glass); border: 1px solid var(--edge); border-radius: 20px;
-  -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+/* the demo and what stands around it */
+.demo-sec { padding-top: 22px; }
+.demo-cap { display: flex; justify-content: space-between; gap: 20px; align-items: baseline; flex-wrap: wrap; margin-bottom: 12px; }
+.demo-cap h2 { font-size: 22px; color: var(--txt); }
+.demo-cap p { color: var(--muted); font-size: 15px; max-width: 760px; }
+#ogp-demo { border: 1px solid var(--line); box-shadow: 0 24px 80px -30px color-mix(in srgb, var(--accent) 35%, transparent); }
+.pad-row { display: grid; grid-template-columns: 300px 1fr; gap: 18px; align-items: stretch; margin-top: 16px; }
+.pad-copy h3 { font: 600 15px "Segoe UI", system-ui, sans-serif; letter-spacing: 0; color: var(--txt); }
+.pad-copy p { color: var(--muted); font-size: 14.5px; margin-top: 4px; }
+.pad {
+  position: relative; height: 92px; border: 1px solid var(--line); border-radius: 12px; background: var(--well);
+  overflow: hidden; cursor: ew-resize; touch-action: none;
 }
+.pad canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+.pad .knob { position: absolute; top: 0; bottom: 0; width: 2px; background: var(--blue); left: 0; opacity: .9; }
+.pad .lbl { position: absolute; left: 8px; top: 6px; font-size: 12px; color: var(--muted); pointer-events: none;
+  padding: 1px 7px; border-radius: 6px; background: color-mix(in srgb, var(--well) 82%, transparent); }
+.demo-swipe { display: none; color: var(--dim); font-size: 13px; margin-top: 6px; }
+.pad .lbl b { color: var(--blue); font-weight: 600; }
+.try { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 16px; }
+.try div { border: 1px solid var(--edge); border-radius: 10px; padding: 12px 14px; color: var(--muted); font-size: 14.5px; line-height: 1.45; }
+.try b { color: var(--txt); font-weight: 600; display: block; margin-bottom: 2px; }
 
-/* ── signal scope ─────────────────────────────────────────────────────── */
-.scope-grid { display: grid; grid-template-columns: 1.2fr 1fr; gap: 36px; align-items: center; }
-@media (max-width: 880px) { .scope-grid { grid-template-columns: 1fr; gap: 26px; } }
-.scope { padding: 14px 16px 10px; box-shadow: 0 30px 80px -34px rgba(0, 0, 0, .85); overflow: hidden; }
-.scope-head { display: flex; gap: 10px; padding: 4px 4px 10px; flex-wrap: wrap; }
-.stag { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 700; letter-spacing: .06em; padding: 4px 10px; border-radius: 8px; }
-.stag .sw { width: 10px; height: 3px; border-radius: 2px; }
-.stag.in { color: var(--blue); background: var(--blue-tint); }
-.stag.in .sw { background: var(--blue); }
-.stag.out { color: var(--accent); background: var(--green-tint); }
-.stag.out .sw { background: var(--grad); }
-#scope { display: block; width: 100%; height: 240px; }
-.scope-foot { display: flex; justify-content: space-between; gap: 10px; color: var(--dim); font-size: 12px; padding: 8px 6px 2px; }
-.copy h3 { font-size: clamp(22px, 3vw, 30px); line-height: 1.2; margin-bottom: 14px; color: var(--txt); }
-.copy > p { color: var(--muted); margin-bottom: 18px; }
-.ticks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
-.ticks li { display: flex; gap: 12px; align-items: flex-start; color: var(--muted); font-size: 15.5px; }
-.ticks li::before { content: "\2713"; flex: none; width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center;
-  font-size: 12px; font-weight: 700; color: var(--ink); background: var(--grad); margin-top: 1px; }
-.chain { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; margin-top: 26px; }
-.chain .st { font-size: 12.5px; font-weight: 600; color: var(--dim); background: var(--card); border: 1px solid var(--edge);
-  padding: 5px 12px; border-radius: 999px; animation: signal 6.5s linear infinite; animation-delay: calc(var(--i) * .38s); }
-.chain .ar { color: var(--dim); font-size: 12px; }
-@keyframes signal {
-  0% { color: var(--ink); background: var(--accent); border-color: var(--accent); box-shadow: 0 0 16px var(--glow); }
-  7% { color: var(--accent); background: var(--green-tint); border-color: var(--green-mid); box-shadow: none; }
-  80% { color: var(--accent); background: var(--green-tint); border-color: var(--green-mid); }
-  88%, 100% { color: var(--dim); background: var(--card); border-color: var(--edge); }
-}
+/* how it works: one row per stage, each with its live plot */
+.stages { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.stage-card { border: 1px solid var(--edge); border-radius: 12px; padding: 16px 18px; display: grid; grid-template-columns: 1fr 190px; gap: 16px; align-items: center; background: color-mix(in srgb, var(--panel) 60%, transparent); }
+.stage-card h3 { font: 600 16px "Segoe UI", system-ui, sans-serif; letter-spacing: 0; color: var(--txt); }
+.stage-card h3 i { font-style: normal; color: var(--dim); font-weight: 400; margin-right: 8px; }
+.stage-card p { color: var(--muted); font-size: 14.5px; margin-top: 4px; line-height: 1.5; }
+.stage-card canvas { width: 190px; height: 64px; background: var(--well); border: 1px solid var(--edge); border-radius: 8px; }
+.after-chain { margin-top: 16px; color: var(--muted); font-size: 15.5px; max-width: 860px; }
+.after-chain b { color: var(--txt); font-weight: 600; }
 
-/* ── how it works: a rail with the signal flowing down it ─────────────── */
-.flow { position: relative; max-width: 780px; margin: 0 auto; }
-.flow .track { position: absolute; left: 21px; top: 28px; bottom: var(--track-end, 28px); width: 2px; border-radius: 2px;
-  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 45%, transparent), color-mix(in srgb, var(--cyan) 45%, transparent)); }
-.flow .spark { position: absolute; left: 1px; top: 0; width: 10px; height: 10px; margin: -5px 0 0 -5px; border-radius: 50%; background: var(--txt);
-  box-shadow: 0 0 14px 3px var(--accent); animation: down 3.6s linear infinite; }
-.flow .spark.s2 { animation-delay: 1.2s; }
-.flow .spark.s3 { animation-delay: 2.4s; }
-@keyframes down { 0% { top: 0; opacity: 0; } 10% { opacity: 1; } 88% { opacity: 1; } 100% { top: 100%; opacity: 0; } }
-.stage { position: relative; padding: 12px 0 12px 62px; }
-.stage .node { position: absolute; left: 12px; top: 18px; width: 20px; height: 20px; border-radius: 50%; background: var(--bg);
-  border: 2px solid var(--accent); box-shadow: 0 0 0 5px var(--glow-soft); }
-.stage:nth-child(even) .node { border-color: var(--cyan); box-shadow: 0 0 0 5px color-mix(in srgb, var(--cyan) 14%, transparent); }
-.stage h3 { font-size: 20px; margin: 0 0 4px; color: var(--txt); }
-.stage p { color: var(--muted); font-size: 15.5px; }
-.fan { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.fan span { font-size: 13.5px; font-weight: 600; padding: 6px 13px; border-radius: 999px; color: var(--txt);
-  background: linear-gradient(100deg, var(--glow-soft), color-mix(in srgb, var(--cyan) 12%, transparent)); border: 1px solid var(--edge); }
+/* what it does: plain grouped lists */
+.groups { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.group { border: 1px solid var(--edge); border-radius: 12px; padding: 18px 20px; }
+.group h3 { font: 600 13px "Segoe UI", system-ui, sans-serif; letter-spacing: .12em; text-transform: uppercase; color: var(--accent); margin-bottom: 8px; }
+.group ul { margin: 0; padding: 0; list-style: none; }
+.group li { color: var(--muted); font-size: 14.5px; line-height: 1.5; padding: 7px 0; border-top: 1px solid color-mix(in srgb, var(--line) 18%, transparent); }
+.group li:first-child { border-top: none; }
+.group li b { color: var(--txt); font-weight: 600; }
 
-/* ── numbers band ─────────────────────────────────────────────────────── */
-.stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
-@media (max-width: 820px) { .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.stat { padding: 26px 18px; text-align: center; }
-.stat .n { font: clamp(40px, 5vw, 56px)/1 var(--title-font); background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; font-variant-numeric: tabular-nums; }
-.stat .n small { font-size: .5em; }
-.stat .l { color: var(--muted); font-size: 14.5px; margin-top: 10px; }
-
-/* ── feature cards, with a spotlight that follows the pointer ─────────── */
-.cards { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
-@media (max-width: 900px) { .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 580px) { .cards { grid-template-columns: 1fr; } }
-.card {
-  position: relative; overflow: hidden; background: var(--glass); border: 1px solid var(--edge); border-radius: 18px;
-  padding: 24px; transition: transform .3s var(--ease), border-color .3s;
-}
-.card::before {
-  content: ""; position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .3s;
-  background: radial-gradient(380px circle at var(--mx, 50%) var(--my, 0%), color-mix(in srgb, var(--accent) 13%, transparent), transparent 60%);
-}
-.card:hover { transform: translateY(-4px); border-color: color-mix(in srgb, var(--accent) 70%, transparent); }
-.card:hover::before { opacity: 1; }
-.ico { width: 48px; height: 48px; border-radius: 14px; display: grid; place-items: center; font-size: 23px; margin-bottom: 16px;
-  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 18%, transparent), color-mix(in srgb, var(--cyan) 12%, transparent));
-  border: 1px solid var(--edge); }
-.card h3 { font-family: inherit; font-weight: 650; letter-spacing: 0; font-size: 17.5px; margin: 0 0 7px; color: var(--txt); }
-.card p { color: var(--muted); font-size: 15px; }
-.card.wide { grid-column: span 3; display: flex; gap: 22px; align-items: center; }
-.card.wide .ico { margin: 0; width: 64px; height: 64px; font: 30px var(--title-font); color: var(--accent); flex: none; }
-@media (max-width: 900px) { .card.wide { grid-column: span 2; } }
-@media (max-width: 580px) { .card.wide { grid-column: span 1; flex-direction: column; align-items: flex-start; gap: 14px; } }
-
-/* ── roadmap: cards with a light running round the border ─────────────── */
-@property --ang { syntax: "<angle>"; initial-value: 0deg; inherits: false; }
-.soon-group { margin-top: 34px; }
-.soon-group > h3 { font-size: 15px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin: 0 0 16px; display: flex; align-items: center; gap: 12px; }
-.soon-group > h3::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, var(--edge), transparent); }
-.soon {
-  position: relative; border-radius: 18px; padding: 1px;
-  background: conic-gradient(from var(--ang), transparent 0 62%, var(--accent) 78%, var(--cyan) 88%, transparent 100%), linear-gradient(var(--edge), var(--edge));
-  animation: orbit 7s linear infinite;
-}
-.soon:nth-child(3n+2) { animation-delay: -2.3s; }
-.soon:nth-child(3n) { animation-delay: -4.6s; }
-@keyframes orbit { to { --ang: 360deg; } }
-.soon > div { height: 100%; border-radius: 17px; padding: 20px 22px; background: color-mix(in srgb, var(--card) 96%, var(--bg)); }
-.soon .top { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-.soon .top .em { font-size: 26px; line-height: 1; }
-.soon h4 { font: 650 17px/1.3 "Segoe UI", system-ui, sans-serif; margin: 0 0 6px; color: var(--txt); }
-.soon p { color: var(--muted); font-size: 14.5px; }
-.st-pill { margin-left: auto; flex: none; font-size: 10.5px; font-weight: 700; letter-spacing: .08em; padding: 3px 9px; border-radius: 999px; }
-.st-pill.dev { color: var(--run); background: var(--run-tint); border: 1px solid var(--run-mid); }
-.st-pill.plan { color: var(--grey); background: var(--grey-tint); border: 1px solid var(--grey-mid); }
-.st-pill.idea { color: var(--purple); background: var(--purple-tint); border: 1px solid var(--purple-mid); }
-.suggest { text-align: center; color: var(--muted); margin-top: 30px; }
-
-/* ── install ──────────────────────────────────────────────────────────── */
-.steps { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
-.steps::before { content: ""; position: absolute; left: 16%; right: 16%; top: 52px; height: 2px; background: linear-gradient(90deg, var(--accent), var(--cyan)); opacity: .35; }
-@media (max-width: 880px) { .steps { grid-template-columns: 1fr; } .steps::before { display: none; } }
-.step { padding: 26px 24px; text-align: center; }
-.step .num { width: 56px; height: 56px; margin: 0 auto 16px; border-radius: 50%; display: grid; place-items: center; position: relative;
-  font: 24px var(--title-font); color: var(--ink); background: var(--grad); box-shadow: 0 0 26px -4px var(--glow); }
-.step h3 { font-family: inherit; font-weight: 650; letter-spacing: 0; font-size: 19px; margin: 0 0 8px; color: var(--txt); }
+/* install */
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.step { border: 1px solid var(--edge); border-radius: 12px; padding: 18px 20px; }
+.step .num { font: 15px var(--title-font); color: var(--accent); margin-bottom: 6px; }
+.step h3 { font: 600 17px "Segoe UI", system-ui, sans-serif; letter-spacing: 0; color: var(--txt); margin-bottom: 6px; }
 .step p { color: var(--muted); font-size: 15px; }
-.step kbd { font: 12.5px var(--mono); background: var(--well); border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px; color: var(--txt); }
-.step .btn { margin-top: 16px; padding: 11px 20px; font-size: 15px; }
-.needs { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-top: 30px; }
-.needs .pill { font-size: 13.5px; }
+.step .btn { margin-top: 14px; font-size: 15px; padding: 10px 18px; }
+.needs { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.needs span { border: 1px solid var(--edge); border-radius: 999px; padding: 5px 13px; color: var(--muted); font-size: 14px; }
 
-/* ── FAQ ──────────────────────────────────────────────────────────────── */
-.faq { max-width: 820px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
-.faq details { background: var(--glass); border: 1px solid var(--edge); border-radius: 14px; transition: border-color .2s; }
-.faq details[open] { border-color: color-mix(in srgb, var(--accent) 60%, transparent); }
-.faq summary { cursor: pointer; list-style: none; padding: 16px 20px; font-weight: 600; font-size: 16px; color: var(--txt); display: flex; gap: 14px; align-items: center; }
+/* not in this edition yet */
+.soon { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 12px; }
+.soon div { border: 1px solid var(--edge); border-radius: 10px; padding: 12px 14px; }
+.soon b { color: var(--txt); font-weight: 600; font-size: 15px; }
+.soon span { float: right; font-size: 10.5px; font-weight: 700; letter-spacing: .08em; color: var(--warn); border: 1px solid var(--warn-mid); border-radius: 999px; padding: 1px 8px; margin-top: 3px; }
+.soon span.plan { color: var(--run); border-color: var(--run-mid); }
+.soon span.idea { color: var(--muted); border-color: var(--edge); }
+.soon p { color: var(--muted); font-size: 14px; margin-top: 3px; clear: both; }
+.suggest { margin-top: 14px; color: var(--muted); font-size: 15px; }
+
+/* faq */
+.faq { max-width: 860px; display: flex; flex-direction: column; gap: 8px; }
+.faq details { border: 1px solid var(--edge); border-radius: 10px; }
+.faq details[open] { border-color: var(--line); }
+.faq summary { cursor: pointer; list-style: none; padding: 13px 18px; font-weight: 600; font-size: 15.5px; color: var(--txt); display: flex; gap: 14px; align-items: center; }
 .faq summary::-webkit-details-marker { display: none; }
-.faq summary::after { content: "+"; margin-left: auto; font: 22px var(--title-font); color: var(--accent); transition: transform .25s var(--ease); }
-.faq details[open] summary::after { transform: rotate(45deg); }
+.faq summary::after { content: "+"; margin-left: auto; font: 20px var(--title-font); color: var(--accent); }
+.faq details[open] summary::after { content: "\2013"; }
 .faq summary:hover { color: var(--accent); }
-.faq .a { padding: 0 20px 18px; color: var(--muted); font-size: 15px; }
-.faq code { font-size: 13px; padding: 1px 6px; border-radius: 5px; border: 1px solid var(--edge); color: var(--txt); background: var(--well); }
+.faq .a { padding: 0 18px 15px; color: var(--muted); font-size: 15px; }
 
-/* ── the closing call to action ───────────────────────────────────────── */
-.final {
-  position: relative; overflow: hidden; margin-top: 120px; text-align: center; padding: 64px 26px; border-radius: 28px;
-  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
-  background: radial-gradient(80% 120% at 50% 0%, color-mix(in srgb, var(--accent) 17%, transparent), transparent 70%), var(--glass);
-}
-.final img { width: 84px; height: 84px; margin: 0 auto 20px; filter: drop-shadow(0 0 24px var(--glow)); animation: float 6s ease-in-out infinite; }
-.final h2 { font-size: clamp(30px, 4.6vw, 48px); line-height: 1.1; margin-bottom: 14px; color: var(--txt); }
-.final p { color: var(--muted); font-size: 18px; margin-bottom: 30px; }
+.final { margin-top: 64px; border: 1px solid var(--edge); border-radius: 14px; padding: 30px 24px; text-align: center; }
+.final h2 { font-size: 26px; color: var(--txt); }
+.final p { color: var(--muted); margin-top: 6px; }
 
-/* ── footer ───────────────────────────────────────────────────────────── */
-footer { margin-top: 110px; border-top: 1px solid var(--edge); padding: 50px 0 34px; background: color-mix(in srgb, var(--panel) 70%, transparent); }
+/* footer */
+footer { margin-top: 84px; border-top: 1px solid var(--edge); padding: 44px 0 30px; background: color-mix(in srgb, var(--panel) 70%, transparent); }
 .foot { display: flex; justify-content: space-between; gap: 34px; flex-wrap: wrap; }
 .foot-brand { max-width: 340px; }
 .foot-brand .logo-l { margin-bottom: 12px; }
 .foot-brand p { color: var(--muted); font-size: 14.5px; }
 .cols { display: flex; gap: 60px; flex-wrap: wrap; }
 .col h5 { margin: 0 0 12px; font-size: 12.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); }
-.col a { display: block; color: var(--muted); font-size: 14.5px; padding: 3px 0; transition: color .2s; }
+.col a { display: block; color: var(--muted); font-size: 14.5px; padding: 3px 0; }
 .col a:hover { color: var(--accent); }
-.foot-bottom { margin-top: 36px; padding-top: 20px; border-top: 1px solid var(--edge); display: flex; justify-content: space-between; gap: 14px; flex-wrap: wrap; color: var(--dim); font-size: 13px; }
+.foot-bottom { margin-top: 32px; padding-top: 18px; border-top: 1px solid var(--edge); display: flex; justify-content: space-between; gap: 14px; flex-wrap: wrap; color: var(--dim); font-size: 13px; }
 .foot-bottom b { color: var(--accent); font-weight: 600; }
-.age { border: 1px solid var(--edge); border-radius: 999px; padding: 2px 10px; margin-right: 10px; }
+.age { border: 1px solid var(--edge); border-radius: 5px; padding: 0 6px; margin-right: 8px; color: var(--muted); }
 
-/* ── reveal on scroll ─────────────────────────────────────────────────── */
-.js .reveal { opacity: 0; transform: translateY(26px); transition: opacity .8s var(--ease), transform .8s var(--ease); }
-.js .reveal.in { opacity: 1; transform: none; }
-.reveal.d1 { transition-delay: .08s; } .reveal.d2 { transition-delay: .16s; } .reveal.d3 { transition-delay: .24s; }
+/* the demo's hover explanations */
+.tip { position: absolute; z-index: 60; max-width: 300px; padding: 10px 12px; font-size: 13px; line-height: 1.45; text-align: left;
+  background: var(--card); border: 1px solid var(--line); border-radius: 8px; box-shadow: var(--pop-shadow);
+  color: var(--txt); pointer-events: none; opacity: 0; transform: translateY(4px); transition: opacity .15s, transform .15s; }
+.tip.show { opacity: 1; transform: none; }
+.tip b.t { display: block; color: var(--accent); margin-bottom: 3px; }
 
-@media (prefers-reduced-motion: reduce) {
-  html { scroll-behavior: auto; }
-  *, *::before, *::after { animation: none !important; transition: none !important; }
-  .js .reveal { opacity: 1; transform: none; }
-  .gtext { background-position: 0 center; }
+@media (max-width: 980px) {
+  .stages, .groups, .steps, .soon, .try { grid-template-columns: 1fr 1fr; }
+  .pad-row { grid-template-columns: 1fr; }
+}
+@media (max-width: 720px) { .demo-swipe { display: block; } }
+@media (max-width: 640px) {
+  .stages, .groups, .steps, .soon, .try { grid-template-columns: 1fr; }
+  .stage-card { grid-template-columns: 1fr; }
+  .stage-card canvas { width: 100%; }
+  .hide-sm { display: none; }
 }
 </style>
 </head>
 <body id="top">
-<div class="fx" aria-hidden="true"><div class="grid"></div><div class="orb a"></div><div class="orb b"></div><div class="orb c"></div></div>
 
 <!-- ═══ NAV ════════════════════════════════════════════════════════════════ -->
 <nav class="nav" id="nav">
   <div class="nav-in">
     <a class="logo-l" href="#top"><img src="assets/ogp-icon.svg" alt="">OscGoesPurrr</a>
     <div class="nav-links">
-      <a class="hide-sm" href="#signal">How it works</a>
-      <a class="hide-sm" href="#features">Features</a>
-      <a class="hide-sm" href="#roadmap">Roadmap</a>
+      <a class="hide-sm" href="#demo">Try it</a>
+      <a class="hide-sm" href="#how">How it works</a>
+      <a class="hide-sm" href="#does">What it does</a>
       <a class="hide-sm" href="#install">Install</a>
       <a class="gh" href="https://github.com/Blise518B/OscGoesPurrr">
         <svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
@@ -461,327 +251,234 @@ footer { margin-top: 110px; border-top: 1px solid var(--edge); padding: 50px 0 3
 
 <!-- ═══ HERO ═══════════════════════════════════════════════════════════════ -->
 <header class="hero wrap">
-  <div class="mark" aria-hidden="true">
-    <span class="ring"></span><span class="ring r2"></span><span class="ring r3"></span>
-    <img src="assets/ogp-icon.svg" alt="">
-  </div>
-  <span class="eyebrow"><span class="live"></span>VRChat OSC &rarr; your toys</span>
-  <h1>Every touch in VRChat,<br><span class="gtext">felt for real.</span></h1>
-  <p class="lede">OscGoesPurrr turns your avatar's contacts into <b>smooth, real-time output on your
-    Bluetooth toys</b>. <b>Download one file and run it</b> &mdash; it finds VRChat and your toys by itself.</p>
+  <img class="mark" src="assets/ogp-icon.svg" alt="">
+  <span class="eyebrow">VRChat OSC &rarr; Bluetooth toys</span>
+  <h1>Every touch in VRChat,<br><span>felt for real.</span></h1>
+  <p class="lede">OscGoesPurrr reads the contacts on your VRChat avatar and turns them into output for your
+    Bluetooth toys, through <b>a signal chain you can watch and tune</b>. One file for Windows or Linux &mdash;
+    the toy server is built in, and it finds VRChat and your toys by itself.</p>
   <div class="cta">
     <a class="btn btn-primary dl" href="https://github.com/Blise518B/OscGoesPurrr/releases/latest/download/OscGoesPurrr-Windows.exe">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
       <span class="dl-label">Download for Windows</span></a>
-    <a class="btn btn-ghost" href="#signal">See how it works</a>
+    <a class="btn" href="#how">How it works</a>
   </div>
-  <p class="dlmeta"><span class="dl-meta">Early release &middot; Windows 10 / 11 &middot; free and open source</span></p>
-  <div class="pills">
-    <span class="pill"><b>1</b> file, no installer</span>
-    <span class="pill"><b>0</b> IPs to type</span>
-    <span class="pill">Intiface <b>built in</b></span>
-    <span class="pill">Updates <b>itself</b></span>
-  </div>
-
-  <!-- The product shot: a small working model of the real app. Every control
-       carries the app's own hover explanation (data-tip), shown after the
-       same 0.7 s rest. Decorative, so screen readers skip it. -->
-  <div class="shot-wrap reveal" id="shotwrap">
-    <div class="shot-glow"></div>
-    <span class="float f1"><i>&#128225;</i>VRChat found by itself</span>
-    <span class="float f2"><i>&#128161;</i>Hover anything &mdash; it explains itself</span>
-    <span class="float f3"><i>&#127898;&#65039;</i>One bar scales everything</span>
-    <span class="float f4"><i>&#128164;</i>Sleep: only real strokes wake it</span>
-    <div class="shot" id="shot">
-      <div class="mock" id="mock" aria-hidden="true">
-        <div class="m-titlebar"><img src="assets/ogp-icon.svg" alt="">OscGoesPurrr <span class="ver-tag"></span><span class="dots">&#8211; &#9633; &#10005;</span></div>
-        <div class="m-body">
-          <div class="m-side">
-            <div class="m-brand">OscGoesPurrr</div>
-            <div class="m-grid" id="modes">
-              <span class="m-btn on" data-tip="mode" data-mode="Combined">Combined<i>&#128279;</i></span>
-              <span class="m-btn" data-tip="mode" data-mode="Separate">Separate<i>&#128256;</i></span>
-              <span class="m-btn" data-tip="mode" data-mode="Custom 1">Custom 1<i>&#127183;</i></span>
-              <span class="m-btn" data-tip="mode" data-mode="Custom 2">Custom 2<i>&#127922;</i></span>
-            </div>
-            <div class="m-str" data-tip="strength"><span>Total output strength</span><b id="strval">80%</b></div>
-            <input class="m-range" id="strength" type="range" min="0" max="100" value="80" tabindex="-1" data-tip="strength">
-            <div class="m-grid">
-              <span class="m-btn off" id="offbtn" data-tip="off">Off</span>
-              <span class="m-btn" id="sleepbtn" data-tip="sleep">Sleep</span>
-            </div>
-            <div class="m-nav">
-              <span class="home on">Home</span><span>Statistics</span><span>SPS Sources</span><span>OSC Inspector</span><span>Settings</span>
-            </div>
-          </div>
-          <div class="m-main">
-            <div class="m-head">Home</div>
-            <div class="m-row">Toys <span class="m-btn" id="testbtn" data-tip="test">Test all</span></div>
-            <div class="m-toys">
-              <div class="m-toy" data-tip="toy" style="--gc:var(--cyan);--gc-mid:var(--cyan-mid);--gc-tint:var(--cyan-tint)">
-                <div class="gh">Lovense Gush <span class="zz">&middot; asleep</span><span class="batt">82%</span></div>
-                <div class="m-out"><span class="lbl">Output</span><span class="pct">0%</span></div>
-                <div class="m-meter"><i></i></div>
-                <canvas></canvas>
-              </div>
-              <div class="m-toy" data-tip="toy" style="--gc:var(--blue);--gc-mid:var(--blue-mid);--gc-tint:var(--blue-tint)">
-                <div class="gh">Lovense Hush <span class="zz">&middot; asleep</span><span class="batt">64%</span></div>
-                <div class="m-out"><span class="lbl">Output</span><span class="pct">0%</span></div>
-                <div class="m-meter"><i></i></div>
-                <canvas></canvas>
-              </div>
-            </div>
-            <div class="m-offline" data-tip="offline"><span class="ring"></span>Lovense Domi <span class="off">Offline</span></div>
-            <div class="m-fold" data-tip="tools"><span>&#9656; Tuning tools</span><span class="sum">Simulator &middot; signal graph</span></div>
-          </div>
-        </div>
-      </div>
-    </div>
-    <p class="shot-cap">That's the real layout, working. Click things. Drag the bar. Rest the pointer anywhere.</p>
-  </div>
+  <p class="dlmeta"><span class="dl-meta">Windows 10 / 11 &middot; free and open source</span><br>
+    On Linux? <a class="inl" href="https://github.com/Blise518B/OscGoesPurrr/releases/latest/download/OscGoesPurrr-Linux-x86_64.AppImage">Get the AppImage</a></p>
 </header>
-
-<!-- ═══ MARQUEE ════════════════════════════════════════════════════════════ -->
-<div class="marquee" aria-label="Works with hundreds of toys that Buttplug.io supports">
-  <p class="marquee-cap">Works with hundreds of Buttplug.io toys</p>
-  <div class="mq" aria-hidden="true">
-    <div class="mrow">
-      <span>Lush</span><span>Hush</span><span>Gush</span><span>Edge</span><span>Domi</span><span>Nora</span><span>Max</span><span>Ferri</span><span>Diamo</span><span>Gravity</span><span>Solace&nbsp;Pro</span><span>Osci</span><span>Calor</span><span>Tenera</span><span>Vulse</span><span>Ridge</span><span>Exomoon</span><span>Hyphy</span><span>Flexer</span><span>OSR2</span><span>We-Vibe</span><span>Kiiroo</span><span>Satisfyer</span><span>Magic&nbsp;Motion</span>
-      <span>Lush</span><span>Hush</span><span>Gush</span><span>Edge</span><span>Domi</span><span>Nora</span><span>Max</span><span>Ferri</span><span>Diamo</span><span>Gravity</span><span>Solace&nbsp;Pro</span><span>Osci</span><span>Calor</span><span>Tenera</span><span>Vulse</span><span>Ridge</span><span>Exomoon</span><span>Hyphy</span><span>Flexer</span><span>OSR2</span><span>We-Vibe</span><span>Kiiroo</span><span>Satisfyer</span><span>Magic&nbsp;Motion</span>
-    </div>
-  </div>
-</div>
 
 <main>
 
-<!-- ═══ SIGNAL ═════════════════════════════════════════════════════════════ -->
-<section class="section" id="signal">
+<!-- ═══ THE DEMO ═══════════════════════════════════════════════════════════
+     A working copy of the real window: assets/demo.js builds it into
+     #ogp-demo. The strip under it is the contact going in. -->
+<section class="demo-sec" id="demo">
   <div class="wrap">
-    <div class="head reveal">
-      <p class="kicker">Smooth by design</p>
-      <h2>Twitchy OSC in.<br><span class="gtext">Silky output out.</span></h2>
-      <p>VRChat's contact data is jittery and only arrives when something changes. A signal chain per contact
-        shapes every tick into motion that feels like <i>that</i> toy &mdash; not a raw proximity number.</p>
+    <div class="demo-cap">
+      <h2>This is the app.</h2>
+      <p>A working copy of the real window, running the app's own signal maths in your browser. Only the toys
+        and the link to VRChat are simulated.</p>
     </div>
-    <div class="scope-grid">
-      <div class="glass scope reveal">
-        <div class="scope-head">
-          <span class="stag in"><span class="sw"></span>RAW OSC IN</span>
-          <span class="stag out"><span class="sw"></span>WHAT YOUR TOY FEELS</span>
-        </div>
-        <canvas id="scope" aria-hidden="true"></canvas>
-        <div class="scope-foot"><span>live signal preview</span><span>depth &middot; speed &middot; punch &rarr; one feel</span></div>
+    <div id="ogp-demo" aria-label="A working copy of the OscGoesPurrr window"></div>
+    <p class="demo-swipe">The window keeps its real proportions &mdash; swipe sideways to see the rest of it.</p>
+
+    <div class="pad-row">
+      <div class="pad-copy">
+        <h3>The contact going in</h3>
+        <p>What VRChat reports for a contact on your avatar: how deep, from 0 to 1. Move your pointer along the
+          strip to stroke by hand &mdash; leave it alone and the app's built-in simulator does it. Hold still and
+          the toys stop after a second: that is anti-stuck, as in the app.</p>
       </div>
-      <div class="copy reveal d1">
-        <h3>A real signal chain, per contact</h3>
-        <p>Every stage is a knob you can see working: a mini graph shows each one live, and every one of them
-          explains itself when you rest the pointer on it.</p>
-        <ul class="ticks">
-          <li>Depth, speed and punch, mixed the way you like it</li>
-          <li>Wake, smoothing, texture and a clean zero cut</li>
-          <li>An output range fitted to what each toy can really do</li>
-          <li>Low latency first &mdash; no queues and no waits between the contact and your toy</li>
-        </ul>
-        <div class="chain" aria-label="Signal chain stages">
-          <span class="st" style="--i:0">Input</span><span class="ar">&rarr;</span>
-          <span class="st" style="--i:1">Depth</span><span class="ar">&rarr;</span>
-          <span class="st" style="--i:2">Speed</span><span class="ar">&rarr;</span>
-          <span class="st" style="--i:3">Punch</span><span class="ar">&rarr;</span>
-          <span class="st" style="--i:4">Combine</span><span class="ar">&rarr;</span>
-          <span class="st" style="--i:5">Wake</span><span class="ar">&rarr;</span>
-          <span class="st" style="--i:6">Envelope</span><span class="ar">&rarr;</span>
-          <span class="st" style="--i:7">Zero cut</span><span class="ar">&rarr;</span>
-          <span class="st" style="--i:8">Output</span>
-        </div>
+      <div class="pad" id="ogp-pad">
+        <canvas data-ogp-trace="pen" data-ogp-hue="blue" aria-hidden="true"></canvas>
+        <span class="knob"></span>
+        <span class="lbl">contact depth <b id="ogp-padval">0.00</b></span>
       </div>
+    </div>
+
+    <div class="try">
+      <div><b>Open a toy</b>Click a toy, then one of its chains: every stage of the signal, live, with its knobs.</div>
+      <div><b>Turn a knob</b>Drag one on a stage card and watch what the toy is sent change.</div>
+      <div><b>Press Sleep</b>Silent until three full strokes land within six seconds. Off is instant.</div>
+      <div><b>Pick a colour</b>Settings &rarr; Appearance turns everything, Vibrant or Darker, as you pick.</div>
     </div>
   </div>
 </section>
 
-<!-- ═══ HOW IT WORKS ═══════════════════════════════════════════════════════ -->
+<!-- ═══ HOW IT WORKS ═══════════════════════════════════════════════════════
+     One card per stage of the chain, in the app's order. Each plot is the
+     named trace of the demo's engine (data-ogp-trace = the app's trace id). -->
 <section class="section" id="how">
   <div class="wrap">
-    <div class="head reveal">
+    <div class="head">
       <p class="kicker">How it works</p>
-      <h2>From a touch in VR<br>to a buzz in the room</h2>
+      <h2>From one jittery number to a toy</h2>
+      <p>A contact on your avatar &mdash; an SPS or OGB socket, plug or touch zone &mdash; reports one number: how
+        deep, 0 to 1. VRChat sends it over OSC only when it changes, and it jitters. Every motor runs that number
+        through the chain below. The plots are live: they show the demo above.</p>
     </div>
-    <div class="flow reveal">
-      <div class="track" aria-hidden="true"><span class="spark"></span><span class="spark s2"></span><span class="spark s3"></span></div>
-      <div class="stage"><span class="node"></span>
-        <h3>Your avatar is touched</h3>
-        <p>The OGB / SPS contacts on your avatar notice every touch, stroke and thrust.</p></div>
-      <div class="stage"><span class="node"></span>
-        <h3>VRChat sends it over OSC</h3>
-        <p>OscGoesPurrr finds VRChat on its own and reads your avatar's parameters. No IP or port typing, ever.</p></div>
-      <div class="stage"><span class="node"></span>
-        <h3>The signal chain shapes it</h3>
-        <p>Depth, speed and punch are mixed, woken, smoothed and fitted to your toy &mdash; per contact, per toy.</p></div>
-      <div class="stage"><span class="node"></span>
-        <h3>The built-in Intiface engine sends it</h3>
-        <p>It speaks Buttplug.io to your toys over Bluetooth. There's nothing else to install or run.</p></div>
-      <div class="stage"><span class="node"></span>
-        <h3>Your toy responds</h3>
-        <p>Milliseconds later.</p>
-        <div class="fan"><span>&#128243; Vibrators buzz</span><span>&#8597;&#65039; Strokers follow the motion</span><span>&#10024; Your avatar can glow along</span></div></div>
+    <div class="stages">
+      <div class="stage-card"><div><h3><i>1</i>Input</h3>
+        <p>What a motor listens to: zones on your avatar, a source you built from other contacts, or any OSC
+          parameter. With several, the strongest one counts.</p></div>
+        <canvas data-ogp-trace="d_raw" data-ogp-hue="blue" aria-hidden="true"></canvas></div>
+      <div class="stage-card"><div><h3><i>2</i>Depth</h3>
+        <p>How far in, right now &mdash; with a gain and, if you want, a curve.</p></div>
+        <canvas data-ogp-trace="d_shaped" data-ogp-hue="blue" aria-hidden="true"></canvas></div>
+      <div class="stage-card"><div><h3><i>3</i>Speed</h3>
+        <p>How fast the depth is changing. The stroke in and the stroke out are measured apart, each with its own
+          gain.</p></div>
+        <canvas data-ogp-trace="s_out_shaped,s_in_shaped" data-ogp-hue="cyan,amber" aria-hidden="true"></canvas></div>
+      <div class="stage-card"><div><h3><i>4</i>Punch</h3>
+        <p>A short hit on top when a stroke is fast, ringing out in about a tenth of a second. Slow movement never
+          triggers it.</p></div>
+        <canvas data-ogp-trace="punch" data-ogp-hue="pink" aria-hidden="true"></canvas></div>
+      <div class="stage-card"><div><h3><i>5</i>Combine</h3>
+        <p>Depth and speed become one level: added, the larger of the two, or multiplied. Punch rides on top.</p></div>
+        <canvas data-ogp-trace="mixed" data-ogp-hue="purple" aria-hidden="true"></canvas></div>
+      <div class="stage-card"><div><h3><i>6</i>Wake</h3>
+        <p>A gate that opens on real activity, so a contact that only rests against you does nothing. In Sleep it
+          counts strokes instead.</p></div>
+        <canvas data-ogp-trace="wake_meter,wake_out" data-ogp-hue="yellow,cyan" aria-hidden="true"></canvas></div>
+      <div class="stage-card"><div><h3><i>7</i>Envelope</h3>
+        <p>Rise and fall times round the level, so a toy never clicks on or off. Optional texture keeps a held
+          level from feeling flat.</p></div>
+        <canvas data-ogp-trace="smoothed" data-ogp-hue="cyan" aria-hidden="true"></canvas></div>
+      <div class="stage-card"><div><h3><i>8</i>Zero cut and output</h3>
+        <p>Input back at zero means silence, at once. Then the chain's gain and the total strength scale the
+          level, and the result is fitted into the range this toy can actually feel: remapped, not clipped.</p></div>
+        <canvas data-ogp-trace="out" data-ogp-hue="accent" aria-hidden="true"></canvas></div>
     </div>
+    <p class="after-chain">Then the built-in Intiface engine sends it to the toy over Bluetooth. From the contact
+      changing to the command for the toy we measure <b>about 27&nbsp;ms</b> on our test bench: nothing in that path
+      queues or waits for an answer.</p>
   </div>
 </section>
 
-<!-- ═══ NUMBERS ════════════════════════════════════════════════════════════ -->
-<section class="section" aria-label="In numbers">
-  <div class="wrap stats">
-    <div class="glass stat reveal"><div class="n" data-count="9">9</div><div class="l">stages in every signal chain</div></div>
-    <div class="glass stat reveal d1"><div class="n" data-count="4">4</div><div class="l">routing modes to switch between</div></div>
-    <div class="glass stat reveal d2"><div class="n">0</div><div class="l">sync bits for the in&#8209;game menu</div></div>
-    <div class="glass stat reveal d3"><div class="n" data-count="1">1</div><div class="l">click to update</div></div>
-  </div>
-</section>
-
-<!-- ═══ FEATURES ═══════════════════════════════════════════════════════════
+<!-- ═══ WHAT IT DOES ═══════════════════════════════════════════════════════
      Only what this release ships. -->
-<section class="section" id="features">
+<section class="section" id="does">
   <div class="wrap">
-    <div class="head reveal">
-      <p class="kicker">Features</p>
-      <h2>Just works out of the box.<br><span class="gtext">Every knob, if you want it.</span></h2>
+    <div class="head">
+      <p class="kicker">What it does</p>
+      <h2>Works out of the box. Every knob, if you want it.</h2>
     </div>
-    <div class="cards">
-      <div class="card reveal"><div class="ico">&#128230;</div><h3>One file, zero setup</h3>
-        <p>No installer, no Python, no separate Intiface Central. The exe carries its own Buttplug server.</p></div>
-      <div class="card reveal d1"><div class="ico">&#128225;</div><h3>Finds everything itself</h3>
-        <p>VRChat is found on your network automatically, toys the moment they're switched on &mdash; and a chime tells
-          you in VR when one connects or drops.</p></div>
-      <div class="card reveal d2"><div class="ico">&#127898;&#65039;</div><h3>One bar for everything</h3>
-        <p>Total output strength scales every toy at once &mdash; and never touches your tuning, so turning it back up
-          brings back exactly the feel you had.</p></div>
-      <div class="card reveal"><div class="ico">&#128164;</div><h3>Off and Sleep</h3>
-        <p>Off is instant silence. Sleep only wakes for three real strokes in six seconds, so a brush against a sleeping
-          partner does nothing.</p></div>
-      <div class="card reveal d1"><div class="ico">&#128256;</div><h3>Four routing modes</h3>
-        <p>Combined, Separate and two custom modes decide which parts of your avatar drive which toys. Each avatar can
-          remember its own.</p></div>
-      <div class="card reveal d2"><div class="ico">&#127918;</div><h3>Control it from VRChat</h3>
-        <p>A strength radial plus Mode, Off, Sleep and Test in your avatar's menu. Unsynced, so they cost 0 sync bits.</p></div>
-      <div class="card reveal"><div class="ico">&#128158;</div><h3>Touch and penetration, apart</h3>
-        <p>Separate chains per kind of contact, each with its own feel &mdash; and a touch can go quiet while the pen is in.</p></div>
-      <div class="card reveal d1"><div class="ico">&#127919;</div><h3>Fitted to every toy</h3>
-        <p>A gain and a min / max band per chain that remaps rather than clips. Strokers like the Solace Pro or an OSR2
-          follow depth.</p></div>
-      <div class="card reveal d2"><div class="ico">&#129694;</div><h3>Mirror to your avatar</h3>
-        <p>Send any toy's output back to VRChat as a parameter to drive a glow, a blendshape or a meter &mdash; even with no
-          toy connected. A second parameter can tell your avatar whether a toy, or one particular toy, is connected.</p></div>
-      <div class="card reveal"><div class="ico">&#128737;&#65039;</div><h3>Never stuck on</h3>
-        <p>OSC only sends changes, so a frozen contact could hold a motor on forever &mdash; after an avatar swap, or when
-          your partner leaves. Anti-stuck timers cut it.</p></div>
-      <div class="card reveal d1"><div class="ico">&#9197;&#65039;</div><h3>Replay, tune, measure</h3>
-        <p>Replay a recorded session or a built-in wave to tune with nobody around. Stats and a live OSC inspector stay on
-          your PC.</p></div>
-      <div class="card reveal d2"><div class="ico">&#128267;</div><h3>Toys in SteamVR</h3>
-        <p>Your toys join SteamVR's device strip, each with its own icon and battery. Just for show &mdash; never used as
-          trackers, and one switch in Settings turns it off.</p></div>
-      <div class="card wide reveal"><div class="ico">&#128200;</div><div><h3>Every session, charted</h3>
-        <p>Click any session for its timeline: how hard each toy ran, thrusts per minute and which zones were touched,
-          with your hottest five minutes and longest break picked out. Lifetime totals come with a few fun facts, a heatmap
-          shows when in the week you play, and a calendar fills in month by month. All of it stays on your PC, and
-          one switch in Settings turns it off and deletes it.</p></div></div>
-      <div class="card wide reveal"><div class="ico">&#127912;</div><div><h3>Any colour you like</h3>
-        <p>Not a green person? One slider in Settings turns the whole app &mdash; frames, buttons, highlights, even the
-          tint of the background &mdash; to the colour you pick, in a Vibrant look or a Darker one. It changes while you watch,
-          every colour stays as readable as the green, and one click brings the green back.</p></div></div>
-      <div class="card wide reveal"><div class="ico">?</div><div><h3>It explains itself</h3>
-        <p>No manual to read first and no help mode to switch on. Rest the pointer on any button, slider, toggle or heading
-          and it tells you what it does &mdash; down to each knob of a signal chain. And when a new version is out, one click
-          downloads it, checks it and restarts &mdash; and a small window shows you what changed, with a button that
-          takes you to each new thing.</p></div></div>
+    <div class="groups">
+      <div class="group"><h3>Setting up</h3><ul>
+        <li><b>One file.</b> No installer, no Python, no separate Intiface Central: the Buttplug server is inside.
+          It can use your own Intiface Central instead.</li>
+        <li><b>Finds VRChat by itself.</b> No IP or port to type.</li>
+        <li><b>Finds your toys by itself</b> and takes them back when they reconnect. A chime tells you in VR when
+          one connects or drops.</li>
+        <li><b>Updates in one click.</b> It offers a new version at launch, and afterwards shows what changed.</li>
+      </ul></div>
+      <div class="group"><h3>Routing</h3><ul>
+        <li><b>Four modes</b> &mdash; Combined, Separate and two of your own &mdash; decide which parts of your
+          avatar drive which toy. Each avatar can remember its mode.</li>
+        <li><b>Touch and penetration apart.</b> Every motor has a chain per kind of contact, merged by add, max or
+          multiply.</li>
+        <li><b>SPS Sources</b> builds a zone from any contact receivers, for avatars without the standard sockets.</li>
+      </ul></div>
+      <div class="group"><h3>Feel</h3><ul>
+        <li><b>Total output strength</b> scales every toy at once and never touches your tuning.</li>
+        <li><b>Fitted to the toy.</b> A gain and a min / max band per chain. Strokers such as a Solace Pro or an
+          OSR2 follow the depth as position.</li>
+        <li><b>Sleep</b> wakes only for real strokes. <b>Off</b> is instant silence.</li>
+      </ul></div>
+      <div class="group"><h3>From inside VRChat</h3><ul>
+        <li><b>Your avatar's menu</b> gets a strength radial plus Mode, Off, Sleep and Test. They are unsynced
+          parameters, so they cost 0 sync bits.</li>
+        <li><b>Output back to the avatar.</b> Any motor's level can be sent as a parameter, to drive a glow, a
+          blendshape or a meter.</li>
+        <li><b>&ldquo;A toy is connected&rdquo;</b> as a parameter, for the whole rig or for one toy.</li>
+      </ul></div>
+      <div class="group"><h3>Safety</h3><ul>
+        <li><b>Anti-stuck.</b> OSC only sends changes, so a contact that freezes &mdash; an avatar swap, a partner
+          leaving &mdash; would hold a motor on. A value frozen part-way is cut after a second; one held at 100&nbsp;%
+          eases off after ten.</li>
+        <li><b>Off</b> stops everything at once, from the app or from your avatar's menu.</li>
+        <li><b>Nothing leaves your PC</b> except one question to GitHub at launch: is there a newer version?</li>
+      </ul></div>
+      <div class="group"><h3>Also in there</h3><ul>
+        <li><b>Statistics.</b> Every session with its timeline, a when-you-play heatmap and a calendar. One switch
+          turns it off and deletes it.</li>
+        <li><b>Tune without a partner.</b> An input simulator, a live signal graph, and recording and replay of
+          sessions.</li>
+        <li><b>OSC Inspector and Diagnostics</b> for when an avatar or the link misbehaves.</li>
+        <li><b>Toys in SteamVR's device list</b>, with battery. Never as trackers. Windows only for now.</li>
+        <li><b>Any colour</b>, in a Vibrant or a Darker look. Every control explains itself when you rest the
+          pointer on it.</li>
+      </ul></div>
     </div>
-  </div>
-</section>
-
-<!-- ═══ ROADMAP ════════════════════════════════════════════════════════════
-     In development = built, being made ready to share · Planned = designed,
-     not built yet · Idea = being explored. Move an item into Features when
-     it ships. -->
-<section class="section" id="roadmap">
-  <div class="wrap">
-    <div class="head reveal">
-      <p class="kicker">On the roadmap</p>
-      <h2>And this is<br><span class="gtext">just the start.</span></h2>
-      <p>The full OscGoesPurrr drives a lot more than Bluetooth toys. These parts are in development and join this
-        edition once they're polished enough to hand to anyone &mdash; no dates, and the app tells you when an update lands.</p>
-    </div>
-
-    <div class="soon-group">
-      <h3 class="reveal">More hardware</h3>
-      <div class="cards">
-        <div class="soon reveal"><div><div class="top"><span class="em">&#127919;</span><span class="st-pill dev">IN DEVELOPMENT</span></div><h4>SteamVR trackers</h4>
-          <p>Buzz Vive and Tundra trackers from avatar contacts, and send their battery levels back to VRChat.</p></div></div>
-        <div class="soon reveal d1"><div><div class="top"><span class="em">&#129466;</span><span class="st-pill dev">IN DEVELOPMENT</span></div><h4>bHaptics vests</h4>
-          <p>Driven by the bHapticsOSC dots avatars already carry.</p></div></div>
-        <div class="soon reveal d2"><div><div class="top"><span class="em">&#128085;</span><span class="st-pill dev">IN DEVELOPMENT</span></div><h4>OWO suits</h4>
-          <p>Full-torso feedback across OWO's ten muscle groups.</p></div></div>
-        <div class="soon reveal"><div><div class="top"><span class="em">&#9889;</span><span class="st-pill dev">IN DEVELOPMENT</span></div><h4>PiShock &amp; DG-Lab Coyote</h4>
-          <p>E-stim from avatar contacts, with safety limits built in: cooldowns, rate caps and strength ceilings.</p></div></div>
-        <div class="soon reveal d1"><div><div class="top"><span class="em">&#127918;</span><span class="st-pill dev">IN DEVELOPMENT</span></div><h4>PS VR2 headset rumble</h4>
-          <p>Buzz the headset itself from a contact, through PSVR2Toolkit.</p></div></div>
-        <div class="soon reveal d2"><div><div class="top"><span class="em">&#8597;&#65039;</span><span class="st-pill dev">IN DEVELOPMENT</span></div><h4>The Handy</h4>
-          <p>Being rebuilt around streaming, for smooth, low-latency strokes.</p></div></div>
-      </div>
-    </div>
-
-    <div class="soon-group">
-      <h3 class="reveal">Smarter feel</h3>
-      <div class="cards">
-        <div class="soon reveal"><div><div class="top"><span class="em">&#129520;</span><span class="st-pill plan">PLANNED</span></div><h4>Typed chains</h4>
-          <p>Chains that know what they're for &mdash; Touch, Penetration, Vibe or Impact &mdash; each starting from a feel
-            made for it, and more than two per toy.</p></div></div>
-        <div class="soon reveal d1"><div><div class="top"><span class="em">&#129309;</span><span class="st-pill plan">PLANNED</span></div><h4>Props that just work</h4>
-          <p>A shared standard for Vibe and Impact contacts, so a friend's prop can drive your toys with no setup.</p></div></div>
-        <div class="soon reveal d2"><div><div class="top"><span class="em">&#127925;</span><span class="st-pill idea">IDEA</span></div><h4>Rhythm engine</h4>
-          <p>Instead of filtering a jittery stroke, lock onto its rhythm and play a clean feel in time with it.</p></div></div>
-      </div>
-    </div>
-    <p class="suggest reveal">Missing something you'd love to see?
-      <a class="inl" href="https://github.com/Blise518B/OscGoesPurrr/issues">Suggest it on GitHub</a>.</p>
   </div>
 </section>
 
 <!-- ═══ INSTALL ════════════════════════════════════════════════════════════ -->
 <section class="section" id="install">
   <div class="wrap">
-    <div class="head reveal">
-      <p class="kicker">Get started</p>
-      <h2>Up and running<br><span class="gtext">in a minute.</span></h2>
+    <div class="head">
+      <p class="kicker">Install</p>
+      <h2>Up and running in a minute</h2>
     </div>
     <div class="steps">
-      <div class="glass step reveal"><div class="num">1</div><h3>Download</h3>
-        <p>Grab the <span class="mono">.exe</span> from the latest release. One file &mdash; keep it wherever you like.</p>
+      <div class="step"><div class="num">1</div><h3>Download</h3>
+        <p>One <span class="mono">.exe</span> from the latest release. Keep it wherever you like.</p>
         <a class="btn btn-primary dl" href="https://github.com/Blise518B/OscGoesPurrr/releases/latest/download/OscGoesPurrr-Windows.exe">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
           <span class="dl-label">Download for Windows</span></a></div>
-      <div class="glass step reveal d1"><div class="num">2</div><h3>Run it</h3>
+      <div class="step"><div class="num">2</div><h3>Run it</h3>
         <p>The first time, Windows shows a blue &ldquo;Windows protected your PC&rdquo; box because the exe isn't
-          code-signed. Click <kbd>More info</kbd> &rarr; <kbd>Run anyway</kbd>.</p></div>
-      <div class="glass step reveal d2"><div class="num">3</div><h3>Switch on and play</h3>
+          code-signed. Click <kbd>More info</kbd> &rarr; <kbd>Run anyway</kbd>.</p>
+        <p>On Linux, get the <a class="inl" href="https://github.com/Blise518B/OscGoesPurrr/releases/latest/download/OscGoesPurrr-Linux-x86_64.AppImage">AppImage</a>,
+          make it executable (<span class="mono">chmod +x</span>) and run it.</p></div>
+      <div class="step"><div class="num">3</div><h3>Switch on and play</h3>
         <p>Turn your toy on and start VRChat with OSC enabled. The Home page ticks off each step &mdash; press
           <kbd>Test all</kbd>, and if you feel it, you're set.</p></div>
     </div>
-    <div class="needs reveal">
-      <span class="pill">&#128187; Windows 10 / 11</span>
-      <span class="pill">&#128246; Bluetooth, built in or USB</span>
-      <span class="pill">&#129405; VRChat on PC, desktop or VR</span>
-      <span class="pill">&#127917; An avatar with OGB / SPS contacts</span>
+    <div class="needs">
+      <span>Windows 10 / 11, or x86_64 Linux</span>
+      <span>Bluetooth 4.0 or newer, built in or USB</span>
+      <span>VRChat on PC, desktop or VR</span>
+      <span>An avatar with SPS / OGB contacts</span>
     </div>
+  </div>
+</section>
+
+<!-- ═══ NOT IN THIS EDITION YET ════════════════════════════════════════════
+     In development = built, being made ready to share · Planned = designed,
+     not built yet · Idea = being explored. Move an item into "What it does"
+     when it ships. -->
+<section class="section" id="roadmap">
+  <div class="wrap">
+    <div class="head">
+      <p class="kicker">Not in this edition yet</p>
+      <h2>What is being worked on</h2>
+      <p>The full OscGoesPurrr drives more than Bluetooth toys. These parts exist and join this edition once
+        they are ready to hand to anyone. No dates &mdash; the app tells you when an update lands.</p>
+    </div>
+    <div class="soon">
+      <div><b>SteamVR trackers</b><span>IN DEVELOPMENT</span><p>Buzz Vive and Tundra trackers from avatar contacts.</p></div>
+      <div><b>bHaptics vests</b><span>IN DEVELOPMENT</span><p>Driven by the bHapticsOSC dots avatars already carry.</p></div>
+      <div><b>OWO suits</b><span>IN DEVELOPMENT</span><p>Feedback across OWO's ten muscle groups.</p></div>
+      <div><b>PiShock &amp; DG-Lab Coyote</b><span>IN DEVELOPMENT</span><p>E-stim from contacts, with rests, caps and strength ceilings built in.</p></div>
+      <div><b>PS VR2 headset rumble</b><span>IN DEVELOPMENT</span><p>The headset itself, through PSVR2Toolkit.</p></div>
+      <div><b>The Handy</b><span>IN DEVELOPMENT</span><p>Being rebuilt around streaming, for low-latency strokes.</p></div>
+      <div><b>Typed chains</b><span class="plan">PLANNED</span><p>Chains that know what they are for &mdash; touch, penetration, vibe, impact &mdash; and more than two per motor.</p></div>
+      <div><b>Props that just work</b><span class="plan">PLANNED</span><p>A shared standard for contacts, so a friend's prop drives your toys with no setup.</p></div>
+      <div><b>Rhythm engine</b><span class="idea">IDEA</span><p>Lock onto a stroke's rhythm and play a clean feel in time with it.</p></div>
+    </div>
+    <p class="suggest">Missing something? <a class="inl" href="https://github.com/Blise518B/OscGoesPurrr/issues">Suggest it on GitHub</a>.</p>
   </div>
 </section>
 
 <!-- ═══ FAQ ════════════════════════════════════════════════════════════════ -->
 <section class="section" id="faq">
   <div class="wrap">
-    <div class="head reveal">
+    <div class="head">
       <p class="kicker">Questions</p>
       <h2>Good to know</h2>
     </div>
-    <div class="faq reveal">
+    <div class="faq">
       <details>
         <summary>Why does Windows warn me about it?</summary>
         <div class="a">The exe isn't code-signed &mdash; a certificate costs a few hundred a year &mdash; so Windows SmartScreen
@@ -801,14 +498,14 @@ footer { margin-top: 110px; border-top: 1px solid var(--edge); padding: 50px 0 3
       </details>
       <details>
         <summary>Which avatars work?</summary>
-        <div class="a">Any avatar with OGB / SPS contacts &mdash; the standard sockets, plugs and touch zones toy apps use.
+        <div class="a">Any avatar with SPS / OGB contacts &mdash; the standard sockets, plugs and touch zones toy apps use.
           They're picked up automatically when you load the avatar. For anything unusual, SPS Sources builds a zone out of
           your avatar's own contact receivers.</div>
       </details>
       <details>
         <summary>Does it work with a Quest?</summary>
         <div class="a">Yes, as long as VRChat runs on your PC &mdash; over Link, Air Link or Virtual Desktop. OscGoesPurrr
-          runs on Windows next to it.</div>
+          runs on the same PC next to it.</div>
       </details>
       <details>
         <summary>Does it send anything over the internet?</summary>
@@ -833,16 +530,14 @@ footer { margin-top: 110px; border-top: 1px solid var(--edge); padding: 50px 0 3
       </details>
     </div>
 
-    <!-- the closing call to action -->
-    <div class="final reveal">
-      <img src="assets/ogp-icon.svg" alt="">
-      <h2>Ready to <span class="gtext">feel it?</span></h2>
-      <p>Free, open source, and one file away.</p>
+    <div class="final">
+      <h2>Free, open source, one file.</h2>
+      <p>MIT licensed. The whole source is on GitHub.</p>
       <div class="cta">
         <a class="btn btn-primary dl" href="https://github.com/Blise518B/OscGoesPurrr/releases/latest/download/OscGoesPurrr-Windows.exe">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
           <span class="dl-label">Download for Windows</span></a>
-        <a class="btn btn-ghost" href="https://github.com/Blise518B/OscGoesPurrr">View the source</a>
+        <a class="btn" href="https://github.com/Blise518B/OscGoesPurrr">View the source</a>
       </div>
     </div>
   </div>
@@ -879,14 +574,13 @@ footer { margin-top: 110px; border-top: 1px solid var(--edge); padding: 50px 0 3
   </div>
 </footer>
 
-<div class="tip" id="tip" role="tooltip"></div>
-
+<script src="assets/ogp-accent.js"></script>
+<script src="assets/ogp-chain.js"></script>
+<script src="assets/demo-stats.js"></script>
+<script src="assets/demo.js"></script>
 <script>
 (function () {
   'use strict';
-  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-  var css = getComputedStyle(document.documentElement);
-  function tok(name) { return css.getPropertyValue(name).trim(); }
 
   // ── nav turns to glass once you scroll ───────────────────────────────────
   var nav = document.getElementById('nav');
@@ -894,68 +588,24 @@ footer { margin-top: 110px; border-top: 1px solid var(--edge); padding: 50px 0 3
   window.addEventListener('scroll', onScroll, { passive: true });
   onScroll();
 
-  // ── reveal on scroll, and count the numbers up as they appear ────────────
-  function countUp(el) {
-    var to = parseFloat(el.getAttribute('data-count')), dec = +(el.getAttribute('data-dec') || 0);
-    var small = el.querySelector('small'), suffix = small ? small.outerHTML : '', t0 = null;
-    function step(ts) {
-      if (t0 === null) t0 = ts;
-      var p = Math.min(1, (ts - t0) / 1100), e = 1 - Math.pow(1 - p, 3);
-      el.innerHTML = (to * e).toFixed(dec) + suffix;
-      if (p < 1) requestAnimationFrame(step);
-    }
-    requestAnimationFrame(step);
+  // ── the strip under the demo: the visitor as the contact ─────────────────
+  var pad = document.getElementById('ogp-pad'), knob = pad.querySelector('.knob'), padVal = document.getElementById('ogp-padval');
+  function stroke(e) {
+    var r = pad.getBoundingClientRect(), v = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
+    if (window.OGPDemo) window.OGPDemo.setManual(v);
   }
-  var reveals = [].slice.call(document.querySelectorAll('.reveal'));
-  if (reduce || !('IntersectionObserver' in window)) {
-    reveals.forEach(function (el) { el.classList.add('in'); });
-  } else {
-    var io = new IntersectionObserver(function (entries) {
-      entries.forEach(function (e) {
-        if (!e.isIntersecting) return;
-        e.target.classList.add('in');
-        var n = e.target.querySelector('[data-count]');
-        if (n) countUp(n);
-        io.unobserve(e.target);
-      });
-    }, { threshold: .12, rootMargin: '0px 0px -6% 0px' });
-    reveals.forEach(function (el) { io.observe(el); });
-  }
-
-  // ── the flow rail runs from the first node to the last, no further ───────
-  var flow = document.querySelector('.flow');
-  function fitTrack() {
-    var stages = flow.querySelectorAll('.stage'), last = stages[stages.length - 1], node = last.querySelector('.node');
-    var end = flow.clientHeight - (last.offsetTop + node.offsetTop + node.offsetHeight / 2);
-    flow.style.setProperty('--track-end', end + 'px');
-  }
-  fitTrack();
-  window.addEventListener('resize', fitTrack);
-  if (document.fonts && document.fonts.ready) document.fonts.ready.then(fitTrack);
-
-  // ── a spotlight that follows the pointer across the cards ────────────────
-  document.querySelectorAll('.card').forEach(function (c) {
-    c.addEventListener('pointermove', function (e) {
-      var r = c.getBoundingClientRect();
-      c.style.setProperty('--mx', (e.clientX - r.left) + 'px');
-      c.style.setProperty('--my', (e.clientY - r.top) + 'px');
-    });
+  pad.addEventListener('pointermove', stroke);
+  pad.addEventListener('pointerdown', stroke);
+  if (window.OGPDemo) window.OGPDemo.onTick(function (S) {
+    var a = S.manual !== null && S.t < S.manualUntil;
+    knob.style.display = a ? '' : 'none';
+    if (a) knob.style.left = (S.manual * 100) + '%';
   });
-
-  // ── the product shot leans toward the pointer ────────────────────────────
-  var shotWrap = document.getElementById('shotwrap'), shot = document.getElementById('shot'), dragging = false;
-  if (!reduce && window.matchMedia('(hover: hover)').matches) {
-    shotWrap.addEventListener('pointermove', function (e) {
-      if (dragging) return;
-      var r = shotWrap.getBoundingClientRect();
-      var x = (e.clientX - r.left) / r.width - .5, y = (e.clientY - r.top) / r.height - .5;
-      shot.style.setProperty('--ry', (x * 7).toFixed(2) + 'deg');
-      shot.style.setProperty('--rx', (-y * 5).toFixed(2) + 'deg');
-    });
-    shotWrap.addEventListener('pointerleave', function () {
-      shot.style.setProperty('--ry', '0deg'); shot.style.setProperty('--rx', '0deg');
-    });
-  }
+  setInterval(function () {
+    if (!window.OGPDemo) return;
+    var S = window.OGPDemo.state, sim = S.sim.on, manual = S.manual !== null && S.t < S.manualUntil;
+    padVal.textContent = (window.OGPDemo.contact ? window.OGPDemo.contact() : 0).toFixed(2) + (manual ? ' · you' : sim ? ' · simulator' : ' · idle');
+  }, 120);
 
   // ── latest release: show its version on the Download buttons ────────────
   // Their own href already fetches the newest exe (releases/latest/download/
@@ -981,189 +631,6 @@ footer { margin-top: 110px; border-top: 1px solid var(--edge); padding: 50px 0 3
       });
     })
     .catch(function () {});
-
-  // ── the mini app ─────────────────────────────────────────────────────────
-  var mock = document.getElementById('mock');
-  var range = document.getElementById('strength'), strval = document.getElementById('strval');
-  var offBtn = document.getElementById('offbtn'), sleepBtn = document.getElementById('sleepbtn');
-  var testUntil = 0, now = 0;
-  function setStrength() { mock.style.setProperty('--k', range.value / 100); strval.textContent = range.value + '%'; }
-  range.addEventListener('input', setStrength);
-  range.addEventListener('pointerdown', function () { dragging = true; });
-  window.addEventListener('pointerup', function () { dragging = false; });
-  setStrength();
-  offBtn.addEventListener('click', function () { mock.classList.toggle('is-off', offBtn.classList.toggle('on')); });
-  sleepBtn.addEventListener('click', function () { mock.classList.toggle('is-asleep', sleepBtn.classList.toggle('on')); });
-  document.getElementById('testbtn').addEventListener('click', function () { testUntil = now + 1.1; });
-  document.querySelectorAll('#modes .m-btn').forEach(function (b) {
-    b.addEventListener('click', function () {
-      document.querySelectorAll('#modes .m-btn').forEach(function (x) { x.classList.remove('on'); });
-      b.classList.add('on');
-    });
-  });
-
-  var toys = [].slice.call(mock.querySelectorAll('.m-toy')).map(function (el, i) {
-    return { el: el, fill: el.querySelector('.m-meter i'), pct: el.querySelector('.pct'),
-             cv: el.querySelector('canvas'), hist: [], v: 0, ph: i * 2.1, acc: 0, hue: i ? '--blue' : '--cyan' };
-  });
-  function toyTarget(t, i) {
-    var p = toys[i].ph;
-    var raw = .5 + .34 * Math.sin(t * (1.05 + i * .32) + p) + .14 * Math.sin(t * 3.9 + p * 1.7);
-    raw = Math.max(0, Math.min(1, raw));
-    if (now < testUntil) return .3;                      // Test all: a short low pulse
-    if (offBtn.classList.contains('on') || sleepBtn.classList.contains('on')) return 0;
-    return raw * range.value / 100;
-  }
-  function drawSpark(toy) {
-    var cv = toy.cv, dpr = Math.min(window.devicePixelRatio || 1, 2);
-    var w = cv.clientWidth, h = cv.clientHeight;
-    if (!w || !h) return;
-    if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
-    var g = cv.getContext('2d'), col = tok(toy.hue);
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.clearRect(0, 0, w, h);
-    var n = toy.hist.length, step = w / 119;
-    g.beginPath();
-    for (var k = 0; k < n; k++) { var x = w - (n - 1 - k) * step, y = h - 2 - toy.hist[k] * (h - 5); k ? g.lineTo(x, y) : g.moveTo(x, y); }
-    g.lineWidth = 1.8; g.strokeStyle = col; g.lineJoin = 'round'; g.shadowColor = col; g.shadowBlur = 6; g.stroke();
-    g.shadowBlur = 0; g.lineTo(w, h); g.lineTo(w - (n - 1) * step, h); g.closePath();
-    g.globalAlpha = .12; g.fillStyle = col; g.fill(); g.globalAlpha = 1;
-  }
-  function stepToys(dt) {
-    toys.forEach(function (toy, i) {
-      toy.v += (toyTarget(now, i) - toy.v) * Math.min(1, dt * 9);
-      toy.fill.style.width = (toy.v * 100).toFixed(1) + '%';
-      toy.acc += dt;
-      if (toy.acc >= .049) {
-        toy.acc = 0; toy.hist.push(toy.v); if (toy.hist.length > 120) toy.hist.shift();
-        toy.pct.textContent = Math.round(toy.v * 100) + '%';
-        drawSpark(toy);
-      }
-    });
-  }
-
-  toys.forEach(function (toy, i) { toy.v = toyTarget(0, i); });
-  for (var pre = 0; pre < 120; pre++) { now += .05; stepToys(.05); }   // sparklines start full
-
-  // ── the signal scope: jittery OSC in, the shaped feel out ────────────────
-  var scope = (function () {
-    var cv = document.getElementById('scope'), g = cv.getContext('2d');
-    var w = 0, h = 0, dpr = 1, inBuf = [], outBuf = [], ph = 0, acc = 0, out = .3, held = .3;
-    function noise(x) { var s = Math.sin(x * 12.9898) * 43758.5453; return s - Math.floor(s); }
-    function sample(p) {                        // a stroke, sampled the way OSC delivers it
-      var t = p * .02;
-      var v = .45 + .32 * Math.sin(t * 1.3) + .08 * Math.sin(t * 3.1 + 1.3);
-      if (noise(p) > .72) held = Math.max(.02, Math.min(.98, v + (noise(p * 3.1) * 2 - 1) * .09));
-      return held;                               // only changes now and then, with jitter
-    }
-    function push() { ph++; var v = sample(ph); inBuf.push(v); out += (v - out) * .07; outBuf.push(Math.min(.98, out * 1.06)); }
-    function resize() {
-      dpr = Math.min(window.devicePixelRatio || 1, 2);
-      w = Math.max(2, cv.clientWidth); h = Math.max(2, cv.clientHeight);
-      cv.width = Math.floor(w * dpr); cv.height = Math.floor(h * dpr);
-      g.setTransform(dpr, 0, 0, dpr, 0, 0);
-      while (inBuf.length < w) push();
-      if (inBuf.length > w) { inBuf = inBuf.slice(-w); outBuf = outBuf.slice(-w); }
-    }
-    function y(v) { return 14 + (1 - v) * (h - 28); }
-    function trace(buf) { g.beginPath(); for (var x = 0; x < buf.length; x++) { x ? g.lineTo(x, y(buf[x])) : g.moveTo(x, y(buf[x])); } }
-    function draw() {
-      g.clearRect(0, 0, w, h);
-      g.lineWidth = 1; g.strokeStyle = tok('--edge') || 'rgba(128,128,128,.2)';
-      for (var i = 0; i <= 4; i++) { var gy = 14 + i * (h - 28) / 4; g.beginPath(); g.moveTo(0, gy); g.lineTo(w, gy); g.stroke(); }
-      g.lineWidth = 1.4; g.globalAlpha = .7; g.strokeStyle = tok('--blue'); trace(inBuf); g.stroke(); g.globalAlpha = 1;
-      var grad = g.createLinearGradient(0, 0, w, 0);
-      grad.addColorStop(0, tok('--accent')); grad.addColorStop(1, tok('--cyan'));
-      g.lineJoin = 'round'; g.lineWidth = 3; g.strokeStyle = grad; g.shadowColor = tok('--accent'); g.shadowBlur = 14;
-      trace(outBuf); g.stroke(); g.shadowBlur = 0;
-      g.fillStyle = tok('--txt'); g.beginPath(); g.arc(outBuf.length - 1, y(outBuf[outBuf.length - 1]), 4, 0, 6.2832); g.fill();
-    }
-    function step(dt) {
-      acc += 80 * dt; var n = Math.floor(acc); acc -= n;
-      for (var i = 0; i < Math.min(n, w); i++) push();
-      var extra = inBuf.length - w; if (extra > 0) { inBuf.splice(0, extra); outBuf.splice(0, extra); }
-      draw();
-    }
-    resize();
-    window.addEventListener('resize', function () { clearTimeout(resize.t); resize.t = setTimeout(resize, 150); });
-    return { step: step, still: function () { resize(); draw(); } };
-  })();
-
-  // ── one loop drives the scope and the toys; it rests when the tab is hidden ──
-  if (reduce) {
-    scope.still();
-  } else {
-    var prev, running = true;
-    document.addEventListener('visibilitychange', function () {
-      running = !document.hidden;
-      if (running) { prev = undefined; requestAnimationFrame(frame); }
-    });
-    var frame = function (ts) {
-      if (!running) return;
-      if (prev === undefined) prev = ts;
-      var dt = Math.min(.05, (ts - prev) / 1000); prev = ts; now += dt;
-      scope.step(dt); stepToys(dt);
-      requestAnimationFrame(frame);
-    };
-    requestAnimationFrame(frame);
-  }
-
-  // ── hover explanations: the app's own words, after the app's 0.7 s rest ──
-  var TIPS = {
-    mode: ['Modes', 'A mode is a <b>routing</b> — which parts of your avatar drive which toys. Click to make ' +
-           'this one live. Your tuning, your toys and the strength stay the same whichever mode is on.<br><br>' +
-           '<b>Right-click</b> to rename it or change its icon.'],
-    strength: ['Total output strength', 'One multiplier on everything your toys receive — the knob for ' +
-           '“a bit softer tonight”. It never touches your tuning, so turning it back up restores ' +
-           'exactly the feel you had.<br><br>From inside VRChat: the <b>OGP/Strength</b> radial.'],
-    off: ['Off', 'Panic silence. Every toy stops instantly, whatever the strength says; press it again and ' +
-           'your previous level comes straight back.<br><br>From inside VRChat: <b>OGP/Off</b>.'],
-    sleep: ['Sleep', 'Makes your toys hard to wake: nothing plays until three full strokes land within six ' +
-           'seconds, so a brush against a sleeping partner does nothing.<br><br>From inside VRChat: <b>OGP/Sleep</b>.'],
-    test: ['Test all', 'Buzzes every connected toy at a low level for a moment, so you know they’re all ' +
-           'wired up.'],
-    toy: ['Your toys', 'Every connected toy with its live output and battery. Click one to open it right ' +
-           'there and choose which zones drive it and how each motor responds.'],
-    offline: ['Offline', 'Switched off or out of range. Everything you set up for it is kept, and it comes ' +
-           'back to life the moment it reconnects.'],
-    tools: ['Tuning tools', 'For when you are shaping how a toy responds: an ' +
-           'input simulator to tune against without a partner, and a live graph of the signal. Folded away ' +
-           'until you want them.']
-  };
-  var tip = document.getElementById('tip'), timer = null, current = null;
-  function place(el) {
-    var r = el.getBoundingClientRect(), tw = tip.offsetWidth, th = tip.offsetHeight;
-    var x = Math.min(Math.max(8, r.left + r.width / 2 - tw / 2), document.documentElement.clientWidth - tw - 8);
-    var y = r.bottom + 8;
-    if (y + th > window.innerHeight - 8) y = r.top - th - 8;
-    tip.style.left = (x + window.scrollX) + 'px';
-    tip.style.top = (y + window.scrollY) + 'px';
-  }
-  function show(el) {
-    var t = TIPS[el.getAttribute('data-tip')];
-    if (!t) return;
-    tip.innerHTML = '<b class="t">' + t[0] + '</b>' + t[1];
-    tip.classList.add('show');
-    place(el);
-    current = el;
-  }
-  function hide() { clearTimeout(timer); tip.classList.remove('show'); current = null; }
-  mock.addEventListener('pointerover', function (e) {
-    if (e.pointerType === 'touch') return;
-    var el = e.target.closest('[data-tip]');
-    if (el === current) return;
-    hide();
-    if (el) timer = setTimeout(function () { show(el); }, 700);
-  });
-  mock.addEventListener('pointerleave', hide);
-  mock.addEventListener('pointerdown', function (e) {       // touch has no hover: a tap shows the words
-    if (e.pointerType !== 'touch') { hide(); return; }
-    var el = e.target.closest('[data-tip]');
-    hide();
-    if (el) timer = setTimeout(function () { show(el); }, 450);
-  });
-  document.addEventListener('pointerdown', function (e) { if (!mock.contains(e.target)) hide(); });
-  window.addEventListener('scroll', function () { if (current) hide(); }, { passive: true });
 })();
 </script>
 </body>

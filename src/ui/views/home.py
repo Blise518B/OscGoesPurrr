@@ -218,7 +218,7 @@ class HomeMixin:
          "It's found by itself over Bluetooth, so this PC needs Bluetooth "
          "switched on — version 4.0 or newer, built in or a USB dongle. "
          "Close the toy's own phone app first: a toy only talks to one "
-         "device at a time. And don't pair it in Windows' Bluetooth "
+         "device at a time. And don't pair it in the system's Bluetooth "
          "settings — most toys then refuse to connect (We-Vibe and "
          "Satisfyer are the exceptions)."),
         ("osc", "Start VRChat with OSC on",

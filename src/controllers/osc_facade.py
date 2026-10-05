@@ -150,15 +150,10 @@ class OscFacade:
             return
         try:
             import os as _os
-            import subprocess as _subp
+            from utilities import open_folder
             folder = _os.path.dirname(path)
             self.log_message(f"OSC log file: {path}")
-            if _os.name == "nt":
-                _os.startfile(folder)  # type: ignore[attr-defined]
-            else:
-                # Fallback for non-Windows; this app targets Windows but
-                # keep it from crashing if someone runs it elsewhere.
-                _subp.Popen(["xdg-open", folder])
+            open_folder(folder)
         except Exception as e:
             self.log_message(f"Open log folder failed: {type(e).__name__}: {e}")
     

@@ -156,11 +156,13 @@ adding one back is adding files (see "How to add a new haptic backend").
     * `intiface_external.py` — connect to a user-run Intiface Central
       (the original behavior; owns no server lifecycle).
     * `intiface_integrated.py` — spawn and supervise a bundled
-      `intiface-engine` (hidden console, Windows Job Object kill-on-close,
-      websocket-readiness probe) so everything runs in one program. This is
+      `intiface-engine` (hidden console, a Windows Job Object or Linux
+      parent-death signal so it dies with the app, websocket-readiness
+      probe) so everything runs in one program. This is
       the default, gated by the `use_integrated_intiface` app setting
       (Settings → Intiface Engine). The engine binary is not in the repo;
-      it lives in `src/intiface-engine/` and is bundled by `tools/build_OGP.bat`.
+      it lives in `src/intiface-engine/` and is bundled by `tools/build_OGP.bat`
+      (Windows) and `tools/build_linux.sh` (Linux, which also builds it).
 
 * **Toys in SteamVR (display only, not a backend).** `controllers/
   steamvr_toys_facade.py` mirrors the connected toys — name, icon, battery
@@ -654,6 +656,9 @@ recalculate.
   streams the release asset, verifies it against the size and SHA-256
   GitHub reports, and hands the swap to a detached `.cmd` that waits for
   this process to exit before replacing the exe and relaunching it.
+  On Linux the asset is the AppImage, swapped in place (Linux lets a
+  running file be replaced) before the app restarts itself through
+  `$APPIMAGE`.
   Verification happens before anything touches the installed exe, so a
   failed update changes nothing. `is_self_updatable()` is False from a
   source checkout, where the UI falls back to the release link.
@@ -714,14 +719,39 @@ recalculate.
 * `toy_sounds.py` — the connect (low → high) and disconnect (high → low)
   chimes, synthesized in memory as WAVs at the user's 0–100 % volume
   (squared to amplitude, so the slider feels even) and played through
-  Windows' `PlaySound` on a short-lived daemon thread, so no caller waits
-  on audio; a no-op off Windows. Stdlib only. Driven by
-  `controllers/toy_sounds_facade.py`; never on a routing path.
+  Windows' `PlaySound` — on Linux through `pw-play` / `paplay` / `aplay` —
+  on a short-lived daemon thread, so no caller waits on audio. Stdlib
+  only. Driven by `controllers/toy_sounds_facade.py`; never on a routing
+  path.
 * `version.py` — single source of truth for `__version__`.
 * `settings/` — per-user settings managers, one JSON file per concern
   (see the Mode model section above).
 * `tools/` — developer scripts, not loaded at runtime
   (`flatten_lovense_icons.py`, `generate_sim_icon.py`).
+
+### Linux
+
+The Linux release is an AppImage (`OscGoesPurrr-Linux-x86_64.AppImage`)
+that GitHub Actions builds for every release (`.github/workflows/linux.yml`
+→ `tools/build_linux.sh`, on Ubuntu 22.04 so it runs on any newer
+distro) and attaches next to the exe. Inside is a PyInstaller `--onedir`
+build plus the built-in engine, compiled from the Buttplug commit the
+notices name with `tools/intiface-engine-Cargo.lock`. The few places the
+code differs:
+
+* **Settings** live in `~/.config/OscGoesPurrr` (`settings/_paths.py`);
+  help texts write the folder as `constants.SETTINGS_DIR_DISPLAY`.
+* **System programs** — the file browser, the sound player, the engine —
+  start with `utilities.system_env()`, which takes the bundle's
+  `LD_LIBRARY_PATH` and Qt paths back out; a frozen build's environment
+  would otherwise make them load our libraries instead of their own.
+* **Restarts** go through `$APPIMAGE` (`utilities.running_appimage()`):
+  the mount `sys.executable` lives in vanishes when the app exits.
+* **Tray**: Qt's, via the UI facade (`show_tray_icon` …), because
+  pystray's Linux backends need GTK bindings or an X11 tray. A desktop
+  without a tray gets the window minimized, never hidden.
+* **Windows only**: the SteamVR toy driver (a DLL; its toggle says so)
+  and the console toggle.
 
 ---
 

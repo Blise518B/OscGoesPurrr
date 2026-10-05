@@ -83,7 +83,11 @@ if not defined REL_VERSION (
     exit /b 1
 )
 set "TAG=v!REL_VERSION!"
-echo Releasing: !TAG!
+REM The b<n> build number goes into the public commit, so the Linux
+REM AppImage that GitHub Actions builds from it shows the same one.
+set "BUILD_NO="
+for /f "usebackq tokens=*" %%i in (`%VENV_PY% -c "import sys; sys.path.insert(0, 'src'); from version import build_number; print(build_number())"`) do set "BUILD_NO=%%i"
+echo Releasing: !TAG! ^(b!BUILD_NO!^)
 echo.
 
 REM ---- 3b. The in-app "What's new" notes (src\whats_new.py) are filed
@@ -184,7 +188,9 @@ if not errorlevel 1 (
 )
 if defined FRESH echo Fresh history: this release becomes the public repo's first commit.
 set "PUBCOMMIT="
-for /f "usebackq tokens=*" %%i in (`git commit-tree !TREE! !PARENT! -m "OscGoesPurrr !TAG!"`) do set "PUBCOMMIT=%%i"
+set "BUILD_MSG="
+if defined BUILD_NO set "BUILD_MSG=-m "Build !BUILD_NO!""
+for /f "usebackq tokens=*" %%i in (`git commit-tree !TREE! !PARENT! -m "OscGoesPurrr !TAG!" !BUILD_MSG!`) do set "PUBCOMMIT=%%i"
 if not defined PUBCOMMIT (
     echo [ERROR] Could not build the public commit.
     pause
@@ -251,6 +257,11 @@ echo   Released !TAG!
 echo ========================================
 echo.
 echo   https://github.com/%PUBLIC_REPO%/releases/tag/!TAG!
+echo.
+echo The Linux AppImage is building on GitHub Actions now and attaches
+echo itself to this release when done ^(about 5 minutes; 15 when the engine
+echo commit changed^). Watch it at:
+echo   https://github.com/%PUBLIC_REPO%/actions/workflows/linux.yml
 echo.
 echo Every copy already out there will offer this update at next launch.
 echo.

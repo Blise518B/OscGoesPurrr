@@ -10,7 +10,8 @@ and anything else [Buttplug.io](https://buttplug.io/) supports.
   <a href="https://github.com/Blise518B/OscGoesPurrr/releases/latest/download/OscGoesPurrr-Windows.exe">
     <img src="docs/assets/download-badge.svg" alt="Download for Windows — OscGoesPurrr-Windows.exe, latest release">
   </a><br>
-  <sub>More on the <a href="https://blise518b.github.io/OscGoesPurrr/">website</a> ·
+  <sub>On Linux? Get the <a href="https://github.com/Blise518B/OscGoesPurrr/releases/latest/download/OscGoesPurrr-Linux-x86_64.AppImage">AppImage</a> ·
+  more on the <a href="https://blise518b.github.io/OscGoesPurrr/">website</a> ·
   every version on the <a href="https://github.com/Blise518B/OscGoesPurrr/releases">Releases</a> page</sub>
 </p>
 
@@ -26,6 +27,10 @@ and anything else [Buttplug.io](https://buttplug.io/) supports.
 
 You'll need an avatar with **OGB / SPS contacts** — the standard toy setup.
 New versions install themselves: the app lets you know when there's one.
+
+**On Linux** it's one AppImage: make it executable (`chmod +x`, or
+*Allow executing* in its Properties) and run it. Bluetooth needs BlueZ
+running, which it is on most desktops.
 
 ## What you get
 
@@ -52,7 +57,7 @@ New versions install themselves: the app lets you know when there's one.
   change while you watch.
 - 🔋 **Toys in SteamVR** — your toys show up in SteamVR's device list
   with their battery. Just for show, never trackers; one switch in
-  Settings turns it off.
+  Settings turns it off. Windows only for now.
 
 ## Coming later
 

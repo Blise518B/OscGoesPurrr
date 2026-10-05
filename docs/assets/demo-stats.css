@@ -1,0 +1,204 @@
+/* ============================================================================
+   OscGoesPurrr demo — the Statistics page, modelled on the app's own page
+   at the app's own sizes (src/ui/views/statistics.py + ui/stats_charts.py + the QSS in
+   ui/theme.py). Sizes are the app's real pixels: the page sits in the
+   860 px page area of the 1100x760 app window, which the site scales as a
+   whole. Every colour is a token from assets/tokens.css; the charts
+   (canvas) read the same tokens when they draw (stats.js).
+
+   Optional hooks for the host page:  --catbar / --catbar-text  (the filled
+   section bar; the app's Neon bar is not in the token file).
+   ========================================================================= */
+
+.pg-stats {
+  /* Neon: the filled section bar with body-colour text. The app's bar is
+     the accent's hue at a fixed, darker tone; derived from the token so the
+     colour picker turns it too. */
+  --st-catbar: var(--catbar, color-mix(in srgb, var(--accent) 52%, var(--ink)));
+  --st-catbar-text: var(--catbar-text, var(--txt));
+
+  position: relative;
+  box-sizing: border-box;
+  height: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  color: var(--txt);
+  font: var(--font);                 /* 13px "Segoe UI", like the app */
+  font-size: 13px;
+  line-height: 17px;
+  /* Qt lays text out on whole pixels, which runs a touch wider than the
+     browser at 13 px and 11 px (measured against the app); 12 px matches. */
+  letter-spacing: .1px;
+  text-align: left;
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+  /* the app's 10 px scrollbar: transparent track, 6 px thumb in the frame line */
+  scrollbar-width: auto;
+  scrollbar-color: auto;
+}
+/* Midnight: the bar is the tint with accent text (theme.qss_vars). */
+[data-theme="midnight"] .pg-stats,
+.pg-stats[data-theme="midnight"] {
+  --st-catbar: var(--catbar, var(--tint));
+  --st-catbar-text: var(--catbar-text, var(--accent));
+}
+/* Where relative colours exist the bar is exact: the accent's hue, 66 % / 32.5 %. */
+@supports (color: hsl(from red h s l)) {
+  .pg-stats { --st-catbar: var(--catbar, hsl(from var(--accent) calc(h - 2) 66.3% 32.5%)); }
+  [data-theme="midnight"] .pg-stats,
+  .pg-stats[data-theme="midnight"] { --st-catbar: var(--catbar, var(--tint)); }
+}
+.pg-stats::-webkit-scrollbar { width: 10px; height: 10px; }
+.pg-stats::-webkit-scrollbar-track { background: transparent; }
+/* Qt keeps the (unpainted) 10 px arrow steps at both ends of the track. */
+.pg-stats::-webkit-scrollbar-button { display: none; }
+.pg-stats::-webkit-scrollbar-button:vertical:start:decrement,
+.pg-stats::-webkit-scrollbar-button:vertical:end:increment { display: block; height: 10px; background: transparent; }
+.pg-stats::-webkit-scrollbar-thumb {
+  background: var(--line); background-clip: padding-box;
+  border: 2px solid transparent; border-radius: 5px;
+}
+.pg-stats::-webkit-scrollbar-thumb:hover { background: var(--accent); background-clip: padding-box; }
+@supports not selector(::-webkit-scrollbar) {
+  .pg-stats { scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+}
+
+.pg-stats *, .pg-stats *::before, .pg-stats *::after { box-sizing: border-box; }
+.pg-stats [hidden] { display: none !important; }
+.pg-stats canvas { display: block; }
+
+/* ── page: 20 px margins, 12 px between blocks ─────────────────────────── */
+.pg-stats .st-page {
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 20px; min-width: 0;
+}
+.pg-stats .st-overview, .pg-stats .st-detail {
+  display: flex; flex-direction: column; gap: 12px; min-width: 0;
+}
+.pg-stats .st-title {
+  font-family: var(--title-font);
+  font-size: 19px; font-weight: 600;
+  letter-spacing: 2px;               /* the app's 1px + what Qt's bold adds */
+  line-height: 22px; height: 22px;
+  color: var(--accent); text-align: center; white-space: nowrap;
+}
+
+/* ── type ──────────────────────────────────────────────────────────────── */
+.pg-stats .st-muted { color: var(--muted); font-size: 12px; line-height: 16px; letter-spacing: 0; }
+.pg-stats .st-hint { color: var(--dim); font-size: 11px; line-height: 15px; letter-spacing: .28px; }
+.pg-stats .st-h { font-weight: 700; font-size: 13px; line-height: 17px; letter-spacing: 0; }
+.pg-stats .st-pre { white-space: pre; }
+
+/* ── card + its section bar ────────────────────────────────────────────── */
+.pg-stats .st-card {
+  display: flex; flex-direction: column; gap: 8px;
+  margin: 0; padding: 14px; min-width: 0;
+  background: var(--card);
+  border: 1px solid var(--line); border-radius: var(--r-card);
+}
+.pg-stats .st-card-detail { gap: 10px; }
+.pg-stats .st-head { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pg-stats .st-sec {
+  flex: 1 1 0; min-width: 0; height: 27px;
+  padding: 4px 10px 4px 14px;        /* QSS 10px + the framed label's indent */
+  border-radius: var(--r-gh);
+  background: var(--st-catbar); color: var(--st-catbar-text);
+  font-size: 14px; font-weight: 700; line-height: 19px; letter-spacing: 0;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.pg-stats .st-sec.st-pre { white-space: pre; }
+
+/* ── buttons: outlined, 31 px tall ─────────────────────────────────────── */
+.pg-stats .st-btn {
+  flex: none; height: 31px; margin: 0; padding: 6px 12px;
+  font-family: inherit; font-size: 13px; font-weight: 400; line-height: 17px;
+  color: var(--txt); background: transparent;
+  border: 1px solid var(--line); border-radius: var(--r-btn);
+  cursor: default; white-space: nowrap; transform: none; transition: none;
+}
+.pg-stats .st-btn.st-pre { white-space: pre; }
+.pg-stats .st-btn:hover { background: var(--hover); border-color: var(--accent); color: var(--accent); }
+.pg-stats .st-btn:active { background: var(--hover); transform: none; }
+/* the app's own button widths (Qt's text metrics), so the bars beside them end where the app's do */
+.pg-stats .st-btn[data-st="reset"] { min-width: 58px; }
+.pg-stats .st-btn[data-st="back"] { min-width: 112px; }
+.pg-stats .st-btn[data-span="0"] { min-width: 72px; }
+.pg-stats .st-btn[data-span="1"] { min-width: 84px; }
+.pg-stats .st-btn[data-span="2"] { min-width: 69px; }
+.pg-stats .st-btn[data-month] { min-width: 37px; }
+.pg-stats .st-btn.st-seg { color: var(--muted); }
+.pg-stats .st-btn.st-seg:hover { color: var(--accent); }
+.pg-stats .st-btn.st-seg.is-on {
+  background: var(--tint); border-color: var(--accent);
+  color: var(--accent); font-weight: 600; letter-spacing: .3px;
+}
+
+/* ── session list ──────────────────────────────────────────────────────── */
+.pg-stats .st-list { display: flex; flex-direction: column; gap: 2px; }
+.pg-stats .st-row {
+  display: flex; align-items: center; gap: 10px;
+  height: 32px; padding: 4px 8px;
+  border: 1px solid transparent; border-radius: var(--r-btn);
+  cursor: pointer; outline: none;
+}
+.pg-stats .st-row:hover, .pg-stats .st-row:focus-visible { background: var(--hover); border-color: var(--line); }
+.pg-stats .st-when { flex: none; width: 206px; white-space: pre; overflow: hidden; }
+.pg-stats .st-c { flex: none; color: var(--muted); font-size: 12px; line-height: 16px; letter-spacing: 0; white-space: nowrap; }
+.pg-stats .st-c-dur { min-width: 64px; }
+.pg-stats .st-c-act { min-width: 86px; }
+.pg-stats .st-c-thr { min-width: 104px; }
+.pg-stats .st-spark { flex: 1 1 0; width: 0; min-width: 60px; height: 22px; }
+.pg-stats .st-chev { flex: none; color: var(--muted); font-size: 12px; line-height: 16px; letter-spacing: 0; }
+
+/* ── number tiles ──────────────────────────────────────────────────────── */
+.pg-stats .st-tiles { display: grid; gap: 8px; min-width: 0; }
+.pg-stats .st-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pg-stats .st-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.pg-stats .st-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.pg-stats .st-tile {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 6px 10px 7px; min-width: 0;
+  background: var(--panel);
+  border: 1px solid var(--green-mid); border-radius: var(--r-btn);
+}
+.pg-stats .st-cap { color: var(--muted); font-size: 12px; line-height: 16px; letter-spacing: 0; }
+.pg-stats .st-val { font-size: 13px; font-weight: 700; line-height: 17px; letter-spacing: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pg-stats .st-note { color: var(--dim); font-size: 11px; line-height: 15px; letter-spacing: .28px; }
+.pg-stats .st-note:empty { display: none; }
+
+/* ── toys / zones tables: name · lifetime · this session ───────────────── */
+.pg-stats .st-table {
+  display: grid; grid-template-columns: auto auto auto 1fr;
+  column-gap: 24px; row-gap: 2px; align-items: center;
+}
+.pg-stats .st-table > span { white-space: nowrap; line-height: 17px; }
+.pg-stats .st-table > .st-th { color: var(--muted); font-size: 12px; line-height: 16px; letter-spacing: 0; }
+.pg-stats .st-table > .st-td-s { color: var(--muted); font-size: 12px; letter-spacing: 0; }
+
+/* ── charts ────────────────────────────────────────────────────────────── */
+.pg-stats .st-week { width: 100%; height: 214px; }
+.pg-stats .st-timeline { width: 100%; height: 40px; }
+.pg-stats .st-month { display: flex; align-items: flex-start; gap: 16px; }
+.pg-stats .st-cal { flex: none; width: 290px; height: 218px; }
+.pg-stats .st-month > .st-tiles { flex: 1 1 0; }
+.pg-stats .st-month-label { flex: none; min-width: 120px; text-align: center; white-space: nowrap; }
+
+/* ── one session ───────────────────────────────────────────────────────── */
+.pg-stats .st-insights { display: flex; flex-direction: column; gap: 4px; }
+.pg-stats .st-dot-cyan { color: var(--cyan); }
+.pg-stats .st-dot-blue { color: var(--blue); }
+.pg-stats .st-dot-purple { color: var(--purple); }
+.pg-stats .st-dot-pink { color: var(--pink); }
+
+/* ── hover explanations (the app's QToolTip) ───────────────────────────── */
+.pg-stats .st-tip {
+  position: absolute; z-index: 5; left: 0; top: 0;
+  max-width: 400px; padding: 4px 6px;
+  background: var(--card); color: var(--txt);
+  border: 1px solid var(--line);
+  font-size: 13px; font-weight: 400; line-height: 17px;
+  white-space: normal; pointer-events: none;
+}
+.pg-stats .st-tip.st-tip-nowrap { white-space: nowrap; max-width: none; }
+.pg-stats .st-tip b { font-weight: 700; }

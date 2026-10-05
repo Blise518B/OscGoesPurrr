@@ -1,17 +1,20 @@
 """Generate THIRD_PARTY_NOTICES.md: every piece of other people's software
-the Windows exe carries, its license, and the notices it asks us to pass on.
+the Windows exe and the Linux AppImage carry, its license, and the notices
+it asks us to pass on.
 
 OscGoesPurrr's own code is under the MIT license, but the exe also bundles the
 Python runtime, PySide6/Qt, the Python packages in requirements.txt (and
 what they pull in), the Aldrich font and the Buttplug intiface-engine with
 the Rust crates compiled into it. Each keeps its own license; several
 (BSD, MIT, Apache, LGPL) require their notice to travel with the binary.
-The file is bundled into the exe and shown from Help -> License.
+The file is bundled into both builds and shown from Help -> License.
 
 Sources, all read locally:
   * the venv's installed package metadata (license + license files),
   * the engine checkout in _engine_build/buttplug (its LICENSE, plus
-    `cargo tree` for the crates in intiface-engine's Windows build).
+    `cargo tree` for the crates in intiface-engine's Windows and Linux
+    builds), whose Cargo.lock is copied to tools/intiface-engine-Cargo.lock
+    for the Linux build.
 
 Run from the project root after changing requirements.txt or rebuilding
 the engine:
@@ -187,6 +190,12 @@ def _source_of(dist: md.Distribution) -> str:
     return m.get("Home-page") or f"https://pypi.org/project/{m['Name']}/"
 
 
+# License texts for packages whose wheel ships none (the notice still has to
+# travel with the exe): tools/licenses/<distribution name>.txt, copied from
+# the package's source at the pinned version.
+FALLBACK_LICENSES = REPO / "tools" / "licenses"
+
+
 def _license_files(dist: md.Distribution) -> list[str]:
     texts = []
     for f in dist.files or ():
@@ -198,18 +207,33 @@ def _license_files(dist: md.Distribution) -> list[str]:
                 texts.append(Path(dist.locate_file(f)).read_text(encoding="utf-8", errors="replace"))
             except OSError:
                 pass
+    fallback = FALLBACK_LICENSES / f"{_key(dist.metadata['Name'])}.txt"
+    if not texts and fallback.exists():
+        texts.append(fallback.read_text(encoding="utf-8"))
     return texts
+
+
+# The engine ships in both builds: the Windows exe and the Linux AppImage
+# (tools/build_linux.sh). Each target pulls in a few crates of its own.
+ENGINE_TARGETS = ("x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu")
+# The Cargo.lock the engine was built with. Buttplug doesn't commit one, so
+# the Linux build (in CI, from a fresh checkout) takes this copy to get the
+# same crate versions as the Windows engine and as this notice.
+ENGINE_LOCK_COPY = REPO / "tools" / "intiface-engine-Cargo.lock"
 
 
 def rust_crates() -> list[tuple[str, str, str, bool]]:
     """(crate, version, license, part_of_buttplug) for intiface-engine's
-    Windows build. Crates from the Buttplug workspace itself are path
-    dependencies; their license is the engine's own."""
-    out = subprocess.run(
+    Windows and Linux builds. Crates from the Buttplug workspace itself are
+    path dependencies; their license is the engine's own. A target whose
+    crates aren't in the local cargo cache yet needs one `cargo fetch` in
+    the engine checkout first."""
+    out = "\n".join(subprocess.run(
         ["cargo", "tree", "--offline", "-p", "intiface-engine",
-         "--target", "x86_64-pc-windows-msvc", "-e", "normal",
+         "--target", target, "-e", "normal",
          "--prefix", "none", "--no-dedupe", "-f", "{p}|{l}"],
         cwd=ENGINE, capture_output=True, text=True, check=True).stdout
+        for target in ENGINE_TARGETS)
     crates = set()
     for line in out.splitlines():
         if "|" not in line:
@@ -283,6 +307,7 @@ def main() -> int:
     if dirty:
         print("warning: the engine checkout has local changes -- the notice says it is unmodified",
               file=sys.stderr)
+    ENGINE_LOCK_COPY.write_bytes((ENGINE / "Cargo.lock").read_bytes())
     copyleft = sorted({(c, lic) for c, _, lic, local in crates
                        if not local and re.search(r"\bA?GPL", lic) and not _mit_or_apache(lic)})
 
@@ -295,6 +320,9 @@ def main() -> int:
          f"https://github.com/buttplugio/buttplug/tree/{commit}"),
         ("PyInstaller bootloader", pyi_ver, "GPL-2.0-or-later WITH Bootloader-exception",
          "https://github.com/pyinstaller/pyinstaller"),
+        ("AppImage runtime (Linux AppImage)", "-",
+         "MIT; contains libfuse (LGPL-2.1) and squashfuse (BSD-2-Clause)",
+         "https://github.com/AppImage/type2-runtime"),
         ("Aldrich font", "-", "OFL-1.1", "https://fonts.google.com/specimen/Aldrich"),
         ("OpenVR driver header (SteamVR toy driver)", openvr_ver, "BSD-3-Clause",
          "https://github.com/ValveSoftware/openvr"),
@@ -371,9 +399,10 @@ def main() -> int:
         "# Third-party notices",
         "",
         "OscGoesPurrr is [MIT](LICENSE)-licensed. It also includes these open-source",
-        "projects, each under its own license.",
+        "projects, each under its own license. The Linux AppImage also carries a few",
+        "system libraries; its copy of this file lists them at the end.",
         "",
-        "## What the exe contains",
+        "## What the exe and the AppImage contain",
         "",
         "| Component | Version | License | Source |",
         "|---|---|---|---|",
@@ -383,10 +412,12 @@ def main() -> int:
         "",
         "## Source for intiface-engine",
         "",
-        "The bundled `intiface-engine.exe` is built, unmodified, from Buttplug commit",
+        "The bundled `intiface-engine` is built, unmodified, from Buttplug commit",
         f"[`{commit[:12]}`](https://github.com/buttplugio/buttplug/tree/{commit})",
-        "by this repository's `tools/rebuild_intiface_engine.bat`, which only adds compiler flags",
-        "that strip build-machine paths. It runs as its own process next to OscGoesPurrr.",
+        "with the dependency versions in this repository's `tools/intiface-engine-Cargo.lock`:",
+        "for Windows by `tools/rebuild_intiface_engine.bat`, for Linux by `tools/build_linux.sh`.",
+        "Both only add compiler flags that strip build-machine paths. It runs as its own",
+        "process next to OscGoesPurrr.",
     ]
     for c, lic in copyleft:
         lines += [

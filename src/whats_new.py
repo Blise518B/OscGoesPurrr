@@ -39,6 +39,12 @@ class Release(NamedTuple):
 
 
 RELEASES: Tuple[Release, ...] = (
+    Release("0.13.0", (
+        Item("Now on Linux too",
+             "OscGoesPurrr has a Linux version: one AppImage on the "
+             "releases page, with the toy server built in, just like here. "
+             "Handy if a friend plays VRChat on Linux."),
+    )),
     Release("0.12.0", (
         Item("Any colour you like",
              "Not a green person? Pick a colour in Settings and the whole "

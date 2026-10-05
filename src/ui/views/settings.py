@@ -319,7 +319,7 @@ class SettingsMixin:
         self.toy_sounds_volume_slider = vol_slider
         self._explain(
             snd_lay, "Connect sound volume",
-            "How loud the chimes are, on top of your Windows volume. The "
+            "How loud the chimes are, on top of your system volume. The "
             "chime plays at the new level when you stop moving the "
             "slider. <b>Test</b> plays the connect chime, then the "
             "disconnect one.")
@@ -403,7 +403,8 @@ class SettingsMixin:
         except Exception:
             svr_status = {"supported": False, "enabled": False}
         self.steamvr_toys_toggle = ToggleSwitch("Show toys in SteamVR")
-        self.steamvr_toys_toggle.setChecked(bool(svr_status.get("enabled")))
+        self.steamvr_toys_toggle.setChecked(
+            bool(svr_status.get("enabled")) and bool(svr_status.get("supported")))
         self.steamvr_toys_toggle.setEnabled(bool(svr_status.get("supported")))
         self.steamvr_toys_toggle.toggled.connect(self._on_steamvr_toys_toggled)
         svr_lay.addWidget(self.steamvr_toys_toggle)
@@ -421,6 +422,10 @@ class SettingsMixin:
         self.steamvr_toys_note = self._muted_label("")
         self.steamvr_toys_note.setVisible(False)
         svr_lay.addWidget(self.steamvr_toys_note)
+        if not svr_status.get("supported"):
+            # The driver is a Windows DLL.
+            self.steamvr_toys_note.setText("Windows only for now.")
+            self.steamvr_toys_note.setVisible(True)
         parent_layout.addWidget(svr_card)
 
         # ---- Quality of Life Card ----
@@ -444,6 +449,8 @@ class SettingsMixin:
 
         hide_console.toggled.connect(on_hide_console)
         ql_lay.addWidget(hide_console)
+        if sys.platform != "win32":
+            hide_console.setVisible(False)  # no console window to hide
         self._explain(
             hide_console, "Hide terminal console",
             "Hides the black text window that runs alongside the app. Turn "
@@ -608,7 +615,7 @@ class SettingsMixin:
         self._explain(bk_lay,
             "Settings backups",
             "Every launch, all settings files are snapshotted into "
-            "<b>%APPDATA%\\OscGoesPurrr\\backups</b> (the newest five "
+            f"<b>{SETTINGS_DIR_DISPLAY}{os.sep}backups</b> (the newest five "
             "are kept). <b>Restore</b> copies a snapshot back over the "
             "current settings and restarts the app — the escape hatch "
             "when a config change or an update went wrong. Restores are "
@@ -1065,14 +1072,14 @@ Both consume the same data, so they stay in lockstep.
 Rest the mouse on a control, a heading or a button for a moment and its explanation pops up on its own — the modes, the strength bar, Off and Sleep, every stage of a signal chain, the zone pickers, the connection buttons. Move the mouse away and it disappears. There is nothing to switch on first.
 """)
 
-        section("Where settings live on disk", """
-%APPDATA%\\OscGoesPurrr\\
+        section("Where settings live on disk", f"""
+{SETTINGS_DIR_DISPLAY}{os.sep}
   • modes.json               — the four routing modes + shared rig, feel and strength (schema v4)
   • known_devices.json       — global toy list (name, motor count, motor kinds)
   • app_settings.json        — global app preferences
   • sps_sources.json         — synthetic contact zones, shared by every mode
   • sessions_settings.json   — session-logger preferences
-  • stats.json, stats_hours.json, stats_sessions\\
+  • stats.json, stats_hours.json, stats_sessions{os.sep}
                              — usage statistics (Settings → Features →
                                Usage statistics; switching it off deletes them)
 """)

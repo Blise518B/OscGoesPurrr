@@ -1,0 +1,284 @@
+/* ============================================================================
+   The demo: a working copy of the OscGoesPurrr window.
+
+   Built against screenshots of the real app at 1100 x 760 and kept in the
+   app's own pixel sizes; the page scales the whole window to fit (demo.js).
+   Sizes, radii and paddings are the app's stylesheet (src/ui/theme.py);
+   colours are the same tokens (tokens.css) -- never a typed hex. When the
+   app's look changes, re-render the reference shots and bring this back in
+   line.
+   ========================================================================= */
+
+.ogp-stage { position: relative; width: 100%; overflow-x: auto; overflow-y: hidden; border-radius: 12px; }
+.ogp-frame { transform-origin: 0 0; width: 1100px; }
+.ogp-title {
+  height: 32px; display: flex; align-items: center; gap: 8px; padding: 0 0 0 10px;
+  background: var(--panel); color: var(--muted); font: 12px "Segoe UI", system-ui, sans-serif;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 35%, transparent);
+}
+.ogp-title img { width: 16px; height: 16px; }
+.ogp-title .wc { margin-left: auto; display: flex; }
+.ogp-title .wc span { width: 44px; text-align: center; color: var(--dim); font-size: 13px; }
+
+.ogp {
+  position: relative; width: 1100px; height: 760px; overflow: hidden;
+  background: var(--bg); color: var(--txt);
+  font: 13px/1.3 "Segoe UI", system-ui, Arial, sans-serif; text-align: left;
+  -webkit-user-select: none; user-select: none; cursor: default;
+}
+.ogp *, .ogp *::before, .ogp *::after { box-sizing: border-box; }
+.ogp b { font-weight: 600; }
+
+/* ---- sidebar ----------------------------------------------------------- */
+.o-side {
+  position: absolute; left: 0; top: 0; width: 240px; height: 736px;
+  background: var(--panel); border-right: 1px solid var(--line); padding: 12px 10px 0 10px;
+}
+.o-brand { font: 600 19px/1.2 "Aldrich Site", "Aldrich", "Segoe UI", sans-serif; letter-spacing: 1px; color: var(--accent); cursor: pointer; }
+.o-build { color: var(--dim); font-size: 11px; margin-top: 4px; }
+.o-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 4px; }
+.o-modes { margin-top: 13px; }
+.o-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  background: transparent; color: var(--txt); border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 12px; font: inherit; height: 30px; white-space: nowrap; cursor: pointer;
+}
+.o-btn:hover { background: var(--hover); border-color: var(--accent); color: var(--accent); }
+.o-btn.primary { background: var(--accent); border-color: var(--accent); color: var(--ink); font-weight: 650; }
+.o-btn.small { height: 30px; padding: 3px 12px; }
+.o-btn.seg { color: var(--muted); }
+.o-btn.seg.on { background: var(--tint); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.o-mode {
+  height: 44px; flex-direction: column; gap: 1px; font-size: 12px; padding: 3px; color: var(--muted);
+}
+.o-mode i { font-style: normal; font-size: 11px; line-height: 1; }
+.o-mode.on { background: var(--tint); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.o-mode.warn.on { background: var(--warn-tint); border-color: var(--warn); color: var(--warn); }
+.o-strrow { display: flex; align-items: baseline; justify-content: space-between; margin-top: 5px; }
+.o-strrow span { color: var(--muted); font-size: 12px; }
+.o-strrow b { color: var(--accent); font-size: 17px; font-weight: 700; }
+.o-offrow { margin-top: 9px; }
+
+/* sliders: the app's groove + round handle */
+.ogp input[type=range] {
+  -webkit-appearance: none; appearance: none; background: transparent; margin: 0; height: 16px; cursor: pointer;
+  border: none; padding: 0; outline: none; box-shadow: none; --v: 50%;
+}
+.ogp input[type=range]::-webkit-slider-runnable-track {
+  height: 8px; border: 1px solid var(--line); border-radius: 4px;
+  background: linear-gradient(90deg, var(--accent) var(--v), var(--well) var(--v));
+}
+.ogp input[type=range]::-moz-range-track {
+  height: 6px; border: 1px solid var(--line); border-radius: 4px;
+  background: linear-gradient(90deg, var(--accent) var(--v), var(--well) var(--v));
+}
+.ogp input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 14px; height: 14px; border-radius: 7px; background: var(--accent); margin-top: -4px; border: none;
+}
+.ogp input[type=range]::-moz-range-thumb { width: 14px; height: 14px; border-radius: 7px; background: var(--accent); border: none; }
+.ogp input[type=range]:hover::-webkit-slider-thumb { background: var(--accent2); }
+.ogp input[type=range].big { width: 100%; height: 26px; margin-top: 6px; }
+.ogp input[type=range].big::-webkit-slider-runnable-track { height: 14px; border-radius: 7px; }
+.ogp input[type=range].big::-moz-range-track { height: 12px; border-radius: 7px; }
+.ogp input[type=range].big::-webkit-slider-thumb { width: 24px; height: 24px; border-radius: 12px; margin-top: -6px; }
+.ogp input[type=range].big::-moz-range-thumb { width: 24px; height: 24px; border-radius: 12px; }
+
+.o-nav { margin-top: 11px; display: flex; flex-direction: column; }
+.o-nav .n {
+  height: 28px; display: flex; align-items: center; padding: 5px 12px; border-radius: 8px;
+  color: var(--muted); border: 1px solid transparent; margin-bottom: 4px; cursor: pointer;
+}
+.o-nav .n:hover { background: var(--hover); color: var(--txt); }
+.o-nav .n.on { background: var(--tint); color: var(--accent); font-weight: 600; }
+.o-nav .n.home {
+  height: 38px; border: 1px solid var(--line); color: var(--txt); font-size: 15px; font-weight: 600; gap: 7px; margin-bottom: 7px;
+}
+.o-nav .n.home svg { width: 20px; height: 20px; flex: none; }
+.o-nav .n.home:hover { border-color: var(--accent); color: var(--accent); }
+.o-nav .n.home.on { background: var(--tint); border-color: var(--accent); color: var(--accent); }
+.o-nav .grp { color: var(--dim); font-size: 10px; font-weight: 700; letter-spacing: 1px; padding: 9px 10px 4px 10px; }
+.o-nav .gap { height: 10px; }
+.o-links { position: absolute; left: 10px; right: 10px; bottom: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+.o-links .l { display: flex; align-items: center; justify-content: space-between; height: 28px; padding-left: 2px; }
+.o-links .l span:first-child { font-size: 12px; font-weight: 600; }
+.o-pill {
+  display: inline-block; padding: 2px 9px; border-radius: 10px; font-size: 11px; font-weight: 600; line-height: 14px;
+  background: var(--card); color: var(--muted); border: 1px solid var(--line);
+}
+.o-pill.ok { background: var(--ok-tint); color: var(--ok); border-color: var(--ok-mid); }
+.o-pill.idle { background: transparent; color: var(--dim); border-color: var(--dim); }
+
+/* ---- status bar ---------------------------------------------------------- */
+.o-status {
+  position: absolute; left: 0; right: 0; bottom: 0; height: 24px; background: var(--panel);
+  border-top: 1px solid var(--line); color: var(--dim); font-size: 11px;
+  display: flex; align-items: center; justify-content: flex-end; padding-right: 12px;
+}
+.o-status b { color: var(--accent); font-weight: 600; }
+
+/* ---- pages ----------------------------------------------------------------- */
+.o-main { position: absolute; left: 240px; top: 0; width: 860px; height: 736px; }
+.o-page { position: absolute; inset: 0; display: none; padding: 20px 20px 22px 20px; overflow: hidden; }
+.o-page.on { display: block; }
+.o-page[data-page="Statistics"] { padding: 0; }      /* that page brings its own margins and scrolling */
+/* the app's scrollbar: a 10px gutter, a 6px thumb in the frame line */
+.o-scroll { overflow-y: auto; overflow-x: hidden; }
+.o-scroll::-webkit-scrollbar { width: 10px; height: 10px; }
+.o-scroll::-webkit-scrollbar-track { background: transparent; }
+.o-scroll::-webkit-scrollbar-thumb { background: var(--line); border-radius: 5px; border: 2px solid transparent; background-clip: padding-box; }
+@supports not selector(::-webkit-scrollbar) { .o-scroll { scrollbar-width: thin; scrollbar-color: var(--line) transparent; } }
+.o-viewtitle { font: 600 19px/1.2 "Aldrich Site", "Aldrich", "Segoe UI", sans-serif; letter-spacing: 2px; color: var(--accent); text-align: center; }
+.o-card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; }
+/* The filled section bar: the accent's hue at the app's fixed, darker tone
+   (derived from the token, so the colour picker turns it too). */
+.ogp { --catbar: color-mix(in srgb, var(--accent) 52%, var(--ink)); --catbar-text: var(--txt); }
+@supports (color: hsl(from red h s l)) { .ogp { --catbar: hsl(from var(--accent) calc(h - 2) 66.3% 32.5%); } }
+:root[data-theme="midnight"] .ogp { --catbar: var(--tint); --catbar-text: var(--accent); }
+.o-sect {
+  background: var(--catbar); color: var(--catbar-text);
+  font-size: 14px; font-weight: 700; padding: 4px 10px 5px 14px; border-radius: 9px; line-height: 18px;
+}
+.o-muted { color: var(--muted); font-size: 12px; }
+
+/* ---- Home ------------------------------------------------------------------ */
+.o-home { display: flex; flex-direction: column; height: 100%; }
+.o-homehead { display: flex; align-items: center; justify-content: space-between; height: 30px; margin-bottom: 10px; flex: none; }
+.o-homehead h4 { margin: 0; font: 600 17px/1 "Aldrich Site", "Aldrich", "Segoe UI", sans-serif; letter-spacing: 1px; color: var(--accent); }
+.o-toys { flex: 1 1 auto; min-height: 200px; margin-right: -10px; padding-right: 10px; }
+.o-toy {
+  --hue: var(--cyan); --hue-mid: var(--cyan-mid);
+  border: 1px solid color-mix(in srgb, var(--hue) 45%, var(--hue-mid)); border-radius: 10px;
+  background: var(--panel); padding: 3px; margin-bottom: 8px;
+}
+:root[data-theme="midnight"] .o-toy { border-color: var(--hue-mid); }
+.o-toy.offline { background: transparent; border-color: var(--dim); }
+:root[data-theme="midnight"] .o-toy.offline { border-color: var(--grey-mid); }
+.o-toybar { display: flex; align-items: center; gap: 8px; height: 38px; padding: 5px 8px; border-radius: 9px; cursor: pointer; }
+.o-toybar:hover { background: var(--hover); }
+.o-ticon { width: 30px; height: 30px; flex: none; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+.o-ticon img { width: 26px; height: 26px; object-fit: contain; }
+.o-toy.offline .o-ticon img { opacity: .45; }
+.o-dot { width: 12px; height: 12px; border-radius: 6px; background: var(--accent); flex: none; margin: 0 2px 0 4px; }
+.o-toy.offline .o-dot { background: transparent; border: 2px solid var(--dim); }
+.o-tname { font-size: 14px; font-weight: 600; color: var(--hue); }
+.o-toy.offline .o-tname { color: var(--muted); }
+.o-tzones { color: var(--muted); font-size: 11px; margin-left: 2px; }
+.o-toy.offline .o-tzones { color: var(--dim); }
+.o-tspace { flex: 1; }
+.o-batt { display: flex; align-items: center; gap: 8px; color: var(--accent); width: 56px; margin-left: 6px; font-size: 13px; }
+.o-batt svg { width: 10px; height: 14px; }
+.o-meters { display: flex; gap: 3px; width: 115px; margin: 0 2px 0 12px; }
+.o-meter { flex: 1; height: 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--well); overflow: hidden; }
+.o-meter i { display: block; height: 100%; width: 0; border-radius: 4px; background: var(--accent); }
+.o-caret { width: 18px; text-align: center; color: var(--muted); font-size: 11px; flex: none; }
+.o-toybody { display: none; padding: 12px; }
+.o-toy.open .o-toybody { display: block; }
+
+/* a chain: fold bar, then the node graph */
+.o-fold {
+  --ch: var(--pink); --ch-mid: var(--pink-mid);
+  position: relative; background: var(--card); border: 1px solid var(--ch-mid); border-radius: 10px;
+  height: 48px; padding: 6px 12px 0 18px; margin-bottom: 10px; cursor: pointer;
+}
+.o-fold:hover { background: var(--hover); border-color: var(--ch); }
+.o-fold::before { content: ""; position: absolute; left: 6px; top: 7px; bottom: 7px; width: 3px; border-radius: 2px; background: var(--ch); }
+.o-fold .r1 { display: flex; align-items: center; gap: 10px; height: 20px; }
+.o-fold .car { color: var(--txt); font-size: 9px; width: 10px; }
+.o-fold .nm { font-weight: 600; margin-left: 2px; }
+.o-pips { display: flex; font-size: 16px; font-weight: 700; letter-spacing: 0; line-height: 18px; }
+.o-fold .mrg { color: var(--muted); font-size: 12px; margin-right: -2px; }
+.o-pips span { width: 13px; text-align: center; color: var(--line); }
+.o-fold .o-meter { height: 10px; margin-left: 2px; }
+.o-fold .x { color: var(--err); font-weight: 700; padding: 0 4px; }
+.o-fold .xb { color: var(--err); border: 1px solid var(--err-mid); border-radius: 5px; width: 20px; height: 18px; display: flex; align-items: center; justify-content: center; font-size: 10px; }
+.o-fold .sum { color: var(--muted); font-size: 11px; margin-top: 2px; white-space: pre; overflow: hidden; text-overflow: ellipsis; }
+
+.o-chain {
+  --ch: var(--pink); --ch-mid: var(--pink-mid);
+  display: none; position: relative; background: var(--panel); border: 1px solid var(--ch-mid); border-radius: 14px;
+  height: 314px; margin-bottom: 10px;
+}
+.o-chain.open { display: block; }
+.o-chain .hd { position: absolute; left: 10px; top: 17px; font-weight: 600; }
+.o-chain .rst { position: absolute; right: 10px; top: 10px; }
+.o-chain .lab { position: absolute; top: 49px; width: 120px; margin-left: -60px; text-align: center; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .3px; }
+.o-wires { position: absolute; inset: 0; pointer-events: none; }
+.o-wires path { fill: none; stroke: var(--muted); stroke-width: 1.5; }
+.o-wires .ah { fill: var(--muted); stroke: none; }
+.o-stage {
+  position: absolute; background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 7px 9px;
+}
+.o-stage .t { display: flex; justify-content: space-between; align-items: baseline; font-weight: 600; line-height: 16px; }
+.o-stage .num { color: var(--pink); font: 600 11px "Cascadia Mono", Consolas, monospace; }
+.o-stage .row { display: flex; align-items: center; gap: 6px; height: 20px; margin-top: 3px; }
+.o-stage .row label { color: var(--muted); font-size: 12px; width: 20px; flex: none; }
+.o-stage .row input[type=range] { flex: 1; min-width: 0; }
+.o-stage .row .val { font-weight: 600; font-size: 12px; min-width: 32px; text-align: right; white-space: nowrap; }
+.o-stage[data-stage="speed"] .row, .o-stage[data-stage="punch"] .row { gap: 3px; }
+.o-stage[data-stage="speed"] .val, .o-stage[data-stage="punch"] .val { font-size: 11px; min-width: 28px; }
+.o-stage .hint { color: var(--muted); font-size: 12px; text-align: center; margin-top: 2px; white-space: nowrap; overflow: hidden; }
+.o-stage.center { text-align: center; }
+.o-stage.center .t { justify-content: center; }
+.o-stage.center .num { display: block; text-align: center; height: 14px; }
+.o-act { height: 6px; border: 1px solid var(--line); background: var(--well); margin-top: 5px; position: relative; }
+.o-act i { position: absolute; left: 0; top: 0; bottom: 0; background: var(--muted); }
+.o-act.open i { background: var(--accent); }
+.o-act u { position: absolute; top: -1px; bottom: -1px; width: 2px; background: var(--txt); }
+.o-chain .omet { position: absolute; left: 10px; right: 10px; bottom: 9px; height: 8px; }
+.o-sw { position: relative; width: 36px; height: 18px; border-radius: 9px; background: var(--well); border: 1px solid var(--line); flex: none; cursor: pointer; }
+.o-sw::after { content: ""; position: absolute; top: 2px; left: 3px; width: 12px; height: 12px; border-radius: 6px; background: var(--muted); }
+.o-sw.on { background: var(--accent); border-color: var(--accent); }
+.o-sw.on::after { left: 19px; background: var(--ink); }
+.o-merge { display: flex; align-items: center; gap: 8px; margin: 2px 0 10px 0; }
+.o-merge b { margin-right: 0; }
+
+/* tuning tools */
+.o-tools { flex: none; margin-top: 8px; }
+.o-toolbar {
+  display: flex; align-items: center; height: 35px; padding: 0 12px 0 14px; cursor: pointer;
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+}
+.o-toolbar:hover { background: var(--hover); border-color: var(--accent); }
+.o-toolbar .car { font-size: 9px; width: 20px; }
+.o-toolbar b { color: var(--accent); }
+.o-toolbar .sum { margin-left: auto; color: var(--dim); font-size: 11px; }
+.o-toolbody { display: none; margin-top: 7px; }
+.o-tools.open .o-toolbody { display: block; }
+.o-simcard { padding: 10px 14px 12px 14px; }
+.o-simrow { display: flex; align-items: center; gap: 10px; height: 34px; }
+.o-in {
+  display: inline-flex; align-items: center; height: 30px; background: var(--well); border: 1px solid var(--line);
+  border-radius: 7px; padding: 0 8px; min-width: 60px; position: relative;
+}
+.o-in.spin { padding-right: 24px; width: 112px; }
+.o-in.spin .ar { position: absolute; right: 0; top: 0; bottom: 0; width: 18px; border-left: 1px solid var(--line); display: flex; flex-direction: column; }
+.o-in.spin .ar i { flex: 1; display: flex; align-items: center; justify-content: center; font-style: normal; font-size: 7px; color: var(--txt); cursor: pointer; }
+.o-in.spin .ar i:hover { background: var(--hover); }
+.o-in.combo { padding-right: 30px; width: 92px; cursor: pointer; }
+.o-in.combo::after { content: "\25BE"; position: absolute; right: 0; top: 0; bottom: 0; width: 22px; border-left: 1px solid var(--line); display: flex; align-items: center; justify-content: center; font-size: 10px; }
+.o-graph { margin-top: 7px; padding: 6px; height: 132px; }
+.o-graph canvas { width: 100%; height: 100%; display: block; background: var(--well); border-radius: 6px; }
+
+/* ---- Settings ---------------------------------------------------------------- */
+.o-tabs { display: flex; gap: 4px; margin: 13px 0 0 0; }
+.o-tabs span { height: 30px; padding: 0 12px; display: flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; color: var(--muted); }
+.o-tabs span.on { background: var(--tint); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.o-setscroll { position: absolute; left: 20px; right: 4px; top: 87px; bottom: 0; padding-right: 10px; }
+.o-set { padding: 20px; margin-bottom: 8px; }
+.o-set .o-sect { margin-bottom: 8px; }
+.o-set .line { display: flex; align-items: center; gap: 8px; min-height: 30px; }
+.o-set p { margin: 0 0 6px 0; color: var(--muted); font-size: 12px; line-height: 16px; }
+.o-set.spot { background: var(--hover); border-color: var(--accent); }
+.o-swatch { width: 24px; height: 24px; border-radius: 12px; border: 2px solid var(--panel); cursor: pointer; flex: none; }
+.o-swatch.on, .o-swatch:hover { border-color: var(--txt); }
+.o-hue { width: 420px; height: 24px; }
+.ogp input[type=range].o-hue::-webkit-slider-runnable-track { height: 10px; border-radius: 6px; background: var(--huetrack); }
+.ogp input[type=range].o-hue::-moz-range-track { height: 8px; border-radius: 6px; background: var(--huetrack); }
+.ogp input[type=range].o-hue::-webkit-slider-thumb { width: 18px; height: 18px; border-radius: 9px; border: 2px solid var(--txt); margin-top: -5px; }
+.ogp input[type=range].o-hue::-moz-range-thumb { width: 14px; height: 14px; border-radius: 9px; border: 2px solid var(--txt); }
+.o-lbl { width: 52px; flex: none; }
+
+/* ---- pages the demo does not rebuild ------------------------------------------ */
+.o-note { max-width: 520px; margin: 120px auto 0 auto; text-align: center; }
+.o-note p { color: var(--muted); line-height: 20px; margin: 14px 0 0 0; }
+.o-note .o-btn { margin-top: 18px; }

@@ -14,7 +14,6 @@ import threading
 import asyncio
 import queue
 import sys
-import pystray
 from typing import Any, Dict, List, Optional
 
 # ModeManager from config manager module
@@ -36,7 +35,7 @@ from queue_drain import drain_and_coalesce
 from constants import *
 from utilities import (
     classify_ogb_zone, value_to_hex_color, toggle_windows_console,
-    create_default_icon, relaunch_self,
+    create_default_icon, relaunch_self, open_folder, png_bytes,
 )
 from version import __version__, build_number
 import debug_log
@@ -533,14 +532,7 @@ class OscGoesPurrrApp(
             from settings._paths import APPDATA_DIR
             folder = str(APPDATA_DIR)
         try:
-            import os as _os
-            import subprocess as _subp
-            if _os.name == "nt":
-                _os.startfile(folder)  # type: ignore[attr-defined]
-            else:
-                # This app targets Windows; keep the fallback from crashing
-                # if someone runs it elsewhere.
-                _subp.Popen(["xdg-open", folder])
+            open_folder(folder)
             self.log_message(f"Opened logs folder: {folder}")
         except Exception as e:
             self.log_message(f"Open logs folder failed: {type(e).__name__}: {e}")
@@ -596,7 +588,7 @@ class OscGoesPurrrApp(
         if not asset:
             self.log_message(
                 "No downloadable release asset — open the releases page "
-                "and grab the exe manually.")
+                "and download it from there.")
             return
         if not updater.is_self_updatable():
             # Running from source (or a --onedir build): there is no single
@@ -628,7 +620,7 @@ class OscGoesPurrrApp(
         if not path:
             self.log_message(
                 "Update download failed (or failed verification) — "
-                "nothing was changed. Try again, or grab the exe from the "
+                "nothing was changed. Try again, or download it from the "
                 "releases page.")
             done = getattr(self.ui, "show_update_failed", None)
             if callable(done):
@@ -638,12 +630,16 @@ class OscGoesPurrrApp(
         if not updater.apply_update(path):
             self.log_message(
                 "Couldn't start the update helper — nothing was changed. "
-                f"The downloaded exe is at {path}")
+                f"The download is at {path}")
             fail = getattr(self.ui, "show_update_failed", None)
             if callable(fail):
                 fail()
             return
-        self.quit_app()
+        if updater.relaunch_after_apply():
+            # Linux: the AppImage is already swapped; start the new one.
+            self.request_restart()
+        else:
+            self.quit_app()
 
     # ==================================================================
     # Settings snapshots — launch-time backups of every settings JSON
@@ -678,10 +674,12 @@ class OscGoesPurrrApp(
         changes — zero work at steady state, and a no-op whenever no
         tray icon is running (minimize-to-tray off or window visible)."""
         tray = getattr(self, "tray_icon", None)
+        desktop_tray = getattr(self, "_desktop_tray", False)
         # Gate on pystray's _running, not `visible`: stop() clears only
         # _running, so a restored-from-tray icon reads visible==True
         # forever and this would keep redrawing a dead icon.
-        if tray is None or not getattr(tray, "_running", False):
+        if not desktop_tray and (
+                tray is None or not getattr(tray, "_running", False)):
             return
         try:
             level = max(self.motor_router.last_outputs.values(), default=0.0)
@@ -701,6 +699,13 @@ class OscGoesPurrrApp(
         # Bucket color rides the value ramp (COLOR_VALUE_LO → HI blend,
         # same math as the OSC inspector); bucket 0 = the plain icon.
         tint = value_to_hex_color(bucket / 3.0) if bucket else None
+        if desktop_tray:
+            # The UI's tray icon: GUI thread, so no handle race either.
+            try:
+                self.ui.set_tray_icon(png_bytes(create_default_icon(tint=tint)))
+            except Exception:
+                pass
+            return
         try:
             # Residual risk, accepted: pystray swaps native icon handles
             # in the ASSIGNING thread, and its own tray thread can touch
@@ -1085,6 +1090,10 @@ class OscGoesPurrrApp(
             self.stop_replay()
         except Exception:
             pass
+        if sys.platform != "win32":
+            self._minimize_to_desktop_tray()
+            return
+        import pystray  # Windows only; see _minimize_to_desktop_tray
         self.ui.hide_window()
 
         image = create_default_icon()
@@ -1115,6 +1124,33 @@ class OscGoesPurrrApp(
         """Fully shuts down the app from the system tray (thread-safe)."""
         icon.stop()
         self.ui.schedule_on_main_thread(self.quit_app)
+
+    def _minimize_to_desktop_tray(self):
+        """Linux: the tray icon is the UI's (Qt's), not pystray's — the
+        AppImage carries no GTK bindings for pystray, and its X11 fallback
+        finds no tray on Wayland. A desktop without any tray gets the
+        window minimized instead of hidden: hidden with no icon would leave
+        the app running with no way back to it."""
+        if self.ui.show_tray_icon(png_bytes(create_default_icon()),
+                                  APP_NAME,
+                                  self._restore_from_desktop_tray,
+                                  self._quit_from_desktop_tray):
+            self._desktop_tray = True
+            self._tray_glow_bucket = 0
+            self.ui.hide_window()
+        else:
+            self.ui.minimize_window()
+
+    def _restore_from_desktop_tray(self):
+        self._desktop_tray = False
+        self._tray_glow_bucket = 0
+        self.ui.hide_tray_icon()
+        self.ui.show_window()
+
+    def _quit_from_desktop_tray(self):
+        self._desktop_tray = False
+        self.ui.hide_tray_icon()
+        self.quit_app()
 
     def request_restart(self):
         """UI facade: run the normal clean shutdown, then relaunch the

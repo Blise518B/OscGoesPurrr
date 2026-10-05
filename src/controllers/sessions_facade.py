@@ -16,8 +16,6 @@ Wiring contract (see docs/SESSION_LOGGING.md):
 * `quit_app()` calls `stop_session_logging()` so the footer lands.
 """
 
-import os
-import sys
 from typing import Any, Dict, List, Optional
 
 from parameter_store import store
@@ -163,15 +161,8 @@ class SessionsFacade:
         Returns True on success. Defensive: never raises."""
         path = str(SESSIONS_DIR)
         try:
-            if sys.platform.startswith("win"):
-                os.startfile(path)  # type: ignore[attr-defined]
-                return True
-            if sys.platform == "darwin":
-                import subprocess
-                subprocess.Popen(["open", path])
-                return True
-            import subprocess
-            subprocess.Popen(["xdg-open", path])
+            from utilities import open_folder
+            open_folder(path)
             return True
         except Exception as e:
             self.log_message(f"Session folder open failed ({path}): {e}")

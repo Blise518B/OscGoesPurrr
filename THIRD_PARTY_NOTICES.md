@@ -2,15 +2,17 @@
 # Third-party notices
 
 OscGoesPurrr is [MIT](LICENSE)-licensed. It also includes these open-source
-projects, each under its own license.
+projects, each under its own license. The Linux AppImage also carries a few
+system libraries; its copy of this file lists them at the end.
 
-## What the exe contains
+## What the exe and the AppImage contain
 
 | Component | Version | License | Source |
 |---|---|---|---|
 | Python | 3.13.13 | PSF-2.0 | https://www.python.org/ |
 | intiface-engine (Buttplug) | 4.0.2 | BSD-3-Clause; contains evalexpr under AGPL-3.0-only | https://github.com/buttplugio/buttplug/tree/46d830b06b0105b294595fb733ccfce0a72d24ea |
 | PyInstaller bootloader | 6.20.0 | GPL-2.0-or-later WITH Bootloader-exception | https://github.com/pyinstaller/pyinstaller |
+| AppImage runtime (Linux AppImage) | - | MIT; contains libfuse (LGPL-2.1) and squashfuse (BSD-2-Clause) | https://github.com/AppImage/type2-runtime |
 | Aldrich font | - | OFL-1.1 | https://fonts.google.com/specimen/Aldrich |
 | OpenVR driver header (SteamVR toy driver) | 2.15.6 | BSD-3-Clause | https://github.com/ValveSoftware/openvr |
 | annotated-types | 0.7.0 | MIT License | https://github.com/annotated-types/annotated-types |
@@ -41,10 +43,12 @@ projects, each under its own license.
 
 ## Source for intiface-engine
 
-The bundled `intiface-engine.exe` is built, unmodified, from Buttplug commit
+The bundled `intiface-engine` is built, unmodified, from Buttplug commit
 [`46d830b06b01`](https://github.com/buttplugio/buttplug/tree/46d830b06b0105b294595fb733ccfce0a72d24ea)
-by this repository's `tools/rebuild_intiface_engine.bat`, which only adds compiler flags
-that strip build-machine paths. It runs as its own process next to OscGoesPurrr.
+with the dependency versions in this repository's `tools/intiface-engine-Cargo.lock`:
+for Windows by `tools/rebuild_intiface_engine.bat`, for Linux by `tools/build_linux.sh`.
+Both only add compiler flags that strip build-machine paths. It runs as its own
+process next to OscGoesPurrr.
 
 It contains the `evalexpr` crate, licensed AGPL-3.0-only: that commit plus the build script
 are the complete corresponding source for the engine binary, and both stay
@@ -5508,6 +5512,8 @@ covered by the engine's license above; every other crate's notice follows the ta
 
 | Crate | Version | License |
 |---|---|---|
+| addr2line | 0.25.1 | Apache-2.0 OR MIT |
+| adler2 | 2.0.1 | 0BSD OR MIT OR Apache-2.0 |
 | aes | 0.8.4 | MIT OR Apache-2.0 |
 | ahash | 0.8.12 | MIT OR Apache-2.0 |
 | aho-corasick | 1.1.4 | Unlicense OR MIT |
@@ -5529,9 +5535,12 @@ covered by the engine's license above; every other crate's notice follows the ta
 | base64 | 0.22.1 | MIT OR Apache-2.0 |
 | bit-set | 0.8.0 | Apache-2.0 OR MIT |
 | bit-vec | 0.8.0 | Apache-2.0 OR MIT |
+| bitflags | 1.3.2 | MIT/Apache-2.0 |
 | bitflags | 2.11.1 | MIT OR Apache-2.0 |
 | block-buffer | 0.10.4 | MIT OR Apache-2.0 |
 | block-padding | 0.3.3 | MIT OR Apache-2.0 |
+| bluez-async | 0.8.2 | MIT OR Apache-2.0 |
+| bluez-generated | 0.4.0 | MIT OR Apache-2.0 |
 | borrow-or-share | 0.2.4 | MIT-0 |
 | btleplug | 0.12.0 | MIT/Apache-2.0/BSD-3-Clause |
 | buttplug_client | 10.0.2 | BSD-3-Clause |
@@ -5564,6 +5573,8 @@ covered by the engine's license above; every other crate's notice follows the ta
 | darling_macro | 0.20.11 | MIT |
 | dashmap | 6.2.1 | MIT |
 | data-encoding | 2.11.0 | MIT |
+| dbus | 0.9.11 | Apache-2.0/MIT |
+| dbus-tokio | 0.7.6 | Apache-2.0/MIT |
 | derive_builder | 0.20.2 | MIT OR Apache-2.0 |
 | derive_builder_core | 0.20.2 | MIT OR Apache-2.0 |
 | derive_builder_macro | 0.20.2 | MIT OR Apache-2.0 |
@@ -5578,6 +5589,7 @@ covered by the engine's license above; every other crate's notice follows the ta
 | enumflags2 | 0.7.12 | MIT OR Apache-2.0 |
 | enumflags2_derive | 0.7.12 | MIT OR Apache-2.0 |
 | equivalent | 1.0.2 | Apache-2.0 OR MIT |
+| errno | 0.3.14 | MIT OR Apache-2.0 |
 | evalexpr | 13.1.0 | AGPL-3.0-only |
 | fancy-regex | 0.17.0 | MIT |
 | fluent-uri | 0.4.1 | MIT |
@@ -5599,6 +5611,7 @@ covered by the engine's license above; every other crate's notice follows the ta
 | getrandom | 0.3.4 | MIT OR Apache-2.0 |
 | getrandom | 0.4.2 | MIT OR Apache-2.0 |
 | getset | 0.1.6 | MIT |
+| gimli | 0.32.3 | MIT OR Apache-2.0 |
 | hashbrown | 0.14.5 | MIT OR Apache-2.0 |
 | hashbrown | 0.16.1 | MIT OR Apache-2.0 |
 | heck | 0.5.0 | MIT OR Apache-2.0 |
@@ -5612,6 +5625,7 @@ covered by the engine's license above; every other crate's notice follows the ta
 | hyper | 1.10.0 | MIT |
 | hyper-rustls | 0.27.9 | Apache-2.0 OR ISC OR MIT |
 | hyper-util | 0.1.20 | MIT |
+| iana-time-zone | 0.1.65 | MIT OR Apache-2.0 |
 | icu_collections | 2.2.0 | Unicode-3.0 |
 | icu_locale_core | 2.2.0 | Unicode-3.0 |
 | icu_normalizer | 2.2.0 | Unicode-3.0 |
@@ -5631,7 +5645,10 @@ covered by the engine's license above; every other crate's notice follows the ta
 | jsonschema | 0.45.1 | MIT |
 | lazy_static | 1.5.0 | MIT OR Apache-2.0 |
 | libc | 0.2.186 | MIT OR Apache-2.0 |
+| libdbus-sys | 0.2.7 | Apache-2.0/MIT |
 | libmdns | 0.10.1 | MIT |
+| libudev | 0.3.0 | MIT |
+| libudev-sys | 0.1.4 | MIT |
 | litemap | 0.8.2 | Unicode-3.0 |
 | local-ip-address | 0.6.13 | MIT OR Apache-2.0 |
 | lock_api | 0.4.14 | MIT OR Apache-2.0 |
@@ -5644,8 +5661,13 @@ covered by the engine's license above; every other crate's notice follows the ta
 | md-5 | 0.10.6 | MIT OR Apache-2.0 |
 | memchr | 2.8.1 | Unlicense OR MIT |
 | mime | 0.3.17 | MIT OR Apache-2.0 |
+| miniz_oxide | 0.8.9 | MIT OR Zlib OR Apache-2.0 |
 | mio | 1.2.1 | MIT |
 | multimap | 0.10.1 | MIT OR Apache-2.0 |
+| neli | 0.7.4 | BSD-3-Clause |
+| neli-proc-macros | 0.2.2 | BSD-3-Clause |
+| nix | 0.26.4 | MIT |
+| nix | 0.31.3 | MIT |
 | nu-ansi-term | 0.50.3 | MIT |
 | num | 0.4.3 | MIT OR Apache-2.0 |
 | num-bigint | 0.4.6 | MIT OR Apache-2.0 |
@@ -5655,7 +5677,9 @@ covered by the engine's license above; every other crate's notice follows the ta
 | num-iter | 0.1.45 | MIT OR Apache-2.0 |
 | num-rational | 0.4.2 | MIT OR Apache-2.0 |
 | num-traits | 0.2.19 | MIT OR Apache-2.0 |
+| object | 0.37.3 | Apache-2.0 OR MIT |
 | once_cell | 1.21.4 | MIT OR Apache-2.0 |
+| openssl-probe | 0.2.1 | MIT OR Apache-2.0 |
 | ordered-float | 2.10.1 | MIT |
 | outref | 0.5.2 | MIT |
 | owning_ref | 0.4.1 | MIT |
@@ -5693,6 +5717,7 @@ covered by the engine's license above; every other crate's notice follows the ta
 | ring | 0.17.14 | Apache-2.0 AND ISC |
 | rustc-demangle | 0.1.27 | MIT/Apache-2.0 |
 | rustls | 0.23.40 | Apache-2.0 OR ISC OR MIT |
+| rustls-native-certs | 0.8.3 | Apache-2.0 OR ISC OR MIT |
 | rustls-pki-types | 1.14.1 | MIT OR Apache-2.0 |
 | rustls-platform-verifier | 0.7.0 | MIT OR Apache-2.0 |
 | rustls-webpki | 0.103.13 | ISC |
@@ -5702,6 +5727,7 @@ covered by the engine's license above; every other crate's notice follows the ta
 | serde | 1.0.228 | MIT OR Apache-2.0 |
 | serde-aux | 4.7.0 | MIT |
 | serde-value | 0.7.0 | MIT |
+| serde-xml-rs | 0.8.2 | MIT |
 | serde_core | 1.0.228 | MIT OR Apache-2.0 |
 | serde_derive | 1.0.228 | MIT OR Apache-2.0 |
 | serde_json | 1.0.150 | MIT OR Apache-2.0 |
@@ -5712,6 +5738,7 @@ covered by the engine's license above; every other crate's notice follows the ta
 | sha1 | 0.10.6 | MIT OR Apache-2.0 |
 | sha2 | 0.10.9 | MIT OR Apache-2.0 |
 | sharded-slab | 0.1.7 | MIT |
+| signal-hook-registry | 1.4.8 | MIT OR Apache-2.0 |
 | slab | 0.4.12 | MIT |
 | smallvec | 0.6.14 | MIT/Apache-2.0 |
 | smallvec | 1.15.1 | MIT OR Apache-2.0 |
@@ -5751,6 +5778,7 @@ covered by the engine's license above; every other crate's notice follows the ta
 | try-lock | 0.2.5 | MIT |
 | tungstenite | 0.28.0 | MIT OR Apache-2.0 |
 | typenum | 1.20.1 | MIT OR Apache-2.0 |
+| unescaper | 0.1.8 | GPL-3.0/MIT |
 | unicode-general-category | 1.1.0 | Apache-2.0 |
 | unicode-ident | 1.0.24 | (MIT OR Apache-2.0) AND Unicode-3.0 |
 | untrusted | 0.9.0 | ISC |
@@ -5781,6 +5809,7 @@ covered by the engine's license above; every other crate's notice follows the ta
 | windows-threading | 0.2.1 | MIT OR Apache-2.0 |
 | windows_x86_64_msvc | 0.52.6 | MIT OR Apache-2.0 |
 | writeable | 0.6.3 | Unicode-3.0 |
+| xml | 1.3.0 | MIT |
 | yoke | 0.8.2 | Unicode-3.0 |
 | yoke-derive | 0.8.2 | Unicode-3.0 |
 | zerocopy | 0.8.49 | BSD-2-Clause OR Apache-2.0 OR MIT |
@@ -5793,6 +5822,64 @@ covered by the engine's license above; every other crate's notice follows the ta
 | zmij | 1.0.21 | MIT |
 
 ### Crate notices
+
+#### addr2line 0.25.1 (Apache-2.0 OR MIT)
+
+```text
+Copyright (c) 2016-2018 The gimli Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```
+
+#### adler2 2.0.1 (0BSD OR MIT OR Apache-2.0)
+
+```text
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```
 
 #### aes 0.8.4 (MIT OR Apache-2.0)
 
@@ -5882,31 +5969,7 @@ THE SOFTWARE.
 
 #### allocator-api2 0.2.21 (MIT OR Apache-2.0)
 
-```text
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-```
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### ansi_term 0.11.0 (MIT)
 
@@ -5936,7 +5999,7 @@ SOFTWARE.
 
 #### anyhow 1.0.102 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### argh 0.1.19 (BSD-3-Clause)
 
@@ -6040,11 +6103,11 @@ Same notice as async-stream 0.3.6 (MIT).
 
 #### async-trait 0.1.89 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### atomic-waker 1.1.2 (Apache-2.0 OR MIT)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### aws-lc-rs 1.17.0 (ISC AND (Apache-2.0 OR ISC))
 
@@ -6523,7 +6586,7 @@ DEALINGS IN THE SOFTWARE.
 
 Same notice as bit-set 0.8.0 (Apache-2.0 OR MIT).
 
-#### bitflags 2.11.1 (MIT OR Apache-2.0)
+#### bitflags 1.3.2 (MIT/Apache-2.0)
 
 ```text
 Copyright (c) 2014 The Rust Project Developers
@@ -6552,6 +6615,10 @@ OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
 IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
+
+#### bitflags 2.11.1 (MIT OR Apache-2.0)
+
+Same notice as bitflags 1.3.2 (MIT/Apache-2.0).
 
 #### block-buffer 0.10.4 (MIT OR Apache-2.0)
 
@@ -7377,7 +7444,7 @@ DEALINGS IN THE SOFTWARE.
 
 #### ctrlc 3.5.2 (MIT/Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### darling 0.20.11 (MIT)
 
@@ -7465,6 +7532,34 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+
+#### dbus 0.9.11 (Apache-2.0/MIT)
+
+```text
+Copyright (c) 2014-2018 David Henningsson <diwic@ubuntu.com> and other contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+#### dbus-tokio 0.7.6 (Apache-2.0/MIT)
+
+Same notice as dbus 0.9.11 (Apache-2.0/MIT).
 
 #### derive_builder 0.20.2 (MIT OR Apache-2.0)
 
@@ -7562,7 +7657,7 @@ DEALINGS IN THE SOFTWARE.
 
 #### displaydoc 0.2.6 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### ecb 0.1.2 (MIT)
 
@@ -7762,6 +7857,36 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
+#### errno 0.3.14 (MIT OR Apache-2.0)
+
+```text
+Copyright (c) 2014 Chris Wong
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```
+
 #### evalexpr 13.1.0 (AGPL-3.0-only)
 
 Licensed under the GNU Affero General Public License v3.0 -- full text below.
@@ -7904,7 +8029,7 @@ DEALINGS IN THE SOFTWARE.
 
 #### fraction 0.15.4 (MIT OR Apache-2.0)
 
-Same notice as bitflags 2.11.1 (MIT OR Apache-2.0).
+Same notice as bitflags 1.3.2 (MIT/Apache-2.0).
 
 #### futures 0.3.32 (MIT OR Apache-2.0)
 
@@ -8114,6 +8239,36 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+#### gimli 0.32.3 (MIT OR Apache-2.0)
+
+```text
+Copyright (c) 2015 The Rust Project Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```
+
 #### hashbrown 0.14.5 (MIT OR Apache-2.0)
 
 ```text
@@ -8150,33 +8305,7 @@ Same notice as hashbrown 0.14.5 (MIT OR Apache-2.0).
 
 #### heck 0.5.0 (MIT OR Apache-2.0)
 
-```text
-Copyright (c) 2015 The Rust Project Developers
-
-Permission is hereby granted, free of charge, to any
-person obtaining a copy of this software and associated
-documentation files (the "Software"), to deal in the
-Software without restriction, including without
-limitation the rights to use, copy, modify, merge,
-publish, distribute, sublicense, and/or sell copies of
-the Software, and to permit persons to whom the Software
-is furnished to do so, subject to the following
-conditions:
-
-The above copyright notice and this permission notice
-shall be included in all copies or substantial portions
-of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
-ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
-TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
-PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
-SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
-OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
-IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
-DEALINGS IN THE SOFTWARE.
-```
+Same notice as gimli 0.32.3 (MIT OR Apache-2.0).
 
 #### hidapi 2.6.6 (MIT)
 
@@ -8442,6 +8571,36 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
+#### iana-time-zone 0.1.65 (MIT OR Apache-2.0)
+
+```text
+Copyright (c) 2020 Andrew D. Straw
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```
+
 #### icu_collections 2.2.0 (Unicode-3.0)
 
 ```text
@@ -8695,7 +8854,7 @@ Same notice as either 1.16.0 (MIT OR Apache-2.0).
 
 #### itoa 1.0.18 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### jsonschema 0.45.1 (MIT)
 
@@ -8783,6 +8942,10 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
+#### libdbus-sys 0.2.7 (Apache-2.0/MIT)
+
+Same notice as dbus 0.9.11 (Apache-2.0/MIT).
+
 #### libmdns 0.10.1 (MIT)
 
 ```text
@@ -8808,6 +8971,35 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
+
+#### libudev 0.3.0 (MIT)
+
+```text
+Copyright (c) 2015 David Cuddeback
+
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of this software and associated documentation files (the
+"Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish,
+distribute, sublicense, and/or sell copies of the Software, and to
+permit persons to whom the Software is furnished to do so, subject to
+the following conditions:
+
+The above copyright notice and this permission notice shall be
+included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION
+WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+```
+
+#### libudev-sys 0.1.4 (MIT)
+
+Same notice as libudev 0.3.0 (MIT).
 
 #### litemap 0.8.2 (Unicode-3.0)
 
@@ -8875,7 +9067,7 @@ DEALINGS IN THE SOFTWARE.
 
 #### log 0.4.30 (MIT OR Apache-2.0)
 
-Same notice as bitflags 2.11.1 (MIT OR Apache-2.0).
+Same notice as bitflags 1.3.2 (MIT/Apache-2.0).
 
 #### log-panics 2.1.0 (MIT/Apache-2.0)
 
@@ -9051,6 +9243,35 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
+#### miniz_oxide 0.8.9 (MIT OR Zlib OR Apache-2.0)
+
+```text
+MIT License
+
+Copyright 2013-2014 RAD Game Tools and Valve Software
+Copyright 2010-2014 Rich Geldreich and Tenacious Software LLC
+Copyright (c) 2017 Frommi
+Copyright (c) 2017-2024 oyvindln
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 #### mio 1.2.1 (MIT)
 
 ```text
@@ -9105,6 +9326,74 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ```
 
+#### neli 0.7.4 (BSD-3-Clause)
+
+```text
+BSD 3-Clause License
+
+Copyright (c) 2017, John Baublitz
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+* Redistributions of source code must retain the above copyright notice, this
+  list of conditions and the following disclaimer.
+
+* Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+* Neither the name of the copyright holder nor the names of its
+  contributors may be used to endorse or promote products derived from
+  this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
+
+#### neli-proc-macros 0.2.2 (BSD-3-Clause)
+
+Same notice as neli 0.7.4 (BSD-3-Clause).
+
+#### nix 0.26.4 (MIT)
+
+```text
+The MIT License (MIT)
+
+Copyright (c) 2015 Carl Lerche + nix-rust Authors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+THE SOFTWARE.
+```
+
+#### nix 0.31.3 (MIT)
+
+Same notice as nix 0.26.4 (MIT).
+
 #### nu-ansi-term 0.50.3 (MIT)
 
 ```text
@@ -9134,11 +9423,11 @@ SOFTWARE.
 
 #### num 0.4.3 (MIT OR Apache-2.0)
 
-Same notice as bitflags 2.11.1 (MIT OR Apache-2.0).
+Same notice as bitflags 1.3.2 (MIT/Apache-2.0).
 
 #### num-bigint 0.4.6 (MIT OR Apache-2.0)
 
-Same notice as bitflags 2.11.1 (MIT OR Apache-2.0).
+Same notice as bitflags 1.3.2 (MIT/Apache-2.0).
 
 #### num-cmp 0.1.0 (MIT/Apache-2.0)
 
@@ -9536,27 +9825,61 @@ limitations under the License.
 
 #### num-complex 0.4.6 (MIT OR Apache-2.0)
 
-Same notice as bitflags 2.11.1 (MIT OR Apache-2.0).
+Same notice as bitflags 1.3.2 (MIT/Apache-2.0).
 
 #### num-integer 0.1.46 (MIT OR Apache-2.0)
 
-Same notice as bitflags 2.11.1 (MIT OR Apache-2.0).
+Same notice as bitflags 1.3.2 (MIT/Apache-2.0).
 
 #### num-iter 0.1.45 (MIT OR Apache-2.0)
 
-Same notice as bitflags 2.11.1 (MIT OR Apache-2.0).
+Same notice as bitflags 1.3.2 (MIT/Apache-2.0).
 
 #### num-rational 0.4.2 (MIT OR Apache-2.0)
 
-Same notice as bitflags 2.11.1 (MIT OR Apache-2.0).
+Same notice as bitflags 1.3.2 (MIT/Apache-2.0).
 
 #### num-traits 0.2.19 (MIT OR Apache-2.0)
 
-Same notice as bitflags 2.11.1 (MIT OR Apache-2.0).
+Same notice as bitflags 1.3.2 (MIT/Apache-2.0).
+
+#### object 0.37.3 (Apache-2.0 OR MIT)
+
+```text
+Copyright (c) 2015 The Gimli Developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
+```
 
 #### once_cell 1.21.4 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
+
+#### openssl-probe 0.2.1 (MIT OR Apache-2.0)
+
+Same notice as backtrace 0.3.76 (MIT OR Apache-2.0).
 
 #### ordered-float 2.10.1 (MIT)
 
@@ -9650,7 +9973,7 @@ Same notice as lock_api 0.4.14 (MIT OR Apache-2.0).
 
 #### paste 1.0.15 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### percent-encoding 2.3.2 (MIT OR Apache-2.0)
 
@@ -9658,7 +9981,7 @@ Same notice as idna 1.1.0 (MIT OR Apache-2.0).
 
 #### pin-project-lite 0.2.17 (Apache-2.0 OR MIT)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### potential_utf 0.1.5 (Unicode-3.0)
 
@@ -9726,7 +10049,7 @@ Same notice as proc-macro-error-attr2 2.0.0 (MIT OR Apache-2.0).
 
 #### proc-macro2 1.0.106 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### prost 0.14.3 (Apache-2.0)
 
@@ -9738,7 +10061,7 @@ Licensed under the Apache License 2.0 -- full text below.
 
 #### quote 1.0.45 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### rand 0.10.1 (MIT OR Apache-2.0)
 
@@ -9827,11 +10150,11 @@ Same notice as rand 0.10.1 (MIT OR Apache-2.0).
 
 #### ref-cast 1.0.25 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### ref-cast-impl 1.0.25 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### referencing 0.45.1 (MIT)
 
@@ -9839,7 +10162,7 @@ Same notice as jsonschema 0.45.1 (MIT).
 
 #### regex 1.12.3 (MIT OR Apache-2.0)
 
-Same notice as bitflags 2.11.1 (MIT OR Apache-2.0).
+Same notice as bitflags 1.3.2 (MIT/Apache-2.0).
 
 #### regex-automata 0.1.10 (Unlicense/MIT)
 
@@ -9847,19 +10170,19 @@ Same notice as aho-corasick 1.1.4 (Unlicense OR MIT).
 
 #### regex-automata 0.4.14 (MIT OR Apache-2.0)
 
-Same notice as bitflags 2.11.1 (MIT OR Apache-2.0).
+Same notice as bitflags 1.3.2 (MIT/Apache-2.0).
 
 #### regex-lite 0.1.9 (MIT OR Apache-2.0)
 
-Same notice as bitflags 2.11.1 (MIT OR Apache-2.0).
+Same notice as bitflags 1.3.2 (MIT/Apache-2.0).
 
 #### regex-syntax 0.6.29 (MIT OR Apache-2.0)
 
-Same notice as bitflags 2.11.1 (MIT OR Apache-2.0).
+Same notice as bitflags 1.3.2 (MIT/Apache-2.0).
 
 #### regex-syntax 0.8.10 (MIT OR Apache-2.0)
 
-Same notice as bitflags 2.11.1 (MIT OR Apache-2.0).
+Same notice as bitflags 1.3.2 (MIT/Apache-2.0).
 
 #### reqwest 0.13.4 (MIT OR Apache-2.0)
 
@@ -9922,6 +10245,10 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 Same notice as backtrace 0.3.76 (MIT OR Apache-2.0).
 
 #### rustls 0.23.40 (Apache-2.0 OR ISC OR MIT)
+
+Same notice as hyper-rustls 0.27.9 (Apache-2.0 OR ISC OR MIT).
+
+#### rustls-native-certs 0.8.3 (Apache-2.0 OR ISC OR MIT)
 
 Same notice as hyper-rustls 0.27.9 (Apache-2.0 OR ISC OR MIT).
 
@@ -10083,7 +10410,7 @@ DEALINGS IN THE SOFTWARE.
 
 #### serde 1.0.228 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### serde-aux 4.7.0 (MIT)
 
@@ -10135,25 +10462,51 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
+#### serde-xml-rs 0.8.2 (MIT)
+
+```text
+MIT License
+
+Copyright (c) 2017 Ingvar Stepanyan
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 #### serde_core 1.0.228 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### serde_derive 1.0.228 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### serde_json 1.0.150 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### serde_path_to_error 0.1.20 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### serde_repr 0.1.20 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### serde_urlencoded 0.7.1 (MIT/Apache-2.0)
 
@@ -10222,6 +10575,36 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+```
+
+#### signal-hook-registry 1.4.8 (MIT OR Apache-2.0)
+
+```text
+Copyright (c) 2017 tokio-jsonrpc developers
+
+Permission is hereby granted, free of charge, to any
+person obtaining a copy of this software and associated
+documentation files (the "Software"), to deal in the
+Software without restriction, including without
+limitation the rights to use, copy, modify, merge,
+publish, distribute, sublicense, and/or sell copies of
+the Software, and to permit persons to whom the Software
+is furnished to do so, subject to the following
+conditions:
+
+The above copyright notice and this permission notice
+shall be included in all copies or substantial portions
+of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF
+ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED
+TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT
+SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
+CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR
+IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
+DEALINGS IN THE SOFTWARE.
 ```
 
 #### slab 0.4.12 (MIT)
@@ -10442,7 +10825,7 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 #### syn 2.0.117 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### sync_wrapper 1.0.2 (Apache-2.0)
 
@@ -10462,11 +10845,11 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 
 #### thiserror 2.0.18 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### thiserror-impl 2.0.18 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### thread_local 1.1.9 (MIT OR Apache-2.0)
 
@@ -10790,6 +11173,32 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+#### unescaper 0.1.8 (GPL-3.0/MIT)
+
+```text
+MIT License
+
+Copyright (c) 2023 Hack Ink
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 #### unicode-general-category 1.1.0 (Apache-2.0)
 
 Licensed under the Apache License 2.0 -- full text below.
@@ -10798,7 +11207,7 @@ Licensed under the Apache License 2.0 -- full text below.
 
 Licensed under the Apache License 2.0 -- full text below.
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 ```text
 UNICODE LICENSE V3
@@ -10866,7 +11275,7 @@ Same notice as idna 1.1.0 (MIT OR Apache-2.0).
 
 #### utf-8 0.7.6 (MIT OR Apache-2.0)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 #### utf8_iter 1.0.4 (Apache-2.0 OR MIT)
 
@@ -11137,6 +11546,32 @@ Same notice as windows 0.62.2 (MIT OR Apache-2.0).
 
 Same notice as icu_collections 2.2.0 (Unicode-3.0).
 
+#### xml 1.3.0 (MIT)
+
+```text
+The MIT License (MIT)
+
+Copyright (c) 2014 Vladimir Matveev
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 #### yoke 0.8.2 (Unicode-3.0)
 
 Same notice as icu_collections 2.2.0 (Unicode-3.0).
@@ -11223,7 +11658,7 @@ Same notice as icu_collections 2.2.0 (Unicode-3.0).
 
 #### zmij 1.0.21 (MIT)
 
-Same notice as allocator-api2 0.2.21 (MIT OR Apache-2.0).
+Same notice as adler2 2.0.1 (0BSD OR MIT OR Apache-2.0).
 
 
 ## License texts

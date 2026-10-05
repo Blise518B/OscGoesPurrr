@@ -159,6 +159,10 @@ class OscGoesPurrrUI(
 
         # Bootstrap QApplication (singleton — re-use if one already exists).
         self.qapp: QApplication = QApplication.instance() or QApplication(sys.argv)
+        if sys.platform.startswith("linux"):
+            # Wayland docks find the window's icon through the .desktop file
+            # of this name — the one the AppImage carries.
+            self.qapp.setDesktopFileName(APP_NAME)
         _theme.install_fonts()
         self.qapp.setStyleSheet(GLOBAL_QSS)
         # Rich-text links (update notice, update window) in the accent, not
@@ -1040,6 +1044,61 @@ class OscGoesPurrrUI(
             self.window.activateWindow(),
             self.window.raise_(),
         ))
+
+    def minimize_window(self) -> None:
+        self.window.showMinimized()
+
+    # --- Tray icon (Linux). Windows keeps the controller's pystray icon;
+    # --- pystray's Linux backends need GTK bindings or an X11 tray, and
+    # --- Qt's speaks the StatusNotifier protocol KDE and GNOME's
+    # --- AppIndicator extension use. Callbacks run on the GUI thread.
+
+    def show_tray_icon(self, png: bytes, tooltip: str,
+                       on_restore: Callable[[], None],
+                       on_quit: Callable[[], None]) -> bool:
+        """Show a tray icon (PNG bytes) with Show / Quit. False, changing
+        nothing, when the desktop has no tray to show it in."""
+        from PySide6.QtWidgets import QMenu, QSystemTrayIcon
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return False
+        if getattr(self, "_tray", None) is None:
+            tray = QSystemTrayIcon(self.window)
+            menu = QMenu()
+            menu.addAction(f"Show {APP_NAME}",
+                           lambda: self._tray_callback("restore"))
+            menu.addAction("Quit", lambda: self._tray_callback("quit"))
+            tray.setContextMenu(menu)
+            tray.activated.connect(self._on_tray_activated)
+            self._tray, self._tray_menu = tray, menu
+        self._tray_callbacks = {"restore": on_restore, "quit": on_quit}
+        self.set_tray_icon(png)
+        self._tray.setToolTip(tooltip)
+        self._tray.show()
+        return True
+
+    def set_tray_icon(self, png: bytes) -> None:
+        tray = getattr(self, "_tray", None)
+        if tray is None:
+            return
+        pixmap = QPixmap()
+        if pixmap.loadFromData(png, "PNG"):
+            tray.setIcon(QIcon(pixmap))
+
+    def hide_tray_icon(self) -> None:
+        tray = getattr(self, "_tray", None)
+        if tray is not None:
+            tray.hide()
+
+    def _on_tray_activated(self, reason) -> None:
+        from PySide6.QtWidgets import QSystemTrayIcon
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger,
+                      QSystemTrayIcon.ActivationReason.DoubleClick):
+            self._tray_callback("restore")
+
+    def _tray_callback(self, which: str) -> None:
+        callback = getattr(self, "_tray_callbacks", {}).get(which)
+        if callable(callback):
+            callback()
 
     def run(self) -> None:
         self.window.show()

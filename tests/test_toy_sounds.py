@@ -144,7 +144,76 @@ def test_volume_zero_plays_nothing(fake_winsound):
 
 def test_play_never_raises_without_winsound(monkeypatch):
     monkeypatch.setattr(toy_sounds, "winsound", None)
+    monkeypatch.setattr(toy_sounds, "find_player", lambda: None)
     toy_sounds.play(toy_sounds.CONNECTED)
+
+
+# ---------------------------------------------------------------- Linux
+
+
+class _FakeProc:
+    def __init__(self, cmd, **kwargs):
+        self.cmd, self.kwargs = cmd, kwargs
+        self.terminated = False
+        self.running = True
+
+    def poll(self):
+        return None if self.running else 0
+
+    def terminate(self):
+        self.terminated = True
+
+    def wait(self, timeout=None):
+        return 0
+
+
+@pytest.fixture
+def fake_player(monkeypatch):
+    """No winsound (Linux): play() hands a WAV file to the desktop's
+    player, inline and without spawning anything real."""
+    spawned = []
+
+    def _popen(cmd, **kwargs):
+        proc = _FakeProc(cmd, **kwargs)
+        spawned.append(proc)
+        return proc
+
+    monkeypatch.setattr(toy_sounds, "winsound", None)
+    monkeypatch.setattr(toy_sounds, "find_player", lambda: ("/usr/bin/pw-play",))
+    monkeypatch.setattr(toy_sounds.threading, "Thread", _InlineThread)
+    monkeypatch.setattr(toy_sounds.subprocess, "Popen", _popen)
+    monkeypatch.setattr(toy_sounds, "_player_proc", None)
+    return spawned
+
+
+def test_linux_plays_the_chime_file_through_the_player(fake_player):
+    toy_sounds.play(toy_sounds.CONNECTED, 80)
+    (proc,) = fake_player
+    assert proc.cmd[0] == "/usr/bin/pw-play"
+    with open(proc.cmd[-1], "rb") as fh:
+        assert fh.read() == toy_sounds.chime_wav(toy_sounds.CONNECTED, 80)
+
+
+def test_linux_newer_chime_cuts_off_the_one_playing(fake_player):
+    toy_sounds.play(toy_sounds.CONNECTED, 80)
+    toy_sounds.play(toy_sounds.DISCONNECTED, 80)
+    first, second = fake_player
+    assert first.terminated and not second.terminated
+
+
+def test_linux_volume_zero_spawns_nothing(fake_player):
+    toy_sounds.play(toy_sounds.CONNECTED, 0)
+    assert fake_player == []
+
+
+def test_player_preference_order(monkeypatch):
+    toy_sounds.find_player.cache_clear()
+    monkeypatch.setattr(toy_sounds.shutil, "which",
+                        lambda name: f"/usr/bin/{name}" if name != "pw-play" else None)
+    try:
+        assert toy_sounds.find_player() == ("/usr/bin/paplay",)
+    finally:
+        toy_sounds.find_player.cache_clear()
 
 
 # ---------------------------------------------------------------- facade

@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Union
+from typing import Any, Optional, Union
 
 
 def atomic_write_json(path: Union[str, Path], data: Any, **dumps_kwargs) -> None:
@@ -128,9 +128,22 @@ def value_to_hex_color(value: Any) -> str:
     return "#ffffff"
 
 
+def running_appimage() -> Optional[str]:
+    """Path of the AppImage this process was started from, or None.
+
+    The Linux release is an AppImage: the runtime mounts it and runs the
+    app from that mount, and names the file itself in $APPIMAGE. That
+    file, not sys.executable, is what a restart starts and what an update
+    replaces — the mount disappears the moment this process exits."""
+    if sys.platform == "win32" or not getattr(sys, "frozen", False):
+        return None
+    path = os.environ.get("APPIMAGE", "")
+    return path if path and os.path.isfile(path) else None
+
+
 def relaunch_self() -> None:
-    """Spawn a fresh copy of the running app — the frozen exe when
-    bundled, `python main.py` in dev — with the same arguments and
+    """Spawn a fresh copy of the running app — the AppImage or frozen exe
+    when bundled, `python main.py` in dev — with the same arguments and
     working directory.
 
     Must be called only AFTER the Qt event loop has exited and the
@@ -140,7 +153,11 @@ def relaunch_self() -> None:
     quit."""
     try:
         env = None
-        if getattr(sys, "frozen", False):
+        appimage = running_appimage()
+        if appimage:
+            cmd = [appimage] + sys.argv[1:]
+            env = fresh_instance_env()
+        elif getattr(sys, "frozen", False):
             cmd = [sys.executable] + sys.argv[1:]
             env = fresh_instance_env()
         else:
@@ -158,7 +175,43 @@ def fresh_instance_env() -> dict:
     exit, so the new instance dies on its first compiled import
     ("No module named 'pydantic_core._pydantic_core'"). This makes it
     unpack its own copy (PyInstaller >= 6.9)."""
-    return dict(os.environ, PYINSTALLER_RESET_ENVIRONMENT="1")
+    return dict(system_env(), PYINSTALLER_RESET_ENVIRONMENT="1")
+
+
+def system_env() -> dict:
+    """Environment for starting a program that is not part of this app —
+    the file browser, a sound player, the Intiface engine.
+
+    A frozen Linux build points LD_LIBRARY_PATH (and Qt's plugin path) at
+    the libraries bundled inside it. A system program that inherits that
+    loads our copies instead of its own: xdg-open opening Dolphin, itself a
+    Qt app, can crash on our Qt plugins. PyInstaller keeps the original
+    value as <NAME>_ORIG; put it back, and drop anything else that points
+    into the bundle. Windows finds DLLs differently, so it gets the
+    environment unchanged."""
+    env = dict(os.environ)
+    if sys.platform == "win32" or not getattr(sys, "frozen", False):
+        return env
+    bundle = getattr(sys, "_MEIPASS", "") or os.path.dirname(sys.executable)
+    for key in [k for k in env if k.endswith("_ORIG")]:
+        env[key[:-len("_ORIG")]] = env.pop(key)
+    for key, value in list(env.items()):
+        if key.startswith("_PYI") or (bundle and bundle in value):
+            del env[key]
+    return env
+
+
+def open_folder(path: Union[str, Path]) -> None:
+    """Show `path` in the system's file browser — Explorer, or whatever
+    xdg-open picks on Linux. Raises on failure; the callers log it."""
+    path = str(path)
+    if sys.platform == "win32":
+        os.startfile(path)  # type: ignore[attr-defined]
+        return
+    opener = "open" if sys.platform == "darwin" else "xdg-open"
+    subprocess.Popen([opener, path], env=system_env(),
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL, start_new_session=True)
 
 
 def process_alive(pid: int) -> bool:
@@ -292,3 +345,12 @@ def create_default_icon(tint: str = None):
         except Exception:
             pass
     return image
+
+
+def png_bytes(image) -> bytes:
+    """A PIL image as PNG file bytes — how the controller hands the tray
+    icon to the UI without touching Qt itself."""
+    import io
+    buf = io.BytesIO()
+    image.save(buf, "PNG")
+    return buf.getvalue()

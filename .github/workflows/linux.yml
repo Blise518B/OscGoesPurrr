@@ -1,0 +1,101 @@
+# Builds the Linux AppImage for every release and attaches it.
+#
+# tools\release.bat creates the release on Blise518B/OscGoesPurrr with the
+# Windows exe; that "published" event starts this job, which builds
+# OscGoesPurrr-Linux-x86_64.AppImage (+ .zsync) from the release's tag with
+# tools/build_linux.sh and uploads both to the same release. The names
+# never change, so releases/latest/download/OscGoesPurrr-Linux-x86_64.AppImage
+# always resolves and the in-app updater (updater.pick_exe_asset) finds it.
+#
+# Run it by hand (Actions -> Linux AppImage -> Run workflow) to rebuild:
+# with a tag it replaces that release's AppImage, without one it only
+# keeps the build as a workflow artifact.
+name: Linux AppImage
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach the AppImage to (empty: build only)"
+        required: false
+        default: ""
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+
+jobs:
+  appimage:
+    # The oldest Ubuntu GitHub still offers: the AppImage needs a glibc at
+    # least as new as the one it was built against, so an older base runs
+    # on more distros.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag || github.ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: System packages
+        run: |
+          sudo apt-get update -y
+          # engine: pkg-config + D-Bus (Bluetooth) + udev (serial / HID).
+          # The rest are the libraries Qt's X11 platform plugin loads;
+          # PyInstaller bundles what it finds here.
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libdbus-1-dev libudev-dev file \
+            libegl1 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-shape0 libxcb-xinerama0 libxcb-xkb1 libwayland-cursor0 \
+            libwayland-egl1
+
+      - name: Which Buttplug commit the engine comes from
+        id: engine
+        run: |
+          commit=$(grep -oE 'buttplug/tree/[0-9a-f]{40}' THIRD_PARTY_NOTICES.md | head -n1 | cut -d/ -f3)
+          test -n "$commit"
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+
+      # The engine only changes with the commit the notice names or its
+      # Cargo.lock; the ~10 minute Rust build runs once per pair.
+      - name: Cached engine
+        id: engine-cache
+        uses: actions/cache@v4
+        with:
+          path: src/intiface-engine/intiface-engine
+          key: intiface-engine-linux-x86_64-${{ steps.engine.outputs.commit }}-${{ hashFiles('tools/intiface-engine-Cargo.lock') }}
+
+      - name: Rust
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+
+      - name: Build
+        run: bash tools/build_linux.sh
+        env:
+          PYTHON: python
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: OscGoesPurrr-Linux
+          path: |
+            dist/OscGoesPurrr-Linux-x86_64.AppImage
+            dist/OscGoesPurrr-Linux-x86_64.AppImage.zsync
+          retention-days: 30
+
+      - name: Attach to the release
+        if: github.event_name == 'release' || inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          gh release upload "$TAG" --clobber \
+            dist/OscGoesPurrr-Linux-x86_64.AppImage \
+            dist/OscGoesPurrr-Linux-x86_64.AppImage.zsync

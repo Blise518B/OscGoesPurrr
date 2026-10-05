@@ -60,6 +60,14 @@ def fake_requests(monkeypatch):
     return _install
 
 
+def _pick_windows(assets):
+    return updater.pick_exe_asset(assets, platform="win32")
+
+
+def _apply_windows(downloaded, target):
+    return updater.apply_update(downloaded, target, platform="win32")
+
+
 def _asset(body: bytes, *, with_digest=True, size=None, url=None):
     return {
         "name": "OscGoesPurrr_0.9.1.exe",
@@ -74,7 +82,7 @@ def _asset(body: bytes, *, with_digest=True, size=None, url=None):
 
 class TestPickExeAsset:
     def test_picks_the_windows_exe(self):
-        got = updater.pick_exe_asset([
+        got = _pick_windows([
             {"name": "source.zip",
              "browser_download_url": "https://x/source.zip", "size": 1},
             {"name": "OscGoesPurrr_0.9.1.exe",
@@ -88,7 +96,7 @@ class TestPickExeAsset:
         # release.bat uploads the exe as OscGoesPurrr-Windows.exe so the
         # README's releases/latest/download/... button always resolves.
         # Copies already installed must still find it.
-        got = updater.pick_exe_asset([{
+        got = _pick_windows([{
             "name": "OscGoesPurrr-Windows.exe",
             "browser_download_url": "https://x/OscGoesPurrr-Windows.exe",
             "size": 7,
@@ -109,7 +117,7 @@ class TestPickExeAsset:
 
     def test_parses_a_sha256_digest(self):
         digest = "a" * 64
-        got = updater.pick_exe_asset([{
+        got = _pick_windows([{
             "name": "OscGoesPurrr.exe",
             "browser_download_url": "https://x/OscGoesPurrr.exe",
             "size": 1, "digest": f"sha256:{digest}",
@@ -117,7 +125,7 @@ class TestPickExeAsset:
         assert got["sha256"] == digest
 
     def test_ignores_a_digest_that_is_not_sha256(self):
-        got = updater.pick_exe_asset([{
+        got = _pick_windows([{
             "name": "OscGoesPurrr.exe",
             "browser_download_url": "https://x/OscGoesPurrr.exe",
             "size": 1, "digest": "md5:abc",
@@ -127,20 +135,20 @@ class TestPickExeAsset:
     def test_rejects_a_non_https_url(self):
         # A plain-http asset URL would be a downgrade on a binary we are
         # about to execute; no asset is better than that one.
-        assert updater.pick_exe_asset([{
+        assert _pick_windows([{
             "name": "OscGoesPurrr.exe",
             "browser_download_url": "http://x/OscGoesPurrr.exe", "size": 1,
         }]) is None
 
     def test_ignores_someone_elses_exe(self):
-        assert updater.pick_exe_asset([{
+        assert _pick_windows([{
             "name": "SomethingElse.exe",
             "browser_download_url": "https://x/SomethingElse.exe", "size": 1,
         }]) is None
 
     @pytest.mark.parametrize("assets", [None, [], "nope", [None], [{}]])
     def test_junk_asset_lists_yield_none(self, assets):
-        assert updater.pick_exe_asset(assets) is None
+        assert _pick_windows(assets) is None
 
 
 # ---------------------------------------------------------------- download
@@ -232,8 +240,8 @@ class TestDownloadUpdate:
 def _temp_exe_count() -> int:
     import glob
     import tempfile
-    return len(glob.glob(os.path.join(tempfile.gettempdir(),
-                                      "OscGoesPurrr_update_*.exe")))
+    return len(glob.glob(os.path.join(
+        tempfile.gettempdir(), "OscGoesPurrr_update_*" + updater._DOWNLOAD_SUFFIX)))
 
 
 # ---------------------------------------------------------------- apply
@@ -278,7 +286,7 @@ class TestApplyUpdate:
             raise OSError("cmd.exe missing")
 
         monkeypatch.setattr(updater.subprocess, "Popen", _boom)
-        assert updater.apply_update(str(new), str(target)) is False
+        assert _apply_windows(str(new), str(target)) is False
         assert target.read_bytes() == b"old"
 
     def test_helper_gets_target_download_and_lock(self, tmp_path, monkeypatch):
@@ -294,7 +302,7 @@ class TestApplyUpdate:
             return object()
 
         monkeypatch.setattr(updater.subprocess, "Popen", _fake_popen)
-        assert updater.apply_update(str(new), str(target)) is True
+        assert _apply_windows(str(new), str(target)) is True
 
         args = captured["args"]
         assert args[0] == "cmd.exe"
@@ -326,7 +334,7 @@ class TestApplyUpdate:
         captured = {}
         monkeypatch.setattr(updater.subprocess, "Popen",
                             lambda args, **kw: captured.setdefault("args", args))
-        assert updater.apply_update(str(new), str(target)) is True
+        assert _apply_windows(str(new), str(target)) is True
 
         lock = captured["args"][5]
         assert os.path.isfile(lock)
@@ -344,7 +352,7 @@ class TestApplyUpdate:
         captured = {}
         monkeypatch.setattr(updater.subprocess, "Popen",
                             lambda args, **kw: captured.setdefault("args", args))
-        updater.apply_update(str(new), str(target))
+        _apply_windows(str(new), str(target))
         with open(captured["args"][2], encoding="ascii") as fh:
             script = fh.read()
         # The wait must come first and must be able to give up without
@@ -376,5 +384,112 @@ class TestIsSelfUpdatable:
         # frozen but no _MEIPASS = --onedir, where replacing one file
         # would leave the app half-updated.
         monkeypatch.setattr(updater.sys, "frozen", True, raising=False)
+        monkeypatch.setattr(updater.sys, "platform", "win32")
         monkeypatch.delattr(updater.sys, "_MEIPASS", raising=False)
+        assert updater.is_self_updatable() is False
+
+    def test_windows_needs_no_relaunch_from_the_app(self):
+        # The swap helper starts the new exe itself.
+        assert updater.relaunch_after_apply("win32") is False
+
+
+# ---------------------------------------------------------------- Linux
+
+
+class TestLinuxAppImage:
+    """The Linux release is an AppImage: the asset, the swap and the
+    restart differ from Windows; download and verification are shared."""
+
+    _ASSETS = [
+        {"name": "OscGoesPurrr-Windows.exe",
+         "browser_download_url": "https://x/OscGoesPurrr-Windows.exe", "size": 9},
+        {"name": "OscGoesPurrr-Linux-x86_64.AppImage.zsync",
+         "browser_download_url": "https://x/a.zsync", "size": 2},
+        {"name": "OscGoesPurrr-Linux-x86_64.AppImage",
+         "browser_download_url": "https://x/OscGoesPurrr-Linux-x86_64.AppImage",
+         "size": 5},
+    ]
+
+    def test_linux_picks_the_appimage_not_the_exe_or_zsync(self):
+        got = updater.pick_exe_asset(self._ASSETS, platform="linux")
+        assert got["name"] == "OscGoesPurrr-Linux-x86_64.AppImage"
+        assert got["size"] == 5
+
+    def test_windows_still_picks_the_exe_from_the_same_release(self):
+        assert _pick_windows(self._ASSETS)["name"] == "OscGoesPurrr-Windows.exe"
+
+    def test_a_release_without_the_appimage_yet_has_no_linux_asset(self):
+        # release.bat publishes the exe first; the AppImage arrives from
+        # GitHub Actions minutes later.
+        assert updater.pick_exe_asset(self._ASSETS[:1], platform="linux") is None
+
+    def test_the_download_button_and_workflow_agree_on_the_name(self):
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+        def read(*parts):
+            with open(os.path.join(repo, *parts), encoding="utf-8") as fh:
+                return fh.read()
+
+        name = "OscGoesPurrr-Linux-x86_64.AppImage"
+        assert f"releases/latest/download/{name}" in read("README.md")
+        assert f"releases/latest/download/{name}" in read("docs", "index.html")
+        assert f"dist/{name}" in read(".github", "workflows", "linux.yml")
+        assert 'OUT_NAME="$APP-Linux-$ARCH.AppImage"' in read("tools", "build_linux.sh")
+
+    def test_swap_replaces_the_appimage_and_keeps_it_runnable(self, tmp_path):
+        new = tmp_path / "download.AppImage"
+        new.write_bytes(b"new")
+        target = tmp_path / "OscGoesPurrr.AppImage"
+        target.write_bytes(b"old")
+        os.chmod(target, 0o755)
+        assert updater.apply_update(str(new), str(target), platform="linux") is True
+        assert target.read_bytes() == b"new"
+        assert not new.exists()                         # download tidied up
+        assert not (tmp_path / "OscGoesPurrr.AppImage.update").exists()
+        if os.name == "posix":
+            assert os.stat(target).st_mode & 0o111 == 0o111
+
+    def test_a_failed_swap_leaves_the_old_appimage(self, tmp_path, monkeypatch):
+        new = tmp_path / "download.AppImage"
+        new.write_bytes(b"new")
+        target = tmp_path / "OscGoesPurrr.AppImage"
+        target.write_bytes(b"old")
+
+        def _boom(*a, **k):
+            raise OSError("disk full")
+
+        monkeypatch.setattr(updater.os, "replace", _boom)
+        assert updater.apply_update(str(new), str(target), platform="linux") is False
+        assert target.read_bytes() == b"old"
+        assert not (tmp_path / "OscGoesPurrr.AppImage.update").exists()
+        assert new.exists()                             # still there to retry
+
+    def test_linux_spawns_no_helper(self, tmp_path, monkeypatch):
+        new = tmp_path / "download.AppImage"
+        new.write_bytes(b"new")
+        target = tmp_path / "OscGoesPurrr.AppImage"
+        target.write_bytes(b"old")
+
+        def _no_spawn(*a, **k):
+            raise AssertionError("Linux swaps in place; nothing to spawn")
+
+        monkeypatch.setattr(updater.subprocess, "Popen", _no_spawn)
+        assert updater.apply_update(str(new), str(target), platform="linux") is True
+
+    def test_linux_restarts_itself_after_the_swap(self):
+        assert updater.relaunch_after_apply("linux") is True
+
+    def test_an_appimage_in_a_writable_folder_can_update(self, tmp_path, monkeypatch):
+        appimage = tmp_path / "OscGoesPurrr.AppImage"
+        appimage.write_bytes(b"x")
+        monkeypatch.setattr(updater.sys, "frozen", True, raising=False)
+        monkeypatch.setattr(updater.sys, "platform", "linux")
+        monkeypatch.setenv("APPIMAGE", str(appimage))
+        assert updater.is_self_updatable() is True
+        assert updater.current_exe_path() == os.path.abspath(str(appimage))
+
+    def test_frozen_linux_outside_an_appimage_cannot(self, monkeypatch):
+        monkeypatch.setattr(updater.sys, "frozen", True, raising=False)
+        monkeypatch.setattr(updater.sys, "platform", "linux")
+        monkeypatch.delenv("APPIMAGE", raising=False)
         assert updater.is_self_updatable() is False

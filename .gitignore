@@ -146,3 +146,7 @@ Thumbs.db
 # (~2 GB, carries its own .git) that rebuild_intiface_engine.bat clones
 # and builds. Local scratch space, not source.
 /_engine_build/
+
+# Linux build workspace (tools/build_linux.sh): venv, PyInstaller output,
+# the AppDir, appimagetool and the Buttplug checkout for the engine.
+/_linux_build/

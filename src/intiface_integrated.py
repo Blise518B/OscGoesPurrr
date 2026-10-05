@@ -14,7 +14,7 @@ What this module owns (and the External provider does not):
     _MEIPASS),
   * launching it with no flashing console window,
   * keeping it from being orphaned if OscGoesPurrr crashes (Windows Job
-    Object with kill-on-close),
+    Object with kill-on-close; on Linux the kernel's parent-death signal),
   * waiting until its websocket is actually serving before we dial it,
   * tearing it down on disconnect / app quit.
 
@@ -28,6 +28,7 @@ or flip the Settings toggle back to External mode.
 from __future__ import annotations
 
 import asyncio
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -156,6 +157,52 @@ async def _await_engine_startup(
                 f"{_read_tail(log_path)}"
             )
         await asyncio.sleep(0.15)
+
+
+# --------------------------------------------------------------------------- Linux
+
+
+def _ensure_executable(path: Path) -> None:
+    """Give the engine binary its exec bit if it lost it. The Linux build
+    sets it, but a git checkout or a copied folder can drop it, and a
+    binary without it fails with a bare "Permission denied". Best-effort:
+    on a read-only mount (the AppImage) it is already set."""
+    if _IS_WINDOWS:
+        return
+    try:
+        mode = path.stat().st_mode
+        if not mode & stat.S_IXUSR:
+            path.chmod(mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    except OSError:
+        pass
+
+
+def _die_with_parent():
+    """Linux's stand-in for the Windows job object below: a preexec hook
+    that asks the kernel to SIGTERM the engine when the thread that started
+    it — our long-lived asyncio thread — ends, crash included. Without it a
+    crashed app leaves the engine holding the Bluetooth adapter and the
+    websocket port, and the next launch's engine can't start.
+
+    The hook runs in the forked child before exec, so it only makes the one
+    prctl call; everything it needs is looked up here, beforehand. None
+    (no hook) off Linux or if libc can't be reached."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        import ctypes
+        import signal
+
+        prctl = ctypes.CDLL(None, use_errno=True).prctl
+        sigterm = int(signal.SIGTERM)
+    except Exception:
+        return None
+    PR_SET_PDEATHSIG = 1
+
+    def _set_pdeathsig() -> None:
+        prctl(PR_SET_PDEATHSIG, sigterm, 0, 0, 0)
+
+    return _set_pdeathsig
 
 
 # --------------------------------------------------------------------------- Windows job object
@@ -331,12 +378,19 @@ class IntegratedIntifaceConnection:
         except OSError:
             self._logf = None  # logging the engine is best-effort
 
+        _ensure_executable(engine)
+        from utilities import system_env
+
         self._proc = subprocess.Popen(
             args,
             stdout=self._logf or subprocess.DEVNULL,
             stderr=subprocess.STDOUT,
             cwd=str(engine.parent),
             creationflags=creationflags,
+            # The engine is its own program: on Linux it must load the
+            # system's libraries (D-Bus for Bluetooth), not the bundle's.
+            env=system_env(),
+            preexec_fn=_die_with_parent(),
         )
         self._job = _assign_to_job(self._proc)
 

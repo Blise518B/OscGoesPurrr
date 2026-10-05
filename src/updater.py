@@ -13,17 +13,25 @@
 #      exit, swaps the new exe over the running one, relaunches it and
 #      deletes itself. The app then quits normally.
 #
+# Linux ships an AppImage instead, and steps 1-2 are the same with the
+# .AppImage asset. Step 3 is simpler there: Linux lets a running program's
+# file be replaced (the running copy keeps the old file open until it
+# exits), so apply_update swaps it in place and the app restarts itself
+# (relaunch_after_apply()).
+#
 # Failure model: nothing here may raise into the caller. Every function
 # returns a plain result (None / False / a message) so a failed update is
 # an inconvenience, never a crash — and never a half-replaced exe. The swap
 # only ever happens after the download has been fully verified.
 #
-# Only meaningful for a frozen PyInstaller --onefile build. From a source
-# checkout there is no single file to swap, so is_self_updatable() is False
-# and the UI falls back to opening the release page.
+# Only meaningful for a frozen PyInstaller --onefile build, or an AppImage.
+# From a source checkout there is no single file to swap, so
+# is_self_updatable() is False and the UI falls back to opening the
+# release page.
 
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -45,41 +53,84 @@ _CHUNK = 256 * 1024
 # build and far below anything worth writing to a user's disk by surprise.
 _MAX_ASSET_BYTES = 400 * 1024 * 1024
 
+# The downloaded file's extension, so a download left behind is
+# recognisable for what it is.
+_DOWNLOAD_SUFFIX = ".exe" if sys.platform == "win32" else ".AppImage"
+
 # Open handle on the liveness lock the swap helper waits for. Module-level
 # so it survives apply_update() returning -- the whole point is that the
 # OS, not us, closes it when this process finally goes away.
 _lock_handle = None
 
 
+def _is_windows(platform: Optional[str] = None) -> bool:
+    return (platform or sys.platform) == "win32"
+
+
+def _appimage_path() -> Optional[str]:
+    """The AppImage file a frozen Linux build was started from ($APPIMAGE,
+    set by the AppImage runtime), or None."""
+    path = os.environ.get("APPIMAGE", "")
+    return path if path and os.path.isfile(path) else None
+
+
 def is_self_updatable() -> bool:
-    """True when this process is a frozen single-file exe we can replace.
+    """True when this process is a build we can replace: a frozen
+    single-file exe on Windows, an AppImage in a folder we may write to on
+    Linux.
 
     PyInstaller sets `frozen`; `_MEIPASS` distinguishes a --onefile build
     (unpacked to a temp dir, exe is one self-contained file) from a
     --onedir build, where swapping one file would tear the app in half.
+    The AppImage holds a --onedir build, but the AppImage itself is the one
+    file.
     """
     if not getattr(sys, "frozen", False):
         return False
+    if not _is_windows():
+        path = _appimage_path()
+        # The swap renames a new file over the old one: that needs the
+        # folder to be writable, not just the file.
+        return bool(path) and os.access(os.path.dirname(path), os.W_OK)
     if not hasattr(sys, "_MEIPASS"):
         return False
     return os.path.isfile(sys.executable)
 
 
 def current_exe_path() -> str:
-    """Absolute path of the running exe (the file apply_update replaces)."""
+    """Absolute path of the running exe or AppImage (the file apply_update
+    replaces)."""
+    if not _is_windows():
+        path = _appimage_path()
+        if path:
+            return os.path.abspath(path)
     return os.path.abspath(sys.executable)
 
 
-def _looks_like_our_asset(name: str) -> bool:
+def relaunch_after_apply(platform: Optional[str] = None) -> bool:
+    """Whether the app must start itself again after a successful
+    apply_update. Windows' swap helper relaunches the new exe; on Linux the
+    file is already swapped and nobody else is waiting to start it."""
+    return not _is_windows(platform)
+
+
+def _looks_like_our_asset(name: str, platform: Optional[str] = None) -> bool:
     name = (name or "").lower()
-    return name.endswith(".exe") and "oscgoespurrr" in name
+    if "oscgoespurrr" not in name:
+        return False
+    if _is_windows(platform):
+        return name.endswith(".exe")
+    return name.endswith(".appimage")
 
 
-def pick_exe_asset(assets) -> Optional[dict]:
-    """Choose the downloadable .exe from a release's asset list.
+def pick_exe_asset(assets, platform: Optional[str] = None) -> Optional[dict]:
+    """Choose this platform's download from a release's asset list: the
+    .exe on Windows, the .AppImage on Linux (`platform` overrides
+    sys.platform, for tests).
 
     Returns {"name", "url", "size", "sha256"} or None when the release has
-    no exe attached (a source-only release, or one still uploading).
+    no such file attached (a source-only release, or one still uploading —
+    the AppImage arrives a few minutes after the exe, from GitHub Actions).
     `sha256` is None unless GitHub reported a digest for the asset.
     """
     if not isinstance(assets, (list, tuple)):
@@ -88,7 +139,7 @@ def pick_exe_asset(assets) -> Optional[dict]:
         if not isinstance(asset, dict):
             continue
         name = str(asset.get("name") or "")
-        if not _looks_like_our_asset(name):
+        if not _looks_like_our_asset(name, platform):
             continue
         url = str(asset.get("browser_download_url") or "")
         if not url.lower().startswith("https://"):
@@ -147,7 +198,7 @@ def download_update(asset: dict,
             return None
 
         fd, tmp_path = tempfile.mkstemp(prefix="OscGoesPurrr_update_",
-                                        suffix=".exe")
+                                        suffix=_DOWNLOAD_SUFFIX)
         hasher = hashlib.sha256()
         done = 0
         with os.fdopen(fd, "wb") as fh:
@@ -278,19 +329,28 @@ del "%~f0"
 
 
 def apply_update(downloaded_exe: str,
-                 target_exe: Optional[str] = None) -> bool:
-    """Hand the swap to a detached helper and return.
+                 target_exe: Optional[str] = None,
+                 platform: Optional[str] = None) -> bool:
+    """Install a verified download over the running app.
 
-    The caller must quit the app immediately afterwards: until this process
-    exits, Windows will not let the helper overwrite the exe, and the
-    helper's retry budget is finite. Returns False (having changed nothing)
-    if the helper could not be written or spawned.
+    Windows: hand the swap to a detached helper and return. The caller must
+    quit the app immediately afterwards: until this process exits, Windows
+    will not let the helper overwrite the exe, and the helper's retry
+    budget is finite.
+
+    Linux: the AppImage is replaced right here, and the caller restarts the
+    app (relaunch_after_apply()).
+
+    Returns False (having changed nothing) if the helper could not be
+    written or spawned, or the swap could not be made.
     """
     if not downloaded_exe or not os.path.isfile(downloaded_exe):
         return False
     target = os.path.abspath(target_exe or current_exe_path())
     if not os.path.isfile(target):
         return False
+    if not _is_windows(platform):
+        return _swap_in_place(downloaded_exe, target)
 
     try:
         script_dir = tempfile.mkdtemp(prefix="OscGoesPurrr_swap_")
@@ -335,3 +395,32 @@ def apply_update(downloaded_exe: str,
         except OSError:
             pass
         return False
+
+
+def _swap_in_place(downloaded: str, target: str) -> bool:
+    """Linux: put the new AppImage where the running one is.
+
+    The download is copied next to the target first and then renamed over
+    it: a rename within one folder is atomic, so the AppImage on disk is
+    always either the whole old one or the whole new one, never half of
+    each — even if the copy dies with a full disk. The running app is
+    unaffected; it keeps the old file open until it exits.
+    """
+    staged = target + ".update"
+    try:
+        shutil.copyfile(downloaded, staged)
+        # Keep the old file's permissions, and make sure it can run.
+        mode = os.stat(target).st_mode & 0o777
+        os.chmod(staged, mode | 0o100 | ((mode & 0o044) >> 2))
+        os.replace(staged, target)
+    except Exception:
+        try:
+            os.unlink(staged)
+        except OSError:
+            pass
+        return False
+    try:
+        os.unlink(downloaded)
+    except OSError:
+        pass
+    return True

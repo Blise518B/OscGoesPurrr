@@ -1,20 +1,28 @@
 """Connect / disconnect chimes for toys.
 
 Two short two-note chimes, synthesized in memory: rising (low -> high) when
-a toy connects, falling (high -> low) when one drops. They play through
-Windows' PlaySound on a short-lived daemon thread, so neither the GUI nor
-any haptic path ever waits on audio. Off Windows, `play()` is a no-op.
+a toy connects, falling (high -> low) when one drops. They play on a
+short-lived daemon thread, so neither the GUI nor any haptic path ever
+waits on audio: through Windows' PlaySound, or on Linux through the
+desktop's own player (PipeWire's pw-play, PulseAudio's paplay or ALSA's
+aplay, whichever is there) — no audio library to bundle. With none of
+those, `play()` is a no-op.
 
 Loudness is a 0-100 % volume baked into the samples, so it is the chime's
-own level, independent of (and on top of) the Windows volume.
+own level, independent of (and on top of) the system volume.
 
 Pure stdlib (no Qt) so the controller can own it without breaking the
 visual-decoupling rule.
 """
 
+import atexit
 import io
 import math
+import os
+import shutil
 import struct
+import subprocess
+import tempfile
 import threading
 import wave
 from functools import lru_cache
@@ -24,6 +32,9 @@ try:
     import winsound
 except ImportError:  # not Windows
     winsound = None
+
+# Linux players, best first. Each takes a WAV file name.
+_PLAYERS = (("pw-play", ()), ("paplay", ()), ("aplay", ("-q",)))
 
 CONNECTED = "connected"
 DISCONNECTED = "disconnected"
@@ -114,10 +125,18 @@ def chime_wav(kind: str, volume=DEFAULT_VOLUME) -> bytes:
 def play(kind: str, volume=DEFAULT_VOLUME) -> None:
     """Play the chime for `kind` without waiting for it. A newer chime
     cuts off one still playing; volume 0 plays nothing."""
-    if winsound is None or clamp_volume(volume) == 0:
+    if clamp_volume(volume) == 0:
         return
-    data = chime_wav(kind, volume)
-    threading.Thread(target=_play_blocking, args=(data,),
+    if winsound is not None:
+        data = chime_wav(kind, volume)
+        threading.Thread(target=_play_blocking, args=(data,),
+                         name="toy-chime", daemon=True).start()
+        return
+    player = find_player()
+    if player is None:
+        return
+    threading.Thread(target=_play_with_player,
+                     args=(player, kind, clamp_volume(volume)),
                      name="toy-chime", daemon=True).start()
 
 
@@ -127,3 +146,53 @@ def _play_blocking(data: bytes) -> None:
         winsound.PlaySound(data, winsound.SND_MEMORY | winsound.SND_NODEFAULT)
     except Exception:
         pass  # no audio device, or the device went away: just stay quiet
+
+
+@lru_cache(maxsize=1)
+def find_player() -> Optional[Tuple[str, ...]]:
+    """The command (minus the file name) that plays a WAV file here, or
+    None. Looked up once: the desktop's sound stack doesn't change while
+    the app runs."""
+    for name, args in _PLAYERS:
+        path = shutil.which(name)
+        if path:
+            return (path,) + tuple(args)
+    return None
+
+
+_player_lock = threading.Lock()
+_player_proc: Optional[subprocess.Popen] = None
+_chime_dir: Optional[str] = None
+
+
+def _wav_file(kind: str, volume: int) -> str:
+    """The chime as a WAV file the player can open, written once per
+    kind and volume into a folder of our own that goes when we do."""
+    global _chime_dir
+    if _chime_dir is None:
+        _chime_dir = tempfile.mkdtemp(prefix="OscGoesPurrr_chimes_")
+        atexit.register(shutil.rmtree, _chime_dir, True)
+    path = os.path.join(_chime_dir, f"{kind}-{volume}.wav")
+    if not os.path.isfile(path):
+        with open(path, "wb") as fh:
+            fh.write(chime_wav(kind, volume))
+    return path
+
+
+def _play_with_player(player: Tuple[str, ...], kind: str, volume: int) -> None:
+    global _player_proc
+    try:
+        from utilities import system_env
+        with _player_lock:
+            path = _wav_file(kind, volume)
+            # Like PlaySound, a newer chime cuts off the one still playing.
+            if _player_proc is not None and _player_proc.poll() is None:
+                _player_proc.terminate()
+            proc = subprocess.Popen(
+                list(player) + [path], env=system_env(),
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL)
+            _player_proc = proc
+        proc.wait(timeout=10)   # reap it; a chime is under a second
+    except Exception:
+        pass  # no sound server, or the player failed: just stay quiet

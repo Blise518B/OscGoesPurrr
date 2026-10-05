@@ -6,13 +6,29 @@ ensures the AppData directory exists.
 """
 
 import os
+import sys
 from pathlib import Path
 
 from constants import APP_NAME
 
 
-# AppData directory for persistent storage
-APPDATA_DIR = Path.home() / "AppData" / "Roaming" / APP_NAME
+def _config_root(platform: str = sys.platform) -> Path:
+    """The per-user settings root: AppData\\Roaming on Windows, where every
+    release so far has kept its files, and the XDG config folder
+    (~/.config unless $XDG_CONFIG_HOME says otherwise) elsewhere."""
+    if platform == "win32":
+        return Path.home() / "AppData" / "Roaming"
+    xdg = os.environ.get("XDG_CONFIG_HOME", "")
+    # The XDG spec: a relative path is invalid and must be ignored.
+    if xdg and os.path.isabs(xdg):
+        return Path(xdg)
+    return Path.home() / ".config"
+
+
+# AppData directory for persistent storage (the name stayed from the
+# Windows-only days; on Linux it is ~/.config/OscGoesPurrr). Help texts
+# write it as constants.SETTINGS_DIR_DISPLAY.
+APPDATA_DIR = _config_root() / APP_NAME
 
 # Routing modes + rig + feel (schema v4, managed by ModeManager in
 # config_manager.py). This is the live config file, and the only one the
