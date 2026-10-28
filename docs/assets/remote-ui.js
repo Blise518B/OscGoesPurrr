@@ -53,6 +53,7 @@ export function segmented(labels, hue, onPick, picked = 0) {
   }, label));
   box.style.setProperty("--hue", `var(--${hue})`);
   box.style.setProperty("--hue-tint", `var(--${hue}-tint)`);
+  box.style.setProperty("--hue-mid", `var(--${hue}-mid)`);
   function set(i) { buttons.forEach((b, k) => b.classList.toggle("on", k === i)); box.picked = i; }
   box.append(...buttons);
   box.set = set;

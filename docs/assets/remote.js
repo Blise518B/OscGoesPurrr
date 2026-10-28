@@ -47,7 +47,7 @@ const $ = (id) => document.getElementById(id);
 const now = () => performance.now();
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-const target = parseHash(location.hash);
+const target = P.parseLink(location.hash);
 let guest = null;
 let link = null;
 let linked = false;
@@ -80,18 +80,6 @@ const slots = { cmd: { sig: "", t: 0, reps: 0 }, lw: { sig: "", t: 0, reps: 0 },
                 pw: { sig: "", t: 0, reps: 0 }, ph: { sig: "", t: 0, reps: 0 } };
 // the panel's widgets
 const W = { key: null, toys: [], shockers: [], party: null, board: null, strength: null };
-
-function parseHash(hash) {
-  // <id>.<code>.<nick> -- the shape src/friend_links.py writes
-  const parts = hash.replace(/^#/, "").split(".");
-  const id = (parts[0] || "").toLowerCase();
-  const code = (parts[1] || "").toLowerCase();
-  let nick = "";
-  try { nick = decodeURIComponent(parts.slice(2).join(".")); } catch (e) { nick = ""; }
-  nick = P.cleanNick(nick);
-  if (!/^[0-9a-f]{64}$/.test(id) || !/^[0-9a-f]{16}$/.test(code)) return null;
-  return { id, code, nick };
-}
 
 function store(key, value) {
   try {
@@ -588,14 +576,14 @@ function build() {
       + "newest change wins. Off: your cards are your own, and their toys follow whichever of you is "
       + "higher. Their strength slider is shared either way.");
     const val = el("span.val");
-    const s = hslider({ max: 1000, hue: "pink", value: Math.round(st.strength * 1000),
+    const s = hslider({ max: 1000, hue: "accent", value: Math.round(st.strength * 1000),
                         title: "Their own strength slider, top left in their OGP: it scales everything "
                           + "their toys do. Whoever moves it last wins.",
                         onInput: (x) => { val.textContent = pct(x / 1000); setStrength(x / 1000); } });
     s.classList.add("strength");
     val.textContent = pct(st.strength);
     W.strength = { s, val };
-    toys.head.append(sync, el("span.small", {}, "Their strength"), s, val);
+    toys.head.append(sync, el("span.strength-g", {}, el("span.small", {}, "Their strength"), s, val));
     const every = st.toys.length ? [[P.ALL, "All their toys"]] : [];
     for (const [key, title] of [...every, ...st.toys.map(([n]) => [n, n])]) {
       const card = new ToyCard(key, title, {
@@ -612,7 +600,7 @@ function build() {
     const sh = section("THEIR SHOCKERS", "yellow", "shock");
     panel.append(sh.box);
     if (st.shockers.length > 1) {
-      sh.head.append(el("button.btn.danger.small", { type: "button", title: "Every one of their shockers stops now",
+      sh.head.append(el("button.btn.danger.sm", { type: "button", title: "Every one of their shockers stops now",
         onclick: () => W.shockers.forEach((c) => c.stop()) }, "Stop all"));
     }
     W.strip = el("div.shock-state", { title: "Armed: their shocks are real. Not armed: a shock arrives as a "

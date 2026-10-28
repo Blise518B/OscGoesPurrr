@@ -72,6 +72,19 @@
     return String(text || '').replace(/[\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ')
       .trim().slice(0, NICK_MAX);
   }
+  /** The link's #<id>.<code>.<nick> (src/friend_links.py) -> {id, code,
+   *  nick}, or null. The nick is percent-encoded, so the first character
+   *  that encoding never writes ends the link: a browser that joins the
+   *  copied link with the line under it -- "(Drive Blise's toys ...)" --
+   *  hands that over too. */
+  function parseLink(hash) {
+    var parts = String(hash || '').replace(/^#/, '').split('.');
+    var id = (parts[0] || '').toLowerCase(), code = (parts[1] || '').toLowerCase();
+    if (!/^[0-9a-f]{64}$/.test(id) || !/^[0-9a-f]{16}$/.test(code)) { return null; }
+    var raw = parts.slice(2).join('.').split(/[^A-Za-z0-9_.~%-]/)[0], nick = '';
+    try { nick = decodeURIComponent(raw); } catch (e) { nick = ''; }
+    return { id: id, code: code, nick: cleanNick(nick) };
+  }
   function newId() {
     var b = new Uint8Array(8);
     (typeof crypto !== 'undefined' ? crypto : require('crypto').webcrypto).getRandomValues(b);
@@ -394,7 +407,8 @@
     NICK_MAX: NICK_MAX, MAX_SHOCKERS: MAX_SHOCKERS, SHOCK_MIN_MS: SHOCK_MIN_MS, OPS: OPS,
     DRIVE_STALE_S: DRIVE_STALE_S, MAX_BLOB: MAX_BLOB, WAVES: WAVES, WAVE_LABELS: WAVE_LABELS,
     PERIOD_MIN_S: PERIOD_MIN_S, PERIOD_MAX_S: PERIOD_MAX_S, WATCH_OFF: WATCH_OFF,
-    round: round, unit: unit, cleanNick: cleanNick, newId: newId, encode: encode,
+    round: round, unit: unit, cleanNick: cleanNick, parseLink: parseLink, newId: newId,
+    encode: encode,
     cleanPattern: cleanPattern, shape: shape, patternLevel: patternLevel,
     periodToSlider: periodToSlider, sliderToPeriod: sliderToPeriod, fmtPeriod: fmtPeriod,
     makeCmd: makeCmd, drives: drives, makeShock: makeShock, makeStop: makeStop,

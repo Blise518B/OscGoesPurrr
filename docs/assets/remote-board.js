@@ -5,7 +5,7 @@
 // parameter follows, filterable. The page tells their OGP it is watching
 // (only then does it send the board and its values).
 
-import { el, glyph, hslider } from "./remote-ui.js";
+import { el, hslider } from "./remote-ui.js";
 
 const P = window.OGPRemoteProto;
 const YOLO_ROWS = 60;
@@ -28,7 +28,7 @@ class ParamCard {
     if (P.isIntSwitch(c)) {
       const [on, off] = P.intSwitchValues(c);
       const toggle = c.kind === "toggle";
-      marks.push(el("span.pmark", { title: `${toggle ? "ON" : "Holding"} sets ${c.param} to ${on}, `
+      marks.push(el("span.pval", { title: `${toggle ? "ON" : "Holding"} sets ${c.param} to ${on}, `
         + `${toggle ? "OFF" : "letting go"} sets it to ${off}` }, `=${on}`));
     }
     const head = el("div.pc-head", {}, el("span.pc-label", { title: `${c.param}  (${c.ptype})` }, c.label || c.param), ...marks);
@@ -158,9 +158,9 @@ export class Board {
       const controls = board.controls.filter((x) => x.cat === cat.id);
       if (!controls.length) continue;
       const name = el("span.cat-name", {}, cat.name);
-      const lock = el("span.cat-lock", { title: "Locked - for looking only" }, glyph("lock", 14));
+      const lock = el("span.cat-lock", { title: "Locked - for looking only" }, "🔒 look only");
       const grid = el("div.cat-grid");
-      const box = hued(el("div.cat"), cat.color);
+      const box = hued(el(`div.cat.${cat.color}`), cat.color);
       box.append(el("div.cat-head", {}, name, lock), grid);
       const cards = controls.map((c) => {
         const card = new ParamCard(c, cat.color, { onSet: this.cb.onSet, onHold: this.cb.onHold });
@@ -221,7 +221,7 @@ export class Board {
     const row = el("div.yrow", {}, el("span.yname", { title: `${name} (${ptype})` }, name));
     let show;
     if (ptype === "Bool") {
-      const sw = el("button.pswitch.small", { type: "button" }, "OFF");
+      const sw = el("button.pswitch.ysw", { type: "button" }, "OFF");
       show = (v) => { sw.classList.toggle("on", Boolean(v)); sw.textContent = v ? "ON" : "OFF"; };
       sw.onclick = () => { const on = !sw.classList.contains("on"); show(on); this.cb.onSetAny(name, on); };
       row.append(sw);

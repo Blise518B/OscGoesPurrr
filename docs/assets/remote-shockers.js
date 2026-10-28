@@ -101,15 +101,21 @@ class VSlider {
   }
 }
 
-/** A tile: its glyph, its label and its value (PiShock's tiles). */
+/** A tile, as PiShock's (shocker_parts.Tile): an icon on top, a value
+ *  under it, a caption at the bottom. */
 function tile(label, hue, { filled = false, wide = false, glyphKind = "", cls = "" } = {}) {
-  const value = el("span.tile-v");
-  const g = el("span.tile-g", {}, glyphKind ? glyph(glyphKind, 16) : null);
-  const b = el(`button.tile${filled ? ".filled" : ""}${wide ? ".wide" : ""}${cls ? "." + cls : ""}${hue ? "" : ".plain"}`,
-               { type: "button" }, g, el("span.tile-l", {}, label), value);
-  if (hue) { b.style.setProperty("--hue", `var(--${hue})`); b.style.setProperty("--hue-tint", `var(--${hue}-tint)`); }
-  b.setValue = (text) => { value.textContent = text; };
-  b.setGlyph = (kind) => { g.replaceChildren(glyph(kind, 16)); };
+  const value = el("span.tile-v", { hidden: true });
+  const g = el("span.tile-g", {}, glyphKind ? glyph(glyphKind, 18) : null);
+  const kind = cls || (hue ? "hued" : "plain");
+  const b = el(`button.optile.${kind}${filled ? ".filled" : ""}${wide ? ".wide" : ""}`,
+               { type: "button" }, g, value, el("span.tile-l", {}, label));
+  if (hue) {
+    b.style.setProperty("--hue", `var(--${hue})`);
+    b.style.setProperty("--hue-mid", `var(--${hue}-mid)`);
+    b.style.setProperty("--hue-tint", `var(--${hue}-tint)`);
+  }
+  b.setValue = (text) => { value.textContent = text; value.hidden = !text; };
+  b.setGlyph = (kind) => { g.replaceChildren(glyph(kind, 18)); };
   return b;
 }
 
@@ -142,13 +148,14 @@ export class ShockerCard {
       vibrate: tile("Operate", "pink", { filled: true, glyphKind: "vibrate" }),
       vibrate_dur: tile("Duration", "pink", { glyphKind: "clock" }),
       use: tile("Use Mode", "", { wide: true, glyphKind: "tap" }),
-      stop: tile("STOP", "red", { wide: true, glyphKind: "stop", cls: "stop" }),
+      stop: tile("STOP", "", { wide: true, glyphKind: "stop", cls: "stop" }),
       beep: tile("Beep", "", { wide: true, glyphKind: "bell" }),
     };
     this.t.shock.title = "Shock at this strength for the Duration (Remote: while you hold it)";
     this.t.vibrate.title = "Vibrate at this strength for the Duration (Remote: while you hold it)";
     this.t.shock_dur.title = this.t.vibrate_dur.title =
       "How long it runs - 0.1 s, 0.3 s, then whole seconds to 10 s, never past their longest";
+    this.t.warn.querySelector(".tile-g").style.color = "var(--warn)";   // the app's amber
     this.t.warn.title = "Vibration before a shock: Small 1-3 s, Mid 3-6 s, Long 6-9 s - how long "
       + "exactly is random, at the vibrate strength. Works in every Use Mode.";
     this.t.stop.title = "Emergency Stop: this shocker stops now - a running pulse, a hold, a "
@@ -175,6 +182,8 @@ export class ShockerCard {
                            el("span.gauge", { title: `${op === "shock" ? "Shock" : "Vibrate"} Intensity` }, glyph("gauge", 16)));
     const mini = (kind, tip, fn, hue) => {
       const b = el("button.mini", { type: "button", title: tip, onclick: fn }, glyph(kind, 14));
+      b.style.setProperty("--hue-tint", `var(--${hue}-tint)`);
+      b.style.setProperty("--hue", `var(--${hue})`);
       b.style.color = `var(--${hue})`;
       return b;
     };
@@ -191,6 +200,7 @@ export class ShockerCard {
       const b = el("div.opblock", {}, el("div.opblock-h", {}, title), el("div.opblock-b", {}, ...kids));
       b.style.setProperty("--hue", `var(--${hue})`);
       b.style.setProperty("--hue-mid", `var(--${hue}-mid)`);
+      b.style.setProperty("--hue-tint", `var(--${hue}-tint)`);
       return b;
     };
     const shock = block("SHOCK", "yellow",
@@ -201,11 +211,11 @@ export class ShockerCard {
 
     this.partyBox = null;
     if (partyBox) {
-      this.partyBox = el("input", { type: "checkbox" });
+      this.partyBox = el("input.ck", { type: "checkbox" });
       this.partyBoxLabel = el("label.partybox", { title: "Party Mode: drive this shocker together with "
         + "the others you tick - all at once, one at random or one after the other" }, this.partyBox, "Party");
     }
-    this.root = el("div.card.shocker", {},
+    this.root = el("div.fcard.shocker", {},
       title ? el("div.card-head", {}, el("span.card-name", {}, title), el("span.grow"),
                  this.partyBoxLabel || null) : null,
       el("div.sk-body", {}, shock, nudgesShock, this.center, nudgesVib, vibrate));
@@ -340,9 +350,12 @@ export class ShockerCard {
       onPick = (i) => { this.dur[op] = every[i]; this.showValues(); };
       hue = op === "shock" ? "yellow" : "pink";
     }
-    const picker = el("div.picker", { role: "dialog" });
+    const picker = el(`div.picker.${cols === 3 ? "round" : "wide"}${hue ? ".hued" : ""}`, { role: "dialog" });
     picker.style.setProperty("--cols", cols);
-    if (hue) picker.style.setProperty("--hue", `var(--${hue})`);
+    if (hue) {
+      picker.style.setProperty("--hue", `var(--${hue})`);
+      picker.style.setProperty("--hue-mid", `var(--${hue}-mid)`);
+    }
     options.forEach(([label, ok], i) => {
       picker.append(el(`button.pick${i === current ? ".on" : ""}`, {
         type: "button", disabled: !ok, onclick: (ev) => { ev.stopPropagation(); this.closePicker(); onPick(i); },
@@ -539,7 +552,7 @@ export class ShockParty {
     if (ticked) this.ticked = new Set(ticked);
     this.ticked = new Set([...this.ticked].filter((s) => targets.some(([t]) => t === s)));
     this.list.replaceChildren(...targets.map(([slot, label]) => {
-      const cb = el("input", { type: "checkbox", checked: this.ticked.has(slot),
+      const cb = el("input.ck", { type: "checkbox", checked: this.ticked.has(slot),
                                 onchange: () => this.tick(slot, cb.checked) });
       const nxt = el("button.mini.next", { type: "button", title: "Round Robin: this one is next - click "
         + "another name to make it next", onclick: () => this.makeNext(slot) }, "▶");

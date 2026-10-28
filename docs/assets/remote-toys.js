@@ -61,7 +61,7 @@ export class ToyCard {
         : mode === "linear" ? "Direct control: the level you set with the slider"
         : mode === "osc" ? "Oscillate: a swing around the level you set, as deep as you set"
         : `Auto mode: ${P.WAVE_LABELS[mode]}`;
-      const b = el(`button.chip${FIRST_ROW.includes(mode) ? ".main" : ""}`,
+      const b = el(`button.mchip${FIRST_ROW.includes(mode) ? ".main" : ""}`,
                    { type: "button", title: tip, onclick: () => this.pick(mode) },
                    mode === "off" ? null : waveIcon(mode), label || null);
       this.chips[mode] = b;
@@ -80,7 +80,7 @@ export class ToyCard {
     this.meter = meter ? el("div.meter", { title: "What this toy is doing on their side right now" },
                             el("span")) : null;
 
-    this.root = el("div.card.toy", {},
+    this.root = el("div.fcard.toy", {},
       el("div.card-head", {}, el("span.card-name", {}, title), this.out, this.battery,
          el("span.grow"), this.over),
       this.hint, this.levelRow, this.depthRow, this.rangeRow, main, waves, this.speedRow,
