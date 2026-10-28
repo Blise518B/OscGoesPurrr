@@ -5,16 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>OscGoesPurrr web remote</title>
 <!--
-  The web remote: drive someone's toys from a browser, no OGP installed.
-  Opens their web remote link (remote.html#<id>.<code>.<nick>, made by
+  The web remote: a friend's panel in a browser, no OGP installed. Opens a
+  web remote link (remote.html#<id>.<code>.<nick>, made by
   src/friend_links.py); assets/remote.js dials that OGP over iroh in
   WebAssembly (tools/web_guest) and speaks the Friends protocol as a web
-  guest - toys only. Everything after the # stays in the browser.
+  guest: their toys, their shockers as PiShock's panel, their avatar's
+  board - whatever their Web remote row allows. Everything after the #
+  stays in the browser.
 
   Colours are tokens from assets/tokens.css, never a new hex.
 -->
 <meta name="robots" content="noindex">
-<meta name="description" content="Drive a friend's toys from your browser, through OscGoesPurrr.">
+<meta name="description" content="A friend's OscGoesPurrr panel in your browser.">
 <meta name="theme-color" content="#0a0c0a">
 <link rel="icon" href="assets/favicon.ico" sizes="any">
 <link rel="icon" href="assets/ogp-icon.svg" type="image/svg+xml">
@@ -26,36 +28,49 @@
   font-display: swap;
 }
 :root { --title-font: "Aldrich Site", "Segoe UI", sans-serif; }
+* { box-sizing: border-box; }
 body {
-  font-size: 16px; line-height: 1.5; background: var(--bg); color: var(--txt);
-  min-height: 100vh; display: flex; justify-content: center; padding: 24px 16px;
+  font-size: 15px; line-height: 1.45; background: var(--bg); color: var(--txt);
+  min-height: 100vh; display: flex; justify-content: center; padding: 20px 16px; margin: 0;
 }
-.card {
-  width: 100%; max-width: 560px; background: var(--card); border: 1px solid var(--line);
-  border-radius: var(--r-card); padding: 26px 24px; align-self: flex-start;
+button { font: inherit; color: inherit; }
+.page {
+  width: 100%; max-width: 980px; background: var(--card); border: 1px solid var(--line);
+  border-radius: var(--r-card); padding: 22px 22px 18px; align-self: flex-start;
 }
-.head { display: flex; align-items: center; gap: 14px; margin-bottom: 16px; }
-.mark { width: 48px; height: 48px; flex: none; }
+.head { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; flex-wrap: wrap; }
+.mark { width: 46px; height: 46px; flex: none; }
 .eyebrow { color: var(--muted); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; }
 h1 { font-family: var(--title-font); font-weight: 400; font-size: 24px; line-height: 1.2; margin: 2px 0 0; }
 h1 .who { color: var(--cyan); }
-p { margin: 0 0 12px; color: var(--muted); }
-form { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 6px; }
-label { width: 100%; font-size: 13px; color: var(--dim); }
-input[type=text] {
-  flex: 1; min-width: 0; font: inherit; color: var(--txt); background: var(--well);
-  border: 1px solid var(--line); border-radius: var(--r-in); padding: 10px 12px;
+p { margin: 0 0 10px; color: var(--muted); }
+.small { font-size: 13px; color: var(--dim); }
+.grow { flex: 1; }
+.row { display: flex; align-items: center; gap: 8px; }
+.val { min-width: 42px; text-align: right; font-variant-numeric: tabular-nums; font-size: 13px; }
+.w62 { min-width: 62px; }
+[hidden] { display: none !important; }
+
+/* the start: name, connect, the link's state */
+form { display: flex; gap: 8px; flex-wrap: wrap; margin: 4px 0 8px; }
+label.l { width: 100%; font-size: 13px; color: var(--dim); }
+input[type=text], input[type=search], input[type=number] {
+  min-width: 0; font: inherit; color: var(--txt); background: var(--well);
+  border: 1px solid var(--line); border-radius: var(--r-in); padding: 8px 10px;
 }
+#go input[type=text] { flex: 1; }
 .btn {
   display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; cursor: pointer;
-  font: inherit; font-weight: 650; font-size: 16px; padding: 10px 20px; border-radius: 10px;
-  border: 1px solid var(--line); color: var(--txt); background: transparent;
+  font-weight: 650; padding: 8px 18px; border-radius: 10px; border: 1px solid var(--line); background: transparent;
 }
 .btn:hover { border-color: var(--accent); color: var(--accent); background: var(--hover); }
-.btn-primary { background: var(--accent); border-color: var(--accent); color: var(--ink); }
-.btn-primary:hover { background: var(--accent2); border-color: var(--accent2); color: var(--ink); }
-.btn-stop { width: 100%; margin-top: 14px; background: var(--red-tint); border-color: var(--red); color: var(--red); }
-.btn-stop:hover { background: var(--red-mid); border-color: var(--red); color: var(--txt); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--ink); }
+.btn.primary:hover { background: var(--accent2); border-color: var(--accent2); color: var(--ink); }
+.btn.secondary { font-weight: 500; padding: 5px 12px; font-size: 13px; }
+.btn.danger { background: var(--red-tint); border-color: var(--red); color: var(--red); }
+.btn.danger:hover { background: var(--red-mid); border-color: var(--red); color: var(--txt); }
+.btn.small { padding: 4px 12px; font-size: 13px; }
+.btn.stopall { width: 100%; margin-top: 14px; }
 .state { font-size: 14px; padding: 8px 12px; border-radius: var(--r-btn); background: var(--well); color: var(--muted); }
 .state.ok { color: var(--accent); background: var(--tint); }
 .state.bad { color: var(--warn); background: var(--warn-tint); }
@@ -65,86 +80,216 @@ input[type=text] {
 }
 .state.ok::before { box-shadow: var(--glow) var(--accent); }
 .state.connecting::before { background: var(--dim); }
-.me { font-size: 13px; color: var(--dim); margin: 8px 0 0; }
-#panel { margin-top: 16px; }
-.section { display: flex; align-items: baseline; justify-content: space-between; margin: 0 0 8px; }
-.section h2 { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--pink); margin: 0; }
-.section .strength { font-size: 13px; color: var(--dim); }
-.note { font-size: 14px; color: var(--warn); margin: 0 0 10px; }
-.toy {
-  display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 4px 12px;
-  padding: 12px 14px; margin-bottom: 8px; border-radius: var(--r-btn);
-  background: var(--pink-tint); border: 1px solid var(--pink-mid);
+.me { font-size: 13px; color: var(--dim); margin: 6px 0 0; }
+.pill { display: inline-block; font-size: 11px; font-weight: 700; letter-spacing: .06em; padding: 2px 8px;
+  border-radius: var(--r-chip); border: 1px solid var(--blue-mid); color: var(--blue); background: var(--blue-tint); }
+.note { font-size: 14px; color: var(--warn); margin: 10px 0 0; }
+
+/* a section in the hue of what it drives, as on the app's Friends panel */
+.friend-section { border: 1px solid var(--hue-mid); border-radius: var(--r-group); padding: 10px 12px 12px; margin-top: 14px; }
+.section-h { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; color: var(--hue); }
+.micro { font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--hue); font-weight: 650; }
+.section-h .small { color: var(--muted); }
+.section-h input.strength { width: 150px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 300px), 1fr)); gap: 8px; }
+.grid.wide { grid-template-columns: repeat(auto-fill, minmax(min(100%, 430px), 1fr)); }
+
+.card { position: relative; background: var(--panel); border: 1px solid var(--hue-mid, var(--line));
+  border-radius: var(--r-btn); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.card.toy { --hue: var(--pink); --hue-mid: var(--pink-mid); background: var(--pink-tint); }
+.card.shocker { --hue: var(--yellow); --hue-mid: var(--yellow-mid); container-type: inline-size; }
+.card-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.card-name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.battery.low { color: var(--warn); }
+
+/* sliders: the app's groove + round handle (assets/demo.css), reaching both ends */
+input.hs {
+  -webkit-appearance: none; appearance: none; background: transparent; margin: 0; padding: 0; flex: 1;
+  min-width: 60px; height: 24px; cursor: pointer; border: none; outline: none; box-shadow: none; --v: 0%;
 }
-.toy.all { background: var(--panel); border-color: var(--line); }
-.toy.off { opacity: .5; }
-.toy .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.toy .value { font-variant-numeric: tabular-nums; color: var(--pink); font-weight: 650; }
-.toy.all .value { color: var(--accent); }
-/* the app's groove + round handle (as in assets/demo.css), not the browser's own:
-   at 0 and 100 the handle sits right at the ends */
-.toy input[type=range] {
-  -webkit-appearance: none; appearance: none; background: transparent; margin: 0; padding: 0;
-  border: none; outline: none; box-shadow: none; grid-column: 1 / -1; width: 100%; height: 28px; cursor: pointer; --v: 0%; --fill: var(--pink);
+input.hs::-webkit-slider-runnable-track { height: 8px; border: 1px solid var(--line); border-radius: 5px;
+  background: linear-gradient(90deg, var(--fill) var(--v), var(--well) var(--v)); }
+input.hs::-moz-range-track { height: 6px; border: 1px solid var(--line); border-radius: 5px;
+  background: linear-gradient(90deg, var(--fill) var(--v), var(--well) var(--v)); }
+input.hs::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px; border-radius: 8px;
+  margin-top: -5px; background: var(--fill); border: none; }
+input.hs::-moz-range-thumb { width: 16px; height: 16px; border-radius: 8px; background: var(--fill); border: none; }
+input.hs:focus-visible { outline: 2px solid var(--fill); outline-offset: 2px; border-radius: 6px; }
+input.hs:disabled { opacity: .45; cursor: default; }
+
+/* chips, segmented buttons, switches */
+.chips { display: flex; flex-wrap: wrap; gap: 3px; }
+.chip { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--pink-mid); background: var(--panel);
+  color: var(--pink); border-radius: var(--r-chip); padding: 3px 9px; font-size: 12px; cursor: pointer; }
+.chip.main { font-size: 13px; padding: 4px 11px; }
+.chip.on { background: var(--pink); color: var(--ink); border-color: var(--pink); }
+.seg { display: inline-flex; }
+.seg-b { border: 1px solid var(--line); background: transparent; padding: 3px 10px; font-size: 12px; cursor: pointer; }
+.seg-b:first-child { border-radius: var(--r-btn) 0 0 var(--r-btn); }
+.seg-b:last-child { border-radius: 0 var(--r-btn) var(--r-btn) 0; }
+.seg-b + .seg-b { border-left: none; }
+.seg-b.on { background: var(--hue-tint); color: var(--hue); border-color: var(--hue); }
+label.sw { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; font-size: 13px; color: var(--muted); }
+label.sw input { position: absolute; opacity: 0; width: 0; height: 0; }
+label.sw .knob { width: 30px; height: 16px; border-radius: 8px; background: var(--well); border: 1px solid var(--line);
+  position: relative; flex: none; }
+label.sw .knob::after { content: ""; position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%;
+  background: var(--dim); transition: left .12s; }
+label.sw input:checked + .knob { background: var(--tint); border-color: var(--accent); }
+label.sw input:checked + .knob::after { left: 16px; background: var(--accent); }
+.graph { width: 100%; height: 42px; background: var(--well); border-radius: 6px; }
+.meter { height: 3px; border-radius: 2px; background: var(--pink-mid); overflow: hidden; }
+.meter > span { display: block; height: 100%; width: 0; background: var(--pink); transition: width .1s linear; }
+
+/* shockers: PiShock's panel */
+.shock-state { border: 1px solid var(--line); border-radius: var(--r-btn); padding: 6px 12px; margin-bottom: 8px;
+  font-size: 13px; color: var(--muted); }
+.shock-state b { color: var(--txt); margin-right: 6px; }
+.shock-state.armed { border-color: var(--red); background: var(--red-tint); }
+.shock-state.armed b { color: var(--red); }
+.sk-body { display: flex; flex-wrap: wrap; justify-content: center; align-items: stretch; gap: 6px; }
+.opblock { border: 1px solid var(--hue-mid); border-radius: var(--r-btn); padding: 6px; }
+.opblock-h { text-align: center; font-size: 11px; letter-spacing: .14em; color: var(--hue); font-weight: 700; margin-bottom: 4px; }
+.opblock-b { display: flex; gap: 6px; }
+.tiles { display: flex; flex-direction: column; gap: 6px; }
+.tile { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+  width: 74px; height: 56px; border: 1px solid var(--hue, var(--line)); border-radius: var(--r-btn);
+  background: var(--card); color: var(--txt); cursor: pointer; touch-action: none; user-select: none; }
+.tile .glyph { color: var(--hue, var(--muted)); }
+.tile.filled { background: var(--hue); border-color: var(--hue); color: var(--ink); }
+.tile.filled .glyph { color: var(--ink); }
+.tile.wide { width: 98px; }
+.tile.plain { border-color: var(--line); }
+.tile.plain .glyph { color: var(--txt); }
+.tile.stop { border-color: var(--red); background: var(--red-tint); color: var(--red); height: 76px; }
+.tile.stop .glyph { color: var(--red); }
+.tile:hover:not(:disabled) { filter: brightness(1.15); }
+.tile:disabled { opacity: .4; cursor: default; }
+.tile-l { font-size: 11px; opacity: .85; }
+.tile-v { font-weight: 700; font-size: 14px; font-variant-numeric: tabular-nums; }
+.sk-center { display: flex; flex-direction: column; justify-content: center; gap: 6px; }
+@container (max-width: 470px) {
+  .sk-center { order: 10; flex-direction: row; flex-basis: 100%; justify-content: center; }
+  .tile.stop { height: 56px; }
 }
-.toy.all input[type=range] { --fill: var(--accent); }
-.toy input[type=range]::-webkit-slider-runnable-track {
-  height: 12px; border: 1px solid var(--line); border-radius: 7px;
-  background: linear-gradient(90deg, var(--fill) var(--v), var(--well) var(--v));
+/* a phone: everything a bit smaller, so Shock, the nudges and Vibrate stay on one row */
+@container (max-width: 380px) {
+  .sk-body { gap: 4px; }
+  .opblock { padding: 5px; }
+  .opblock-b { gap: 5px; }
+  .tile { width: 62px; height: 56px; }
+  .tile.wide { width: auto; flex: 1; }
+  .tile-v { font-size: 13px; }
+  .vs { width: 22px; }
+  .mini { min-width: 26px; }
 }
-.toy input[type=range]::-moz-range-track {
-  height: 10px; border: 1px solid var(--line); border-radius: 7px;
-  background: linear-gradient(90deg, var(--fill) var(--v), var(--well) var(--v));
-}
-.toy input[type=range]::-webkit-slider-thumb {
-  -webkit-appearance: none; width: 24px; height: 24px; border-radius: 12px; margin-top: -7px;
-  background: var(--fill); border: none;
-}
-.toy input[type=range]::-moz-range-thumb { width: 24px; height: 24px; border-radius: 12px; background: var(--fill); border: none; }
-.toy input[type=range]:focus-visible { outline: 2px solid var(--fill); outline-offset: 3px; border-radius: 8px; }
-.live { grid-column: 1 / -1; height: 3px; border-radius: 2px; background: var(--pink-mid); overflow: hidden; }
-.live > span { display: block; height: 100%; width: 0; background: var(--pink); transition: width .1s linear; }
-details { margin-top: 18px; }
+.nudges { display: flex; flex-direction: column; justify-content: center; gap: 6px; }
+.mini { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 26px; padding: 0 5px;
+  border: 1px solid var(--line); border-radius: var(--r-btn); background: var(--card); cursor: pointer; }
+.mini.on { background: var(--yellow-tint); border-color: var(--yellow); }
+.mini:disabled { opacity: .4; cursor: default; }
+.vcol { display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.vs-max { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.gauge { color: var(--muted); display: flex; }
+.vs { position: relative; width: 26px; flex: 1; min-height: 130px; touch-action: none; cursor: pointer; outline: none; }
+.vs.disabled { opacity: .45; cursor: default; }
+.vs-track { position: absolute; left: 50%; width: 8px; margin-left: -4px; top: 0; bottom: 0;
+  border: 1px solid var(--line); border-radius: 5px; background: var(--well); }
+.vs-fill { position: absolute; left: 0; right: 0; background: var(--fill); border-radius: 3px;
+  bottom: 0; height: calc(var(--b) * (100% - 18px) + 9px); }
+.vs.range .vs-fill { bottom: calc(var(--a) * (100% - 18px) + 9px); height: calc((var(--b) - var(--a)) * (100% - 18px)); }
+.vs-knob { position: absolute; left: 50%; width: 18px; height: 18px; margin-left: -9px; border-radius: 50%;
+  background: var(--fill); bottom: calc(var(--p) * (100% - 18px)); }
+.vs:focus-visible .vs-knob { outline: 2px solid var(--txt); }
+.picker { position: absolute; z-index: 5; display: grid; grid-template-columns: repeat(var(--cols), auto); gap: 6px;
+  padding: 8px; background: var(--card); border: 1px solid var(--hue, var(--line)); border-radius: var(--r-btn);
+  box-shadow: var(--pop-shadow); }
+.pick { border: 1px solid var(--line); background: var(--panel); border-radius: var(--r-btn); padding: 6px 12px;
+  cursor: pointer; white-space: nowrap; min-width: 48px; }
+.pick.on { border-color: var(--hue, var(--accent)); color: var(--hue, var(--accent)); }
+.pick:disabled { opacity: .35; cursor: default; }
+.partybox { display: inline-flex; align-items: center; gap: 4px; font-size: 13px; color: var(--yellow); cursor: pointer; }
+.party { border: 1px dashed var(--yellow-mid); border-radius: var(--r-btn); padding: 10px; margin-bottom: 8px;
+  display: flex; flex-direction: column; gap: 8px; }
+.party .card.shocker.disabled { opacity: .5; pointer-events: none; }
+.party-head { display: flex; justify-content: center; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.center-row { display: flex; justify-content: center; }
+.party-list { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 13px; }
+.party-item { display: inline-flex; align-items: center; gap: 4px; }
+.mini.next { min-width: 22px; height: 22px; font-size: 10px; color: var(--dim); }
+.mini.next.on { color: var(--yellow); border-color: var(--yellow); }
+
+/* their avatar: categories of controls */
+.board { display: flex; flex-direction: column; gap: 10px; }
+.cat { border: 1px solid var(--hue-mid); border-radius: var(--r-btn); padding: 8px 10px 10px; }
+.cat.locked { opacity: .75; }
+.cat-head { display: flex; align-items: center; gap: 6px; color: var(--hue); font-weight: 650; margin-bottom: 6px; }
+.cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.pcard { background: var(--panel); border: 1px solid var(--hue-mid); border-radius: var(--r-btn); padding: 6px 8px 8px;
+  display: flex; flex-direction: column; gap: 6px; }
+.pc-head { display: flex; gap: 4px; align-items: baseline; font-size: 13px; }
+.pc-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pmark, .pval { font-size: 12px; color: var(--muted); }
+.pswitch, .phold { border: 1px solid var(--hue, var(--line)); border-radius: var(--r-btn); background: var(--card);
+  padding: 6px 0; cursor: pointer; font-weight: 650; touch-action: none; user-select: none; }
+.pswitch.on { background: var(--hue, var(--accent)); color: var(--ink); }
+.pswitch.small { width: 60px; padding: 3px 0; --hue: var(--accent); }
+.phold.down { background: var(--hue); color: var(--ink); }
+.pswitch:disabled, .phold:disabled, .pcard input:disabled { opacity: .5; cursor: default; }
+.stepper { display: flex; gap: 4px; }
+.stepper .pnum { flex: 1; text-align: center; padding: 4px 6px; }
+.yolo { border: 1px solid var(--yellow-mid); color: var(--yellow); background: var(--yellow-tint); border-radius: var(--r-btn);
+  padding: 5px 12px; cursor: pointer; }
+.yolo-rows { display: flex; flex-direction: column; gap: 2px; }
+.yrow { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.yname { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.yrow .pnum { width: 90px; padding: 3px 6px; }
+.yrow input.hs { max-width: 180px; }
+.filter { width: 100%; }
+
+details { margin-top: 16px; }
 summary { font-size: 13px; color: var(--dim); cursor: pointer; }
-#log { font-family: var(--mono); font-size: 12px; color: var(--dim); max-height: 180px; overflow: auto;
+#log { font-family: var(--mono); font-size: 12px; color: var(--dim); max-height: 200px; overflow: auto;
   background: var(--well); border-radius: var(--r-btn); padding: 8px 10px; margin-top: 6px; }
 .bad { color: var(--warn); }
-.foot { margin: 18px 0 0; font-size: 12px; color: var(--dim); text-align: center; }
+.foot { margin: 16px 0 0; font-size: 12px; color: var(--dim); text-align: center; }
 .foot a { color: var(--dim); }
-[hidden] { display: none !important; }
+@media (max-width: 520px) {
+  body { padding: 10px 8px; }
+  .page { padding: 16px 12px 14px; }
+  .friend-section { padding: 8px; }
+}
 </style>
 </head>
 <body>
-<main class="card">
+<main class="page">
   <div class="head">
     <img class="mark" src="assets/ogp-icon.svg" alt="">
-    <div>
+    <div class="grow">
       <div class="eyebrow">OscGoesPurrr web remote</div>
-      <h1><span class="who" id="who">A friend</span>'s toys</h1>
+      <h1><span class="who" id="who">A friend</span>'s panel</h1>
     </div>
+    <span class="pill" id="others" title="Others are driving their toys right now too" hidden></span>
   </div>
 
   <div id="ok" hidden>
     <form id="go">
-      <label for="nick">Your name, as they'll see it</label>
+      <label class="l" for="nick">Your name, as they'll see it</label>
       <input type="text" id="nick" maxlength="24" placeholder="Web guest" autocomplete="nickname">
-      <button class="btn btn-primary" type="submit">Connect</button>
+      <button class="btn primary" type="submit">Connect</button>
     </form>
     <div class="state connecting" id="state">Not connected</div>
     <p class="me" id="me"></p>
 
     <div id="panel" hidden>
-      <div class="section">
-        <h2>Toys</h2>
-        <span class="strength" id="strength"></span>
-      </div>
       <p class="note" id="note" hidden></p>
-      <div id="toys"></div>
-      <button class="btn btn-stop" id="stop" type="button">Stop all</button>
+      <div id="sections"></div>
+      <button class="btn danger stopall" id="stop" type="button"
+              title="Every toy back to Off, every shocker stopped">Stop all</button>
     </div>
 
     <details>
-      <summary>Link log</summary>
+      <summary>Log</summary>
       <div id="log"></div>
     </details>
   </div>
@@ -155,6 +300,8 @@ summary { font-size: 13px; color: var(--dim); cursor: pointer; }
   </div>
   <p class="foot"><a href="./">OscGoesPurrr</a> · <a href="assets/web_guest/THIRD_PARTY_NOTICES.txt">Licenses</a></p>
 </main>
+<script src="assets/ogp-chain.js"></script>
+<script src="assets/remote-proto.js"></script>
 <script type="module" src="assets/remote.js"></script>
 </body>
 </html>
