@@ -13,6 +13,7 @@ Friends can drive them over the internet.
     <img src="docs/assets/download-badge.svg" alt="Download for Windows — OscGoesPurrr-Windows.exe, latest release">
   </a><br>
   <sub>On Linux? Get the <a href="https://github.com/Blise518B/OscGoesPurrr/releases/latest/download/OscGoesPurrr-Linux-x86_64.AppImage">AppImage</a> ·
+  OGP in your avatar's menu: the <a href="#your-avatars-menu-optional">VRCFury prefab</a> ·
   more on the <a href="https://blise518b.github.io/OscGoesPurrr/">website</a> ·
   every version on the <a href="https://github.com/Blise518B/OscGoesPurrr/releases">Releases</a> page</sub>
 </p>
@@ -37,6 +38,27 @@ New versions install themselves: the app lets you know when there's one.
 *Allow executing* in its Properties) and run it. Bluetooth needs BlueZ
 running, which it is on most desktops.
 
+## Your avatar's menu (optional)
+
+OGP's controls can live in your avatar's own menu too, so you never leave
+VRChat: strength, Off, Sleep, Test and the modes, and a **Friends** submenu
+that drives whoever you picked in OGP — their toys, their shockers, or both
+of you at once.
+
+1. Download
+   **[OscGoesPurrr-VRCFury.unitypackage](https://github.com/Blise518B/OscGoesPurrr/releases/latest/download/OscGoesPurrr-VRCFury.unitypackage)**
+   and import it into your avatar's Unity project (it needs
+   [VRCFury](https://vrcfury.com)).
+2. Drag **one** of its prefabs onto your avatar: **OscGoesPurrr Menu**
+   (everything), **(Self)** (only your own controls) or **(Friends)** (only
+   the Friends submenu).
+3. Upload. VRCFury adds the menu and the parameters (unsynced, 0 sync bits);
+   your avatar's own menu files stay untouched.
+
+OGP says on its Friends page whether the avatar you're wearing has the menu.
+No VRCFury? The [setup guide](docs/VRCHAT_MENU.md) has a one-click installer
+and the manual way.
+
 ## What you get
 
 - 🔌 **Just works** — finds VRChat and your toys by itself. No IPs, no ports.
@@ -49,8 +71,8 @@ running, which it is on most desktops.
 - 🎮 **Control it in-game** — strength, mode, Off and Sleep from your
   avatar's menu, and your friends' toys and shockers — one or several at
   once, or both of you together — from its Friends submenu: drag one
-  VRCFury prefab onto your avatar (yours, friends, or both;
-  [setup guide](docs/VRCHAT_MENU.md)). OGP tells you when your avatar has it.
+  VRCFury prefab onto your avatar ([see above](#your-avatars-menu-optional)).
+  OGP tells you when your avatar has it.
 - 🤝 **Friends** — link with other OGP users over the internet: paste an
   invite link into Discord, your friend clicks it and you're linked (a
   link works once, for a day, a week or until you close it; New ID
