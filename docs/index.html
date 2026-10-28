@@ -10,7 +10,9 @@
 
   The page says what the app does and shows it doing it. The window under
   the headline is a working copy of the real one (assets/demo.css + demo.js,
-  built against screenshots of the app), and every moving graph on the page
+  built against screenshots of the app; Friends, Shockers and My Avatar
+  Remote in demo-pages.js, a friend's panel from the web remote's own
+  pieces), and every moving graph on the page
   is fed by the app's own signal chain -- assets/ogp-chain.js is a port of
   src/motor_router.py, checked against it number for number. Nothing here
   is animated for show: if a plot moves, that is what a toy would be sent.
@@ -40,6 +42,8 @@
 <link rel="stylesheet" href="assets/tokens.css">
 <link rel="stylesheet" href="assets/demo.css">
 <link rel="stylesheet" href="assets/demo-stats.css">
+<link rel="stylesheet" href="assets/remote-panel.css">
+<link rel="stylesheet" href="assets/demo-pages.css">
 <style>
 /* tokens.css points its @font-face at /fonts/, an app's root; this site
    lives under /OscGoesPurrr/. The page's own face gets its own name so the
@@ -277,8 +281,8 @@ footer { margin-top: 84px; border-top: 1px solid var(--edge); padding: 44px 0 30
   <div class="wrap">
     <div class="demo-cap">
       <h2>This is the app.</h2>
-      <p>A working copy of the real window, running the app's own signal maths in your browser. Only the toys
-        and the link to VRChat are simulated.</p>
+      <p>A working copy of the real window, running the app's own signal maths in your browser. Only the toys,
+        the shocker hub, your friends and the link to VRChat are simulated.</p>
     </div>
     <div id="ogp-demo" aria-label="A working copy of the OscGoesPurrr window"></div>
     <p class="demo-swipe">The window keeps its real proportions &mdash; swipe sideways to see the rest of it.</p>
@@ -615,7 +619,10 @@ footer { margin-top: 84px; border-top: 1px solid var(--edge); padding: 44px 0 30
 <script src="assets/ogp-accent.js"></script>
 <script src="assets/ogp-chain.js"></script>
 <script src="assets/demo-stats.js"></script>
+<script src="assets/demo-icons.js"></script>
+<script src="assets/remote-proto.js"></script>
 <script src="assets/demo.js"></script>
+<script type="module" src="assets/demo-pages.js"></script>
 <script>
 (function () {
   'use strict';

@@ -294,3 +294,31 @@
 .o-note { max-width: 520px; margin: 120px auto 0 auto; text-align: center; }
 .o-note p { color: var(--muted); line-height: 20px; margin: 14px 0 0 0; }
 .o-note .o-btn { margin-top: 18px; }
+
+/* ---- 0.14: sidebar icons, Home's strip and device rows, Features -------------- */
+.o-nav .n .ic { width: 16px; height: 16px; flex: none; margin-right: 8px; display: inline-flex; color: var(--muted); }
+.o-nav .n .ic svg { width: 16px; height: 16px; }
+.o-setup {
+  display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px; margin-bottom: 10px; flex: none;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--card); cursor: pointer;
+}
+.o-setup .o-ok { width: 11px; height: 11px; border-radius: 6px; background: var(--accent); margin-left: 6px; }
+.o-setup .o-ok:first-child { margin-left: 0; }
+.o-setupr { margin-left: auto; color: var(--dim); font-size: 11px; }
+.o-homehead { gap: 10px; justify-content: flex-start; }
+.o-homehead .o-tspace { flex: 1; }
+.o-devicon svg { width: 26px; height: 26px; color: var(--hue); }
+.o-dev .o-tzones { margin-left: 4px; }
+.o-swl { font-size: 13px; color: var(--txt); margin-right: 6px; }
+.o-dev .o-caret { font-size: 14px; }
+.o-dev.down { background: transparent; border-color: var(--dim); }
+.o-dev.down .o-tname { color: var(--muted); }
+.o-dev.down .o-dot { background: transparent; border: 2px solid var(--dim); }
+.o-pill.err { background: transparent; color: var(--err); border-color: var(--err-mid); margin-right: 8px; }
+.o-btn.danger { color: var(--err); border-color: var(--err-mid); font-weight: 700; }
+.o-btn.danger:hover { background: var(--err-tint); border-color: var(--err); color: var(--err); }
+.o-toysoff { display: none; margin-top: 6px; }
+
+/* the pages built in their own files: the page's margins, scrolling */
+.o-page.o-built { padding: 0; }
+.o-pgscroll { position: absolute; inset: 0; padding: 20px 10px 22px 20px; }

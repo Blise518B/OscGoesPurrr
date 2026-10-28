@@ -49,8 +49,10 @@
     return z === 'All SPS' ? z : n === 0 ? 'No zones' : n === 1 ? z : n + ' zones';
   }
   var STAGES = ['input', 'depth', 'speed', 'punch', 'combine', 'wake', 'envelope', 'zerocut', 'output'];
+  // Pages built in their own files (demo-friends.js, demo-shockers.js,
+  // demo-avatar.js): the window keeps a scrolling frame for each.
+  var BUILT = ['Friends', 'My Avatar Remote', 'Shockers'];
   var NOTES = {
-    'Friends': 'Link with other OGP users over the internet: swap an ID once, and each friend may drive your toys, move your strength and fire your shockers — only what you switch on for them, all of it logged. You drive theirs from here or from your avatar’s menu.',
     'SPS Sources': 'Builds a zone out of your avatar’s own contact receivers, for avatars whose contacts are not standard SPS / OGB sockets and plugs. A source you make here can be picked for any toy on Home.',
     'OSC Inspector': 'A live table of every parameter your avatar sends over OSC, with search — for finding the contact you want, or checking that one moves at all.',
     'OSC Diagnostics': 'Shows whether VRChat is reaching the app: the port in use, packets per second, when the last one arrived, and buttons to reconnect by hand.',
@@ -62,8 +64,21 @@
     mode: 0, strength: 0.85, off: false, sleep: false, page: 'Home',
     sim: { on: true, hz: 1.0, amp: 1.0, shape: 0 }, manual: null, manualUntil: 0,
     graph: false, graphToy: 'lush', graphMotor: 0, graphChain: 0,
-    testUntil: 0, t: 0
+    testUntil: 0, t: 0, scanAt: 24,
+    // a friend driving these toys: toy id -> [level 0..1, override]
+    drive: {},
+    // the shocker hub on Home and the Shockers page (demo-shockers.js)
+    shock: { armed: true, share: true, on: true },
+    // Settings -> Features: a switched-off one hides its page
+    features: { intiface: true, inspector: true, statistics: true, pishock: true, friends: true, params: true }
   };
+  var ICONS = window.OGPDemoIcons || {};
+  // The sidebar's pages: name, icon (ui/icons.py), its colour token ('' = the
+  // nav text's), the feature switch that hides it
+  var NAV = [['Friends', 'friends', 'cyan', 'friends'], ['My Avatar Remote', 'params', 'accent', 'params'],
+             ['Shockers', 'shock', 'yellow', 'pishock'], ['Statistics', 'stats', '', 'statistics']];
+  var NAV_TOOLS = [['SPS Sources', 'sps'], ['OSC Inspector', 'inspector', '', 'inspector'],
+                   ['OSC Diagnostics', 'diagnostics'], ['System Log', 'log']];
 
   // ── the engine: one real chain object per motor ──────────────────────────
   var SHAPES = ((Chain && Chain.WAVEFORMS) || ['sine']).map(function (w) { return w.charAt(0).toUpperCase() + w.slice(1); });
@@ -101,7 +116,11 @@
     var modes = MODES.map(function (m, i) {
       return '<span class="o-btn o-mode' + (i === S.mode ? ' on' : '') + '" data-mode="' + i + '" data-tip="mode">' + m.name + '<i>' + m.icon + '</i></span>';
     }).join('');
-    function nav(name) { return '<span class="n" data-go="' + name + '">' + name + '</span>'; }
+    function nav(name, icon, hue, feature) {
+      return '<span class="n" data-go="' + name + '"' + (feature ? ' data-feature="' + feature + '"' : '') + '>' +
+        '<i class="ic"' + (hue ? ' style="color:var(--' + hue + ')"' : '') + '>' + (ICONS[icon] || '') + '</i>' + name + '</span>';
+    }
+    function navs(list) { return list.map(function (n) { return nav(n[0], n[1], n[2], n[3]); }).join(''); }
     return '<div class="o-side">' +
       '<div class="o-brand" data-go="Home">OscGoesPurrr</div><div class="o-build"><span class="ver-tag"></span>&nbsp;</div>' +
       '<div class="o-grid o-modes">' + modes + '</div>' +
@@ -109,9 +128,9 @@
       '<input type="range" class="big js-strength" min="0" max="100" value="85" tabindex="-1" data-tip="strength">' +
       '<div class="o-grid o-offrow"><span class="o-btn o-mode warn js-off" data-tip="off">Off</span><span class="o-btn o-mode js-sleep" data-tip="sleep">Sleep</span></div>' +
       '<div class="o-nav">' +
-        '<span class="n home on" data-go="Home">' + HOME_SVG + 'Home</span>' + nav('Friends') + nav('Statistics') +
-        '<span class="grp">TOOLS</span>' + nav('SPS Sources') + nav('OSC Inspector') + nav('OSC Diagnostics') + nav('System Log') +
-        '<span class="gap"></span>' + nav('Settings') + nav('Help') +
+        '<span class="n home on" data-go="Home">' + HOME_SVG + 'Home</span>' + navs(NAV) +
+        '<span class="grp">TOOLS</span>' + navs(NAV_TOOLS) +
+        '<span class="gap"></span>' + nav('Settings', 'settings') + nav('Help', 'help') +
       '</div>' +
       '<div class="o-links"><div class="l" data-tip="vrc"><span>VRChat</span><span class="o-pill ok">CONNECTED</span></div>' +
       '<div class="l" data-tip="intiface"><span>Intiface</span><span class="o-pill ok">CONNECTED</span></div></div>' +
@@ -133,10 +152,27 @@
       '<span class="o-caret">▸</span></div><div class="o-toybody"></div></div>';
   }
 
+  // The shocker hub, in the toy list under the connected toys (home_devices.py)
+  function shockRowHTML() {
+    return '<div class="o-toy o-dev" data-dev="shock" style="--hue:var(--yellow);--hue-mid:var(--yellow-mid)">' +
+      '<div class="o-toybar" data-tip="shockrow"><span class="o-ticon o-devicon">' + (ICONS.shock || '') + '</span>' +
+      '<span class="o-dot"></span><span class="o-tname">Shockers</span><span class="o-tzones">PiShock · Collar, Thigh</span>' +
+      '<span class="o-tspace"></span><span class="o-pill err js-armed">ARMED</span>' +
+      '<span class="o-sw on js-share" data-tip="shockshare"></span><span class="o-swl">Share with friends</span>' +
+      '<span class="o-sw on js-shockon" data-tip="shockon"></span><span class="o-swl js-shockonl">On</span>' +
+      '<span class="o-caret">›</span></div></div>';
+  }
+
   function homeHTML() {
     return '<div class="o-page on" data-page="Home"><div class="o-home">' +
-      '<div class="o-homehead"><h4>Toys</h4><span class="o-btn js-testall" data-tip="test">Test all</span></div>' +
-      '<div class="o-toys o-scroll">' + TOYS.map(toyHTML).join('') + '</div>' +
+      '<div class="o-setup" data-tip="setup"><span class="o-ok"></span>Toy on<span class="o-ok"></span>VRChat connected' +
+        '<span class="o-ok"></span>Avatar has SPS<span class="o-setupr">Getting started</span></div>' +
+      '<div class="o-homehead"><h4>Toys</h4><span class="o-btn js-scan" data-tip="scan">Scan now</span>' +
+        '<span class="o-muted js-nextscan"></span><span class="o-tspace"></span>' +
+        '<span class="o-btn js-testall" data-tip="test">Test all</span></div>' +
+      '<div class="o-toys o-scroll">' + TOYS.filter(function (t) { return t.on; }).map(toyHTML).join('') + shockRowHTML() +
+        TOYS.filter(function (t) { return !t.on; }).map(toyHTML).join('') + '</div>' +
+      '<div class="o-toysoff o-muted">Toy communication is off — switch it back on in Settings, under Features.</div>' +
       '<div class="o-tools"><div class="o-toolbar" data-tip="tools"><span class="car">▸</span><b>Tuning tools</b><span class="sum">Simulator · signal graph</span></div>' +
       '<div class="o-toolbody">' +
         '<div class="o-card o-simcard">' +
@@ -155,9 +191,20 @@
 
   function settingsHTML() {
     function line(on, text) { return '<div class="line"><span class="o-sw' + (on ? ' on' : '') + '" data-flip="1"></span><span>' + text + '</span></div>'; }
+    function feat(key, text) {
+      return '<div class="line"><span class="o-sw on" data-feat="' + key + '" data-tip="feature"></span><span>' + text + '</span></div>';
+    }
     return '<div class="o-page" data-page="Settings"><div class="o-viewtitle">Application Settings</div>' +
       '<div class="o-tabs"><span class="on">General</span><span>Sessions</span></div>' +
       '<div class="o-setscroll o-scroll">' +
+      '<div class="o-card o-set"><div class="o-sect">Features</div>' +
+        '<p>Turn off features you don’t need. Disabled features hide their sidebar entry and stop their background threads to save resources.</p>' +
+        '<div class="line"><span class="o-btn" data-tip="interests">Choose what you use…</span></div>' +
+        feat('intiface', 'Intiface toy communication (Buttplug.io)') + feat('inspector', 'OSC Inspector (debug view)') +
+        feat('statistics', 'Usage statistics') +
+        '<div class="line" style="padding-left:44px"><span class="o-btn danger" data-tip="delstats">Delete statistics…</span></div>' +
+        feat('pishock', 'Shockers — PiShock / OpenShock (USB)') + feat('friends', 'Friends — control each other over the internet') +
+        feat('params', 'Avatar Remote — avatar boards friends can use too') + '</div>' +
       '<div class="o-card o-set"><div class="o-sect">Connection Settings</div>' +
         line(1, 'Auto Refresh Devices') + line(1, 'Auto Connect (Intiface)') + line(1, 'Auto Connect (VRChat OSC)') +
         line(1, 'Sound when a toy connects or disconnects') +
@@ -191,6 +238,7 @@
     '<div class="ogp">' + sideHTML() +
     '<div class="o-main">' + homeHTML() +
       '<div class="o-page" data-page="Statistics"></div>' + settingsHTML() +
+      BUILT.map(function (n) { return '<div class="o-page o-built" data-page="' + n + '"><div class="o-pgscroll o-scroll rpanel"></div></div>'; }).join('') +
       Object.keys(NOTES).map(noteHTML).join('') + '</div>' +
     '<div class="o-status"><span class="o-help">?&nbsp; Show me around</span>' +
     '<span>OscGoesPurrr <span class="ver-tag"></span> · made by <b>Blise518B</b></span></div>' +
@@ -322,8 +370,41 @@
   }
 
   // ── interactions ──────────────────────────────────────────────────────────
+  // What the pages in their own files listen to: 'shock' (the hub's
+  // switches), 'features', 'page', 'strength'.
+  var handlers = {};
+  function on(name, fn) { (handlers[name] = handlers[name] || []).push(fn); }
+  function emit(name) { (handlers[name] || []).forEach(function (fn) { fn(S); }); }
+
+  function refreshShockRow() {
+    var row = $('.o-dev[data-dev="shock"]'), up = S.shock.on;
+    $('.js-armed', row).style.display = S.shock.armed && up ? '' : 'none';
+    $('.js-share', row).classList.toggle('on', S.shock.share);
+    $('.js-shockon', row).classList.toggle('on', up);
+    $('.js-shockonl', row).textContent = up ? 'On' : 'Off';
+    row.classList.toggle('down', !up);
+  }
+  on('shock', refreshShockRow);
+  function applyFeatures() {
+    $$('.o-nav [data-feature]').forEach(function (n) { n.style.display = S.features[n.getAttribute('data-feature')] ? '' : 'none'; });
+    $$('[data-feat]').forEach(function (sw) { sw.classList.toggle('on', !!S.features[sw.getAttribute('data-feat')]); });
+    $('.o-dev[data-dev="shock"]').style.display = S.features.pishock ? '' : 'none';
+    $('.o-toys').style.display = S.features.intiface ? '' : 'none';
+    $('.o-toysoff').style.display = S.features.intiface ? 'none' : '';
+  }
+  function setFeature(key, value) { S.features[key] = value; applyFeatures(); emit('features'); }
+  function setStrength(v) {
+    S.strength = clamp(v, 0, 1);
+    var inp = $('.js-strength');
+    inp.value = Math.round(S.strength * 100); setRange(inp);
+    $('.js-strval').textContent = Math.round(S.strength * 100) + '%';
+    emit('strength');
+  }
+
   function go(page) {
     if (!$('.o-page[data-page="' + page + '"]')) return;
+    var entry = $('.o-nav [data-go="' + page + '"]');
+    if (entry && entry.style.display === 'none') return;     // its feature is switched off
     S.page = page;
     $$('.o-page').forEach(function (p) { p.classList.toggle('on', p.getAttribute('data-page') === page); });
     $$('.o-nav .n').forEach(function (n) { n.classList.toggle('on', n.getAttribute('data-go') === page); });
@@ -333,9 +414,10 @@
       statsPage.innerHTML = window.OGPDemoStats.HTML;
       window.OGPDemoStats.init(statsPage);
     }
+    emit('page');
   }
   function refreshZones() {
-    $$('.o-toy').forEach(function (t) { $('.o-tzones', t).textContent = zoneLabel(t.getAttribute('data-toy')); });
+    $$('.o-toy[data-toy]').forEach(function (t) { $('.o-tzones', t).textContent = zoneLabel(t.getAttribute('data-toy')); });
     $$('.o-toy.open').forEach(function (t) {
       var id = t.getAttribute('data-toy');
       motors[id].forEach(function (_m, mi) { refreshChain(t, id, mi, 0); refreshChain(t, id, mi, 1); });
@@ -363,6 +445,14 @@
     if (t.closest('.js-sleep')) { S.sleep = !S.sleep; $('.js-sleep').classList.toggle('on', S.sleep); return; }
     if (t.closest('.js-testall')) { S.testUntil = S.t + 1.0; return; }
     if ((x = t.closest('[data-flip]'))) { x.classList.toggle('on'); return; }
+    if ((x = t.closest('[data-feat]'))) { setFeature(x.getAttribute('data-feat'), !x.classList.contains('on')); return; }
+    if (t.closest('.js-scan')) { S.scanAt = 30; return; }      // it looks now; with a toy connected the next is 30 s on
+    var dev = t.closest('.o-dev');
+    if (dev) {
+      if (t.closest('.js-share')) { S.shock.share = !S.shock.share; emit('shock'); return; }
+      if (t.closest('.js-shockon')) { S.shock.on = !S.shock.on; emit('shock'); return; }
+      go('Shockers'); return;
+    }
     if ((x = t.closest('.js-uimode'))) { setMode(x.getAttribute('data-uimode')); return; }
     if ((x = t.closest('.o-swatch'))) { setHue(x.hasAttribute('data-hue') ? +x.getAttribute('data-hue') : null); return; }
     if ((x = t.closest('.js-idfold'))) {
@@ -432,9 +522,7 @@
 
   app.addEventListener('input', function (e) {
     var inp = e.target;
-    if (inp.classList.contains('js-strength')) {
-      S.strength = inp.value / 100; $('.js-strval').textContent = inp.value + '%'; setRange(inp); return;
-    }
+    if (inp.classList.contains('js-strength')) { setStrength(inp.value / 100); return; }
     if (inp.classList.contains('js-hue')) { setHue(+inp.value, true); return; }
     if (inp.classList.contains('js-idhue')) { chosenHues[inp.closest('.o-idrow').getAttribute('data-id')] = +inp.value; applyColour(); return; }
     var key = inp.getAttribute('data-key');
@@ -559,14 +647,27 @@
 
   function tick(dt) {
     S.t += dt;
+    S.scanAt -= dt;
+    if (S.scanAt <= 0) S.scanAt += 30;
     if (!Chain) return;
     var pen = contactNow(), ref = null;
     TOYS.forEach(function (toy) {
       if (!toy.on) return;
-      var heard = hears(toy.id) ? pen : 0;
+      var heard = hears(toy.id) ? pen : 0, drive = S.drive[toy.id];
       motors[toy.id].forEach(function (mo, mi) {
         var res = mo.m.step(dt, { pen: heard, touch: 0 }, { strength: S.strength, off: S.off, sleep: S.sleep });
         var out = res.out;
+        // A friend's level joins at the end, as in the app (motor_router
+        // _apply_friend_drive): scaled by your strength (none while Off),
+        // into this motor's output band; the higher wins, or with Override
+        // theirs replaces it.
+        if (drive) {
+          if (drive[0] > 0) {
+            var theirs = mo.m.mapIntoOutputBand(Math.min(1, drive[0]) * (S.off ? 0 : S.strength));
+            out = drive[1] ? theirs : Math.max(out, theirs);
+          } else if (drive[1]) out = 0;
+        }
+        if (!S.features.intiface) out = 0;
         if (!S.off && (S.t < S.testUntil || S.t < mo.testUntil)) out = Math.max(out, mo.m.mapIntoOutputBand(TEST_LEVEL));
         if (mo.muted) out = 0;
         mo.out = out; mo.res = res;
@@ -586,7 +687,9 @@
   }
 
   function paint() {
-    $$('.o-toy').forEach(function (toyEl) {
+    var scan = 'Next scan in ' + Math.max(1, Math.ceil(S.scanAt)) + ' s', ns = $('.js-nextscan');
+    if (ns.textContent !== scan) ns.textContent = scan;
+    $$('.o-toy[data-toy]').forEach(function (toyEl) {
       var id = toyEl.getAttribute('data-toy'), ms = motors[id];
       if (!ms || toyEl.classList.contains('offline')) return;
       $$('.o-toybar .o-meter i', toyEl).forEach(function (fill, i) { meterFill(fill, ms[i].out); });
@@ -702,6 +805,14 @@
     graph: ['Signal graph', 'Every stage of one chain drawn live, for the motor and chain picked beside the switch.'],
     uimode: ['Vibrant / Darker', '<b>Vibrant</b> draws every card, button and chip with an outline in your colour. <b>Darker</b> turns those outlines down to a faint hairline and deepens the blacks, so only what matters lights up. Same layout in both.<br><br>Switches as you click \u2014 nothing restarts.'],
     colour: ['Colour', 'Turns everything that is green \u2014 frames, buttons, highlights, even the faint tint of the background \u2014 to the colour you pick, as you pick it. Brightness and contrast stay as they are.<br><br>The colours that <i>mean</i> something keep theirs \u2014 each toy\u2019s own colour, pink for the live signal, amber for warnings, red for errors \u2014 unless your colour lands right on one of them: that one then moves out of its way (pick Pink, and the pink turns green). <b>Other colours</b> below shows them all and lets you set any of them yourself.'],
+    setup: ['Getting started', 'The three things that have to be true for your toys to feel your avatar: a toy connected, VRChat talking to the app over OSC, and an avatar with SPS / OGB contacts. Click to open the steps again.'],
+    scan: ['Scan now', 'Looks for toys right away. While none is connected the app looks every few seconds by itself; with one connected, every 30 seconds, so the link stays fast.'],
+    shockrow: ['Shockers', 'Your PiShock or OpenShock hub and the shockers on it. Click to open the Shockers page.'],
+    shockshare: ['Share with friends', 'On: friends you allow may fire your shockers, within each shocker’s own limits. Off: your friends don’t see your shockers at all.'],
+    shockon: ['On / Off', 'Off stops every shocker and keeps them stopped, even after a restart. Sharing stays as it was.'],
+    feature: ['Features', 'Switch a feature off and its page leaves the sidebar and its background work stops. Nothing you set up for it is lost.'],
+    interests: ['Choose what you use', 'Asks again what you have and want — toys, a shocker, friends — and switches the features to match.'],
+    delstats: ['Delete statistics', 'Deletes everything recorded. Asks first. Works whether statistics are on or off.'],
     idcolours: ['Other colours', 'The colours that <i>mean</i> something: the live signal, errors, warnings, shockers, each toy\u2019s own colour.<br><br><b>Auto</b> (the default): a colour keeps its own hue \u2014 unless your colour above lands too close to it, then it moves out of its way, to where it stands out most.<br><b>Drag a slider</b> to set that colour yourself; it then stays where you put it, whatever your colour. <b>Auto</b> hands it back.']
   };
   var tip = el('<div class="tip" role="tooltip"></div>'), tipTimer = null, tipFor = null;
@@ -743,8 +854,21 @@
     visible = !document.hidden; if (visible) { prev = undefined; requestAnimationFrame(frameFn); }
   });
 
+  applyFeatures(); refreshShockRow();
   window.OGPDemo = {
-    state: S, go: go, contact: contactNow,
+    state: S, go: go, contact: contactNow, on: on, emit: emit, icons: ICONS,
+    // the pages in their own files: their frame, and what they drive
+    page: function (name) { return $('.o-page[data-page="' + name + '"] .o-pgscroll'); },
+    toys: TOYS,
+    // toy id -> [level, override], as a friend drives them (the Me row)
+    setDrive: function (map) { S.drive = map || {}; },
+    // what each connected toy is sent now (its strongest motor)
+    outputs: function () {
+      var o = {};
+      TOYS.forEach(function (t) { if (t.on && motors[t.id]) o[t.id] = Math.max.apply(null, motors[t.id].map(function (m) { return m.out; })); });
+      return o;
+    },
+    setStrength: setStrength, setFeature: setFeature,
     // The visitor as the contact: a depth 0..1, held for a moment after the last call.
     setManual: function (v) { S.manual = v === null ? null : clamp(+v, 0, 1); S.manualUntil = S.t + 1.2; },
     onTick: function (fn) { listeners.push(fn); },
