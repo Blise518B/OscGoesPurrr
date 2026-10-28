@@ -44,6 +44,7 @@ from ui.icons import (
     icon_cross as _icon_cross,
 )
 from ui import theme as _theme
+from ui.views.settings_appearance import AppearanceMixin
 from ui.widgets import (
     ToggleSwitch,
     Invoker as _Invoker,
@@ -56,7 +57,7 @@ from ui.widgets import (
 )
 
 
-class SettingsMixin:
+class SettingsMixin(AppearanceMixin):
 
     # ----------------------------------------------------------
     # Settings view
@@ -83,9 +84,33 @@ class SettingsMixin:
             "avatar sends. Off: the page is hidden and stops its work.",
         "feature_statistics":
             "Your sessions, charts and lifetime totals, kept only on this "
-            "PC. Off: nothing is recorded any more, the Statistics page is "
-            "hidden, and everything recorded so far is deleted (it asks "
-            "first).",
+            "PC. Off: nothing is recorded any more and the Statistics page "
+            "is hidden - what is recorded stays, for when you switch it back "
+            "on. Delete statistics… (right below) deletes it.",
+        "feature_friends":
+            "Link with other OGP users over the internet: they may drive your "
+            "toys or shockers if you allow it, and you theirs. Off: the "
+            "Friends page is hidden and the link is closed - OGP then never "
+            "contacts the servers that help two PCs find each other.",
+        "feature_params":
+            "Boards of controls for your avatar's parameters, per avatar - VRC "
+            "Parameter Relay's board, inside OGP. On: the My Avatar Remote page "
+            "appears, and friends you allow see the board of the avatar you "
+            "wear and can use it. Off: the page is hidden and friends see "
+            "nothing of it.",
+        "feature_pishock":
+            "A PiShock or OpenShock hub plugged into this PC by USB. On: the "
+            "Shockers page appears in the sidebar. Off: the page is hidden, "
+            "the hub is let go and nothing is sent to it.",
+        "feature_bhaptics":
+            "A bHaptics suit, sleeves or head, straight over Bluetooth — no "
+            "bHaptics Player. On: the Suits page appears and OGP connects to "
+            "it. Off: the suit is zeroed and let go, so the Player can have "
+            "it again.",
+        "feature_owo":
+            "An OWO suit, through the My OWO app (which keeps your "
+            "calibration). On: the Suits page appears; OGP connects when you "
+            "press Connect. Off: OWO is stopped and My OWO is let go.",
     }
 
     def _build_settings_view(self, parent_layout: QVBoxLayout):
@@ -117,6 +142,12 @@ class SettingsMixin:
         # the original card stack.
         self._build_sessions_panel(sessions_lay)
         parent_layout = general_lay
+
+        # ---- Features Card ----
+        # First (Blise's call, 2026-10-27): what the app shows at all. A
+        # feature switched off hides its sidebar entry AND stops its
+        # background thread, so the app doesn't pay for what it isn't using.
+        parent_layout.addWidget(self._build_features_card())
 
         # ---- Modes Card ----
         # The per-avatar memory used to sit on the Dashboard's Modes card.
@@ -216,11 +247,34 @@ class SettingsMixin:
         self._explain(
             self.auto_refresh_var, "Auto refresh devices",
             "Keep looking for toys by itself, so one you switch on shows up "
-            "without pressing anything: every 5 seconds while no toy is "
-            "connected and one is expected (the first minutes after "
-            "launch, after a toy drops, or when you open this window), "
-            "every 30 seconds otherwise. Off: a Find toys button appears "
-            "in the sidebar instead.")
+            "without pressing anything: every few seconds while no toy is "
+            "connected (how often: below), every 30 seconds while one is - "
+            "a scan shares Bluetooth with a connected toy, so it waits. "
+            "Off: a Find toys button appears in the sidebar instead.")
+        scan_row = QWidget()
+        scan_lay = _hbox(0, 8)
+        scan_lay.setContentsMargins(
+            ToggleSwitch._TRACK_W + ToggleSwitch._LABEL_SPACING, 0, 0, 0)
+        scan_row.setLayout(scan_lay)
+        scan_lay.addWidget(QLabel("While no toy is connected, look every"))
+        self.toy_scan_spin = QSpinBox()
+        self.toy_scan_spin.setRange(*TOY_SEARCH_RATE_RANGE)
+        self.toy_scan_spin.setSuffix(" s")
+        self.toy_scan_spin.setFixedWidth(86)
+        self.toy_scan_spin.setValue(int(self.controller.get_toy_scan_interval()))
+        self.toy_scan_spin.valueChanged.connect(
+            lambda v: self.controller.set_toy_scan_interval(int(v)))
+        scan_lay.addWidget(self.toy_scan_spin)
+        scan_lay.addStretch(1)
+        conn_lay.addWidget(scan_row)
+        scan_row.setVisible(self.auto_refresh_var.isChecked())
+        self.auto_refresh_var.toggled.connect(scan_row.setVisible)
+        self._explain(
+            self.toy_scan_spin, "How often to look",
+            "While no toy is connected, a scan for toys starts this often - "
+            "5 seconds by default, so a toy you switch on shows up almost at "
+            "once. Each scan listens on Bluetooth for 2 seconds. Once a toy "
+            "is connected, the app looks every 30 seconds instead.")
 
         self.auto_connect_var = ToggleSwitch("Auto Connect (Intiface)")
         self.auto_connect_var.setChecked(
@@ -342,6 +396,32 @@ class SettingsMixin:
                 "It is sent again whenever you change avatar, and goes "
                 "false when you close the app. Each toy has its own switch "
                 "for \"this toy is connected\": open the toy on Home."))
+
+        # Thrust counters as avatar parameters, for a counter display.
+        if callable(getattr(self.controller, "get_thrust_params_enabled", None)):
+            self.thrust_params_toggle = ToggleSwitch("Send thrust counters to VRChat")
+            self.thrust_params_toggle.setChecked(
+                bool(self.controller.get_thrust_params_enabled()))
+            self.thrust_params_toggle.toggled.connect(
+                lambda checked: self.controller.set_thrust_params_enabled(bool(checked)))
+            conn_lay.addWidget(self.thrust_params_toggle)
+            self._explain(
+                self.thrust_params_toggle, "Send thrust counters to VRChat",
+                "Sends three counters as <b>Int</b> avatar parameters, for a "
+                "counter on your avatar or a prop:<br>"
+                "<b>OGP/Thrusts/Total</b> — every thrust on record<br>"
+                "<b>OGP/Thrusts/Session</b> — since the app started<br>"
+                "<b>OGP/Thrusts/PerMin</b> — thrusts in the last minute<br><br>"
+                "An Int only holds 0 to 255, so each counter also goes out "
+                "digit by digit: <b>/D1</b> is the ones, <b>/D2</b> the tens "
+                "and so on — <b>OGP/Thrusts/Total/D1</b> to <b>/D7</b>, "
+                "Session <b>/D1</b> to <b>/D5</b>, PerMin <b>/D1</b> to "
+                "<b>/D3</b>. Add the ones your asset uses; keep them unsynced "
+                "unless others should see them (each synced Int costs 8 "
+                "bits).<br><br>"
+                "The same numbers as the Statistics page, so it needs Usage "
+                "statistics on. Sent again whenever you change avatar; the "
+                "pace goes to 0 when you close the app. Off by default.")
 
         parent_layout.addWidget(conn_card)
         self._connection_card = conn_card
@@ -638,16 +718,31 @@ class SettingsMixin:
         ap_lay.addWidget(ap_hdr)
         ap_lay.addWidget(self._build_ui_mode_row())
         ap_lay.addWidget(self._build_accent_picker())
+        ap_lay.addWidget(self._build_identity_colours())
         parent_layout.addWidget(ap_card)
         self._appearance_card = ap_card
 
-        # ---- Features Card ----
-        # Lets the user turn off subsystems they don't need. Disabling a
-        # feature hides its sidebar entry AND stops its background thread
-        # so the app doesn't pay for what it isn't using.
+        parent_layout.addStretch(1)
+
+        # This page's sections for the live colour sweep: the title, the
+        # tab bar, each card and the Sessions tab -- so a colour picked
+        # here runs down the page card by card instead of all at once.
+        # (The cards are built once and never added to later.)
+        style_root = getattr(self, "_style_root", None)
+        if callable(style_root):
+            style_root(title)
+            style_root(tabs.tabBar())
+            for i in range(general_lay.count()):
+                style_root(general_lay.itemAt(i).widget())
+            style_root(sessions_tab)
+
+    def _build_features_card(self) -> QWidget:
+        """Settings → Features, the first card on the page: one switch
+        per feature, and the first-launch question to set them all."""
         feat_card = _Card()
         feat_lay = _vbox(20, 6)
         feat_card.setLayout(feat_lay)
+        self._features_card = feat_card     # What's new's "Take me there"
 
         hdr = QLabel("Features")
         hdr.setObjectName("sectionTitle")
@@ -656,6 +751,19 @@ class SettingsMixin:
             "Turn off features you don't need. Disabled features hide their sidebar "
             "entry and stop their background threads to save resources."
         ))
+        # the first-launch question again (ui/views/interests.py)
+        pick_row = _hbox(0, 8)
+        pick = QPushButton("Choose what you use…")
+        pick.setProperty("role", "secondary")
+        pick.setCursor(Qt.PointingHandCursor)
+        pick.clicked.connect(lambda _=False: self.open_interests())
+        self._explain(pick, "Choose what you use",
+                      "The question a new install starts with: tick what you "
+                      "have and what you want, and the switches below follow. "
+                      "Cancel leaves them as they are.")
+        pick_row.addWidget(pick)
+        pick_row.addStretch(1)
+        feat_lay.addLayout(pick_row)
 
         # One row per controller feature flag — the flag map is the source
         # of truth, so a flag the controller grows later still gets a row
@@ -665,6 +773,11 @@ class SettingsMixin:
             "feature_osc_router_518":   "OSC Router 518 fallback (VRChat receive)",
             "feature_osc_inspector":    "OSC Inspector (debug view)",
             "feature_statistics":       "Usage statistics",
+            "feature_pishock":          "Shockers — PiShock / OpenShock (USB)",
+            "feature_bhaptics":         "bHaptics — suit and sleeves over Bluetooth",
+            "feature_owo":              "OWO — EMS suit through the My OWO app",
+            "feature_friends":          "Friends — control each other over the internet",
+            "feature_params":           "Avatar Remote — avatar boards friends can use too",
         }
         try:
             flag_keys = list(self.controller.get_feature_flags().keys())
@@ -686,43 +799,51 @@ class SettingsMixin:
             self.feature_toggles[key] = tog
             if key in self._FEATURE_TIPS:
                 self._explain(tog, label, self._FEATURE_TIPS[key])
+            if key == "feature_statistics":
+                # off keeps them; this is what deletes them (on or off)
+                row = _hbox(0, 8)
+                row.setContentsMargins(
+                    ToggleSwitch._TRACK_W + ToggleSwitch._LABEL_SPACING, 0, 0, 0)
+                delete = QPushButton("Delete statistics…")
+                delete.setProperty("role", "danger")
+                delete.setProperty("size", "small")
+                delete.clicked.connect(lambda _=False: self._on_delete_stats())
+                self._explain(delete, "Delete statistics",
+                              "Deletes everything recorded - sessions, charts, "
+                              "lifetime totals, who each session was with. "
+                              "Asks first. Works whether statistics are on or "
+                              "off.")
+                row.addWidget(delete)
+                row.addStretch(1)
+                feat_lay.addLayout(row)
 
-        parent_layout.addWidget(feat_card)
-        parent_layout.addStretch(1)
+        return feat_card
 
-        # This page's sections for the live colour sweep: the title, the
-        # tab bar, each card and the Sessions tab -- so a colour picked
-        # here runs down the page card by card instead of all at once.
-        # (The cards are built once and never added to later.)
-        style_root = getattr(self, "_style_root", None)
-        if callable(style_root):
-            style_root(title)
-            style_root(tabs.tabBar())
-            for i in range(general_lay.count()):
-                style_root(general_lay.itemAt(i).widget())
-            style_root(sessions_tab)
+    def _sync_feature_toggles(self) -> None:
+        """Bring the Features switches in line with the flags after they
+        were set elsewhere (the question): quietly, nothing is set twice."""
+        flags = self.controller.get_feature_flags()
+        for key, tog in (getattr(self, "feature_toggles", None) or {}).items():
+            if key in flags and tog.isChecked() != bool(flags[key]):
+                tog.blockSignals(True)
+                tog.setChecked(bool(flags[key]))
+                tog.blockSignals(False)
 
     def _on_feature_toggled(self, key: str, checked: bool) -> None:
-        """A Features switch was flipped. Switching statistics off deletes
-        everything recorded, so that one asks first — and flips back on
-        No."""
-        if key == "feature_statistics" and not checked:
-            resp = QMessageBox.question(
-                (getattr(self, "dialog_parent", None) or self.window), "Turn off statistics",
-                "Turn off usage statistics?\n\nNothing is recorded any more, "
-                "the Statistics page disappears, and everything recorded so "
-                "far (sessions, charts and lifetime totals) is deleted from "
-                "this PC. This cannot be undone.",
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-            )
-            if resp != QMessageBox.Yes:
-                tog = self.feature_toggles.get(key)
-                if tog is not None:
-                    tog.blockSignals(True)
-                    tog.setChecked(True)
-                    tog.blockSignals(False)
-                return
+        """A Features switch was flipped. (Statistics off only stops
+        recording; deleting them is its own button, which asks first.)"""
         self.controller.set_feature_enabled(key, checked)
+
+    def _on_delete_stats(self) -> None:
+        resp = QMessageBox.question(
+            (getattr(self, "dialog_parent", None) or self.window), "Delete statistics",
+            "Delete all statistics?\n\nEvery session, chart, lifetime total and "
+            "who each session was with is deleted from this PC. This cannot "
+            "be undone.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if resp == QMessageBox.Yes:
+            self.controller.delete_stats()
 
     def _bold_label(self, text: str) -> QLabel:
         lbl = QLabel(text)
@@ -764,9 +885,10 @@ class SettingsMixin:
         quiet line in Settings stays either way."""
         if getattr(self, "_update_popup", None) is not None:
             return
-        if getattr(self, "_whats_new_dialog", None) is not None:
-            # One window at a time: the offer opens when "What's new"
-            # closes (ui/views/whats_new.py).
+        if (getattr(self, "_whats_new_dialog", None) is not None
+                or getattr(self, "_interests_dialog", None) is not None):
+            # One window at a time: the offer opens when "What's new" or
+            # the question closes (ui/views/whats_new.py, interests.py).
             self._update_popup_waiting = (latest, current, url, can_install)
             return
         from PySide6.QtCore import QUrl
@@ -956,7 +1078,28 @@ class SettingsMixin:
         scroll.setWidget(inner)
         parent_layout.addWidget(scroll, 1)
 
-        def section(heading: str, body: str):
+        # First the pages to be shown around (ui/views/help.py), then the
+        # long texts, folded until asked for
+        self._build_help_tour(inner_lay)
+        fold = QPushButton("▸  Every part in detail")
+        fold.setProperty("role", "ghost")
+        fold.setCursor(Qt.PointingHandCursor)
+        details = QWidget()
+        details_lay = _vbox(0, 10)
+        details.setLayout(details_lay)
+        details.setVisible(False)
+
+        def flip():
+            details.setVisible(not details.isVisible())
+            fold.setText(("▾" if details.isVisible() else "▸") + "  Every part in detail")
+        fold.clicked.connect(flip)
+        self._explain(fold, "Every part in detail",
+                      "The manual: how modes, signal chains, shockers, suits, the "
+                      "Avatar Remote and the rest work, and where settings live.")
+        inner_lay.addWidget(fold, 0, Qt.AlignLeft)
+        inner_lay.addWidget(details)
+
+        def section(heading: str, body: str, into=None):
             card = _Card()
             lay = _vbox(15, 6)
             card.setLayout(lay)
@@ -966,7 +1109,7 @@ class SettingsMixin:
             b = QLabel(body.strip())
             b.setWordWrap(True)
             lay.addWidget(b)
-            inner_lay.addWidget(card)
+            (into or details_lay).addWidget(card)
             return lay
 
         section("What this app does", """
@@ -1058,6 +1201,41 @@ The SPS Sources tab lets you build a "virtual" SPS zone out of raw VRChat contac
 Type all the contact parameter names comma-separated (the /avatar/parameters/ prefix is optional). Each source you define then appears — by its name — in every toy's zone picker on Home (under "Custom Sources"), where it routes exactly like an auto-detected zone. The sources are global (shared by every mode).
 """)
 
+        section("Shockers over USB (PiShock / OpenShock)", """
+Switch it on under Settings → Features, plug the hub into this PC by USB and press Connect on the Shockers page. No account and no internet: commands go straight down the cable, the moment your avatar's contact changes.
+
+The hub can run PiShock's own firmware or OpenShock's (PiShock's 2023 and Lite hubs can be reflashed with it, and so can a DIY ESP32 board with a 433 MHz transmitter); the app tells which when it connects. A PiShock hub reports its shockers itself. OpenShock firmware keeps no list, so add each shocker on the page — its model and the ID it is paired to. To pair a collar, hold its power button until the light blinks fast and press Beep on its row. PiShock's own shocker is a CaiXianlin.
+
+Three kinds of rule:
+  • Continuous — a value (usually a proximity contact) runs the shocker while it is above the threshold, stronger the closer the contact.
+  • Contact triggers — one on/off contact at a fixed strength: one pulse per touch, or running while touching.
+  • Impact tiers — several OnEnter receivers on one spot, each with a different Min Velocity on the avatar. The strongest one that fired picks the strength, so a slap lands harder than a tap.
+
+Safety: shocks go out as vibrates until you arm them, and arming switches itself off every launch. Max strength, max pulse length, a rest between pulses and a forced break after long continuous runs apply to every send. Stop all, the sidebar's Off, a lost cable and VRChat going silent all stop the shockers at once.
+""")
+
+        section("Suits (bHaptics and OWO)", """
+Switch each suit on under Settings → Features; both share the Suits page and the same contacts on your avatar.
+
+bHaptics: OGP talks to the suit, sleeves and head over Bluetooth itself — close the bHaptics Player first, because a suit takes one connection at a time. No pairing in Windows needed. "Let go" hands the suit back to the Player or a game. If OGP stops sending, the suit goes quiet within a quarter of a second.
+
+OWO: OGP connects to the My OWO app the way a game does (on this PC first, then on your network). My OWO keeps your calibration and drives the suit; 100 % is the top of that calibration. The ceiling and each muscle's top cap every sensation, the Test button stays gentle, and Stop all, the sidebar's Off and VRChat going silent stop OWO at once.
+
+Contacts: the official bHaptics avatar package (bOSC/v2), older bHapticsOSC setups and the OWO avatar package (owo_suit_…) all work. With sharing on, a bHaptics contact also plays the OWO muscle around it and an OWO contact plays its patch of the bHaptics suit. Zone routes send an OGB / SPS zone or a custom source to a part of the body, for both suits.
+""")
+
+        section("Avatar Remote — your avatar's board", """
+VRC Parameter Relay's board, inside OGP. Switch it on under Settings → Features, wear an avatar, and open the parameter list on the right of the My Avatar Remote page: double-click a parameter, or drag it onto a category, to make a control. The kind is picked for its type — a toggle for a Bool, a stepper for an Int, a slider for a Float; ⋯ → Edit changes the label, the kind, the range or inverts a toggle (⇄, for a parameter whose logic is backwards).
+
+An Int can be a toggle or a hold button too: each sets its own value (Outfit = 1, 2, 3 …, shown as =2 on the card), and they switch each other off like VRChat's own menu.
+
+Drag cards by their ⠿ to move them, and categories by the ⠿ in their header. Each category has a colour and a 🔒: locked, friends can see it but not use it (you still can). Every avatar keeps its own board and can have several presets (the drop-down at the top; ⋯ next to it adds, renames and deletes them; a category's ⋯ copies it to another preset). Give an avatar a name and it stays in the ▾ list, so you can edit its board while you wear something else — ✎ OFFLINE then means nothing is sent.
+
+Friends: everyone whose third box (AVATAR) is ticked in your friends list sees the board of the avatar you are wearing under your toys on their Friends page, and can use it — everything they do is logged. ⚡ YOLO gives them every parameter instead (VRChat's own, like Viseme, aside) and locks don't hold for them; it stays on until you turn it off. ■ STOP blocks everything they send until you press RESUME. Nothing is sent to a friend until they have your board open.
+
+Already built boards in VRC Parameter Relay? Import from VRC Parameter Relay copies them all; the Relay's own files stay as they are.
+""")
+
         section("Real-Time OSC Inspector", """
 OSC Inspector shows every OSC parameter your avatar is broadcasting. It starts automatically when you open the page and stops when you leave — useful for finding the exact name of a parameter before mapping it to a motor.
 
@@ -1070,6 +1248,8 @@ Both consume the same data, so they stay in lockstep.
 
         section("Hover explanations", """
 Rest the mouse on a control, a heading or a button for a moment and its explanation pops up on its own — the modes, the strength bar, Off and Sleep, every stage of a signal chain, the zone pickers, the connection buttons. Move the mouse away and it disappears. There is nothing to switch on first.
+
+For a whole page at once, press F1 (or Show me around in the status bar): the page's steps appear above it, and whatever you point at lights up with what it is. Clicks do nothing while it is on, so looking around never changes a setting. Esc leaves.
 """)
 
         section("Where settings live on disk", f"""
@@ -1078,15 +1258,19 @@ Rest the mouse on a control, a heading or a button for a moment and its explanat
   • known_devices.json       — global toy list (name, motor count, motor kinds)
   • app_settings.json        — global app preferences
   • sps_sources.json         — synthetic contact zones, shared by every mode
+  • pishock_settings.json    — Shockers: port, safety limits, OpenShock shockers and rules
+  • suits_settings.json      — Suits: bHaptics parts, OWO muscles and ceiling, zone routes
+  • param_boards.json        — Avatar Remote: every avatar's boards, YOLO and STOP
   • sessions_settings.json   — session-logger preferences
   • stats.json, stats_hours.json, stats_sessions{os.sep}
                              — usage statistics (Settings → Features →
-                               Usage statistics; switching it off deletes them)
+                               Usage statistics; off keeps them, Delete
+                               statistics… deletes them)
 """)
 
         license_lay = section("License", """
 OscGoesPurrr is free and open source under the MIT license. It also uses other open-source projects, each under its own license — the button below lists them.
-""")
+""", into=inner_lay)
         lic_btn = QPushButton("Show licenses…")
         lic_btn.setCursor(Qt.PointingHandCursor)
         lic_btn.clicked.connect(self._show_licenses)
@@ -1098,208 +1282,20 @@ OscGoesPurrr is free and open source under the MIT license. It also uses other o
 
         inner_lay.addStretch(1)
 
-        # Sections for the live colour sweep: the title and each card. As
-        # one section this page is the app's most expensive slice -- a
-        # dozen long word-wrapped texts laid out again in one go.
+        # Sections for the live colour sweep: the title and each card (the
+        # folded ones one by one, not their plain container). As one
+        # section this page is the app's most expensive slice -- a dozen
+        # long word-wrapped texts laid out again in one go.
         style_root = getattr(self, "_style_root", None)
         if callable(style_root):
             style_root(title)
             for i in range(inner_lay.count()):
-                style_root(inner_lay.itemAt(i).widget())
-
-    # ----------------------------------------------------------
-    # Appearance: the mode and the colour picker
-    # ----------------------------------------------------------
-
-    # "Mode:" and "Colour:" share a column, so what follows them lines up.
-    _APPEARANCE_LABEL_W = 52
-
-    _UI_MODE_TIP = (
-        "<b>Vibrant</b> draws every card, button and chip with an outline "
-        "in your colour. <b>Darker</b> turns those outlines down to a "
-        "faint hairline and deepens the blacks, so only what matters "
-        "lights up. Same layout in both.<br><br>"
-        "Switches as you click — nothing restarts."
-    )
-
-    def _build_ui_mode_row(self) -> QWidget:
-        """Mode: one button per mode, the one in use lit."""
-        host = QWidget()
-        row = _hbox(0, 8)
-        host.setLayout(row)
-        label = QLabel("Mode:")
-        label.setFixedWidth(self._APPEARANCE_LABEL_W)
-        row.addWidget(label)
-        self._ui_mode_buttons = {}
-        for key in _theme.MODE_ORDER:
-            btn = QPushButton(_theme.MODE_LABELS.get(key, key))
-            btn.setProperty(
-                "role", "segActive" if key == _theme.MODE else "segIdle")
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.clicked.connect(lambda _=False, k=key: self._set_ui_mode(k))
-            row.addWidget(btn)
-            self._ui_mode_buttons[key] = btn
-        self._explain(row, "Vibrant / Darker", self._UI_MODE_TIP)
-        row.addStretch(1)
-        return host
-
-    def _set_ui_mode(self, key: str) -> None:
-        """Switch between the two modes, now: the page in view first, the
-        rest of the app right behind it (the same sweep as a colour)."""
-        key = _theme.normalize_mode(key)
-        live = getattr(self, "live_theme", None)
-        if live is None or not live.set_mode(key):
-            return
-        self.controller.set_app_setting("ui_mode", key)
-        for k, btn in self._ui_mode_buttons.items():
-            btn.setProperty("role", "segActive" if k == key else "segIdle")
-            self._repolish(btn)
-        # The picker shows this mode's version of every colour.
-        self._paint_accent_picker()
-
-    _ACCENT_TIP = (
-        "Turns everything that is green — frames, buttons, highlights, "
-        "even the faint tint of the background — to the colour you pick, "
-        "as you pick it. Brightness and contrast stay as they are, so "
-        "every colour reads as well as the green does.<br><br>"
-        "The colours that <i>mean</i> something keep theirs: each toy's "
-        "own colour, pink for the live signal, amber for warnings, red "
-        "for errors.<br><br>"
-        "Nothing restarts: what you are looking at changes first and the "
-        "rest of the app follows a moment later. <b>Green</b> brings the "
-        "original back."
-    )
-
-    # The slider reports every pixel of a drag; the app follows at most
-    # this often. One step re-styles what is on screen (two or three
-    # sections), so this is also the frame rate of the live preview.
-    _ACCENT_LIVE_MS = 40
-    # The choice is written to disk once the picker has been still this long.
-    _ACCENT_SAVE_MS = 600
-
-    def _build_accent_picker(self) -> QWidget:
-        """Colour: presets and a hue slider. The whole app is the preview:
-        a choice is applied as it is made (ui/live_theme.py sweeps it
-        through the app in slices) and saved once the picker rests."""
-        host = QWidget()
-        lay = _vbox(0, 8)
-        host.setLayout(lay)
-
-        self._accent_pick = _theme.ACCENT_HUE
-
-        # ---- presets ----
-        row = _hbox(0, 8)
-        colour_label = QLabel("Colour:")
-        colour_label.setFixedWidth(self._APPEARANCE_LABEL_W)
-        row.addWidget(colour_label)
-        self._accent_preset_buttons = []
-        for name, hue in _theme.ACCENT_PRESETS:
-            btn = QPushButton("")
-            btn.setFixedSize(24, 24)
-            btn.setCursor(Qt.PointingHandCursor)
-            btn.setToolTip(name)
-            # Shows a colour that is not the current one, on purpose.
-            btn.setProperty("noRetint", True)
-            btn.clicked.connect(lambda _=False, h=hue: self._set_accent_pick(h))
-            row.addWidget(btn)
-            self._accent_preset_buttons.append((btn, hue))
-        row.addStretch(1)
-        lay.addLayout(row)
-
-        # ---- hue slider: its track is the colours it leads to ----
-        slider = QSlider(Qt.Horizontal)
-        slider.setRange(0, 359)
-        slider.setPageStep(15)
-        slider.setFixedHeight(24)
-        slider.setMaximumWidth(420)
-        slider.setCursor(Qt.PointingHandCursor)
-        slider.setProperty("noRetint", True)
-        self._accent_slider = slider
-        slider.valueChanged.connect(
-            lambda v: self._set_accent_pick(float(v), from_slider=True))
-        lay.addWidget(slider)
-
-        self._accent_note = self._muted_label(
-            "Mode and colour change as you pick — no restart.")
-        lay.addWidget(self._accent_note)
-
-        # Coalesce a drag into steps the app can keep up with, and save
-        # once it stops.
-        self._accent_live_timer = QTimer(host)
-        self._accent_live_timer.setSingleShot(True)
-        self._accent_live_timer.setInterval(self._ACCENT_LIVE_MS)
-        self._accent_live_timer.timeout.connect(self._apply_accent_pick)
-        self._accent_save_timer = QTimer(host)
-        self._accent_save_timer.setSingleShot(True)
-        self._accent_save_timer.setInterval(self._ACCENT_SAVE_MS)
-        self._accent_save_timer.timeout.connect(self._save_accent_pick)
-
-        self._explain(lay, "Colour", self._ACCENT_TIP)
-        self._paint_accent_picker()
-        return host
-
-    def _set_accent_pick(self, hue, from_slider: bool = False) -> None:
-        """Take a choice (None = the house green) from a preset or the
-        slider. A preset applies at once; a drag is coalesced."""
-        default = _theme.DEFAULT_ACCENT_HUE
-        if from_slider and hue is not None and round(hue) == round(default):
-            hue = None                    # the green's own spot on the track
-        self._accent_pick = hue
-        if from_slider:
-            if not self._accent_live_timer.isActive():
-                self._accent_live_timer.start()
-        else:
-            self._accent_live_timer.stop()
-            self._apply_accent_pick()
-
-    def _apply_accent_pick(self) -> None:
-        """Turn the app to the picked colour, now."""
-        hue = self._accent_pick
-        live = getattr(self, "live_theme", None)
-        if live is not None:
-            live.set_hue(hue)
-        self._paint_accent_picker()
-        self._accent_save_timer.start()
-
-    def _save_accent_pick(self) -> None:
-        hue = self._accent_pick
-        self.controller.set_app_setting(
-            "ui_accent_hue", None if hue is None else round(float(hue), 1))
-
-    def _paint_accent_picker(self) -> None:
-        """Repaint the picker around the current choice: the slider's
-        position, its handle and track, and the ring on the chosen preset."""
-        hue = self._accent_pick
-        now = _theme.CHROME
-        accent = _theme.accent_preview(hue)["accent"]
-
-        slider = self._accent_slider
-        want = int(round(_theme.DEFAULT_ACCENT_HUE if hue is None else hue)) % 360
-        if slider.value() != want and not slider.isSliderDown():
-            slider.blockSignals(True)
-            slider.setValue(want)
-            slider.blockSignals(False)
-        stops = ", ".join(
-            f"stop:{i / 12:.4f} {_theme.accent_preview(i * 30.0)['accent']}"
-            for i in range(13))
-        slider.setStyleSheet(
-            "QSlider::groove:horizontal { height: 10px; "
-            f"border: 1px solid {now['line']}; border-radius: 6px; "
-            f"background: qlineargradient(x1:0, y1:0, x2:1, y2:0, {stops}); }}"
-            "QSlider::sub-page:horizontal { background: transparent; }"
-            "QSlider::handle:horizontal { width: 14px; height: 14px; "
-            "margin: -4px 0; border-radius: 9px; "
-            f"background: {accent}; border: 2px solid {now['txt']}; }}")
-
-        for btn, preset in self._accent_preset_buttons:
-            chosen = _theme.same_accent(preset, hue)
-            fill = _theme.accent_preview(preset)["accent"]
-            ring = now["txt"] if chosen else now["panel"]
-            btn.setStyleSheet(
-                f"QPushButton {{ background-color: {fill}; "
-                f"border: 2px solid {ring}; border-radius: 12px; padding: 0; }}"
-                f"QPushButton:hover {{ background-color: {fill}; "
-                f"border-color: {now['txt']}; }}")
+                w = inner_lay.itemAt(i).widget()
+                if w is details:
+                    for j in range(details_lay.count()):
+                        style_root(details_lay.itemAt(j).widget())
+                else:
+                    style_root(w)
 
     def _build_toy_safety_card(self) -> QWidget:
         """Anti-stuck, the safety cutoff for a frozen input. It is on by

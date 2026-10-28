@@ -49,13 +49,13 @@ if not exist "%ENGINE_REPO%\Cargo.toml" (
     goto :fail
 )
 
-echo === [1/4] Updating monorepo ^(git pull --ff-only^) ===
+echo === [1/5] Updating monorepo ^(git pull --ff-only^) ===
 pushd "%ENGINE_REPO%"
 git pull --ff-only
 if errorlevel 1 echo   (no fast-forward / pull skipped - building current checkout)
 
 echo.
-echo === [2/4] Building intiface-engine (release, incremental) ===
+echo === [2/5] Building intiface-engine (release, incremental) ===
 cargo build --release --bin intiface-engine
 if errorlevel 1 (
     echo ERROR: cargo build failed. See output above.
@@ -65,7 +65,7 @@ if errorlevel 1 (
 popd
 
 echo.
-echo === [3/4] Copying engine into OscGoesPurrr ===
+echo === [3/5] Copying engine into OscGoesPurrr ===
 if not exist "%DEST_DIR%" mkdir "%DEST_DIR%"
 copy /Y "%ENGINE_REPO%\target\release\intiface-engine.exe" "%DEST%" >nul
 if errorlevel 1 (
@@ -74,7 +74,17 @@ if errorlevel 1 (
 )
 
 echo.
-echo === [4/4] Done. Placed engine version: ===
+echo === [4/5] Writing the engine's device list (tools\make_engine_device_config.py) ===
+set "PY=%ROOT%venv\Scripts\python.exe"
+if not exist "%PY%" set "PY=python"
+"%PY%" "%ROOT%tools\make_engine_device_config.py"
+if errorlevel 1 (
+    echo ERROR: the device list was not written. See the message above.
+    goto :fail
+)
+
+echo.
+echo === [5/5] Done. Placed engine version: ===
 "%DEST%" --version
 
 echo.

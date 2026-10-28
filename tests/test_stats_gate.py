@@ -389,26 +389,44 @@ class TestStatisticsSwitch:
         h._stats_shutdown()
         assert list(tmp_path.iterdir()) == []
 
-    def test_switching_off_deletes_everything_recorded(self, tmp_path, monkeypatch):
-        h, flags = self._host(tmp_path, monkeypatch)
+    def _recorded(self, h, tmp_path):
         h.stats_tracker.sample(1.0, ["Domi"], [], 3)
         h.stats_tracker.flush(force=True)
         h.stats_history.sample(T0 + 1, 1.0, {"Domi": 1.0}, [], 3)
         h.stats_history.flush(force=True)
         (tmp_path / "stats.json.before-gate.bak").write_text("{}", encoding="utf-8")
         assert (tmp_path / "stats_sessions").exists()
+
+    def test_switching_off_stops_recording_and_keeps_everything(self, tmp_path, monkeypatch):
+        h, flags = self._host(tmp_path, monkeypatch)
+        self._recorded(h, tmp_path)
         flags["feature_statistics"] = False
         h._stats_set_enabled(False)
         assert h.stats_tracker is None and h.stats_history is None
-        assert list(tmp_path.iterdir()) == []
-        h._stats_shutdown()                      # writes nothing back
-        assert list(tmp_path.iterdir()) == []
+        assert (tmp_path / "stats.json").exists() and (tmp_path / "stats_sessions").exists()
+        h._stats_sample_tick()                   # nothing recorded while off
+        h._stats_shutdown()
 
-    def test_switching_back_on_starts_fresh(self, tmp_path, monkeypatch):
+    def test_switching_back_on_carries_on_from_what_is_there(self, tmp_path, monkeypatch):
         h, flags = self._host(tmp_path, monkeypatch)
-        h.stats_tracker.sample(1.0, ["Domi"], [], 3)
+        self._recorded(h, tmp_path)
         h._stats_set_enabled(False)
         flags["feature_statistics"] = True
         h._stats_set_enabled(True)
         assert h.stats_tracker is not None and h.stats_history is not None
-        assert h.stats_tracker.lifetime["thrusts"] == 0
+        assert h.stats_tracker.lifetime["thrusts"] == 3
+
+    def test_delete_statistics_deletes_everything_on_or_off(self, tmp_path, monkeypatch):
+        h, flags = self._host(tmp_path, monkeypatch)
+        self._recorded(h, tmp_path)
+        flags["feature_statistics"] = False
+        h._stats_set_enabled(False)
+        h.delete_stats()                         # off: just gone
+        assert list(tmp_path.iterdir()) == []
+        assert h.stats_tracker is None
+        flags["feature_statistics"] = True
+        h._stats_set_enabled(True)
+        self._recorded(h, tmp_path)
+        h.delete_stats()                         # on: gone, and recording again
+        assert h.stats_tracker is not None and h.stats_tracker.lifetime["thrusts"] == 0
+        assert not (tmp_path / "stats.json.before-gate.bak").exists()

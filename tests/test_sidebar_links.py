@@ -126,8 +126,8 @@ class TestIntifaceRow:
 
 
 class TestToySearchPacing:
-    """How often the app looks for toys: hard while none is connected and
-    one is expected, at the old slow beat otherwise."""
+    """How often the app looks for toys: every few seconds (the user's
+    interval) while none is connected, at the old slow beat while one is."""
 
     class _Engine:
         def __init__(self, names=()):
@@ -137,43 +137,47 @@ class TestToySearchPacing:
         def list_connected_device_names(self):
             return list(self.names)
 
-    def _facade(self, names=()):
+    def _facade(self, names=(), interval=None):
         from controllers.intiface_facade import IntifaceFacade
 
         class Host(IntifaceFacade):
-            pass
+            def get_app_setting(self, key, default=None):
+                return default if interval is None else interval
 
         h = Host.__new__(Host)
         h.haptic_engine = self._Engine(names)
         return h
 
-    def test_no_toy_and_one_expected_scans_every_five_seconds(self):
+    def test_no_toy_scans_every_five_seconds_by_default(self):
         import constants as C
         h = self._facade()
-        h.note_toy_search_wanted()
-        assert h._toy_scan_pause() == C.TOY_SEARCH_RATE_S - C.TOY_SCAN_SECONDS
-        assert C.TOY_SEARCH_RATE_S == 5.0
+        assert h.get_toy_scan_interval() == C.TOY_SEARCH_RATE_S == 5
+        assert h._toy_scan_pause() == 5 - C.TOY_SCAN_SECONDS        # a scan STARTS every 5 s
+
+    def test_the_interval_is_the_users_within_its_range(self):
+        import constants as C
+        assert self._facade(interval=12)._toy_scan_pause() == 12 - C.TOY_SCAN_SECONDS
+        lo, hi = C.TOY_SEARCH_RATE_RANGE
+        assert self._facade(interval=1).get_toy_scan_interval() == lo
+        assert self._facade(interval=999).get_toy_scan_interval() == hi
+        assert self._facade(interval="junk").get_toy_scan_interval() == C.TOY_SEARCH_RATE_S
 
     def test_a_connected_toy_keeps_the_slow_beat_whatever_is_asked(self):
         """Scanning shares the radio with the toy's own link; its latency
         comes first, so nothing speeds the scan up while one is live."""
         import constants as C
-        h = self._facade(["Lush"])
+        h = self._facade(["Lush"], interval=3)
         h.note_toy_search_wanted()
         assert h._toy_scan_pause() == C.AUTO_REFRESH_RATE_S
 
-    def test_the_fast_search_ends_by_itself(self, monkeypatch):
-        import constants as C
+    def test_with_no_toy_the_search_never_slows_down(self, monkeypatch):
         import controllers.intiface_facade as mod
         now = [1000.0]
         monkeypatch.setattr(mod.time, "monotonic", lambda: now[0])
         h = self._facade()
-        assert h._toy_scan_pause() == C.AUTO_REFRESH_RATE_S   # never asked
-        h.note_toy_search_wanted()
-        now[0] += C.TOY_SEARCH_WINDOW_S - 1
-        assert h._toy_scan_pause() < C.AUTO_REFRESH_RATE_S
-        now[0] += 2
-        assert h._toy_scan_pause() == C.AUTO_REFRESH_RATE_S
+        first = h._toy_scan_pause()
+        now[0] += 3600
+        assert h._toy_scan_pause() == first
 
     def test_losing_the_only_toy_starts_the_search_within_a_second(self, monkeypatch):
         """The loop ticks once a second and re-reads the pause, so a pause
@@ -231,3 +235,45 @@ class TestListeningFacade:
         assert "self.is_listening = False" in inspect.getsource(mgr.__init__)
         assert "self.is_listening = True" in inspect.getsource(mgr.start)
         assert "self.is_listening = False" in inspect.getsource(mgr.stop)
+
+
+class TestScanNowAndCountdown:
+    def _loop(self, monkeypatch, names, until):
+        import asyncio
+        import controllers.intiface_facade as mod
+        h = TestToySearchPacing()._facade(names)
+        h.auto_refresh_enabled = True
+        scans, ticks, seen = [], [0], []
+
+        async def fake_scan():
+            scans.append(ticks[0])
+
+        async def fake_sleep(_s):
+            ticks[0] += 1
+            seen.append(h.get_toy_scan_status()["next_in"])
+            until(h, ticks[0], scans)
+
+        h._async_start_scanning = fake_scan
+        monkeypatch.setattr(mod.asyncio, "sleep", fake_sleep)
+        asyncio.run(h._async_auto_refresh_loop())
+        return scans, seen
+
+    def test_scan_now_scans_at_once_even_with_a_toy_connected(self, monkeypatch):
+        def until(h, tick, scans):
+            if tick == 4:
+                h._toy_scan_now = True           # what scan_for_toys sets
+            if tick >= 6:
+                h.auto_refresh_enabled = False
+        scans, _seen = self._loop(monkeypatch, ["Lush"], until)
+        assert scans == [4]                      # within the second, not at 30
+
+    def test_the_countdown_counts_down_to_the_next_scan(self, monkeypatch):
+        import constants as C
+
+        def until(h, tick, scans):
+            if len(scans) >= 2:
+                h.auto_refresh_enabled = False
+        scans, seen = self._loop(monkeypatch, [], until)
+        step = 5 - C.TOY_SCAN_SECONDS
+        assert scans[:2] == [step, 2 * step]
+        assert seen[0] is None or seen[0] <= step   # never past the next scan

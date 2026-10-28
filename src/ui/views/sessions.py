@@ -5,7 +5,6 @@ logger's facade methods (enable / auto-start / retention / start /
 stop / list / delete / open-folder) to the user."""
 
 import time
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from PySide6.QtCore import Qt, QTimer
@@ -18,6 +17,7 @@ from PySide6.QtWidgets import (
 from constants import BTN_HEIGHT_SMALL
 
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
+from ui.text_helpers import fmt_when
 from ui.widgets import (
     Card as _Card,
     ToggleSwitch,
@@ -325,7 +325,7 @@ class SessionsMixin:
         name.setTextInteractionFlags(Qt.TextSelectableByMouse)
         rlay.addWidget(name)
 
-        started = QLabel(_fmt_when(s.get("started_at_unix")))
+        started = QLabel(fmt_when(s.get("started_at_unix")))
         started.setProperty("role", "muted")
         started.setMinimumWidth(140)
         rlay.addWidget(started)
@@ -533,7 +533,7 @@ class SessionsMixin:
     def _format_replay_label(self, s: Dict[str, Any]) -> str:
         """Human label for a session: when it ran + duration + its id."""
         ts = s.get("started_at_unix") or s.get("mtime_unix")
-        parts = [_fmt_when(ts)]
+        parts = [fmt_when(ts)]
         dur = s.get("duration_s")
         if dur:
             parts.append(_fmt_duration(dur))
@@ -738,12 +738,3 @@ def _fmt_ms(ms: float) -> str:
     s = max(0, int(round(float(ms or 0) / 1000.0)))
     m, s = divmod(s, 60)
     return f"{m}:{s:02d}"
-
-
-def _fmt_when(unix_ts: Optional[float]) -> str:
-    if not unix_ts:
-        return "—"
-    try:
-        return datetime.fromtimestamp(float(unix_ts)).strftime("%Y-%m-%d %H:%M")
-    except (TypeError, ValueError, OSError):
-        return "—"

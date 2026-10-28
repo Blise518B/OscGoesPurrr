@@ -299,6 +299,52 @@ class TestGettingStarted:
         fresh._refresh_setup_checklist()
         assert not fresh._setup_card.isHidden()
 
+    def test_dont_show_again_folds_it_to_a_line_of_lights(self, fresh):
+        assert fresh._setup_strip.isHidden()
+        fresh._setup_hide_btn.click()
+        assert fresh.controller.settings["home_setup_compact"] is True
+        assert fresh._setup_card.isHidden()
+        assert not fresh._setup_strip.isHidden()
+        lights = fresh._setup_strip.lights
+        assert [n.text() for _d, n in lights.values()] == [
+            "Toy on", "VRChat connected", "Avatar has SPS"]
+
+    def test_the_lights_follow_the_steps_and_stay_when_all_are_green(self, fresh):
+        def lit(key):
+            return "solid" not in fresh._setup_strip.lights[key][0].styleSheet()
+        fresh._set_setup_compact(True)
+        assert not any(lit(k) for k in ("toy", "osc", "zones"))
+        c = fresh.controller
+        c.connected.add("Alpha")
+        fresh._refresh_setup_checklist()
+        assert lit("toy") and not lit("osc")
+        c.osc_ok = c.zones_ok = True
+        fresh._refresh_setup_checklist()
+        assert all(lit(k) for k in ("toy", "osc", "zones"))
+        assert not fresh._setup_strip.isHidden()    # a status line now
+        assert fresh._setup_card.isHidden()
+
+    def test_folded_for_good_across_launches(self, qapp):
+        ctl = FakeController({}, connected=())
+        ctl.osc_ok = ctl.zones_ok = False
+        ctl.settings["home_setup_compact"] = True
+        host = _Host(ctl)
+        assert host._setup_card.isHidden()
+        assert not host._setup_strip.isHidden()
+
+    def test_a_click_on_the_line_opens_the_card_again(self, fresh):
+        from PySide6.QtCore import Qt
+        from PySide6.QtTest import QTest
+        c = fresh.controller
+        c.connected.add("Alpha")
+        c.osc_ok = c.zones_ok = True
+        fresh._set_setup_compact(True)
+        QTest.mouseClick(fresh._setup_strip, Qt.LeftButton)
+        assert c.settings["home_setup_compact"] is False
+        assert fresh._setup_strip.isHidden()
+        # everything is green, yet the card you asked for stays
+        assert not fresh._setup_card.isHidden()
+
     def test_with_the_built_in_engine_off_it_says_to_start_intiface(self, fresh):
         fresh.controller.settings["use_integrated_intiface"] = False
         fresh._refresh_setup_checklist()

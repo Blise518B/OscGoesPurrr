@@ -79,12 +79,7 @@ VPY="$VENV/bin/python"
 
 if [ "${SKIP_TESTS:-}" != "1" ]; then
     say "Tests"
-    # test_site_ports.py checks the website's JavaScript against the Python
-    # number for number; glibc's maths rounds a few hues of near-greys
-    # differently from Windows', so it only holds where release.bat runs
-    # it. The website isn't part of this build.
-    QT_QPA_PLATFORM=offscreen "$VPY" -m pytest -q -p no:cacheprovider \
-        --ignore=tests/test_site_ports.py
+    QT_QPA_PLATFORM=offscreen "$VPY" -m pytest -q -p no:cacheprovider
 fi
 
 # ---- 3. PyInstaller ------------------------------------------------------
@@ -117,6 +112,7 @@ rm -rf "$WORK/pyi-dist"
     --distpath "$WORK/pyi-dist" --workpath "$WORK/pyi-work" --specpath "$WORK" \
     --exclude-module pystray --exclude-module readline \
     --exclude-module curses --exclude-module _curses \
+    --collect-binaries iroh \
     --add-data "$ROOT/src/Images:Images" \
     --add-data "$ROOT/LICENSE:." \
     --add-data "$ROOT/THIRD_PARTY_NOTICES.md:." \
@@ -193,7 +189,7 @@ cat > "$APPDIR/$APP.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=$APP
-Comment=VRChat OSC to toys, through Intiface
+Comment=All your VRChat haptics, in one app
 Exec=$APP
 Icon=$APP
 Categories=Utility;

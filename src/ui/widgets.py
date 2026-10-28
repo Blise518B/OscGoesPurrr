@@ -5,7 +5,10 @@ blocks. Cross-thread invocation is handled by `Invoker` so the controller
 can schedule callbacks onto the UI thread without importing Qt.
 """
 
+import weakref
 from typing import Callable, List, Optional
+
+import shiboken6
 
 from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import (
@@ -37,6 +40,13 @@ from constants import (
     COLOR_SUCCESS,
     COLOR_TEXT,
 )
+
+# A toy's icon on its bar, the slot it sits in, and how far it fades while
+# the toy is offline -- shared by the toy bars and Home's shocker / suit
+# rows, which line up with them in one list.
+TOY_ICON_PX = 26
+TOY_ICON_SLOT_PX = TOY_ICON_PX + 4
+OFFLINE_ICON_OPACITY = 0.45
 
 
 class ToggleSwitch(QCheckBox):
@@ -237,6 +247,40 @@ class ToyFrame(QFrame):
         p.setBrush(QBrush(QColor(ground)) if ground else Qt.NoBrush)
         p.drawRoundedRect(box, radius, radius)
         p.end()
+
+
+class IdentityMark(QWidget):
+    """An identity icon (toys / shock / params / friends / suits,
+    ui/icons.identity_icon) or a page's (ui/icons.page_icon) as a small
+    widget, sharp at any display scale. Clicks go through to what it sits
+    on. Every one redraws when the colour picker moves its colour
+    (redraw_all, hooked to the live theme)."""
+
+    _all: "weakref.WeakSet" = weakref.WeakSet()
+
+    def __init__(self, what: str, size: int = 14, parent=None):
+        super().__init__(parent)
+        self._what = what
+        self.setFixedSize(size, size)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._draw()
+        IdentityMark._all.add(self)
+
+    def _draw(self) -> None:
+        from ui.icons import page_icon
+        self._icon = page_icon(self._what, self.width())
+
+    def paintEvent(self, _ev) -> None:  # noqa: N802
+        p = QPainter(self)
+        self._icon.paint(p, self.rect())
+        p.end()
+
+    @classmethod
+    def redraw_all(cls) -> None:
+        for mark in list(cls._all):
+            if shiboken6.isValid(mark):
+                mark._draw()
+                mark.update()
 
 
 class Card(QFrame):

@@ -62,6 +62,30 @@ SPS_SOURCES_FILE = APPDATA_DIR / "sps_sources.json"
 SESSIONS_DIR = APPDATA_DIR / "sessions"
 SESSIONS_SETTINGS_FILE = APPDATA_DIR / "sessions_settings.json"
 
+# Shockers (PiShock / OpenShock hub) — USB port, safety limits, the
+# OpenShock shocker list and the page's rules (continuous / contact
+# triggers / impact tiers). Global like sps_sources: the rules name
+# avatar parameters, not a mode's routing.
+PISHOCK_SETTINGS_FILE = APPDATA_DIR / "pishock_settings.json"
+
+# Suits — the bHaptics suit (direct Bluetooth) and the OWO suit (through
+# the My OWO app): per-position / per-muscle settings, the OWO ceilings and
+# the zone routes both share. Global like the shocker rules. Its own name:
+# the full edition keeps separate bHaptics / OWO files in this same folder.
+SUITS_SETTINGS_FILE = APPDATA_DIR / "suits_settings.json"
+
+# Friends — your nickname, your contact list and what each friend may do.
+# The link's identity is a key pair in its own binary file, NOT a .json:
+# settings backups copy every top-level *.json, and a backup restored on a
+# second PC must not make it the same friend as the first.
+FRIENDS_SETTINGS_FILE = APPDATA_DIR / "friends.json"
+FRIENDS_KEY_FILE = APPDATA_DIR / "friends_key.bin"
+
+# Parameter boards — the Avatar Remote page's avatars, presets, categories
+# and controls (VRC Parameter Relay's boards, in OGP). One file so the
+# settings backups carry them.
+PARAM_BOARDS_FILE = APPDATA_DIR / "param_boards.json"
+
 # Usage statistics — lifetime totals (on-time, thrusts, per-toy /
 # per-zone usage) plus the recent-session summaries. Owned by
 # stats_tracker.StatsTracker, not a settings manager.
@@ -73,6 +97,10 @@ STATS_FILE = APPDATA_DIR / "stats.json"
 # and rewrites stats.json with only the keys it knows.
 STATS_SESSIONS_DIR = APPDATA_DIR / "stats_sessions"
 STATS_HOURS_FILE = APPDATA_DIR / "stats_hours.json"
+
+# Who each session was with — session tags and per-person totals. Owned by
+# stats_people.StatsPeople; apart from stats.json for the same reason.
+STATS_PEOPLE_FILE = APPDATA_DIR / "stats_people.json"
 
 
 os.makedirs(APPDATA_DIR, exist_ok=True)

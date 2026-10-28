@@ -52,6 +52,9 @@ from ui.widgets import (
     RainbowMeter as _RainbowMeter,
     ToyFrame as _ToyFrame,
     install_rainbow_scrollbars as _install_rainbow_scrollbars,
+    TOY_ICON_PX as _TOY_ICON_PX,
+    TOY_ICON_SLOT_PX as _TOY_ICON_SLOT_PX,
+    OFFLINE_ICON_OPACITY as _OFFLINE_ICON_OPACITY,
 )
 from ui.tooltips import explain as _explain_target
 from ui import theme as _theme
@@ -62,13 +65,11 @@ from ui.motor_signal_chain import (
 from ui.osc_variable_picker import open_osc_variable_picker
 
 
-# The toy icon in a bar: small enough that a row stays one compact line.
-_TOY_ICON_PX = 26
-# A motor's meter in a bar, and the gap between two of them.
+# A motor's meter in a bar, and the gap between two of them. (The toy
+# icon's size and offline fade live in ui/widgets.py: Home's shocker / suit
+# rows share them.)
 _METER_PX = 56
 _METER_GAP_PX = 3
-# An offline toy's icon is faded to match its dimmed row.
-_OFFLINE_ICON_OPACITY = 0.45
 
 
 class DeviceFrameMixin:
@@ -186,7 +187,7 @@ class DeviceFrameMixin:
         icon_button.setObjectName("lovenseIcon")
         icon_button.setAutoRaise(True)
         icon_button.setIconSize(QSize(_TOY_ICON_PX, _TOY_ICON_PX))
-        icon_button.setFixedSize(QSize(_TOY_ICON_PX + 4, _TOY_ICON_PX + 4))
+        icon_button.setFixedSize(QSize(_TOY_ICON_SLOT_PX, _TOY_ICON_SLOT_PX))
         icon_button.setCursor(Qt.PointingHandCursor)
         icon_button.clicked.connect(
             lambda _=False, n=device_name, b=icon_button: self._on_lovense_icon_clicked(n, b)
@@ -487,8 +488,9 @@ class DeviceFrameMixin:
 
     def _explain(self, target, title: str, text: str) -> None:
         """Hover explanation for a control, a row or a group -- see
-        ui/tooltips.py. The app has no separate help mode: resting the
-        mouse on anything that has an explanation shows it."""
+        ui/tooltips.py. Resting the mouse on anything that has one shows
+        it; help mode (F1, ui/help_mode.py) shows its title and first
+        sentence when the control is pointed at."""
         _explain_target(target, title, text)
 
     def _build_motor_card(self, device_name: str, motor_idx: int,
@@ -1103,6 +1105,9 @@ class DeviceFrameMixin:
         # leaked ones accumulated ABOVE the cards, sinking them toward the
         # bottom of the scroll area.
         if self.unified_devices_layout is not None:
+            # Rows another view keeps in the list (_reorder_device_frames)
+            # are its own: taken out here, placed again below.
+            extras = getattr(self, "_toy_list_extras", ())
             while self.unified_devices_layout.count():
                 item = self.unified_devices_layout.takeAt(0)
                 w = item.widget() if item is not None else None
@@ -1110,6 +1115,8 @@ class DeviceFrameMixin:
                     # Hide before detaching: a still-visible child reparented
                     # to None briefly realises as a top-level window (a flash).
                     w.hide()
+                    if w in extras:
+                        continue
                     w.setParent(None)
                     w.deleteLater()
             self.unified_devices_layout.addStretch(1)
@@ -1127,6 +1134,7 @@ class DeviceFrameMixin:
             self._style_root(placeholder)
             if self.unified_devices_layout is not None:
                 self.unified_devices_layout.insertWidget(0, placeholder)
+            self._reorder_device_frames()
             return
 
         device_motor_counts = controller.get_device_motor_counts()
@@ -1164,6 +1172,7 @@ class DeviceFrameMixin:
                 "status_label": frame_data["status_label"],
                 "delete_button": frame_data["delete_button"],
             }
+        self._reorder_device_frames()
 
     def build_device_list_ui(self, devices_dict: dict):
         # Device set changed — the wrapper registry the page-level
@@ -1230,42 +1239,61 @@ class DeviceFrameMixin:
             self._refresh_signal_graph_targets()
 
     def _reorder_device_frames(self):
-        if self.unified_devices_layout is None:
+        """Put the toy list in order -- the one place that does: the
+        connected toys, the rows another view keeps right under them, the
+        toys that aren't connected, then that view's rows for the bottom.
+        The rows come from the view's `_toy_list_rows()` (Home's shocker /
+        suit rows, HomeMixin), looked up by name because this mixin comes
+        first in the UI class. Anything else in the list (the "No toys yet"
+        note) stays put above them. The layout is only touched when the
+        order changed: the 1 Hz heartbeat lands here."""
+        lay = self.unified_devices_layout
+        if lay is None:
             return
         connected_names = self.controller.get_connected_device_names()
         all_names = list(self.device_ui_frames.keys())
         all_names.sort(key=lambda name: (name not in connected_names, name.lower()))
+        frames = [self.device_ui_frames[n]["frame"] for n in all_names]
+        live = sum(1 for n in all_names if n in connected_names)
 
-        # Take every device card out, then re-insert in sorted order.
-        # Anything that isn't a tracked device card stays put.
-        tracked_frames = {self.device_ui_frames[n]["frame"]: n for n in all_names}
-        non_card_items: list = []
-        i = 0
-        while i < self.unified_devices_layout.count():
-            item = self.unified_devices_layout.itemAt(i)
-            if item is None:
-                i += 1
-                continue
-            w = item.widget()
-            if w is not None and w in tracked_frames:
-                self.unified_devices_layout.takeAt(i)
-            else:
-                i += 1
+        rows_of = getattr(self, "_toy_list_rows", None)
+        under_live, at_bottom = rows_of() if rows_of is not None else ((), ())
+        extras = tuple(under_live) + tuple(at_bottom)
+        dropped = [w for w in getattr(self, "_toy_list_extras", ()) if w not in extras]
+        self._toy_list_extras = extras
+        order = frames[:live] + list(under_live) + frames[live:] + list(at_bottom)
+        placed = set(order).union(dropped)
 
-        # Re-insert cards in order, before the trailing stretch (if any).
-        # Find index of stretch.
-        stretch_index = self.unified_devices_layout.count()
-        for j in range(self.unified_devices_layout.count()):
-            item = self.unified_devices_layout.itemAt(j)
-            if item is not None and item.spacerItem() is not None:
-                stretch_index = j
-                break
+        current = []
+        for i in range(lay.count()):
+            item = lay.itemAt(i)
+            w = item.widget() if item is not None else None
+            if w is not None and w in placed:
+                current.append(w)
+        if current != order:
+            # Take every card and row out, then re-insert them in order
+            # before the trailing stretch (if any).
+            i = 0
+            while i < lay.count():
+                item = lay.itemAt(i)
+                w = item.widget() if item is not None else None
+                if w is not None and w in placed:
+                    lay.takeAt(i)
+                else:
+                    i += 1
+            at = next((j for j in range(lay.count())
+                       if lay.itemAt(j) is not None
+                       and lay.itemAt(j).spacerItem() is not None), lay.count())
+            for w in order:
+                lay.insertWidget(at, w)
+                at += 1
+        for w in dropped:
+            w.hide()
+        for w in extras:
+            w.show()
 
         live_position = 0
-        for name in all_names:
-            frame = self.device_ui_frames[name]["frame"]
-            self.unified_devices_layout.insertWidget(stretch_index, frame)
-            stretch_index += 1
+        for name, frame in zip(all_names, frames):
             # Identity hue by display position among the CONNECTED toys:
             # three stacked read as three, a fourth starts the cycle over.
             # An offline toy wears no hue at all -- a grey outline -- and

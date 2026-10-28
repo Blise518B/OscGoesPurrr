@@ -50,6 +50,7 @@
   }
   var STAGES = ['input', 'depth', 'speed', 'punch', 'combine', 'wake', 'envelope', 'zerocut', 'output'];
   var NOTES = {
+    'Friends': 'Link with other OGP users over the internet: swap an ID once, and each friend may drive your toys, move your strength and fire your shockers — only what you switch on for them, all of it logged. You drive theirs from here or from your avatar’s menu.',
     'SPS Sources': 'Builds a zone out of your avatar’s own contact receivers, for avatars whose contacts are not standard SPS / OGB sockets and plugs. A source you make here can be picked for any toy on Home.',
     'OSC Inspector': 'A live table of every parameter your avatar sends over OSC, with search — for finding the contact you want, or checking that one moves at all.',
     'OSC Diagnostics': 'Shows whether VRChat is reaching the app: the port in use, packets per second, when the last one arrived, and buttons to reconnect by hand.',
@@ -108,7 +109,7 @@
       '<input type="range" class="big js-strength" min="0" max="100" value="85" tabindex="-1" data-tip="strength">' +
       '<div class="o-grid o-offrow"><span class="o-btn o-mode warn js-off" data-tip="off">Off</span><span class="o-btn o-mode js-sleep" data-tip="sleep">Sleep</span></div>' +
       '<div class="o-nav">' +
-        '<span class="n home on" data-go="Home">' + HOME_SVG + 'Home</span>' + nav('Statistics') +
+        '<span class="n home on" data-go="Home">' + HOME_SVG + 'Home</span>' + nav('Friends') + nav('Statistics') +
         '<span class="grp">TOOLS</span>' + nav('SPS Sources') + nav('OSC Inspector') + nav('OSC Diagnostics') + nav('System Log') +
         '<span class="gap"></span>' + nav('Settings') + nav('Help') +
       '</div>' +
@@ -160,7 +161,8 @@
       '<div class="o-card o-set"><div class="o-sect">Connection Settings</div>' +
         line(1, 'Auto Refresh Devices') + line(1, 'Auto Connect (Intiface)') + line(1, 'Auto Connect (VRChat OSC)') +
         line(1, 'Sound when a toy connects or disconnects') +
-        '<div class="line"><span class="o-sw on" data-flip="1"></span><span>Tell VRChat while any toy is connected</span><span class="o-in" style="flex:1">OGP/ToyConnected</span><span class="o-btn">Pick...</span></div></div>' +
+        '<div class="line"><span class="o-sw on" data-flip="1"></span><span>Tell VRChat while any toy is connected</span><span class="o-in" style="flex:1">OGP/ToyConnected</span><span class="o-btn">Pick...</span></div>' +
+        line(0, 'Send thrust counters to VRChat') + '</div>' +
       '<div class="o-card o-set"><div class="o-sect">Toy Safety</div>' +
         '<p>VRChat only sends a value when it changes. If a contact stops updating — you swap avatar, your partner leaves, the link drops — its last value would keep a toy running. Anti-stuck notices a value that has frozen and stops the toy. On by default.</p>' +
         line(1, 'Anti-stuck') +
@@ -170,7 +172,10 @@
         '<div class="line"><span class="o-lbl">Mode:</span><span class="o-btn seg js-uimode on" data-uimode="neon" data-tip="uimode">Vibrant</span><span class="o-btn seg js-uimode" data-uimode="midnight" data-tip="uimode">Darker</span></div>' +
         '<div class="line"><span class="o-lbl">Colour:</span><span class="js-presets" style="display:flex;gap:8px"></span></div>' +
         '<div class="line"><input type="range" class="o-hue js-hue" min="0" max="359" value="150" tabindex="-1" data-tip="colour"></div>' +
-        '<p style="margin-top:4px">Mode and colour change as you pick — no restart.</p></div>' +
+        '<p style="margin-top:4px">Mode and colour change as you pick — no restart.</p>' +
+        '<div class="line"><span class="o-btn small ghost js-idfold" data-tip="idcolours">Other colours ▸</span></div>' +
+        '<div class="js-idbody" style="display:none"><p>A colour that comes too close to yours moves out of its way by itself. Drag one to set it yourself; Auto hands it back.</p>' +
+        '<div class="js-idrows"></div></div></div>' +
       '</div></div>';
   }
 
@@ -187,7 +192,8 @@
     '<div class="o-main">' + homeHTML() +
       '<div class="o-page" data-page="Statistics"></div>' + settingsHTML() +
       Object.keys(NOTES).map(noteHTML).join('') + '</div>' +
-    '<div class="o-status"><span>OscGoesPurrr <span class="ver-tag"></span> · made by <b>Blise518B</b></span></div>' +
+    '<div class="o-status"><span class="o-help">?&nbsp; Show me around</span>' +
+    '<span>OscGoesPurrr <span class="ver-tag"></span> · made by <b>Blise518B</b></span></div>' +
     '</div></div>');
   host.classList.add('ogp-stage');
   host.appendChild(frame);
@@ -359,6 +365,11 @@
     if ((x = t.closest('[data-flip]'))) { x.classList.toggle('on'); return; }
     if ((x = t.closest('.js-uimode'))) { setMode(x.getAttribute('data-uimode')); return; }
     if ((x = t.closest('.o-swatch'))) { setHue(x.hasAttribute('data-hue') ? +x.getAttribute('data-hue') : null); return; }
+    if ((x = t.closest('.js-idfold'))) {
+      var body = $('.js-idbody'), open = body.style.display === 'none';
+      body.style.display = open ? '' : 'none'; x.textContent = open ? 'Other colours ▾' : 'Other colours ▸'; return;
+    }
+    if ((x = t.closest('.js-idauto'))) { delete chosenHues[x.closest('.o-idrow').getAttribute('data-id')]; applyColour(); return; }
     if (t.closest('.o-toolbar')) {
       var tools = $('.o-tools'); tools.classList.toggle('open');
       $('.o-toolbar .car').textContent = tools.classList.contains('open') ? '▾' : '▸';
@@ -425,6 +436,7 @@
       S.strength = inp.value / 100; $('.js-strval').textContent = inp.value + '%'; setRange(inp); return;
     }
     if (inp.classList.contains('js-hue')) { setHue(+inp.value, true); return; }
+    if (inp.classList.contains('js-idhue')) { chosenHues[inp.closest('.o-idrow').getAttribute('data-id')] = +inp.value; applyColour(); return; }
     var key = inp.getAttribute('data-key');
     if (!key || !CONTROLS[key]) return;
     var toyEl = inp.closest('.o-toy'), id = toyEl.getAttribute('data-toy');
@@ -439,19 +451,64 @@
   var CHROME = ['bg', 'panel', 'card', 'well', 'hover', 'line', 'tint', 'accent', 'accent2', 'ink', 'txt', 'muted', 'dim'];
   var GREENS = ['green', 'green-mid', 'green-tint'];
   var PRESETS = [['Green (default)', null], ['Cyan', 'cyan'], ['Blue', 'blue'], ['Purple', 'purple'], ['Pink', 'pink'], ['Orange', 'orange'], ['Yellow', 'yellow']];
+  // The colours that mean something: each moves out of the accent's way
+  // when it lands too close (Accent.identityHues), or is set by hand under
+  // Other colours -- as in the app (constants.IDENTITY_HUES).
+  var IDENT = [['pink', 'Pink', 'the live signal, penetration, friends\u2019 toys'], ['red', 'Red', 'errors and Stop'],
+    ['amber', 'Amber', 'touch contact and warnings'], ['yellow', 'Yellow', 'shockers'],
+    ['cyan', 'Cyan', 'your first toy, friends, things running'], ['blue', 'Blue', 'your second toy'], ['purple', 'Purple', 'your third toy'],
+    ['orange', 'Orange', 'the haptic suits']];
+  var IDTONES = [];
+  IDENT.forEach(function (r) { IDTONES.push(r[0], r[0] + '-mid', r[0] + '-tint'); });
   var neonAccent = tok('--accent'), pickedHue = null, defaultHue = Accent ? Accent.hueOf(neonAccent) : 150;
+  var chosenHues = {};
   function baseTokens() {
-    var names = CHROME.concat(GREENS), base = {};
+    var names = CHROME.concat(GREENS, IDTONES), base = {};
     names.forEach(function (n) { root.style.removeProperty('--' + n); });
     names.forEach(function (n) { base[n] = tok('--' + n); });
     return base;
   }
+  function turn(d) { return ((d % 360) + 360) % 360; }
   function applyColour() {
     if (!Accent) return;
     var base = baseTokens(), delta = Accent.deltaFor(pickedHue, neonAccent);
-    if (delta) Object.keys(base).forEach(function (n) { root.style.setProperty('--' + n, Accent.shiftHex(base[n], delta)); });
+    if (delta) CHROME.concat(GREENS).forEach(function (n) { root.style.setProperty('--' + n, Accent.shiftHex(base[n], delta)); });
+    var own = {};
+    IDENT.forEach(function (r) { own[r[0]] = Accent.hueOf(base[r[0]]); });
+    var moves = Accent.identityHues(pickedHue, own, Accent.hueOf(base.green), chosenHues);
+    Object.keys(moves).forEach(function (n) {
+      var d = turn(moves[n] - own[n]);
+      if (Accent.hueDistance(moves[n], own[n]) < 0.5) return;
+      [n, n + '-mid', n + '-tint'].forEach(function (t) { root.style.setProperty('--' + t, Accent.shiftHex(base[t], d)); });
+    });
     paintPicker(base);
+    paintIdentity(base, own, moves);
     redrawAll();
+  }
+  function paintIdentity(base, own, moves) {
+    var box = $('.js-idrows');
+    if (!box) return;
+    if (!box.firstChild) {
+      box.innerHTML = IDENT.map(function (r) {
+        return '<div class="line o-idrow" data-id="' + r[0] + '"><span class="o-idsw"></span><span class="o-lbl">' + r[1] + '</span>' +
+          '<input type="range" class="o-hue sm js-idhue" min="0" max="359" tabindex="-1">' +
+          '<span class="o-btn small ghost js-idauto">Auto</span><span class="o-idnote"></span></div>';
+      }).join('');
+    }
+    IDENT.forEach(function (r) {
+      var n = r[0], row = $('.o-idrow[data-id="' + n + '"]', box), hue = n in moves ? moves[n] : own[n];
+      var colour = Accent.shiftHex(base[n], turn(hue - own[n]));
+      $('.o-idsw', row).style.background = colour;
+      var stops = [];
+      for (var i = 0; i <= 12; i++) stops.push(Accent.shiftHex(base[n], turn(i * 30 - own[n])) + ' ' + (i / 12 * 100).toFixed(2) + '%');
+      var sl = $('.js-idhue', row);
+      sl.style.setProperty('--huetrack', 'linear-gradient(90deg,' + stops.join(',') + ')');
+      sl.style.setProperty('--huethumb', colour);
+      if (document.activeElement !== sl) sl.value = Math.round(hue) % 360;
+      var chosen = n in chosenHues;
+      $('.js-idauto', row).style.visibility = chosen ? 'visible' : 'hidden';
+      $('.o-idnote', row).textContent = r[2] + (chosen ? ' \u00b7 set by you' : n in moves ? ' \u00b7 moved out of your colour\u2019s way' : '');
+    });
   }
   function setHue(hue, fromSlider) {
     if (hue !== null && fromSlider && Math.round(hue) === Math.round(defaultHue)) hue = null;
@@ -644,7 +701,8 @@
     simplay: ['Play / Stop', 'Starts and stops the simulated contact.'],
     graph: ['Signal graph', 'Every stage of one chain drawn live, for the motor and chain picked beside the switch.'],
     uimode: ['Vibrant / Darker', '<b>Vibrant</b> draws every card, button and chip with an outline in your colour. <b>Darker</b> turns those outlines down to a faint hairline and deepens the blacks, so only what matters lights up. Same layout in both.<br><br>Switches as you click \u2014 nothing restarts.'],
-    colour: ['Colour', 'Turns everything that is green \u2014 frames, buttons, highlights, even the faint tint of the background \u2014 to the colour you pick, as you pick it. Brightness and contrast stay as they are.<br><br>The colours that <i>mean</i> something keep theirs: each toy\u2019s own colour, pink for the live signal, amber for warnings, red for errors.']
+    colour: ['Colour', 'Turns everything that is green \u2014 frames, buttons, highlights, even the faint tint of the background \u2014 to the colour you pick, as you pick it. Brightness and contrast stay as they are.<br><br>The colours that <i>mean</i> something keep theirs \u2014 each toy\u2019s own colour, pink for the live signal, amber for warnings, red for errors \u2014 unless your colour lands right on one of them: that one then moves out of its way (pick Pink, and the pink turns green). <b>Other colours</b> below shows them all and lets you set any of them yourself.'],
+    idcolours: ['Other colours', 'The colours that <i>mean</i> something: the live signal, errors, warnings, shockers, each toy\u2019s own colour.<br><br><b>Auto</b> (the default): a colour keeps its own hue \u2014 unless your colour above lands too close to it, then it moves out of its way, to where it stands out most.<br><b>Drag a slider</b> to set that colour yourself; it then stays where you put it, whatever your colour. <b>Auto</b> hands it back.']
   };
   var tip = el('<div class="tip" role="tooltip"></div>'), tipTimer = null, tipFor = null;
   document.body.appendChild(tip);
@@ -669,7 +727,7 @@
 
   // ── start ─────────────────────────────────────────────────────────────────
   refreshZones(); refreshSim();
-  if (Accent) paintPicker(baseTokens());
+  if (Accent) applyColour();
   var prev, visible = true;
   function frameFn(ts) {
     if (!visible) return;

@@ -13,6 +13,10 @@ from ._paths import APP_SETTINGS_FILE
 DEFAULT_APP_SETTINGS = {
     "auto_connect": True,
     "auto_refresh": True,
+    # While no toy is connected, a scan for toys starts every this many
+    # seconds (constants.TOY_SEARCH_RATE_RANGE); with one connected, every
+    # AUTO_REFRESH_RATE_S.
+    "toy_scan_interval_s": 5,
     "auto_connect_osc": True,
     "bind_all_interfaces": True,
     "hide_console": True,
@@ -84,11 +88,19 @@ DEFAULT_APP_SETTINGS = {
     # shown (whats_new.py); "" = none yet. A later build with notes opens
     # the window once at launch.
     "whats_new_seen_version": "",
+    # "What are you here for?" (interests.py) was answered or skipped.
+    # False -- a new install, or one from before the question -- asks it
+    # once at launch.
+    "interests_asked": False,
     # Settings → Appearance → Colour: the hue (OKLCH degrees, 0-360) every
     # green in the UI is turned to, or None for the house green. Changing
     # it applies while the app runs (ui/live_theme.py); constants.py reads
     # it at import so the next launch starts in it.
     "ui_accent_hue": None,
+    # Settings → Appearance → Other colours: identity colours set by hand,
+    # {"pink": hue, ...}. One left out moves by itself when the colour
+    # above lands too close to it (constants.IDENTITY_HUES).
+    "ui_identity_hues": {},
 }
 
 

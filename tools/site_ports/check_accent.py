@@ -106,8 +106,10 @@ def build_reference(quick):
         d = rng.choice([rng.randrange(1, 360), rng.uniform(-720.0, 720.0)])
         rand.append([hx, d, accent_shift.shift_hex(hx, d)])
 
-    # --- hue_of / delta_for / to_oklch as doubles
-    hues = [[hx, accent_shift.hue_of(hx)] for hx in uniq]
+    # --- hue_of / delta_for / to_oklch as doubles (each hue carries its
+    #     chroma: a grey's hue is rounding noise, see check_accent.js)
+    hues = [[hx, accent_shift.hue_of(hx), accent_shift.to_oklch(hx)[1]]
+            for hx in uniq]
     oklch = [[hx, list(accent_shift.to_oklch(hx))] for hx in uniq]
     accent = theme_tokens.NEON["accent"]
     targets = [None, 0, 29.23, 90, 145.0, 200.5, 264.05, 300, 359.9, 400, -30]
@@ -127,6 +129,20 @@ def build_reference(quick):
                                        table["accent"])
             turned.append([mode_name, hue_name, d,
                            accent_shift.shift_tokens(table, d)])
+
+    # --- identity colours moving out of the accent's way: the app's own
+    #     inputs (its identity hues, the green's spot), over the whole wheel
+    #     of accents, with and without colours set by hand
+    import constants
+    own = {n: accent_shift.hue_of(theme_tokens.PALETTE[n][0])
+           for n in constants.IDENTITY_HUES}
+    vacated = accent_shift.hue_of(theme_tokens.PALETTE["green"][0])
+    choices = [{}, {"pink": 152.0}, {"red": 200.0, "cyan": 20.0}, {"amber": 357.4}]
+    accents = [None] + list(range(0, 360, 9 if quick else 1)) + list(own.values()) + [9.5, 359.9]
+    identity = []
+    for chosen in choices:
+        for a in accents:
+            identity.append([a, chosen, accent_shift.identity_hues(a, own, vacated, chosen)])
 
     # --- the two pieces the port reimplements bit for bit
     n_vec = 600 if quick else 5000
@@ -155,8 +171,10 @@ def build_reference(quick):
         "random": rand,
         "hues": hues,
         "oklch": oklch,
+        "neutral_chroma": accent_shift._NEUTRAL_CHROMA,
         "deltas": deltas,
         "turned": turned,
+        "identity": {"own": own, "vacated": vacated, "cases": identity},
         "hypot": hyp,
         "round": rnd,
     }

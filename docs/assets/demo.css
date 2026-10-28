@@ -115,6 +115,10 @@
   display: flex; align-items: center; justify-content: flex-end; padding-right: 12px;
 }
 .o-status b { color: var(--accent); font-weight: 600; }
+.o-status .o-help {                                   /* help mode's button (sideSmall) */
+  margin-right: 12px; padding: 1px 6px; border: 1px solid var(--ok-mid); border-radius: 6px;
+  color: var(--muted); font-size: 12px;
+}
 
 /* ---- pages ----------------------------------------------------------------- */
 .o-main { position: absolute; left: 240px; top: 0; width: 860px; height: 736px; }
@@ -277,6 +281,14 @@
 .ogp input[type=range].o-hue::-webkit-slider-thumb { width: 18px; height: 18px; border-radius: 9px; border: 2px solid var(--txt); margin-top: -5px; }
 .ogp input[type=range].o-hue::-moz-range-thumb { width: 14px; height: 14px; border-radius: 9px; border: 2px solid var(--txt); }
 .o-lbl { width: 52px; flex: none; }
+.o-btn.ghost { background: transparent; border-color: transparent; color: var(--muted); }
+.o-btn.ghost:hover { background: transparent; border-color: transparent; color: var(--accent); }
+.o-idsw { width: 16px; height: 16px; border-radius: 8px; border: 1px solid var(--line); flex: none; }
+.o-idnote { color: var(--muted); font-size: 12px; }
+.o-hue.sm { width: 220px; height: 20px; flex: none; }
+.ogp input[type=range].o-hue.sm::-webkit-slider-runnable-track { height: 8px; border-radius: 5px; }
+.ogp input[type=range].o-hue.sm::-webkit-slider-thumb { width: 14px; height: 14px; margin-top: -4px; background: var(--huethumb); }
+.ogp input[type=range].o-hue.sm::-moz-range-thumb { width: 10px; height: 10px; background: var(--huethumb); }
 
 /* ---- pages the demo does not rebuild ------------------------------------------ */
 .o-note { max-width: 520px; margin: 120px auto 0 auto; text-align: center; }

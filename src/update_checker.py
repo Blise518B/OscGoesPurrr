@@ -9,6 +9,7 @@
 # caller can decide whether to mention it (manual check) or stay silent
 # (the automatic launch check).
 
+import re
 from typing import Optional, Tuple
 
 try:
@@ -49,6 +50,29 @@ def _parse_version(s) -> Optional[Tuple[int, ...]]:
         return None
 
 
+# A pre-release right after the numeric core: "0.14.0-alpha.1",
+# "0.14.0-beta", "0.14.0-rc.2" -- a dev checkout may append its branch
+# suffix after it ("0.14.0-alpha.1-dev(3)").
+_PRE = re.compile(r"(alpha|beta|rc)(?:\.?(\d+))?(?=$|[-+ ])", re.IGNORECASE)
+_PRE_RANK = {"alpha": 0, "beta": 1, "rc": 2}
+_RELEASE = (3, 0)
+
+
+def _pre_release(s) -> Tuple[int, int]:
+    """Where a version sits among the builds of its numeric core: alpha
+    < beta < rc < the release itself, each numbered ("0.14.0-alpha.1" is
+    (0, 1)). The release, and a dev or branch build ("0.14.0-dev(3)"),
+    is _RELEASE. Pure; exposed for tests."""
+    s = str(s).strip()
+    if s[:1] in ("v", "V"):
+        s = s[1:]
+    rest = s.split("-", 1)[1] if "-" in s else ""
+    m = _PRE.match(rest)
+    if m is None:
+        return _RELEASE
+    return _PRE_RANK[m.group(1).lower()], int(m.group(2) or 0)
+
+
 def _pad(a: Tuple[int, ...], b: Tuple[int, ...]):
     """Right-pad the shorter tuple with zeros so "1.2" == "1.2.0"."""
     n = max(len(a), len(b))
@@ -57,13 +81,16 @@ def _pad(a: Tuple[int, ...], b: Tuple[int, ...]):
 
 def compare_versions(a, b) -> Optional[int]:
     """-1, 0 or 1 as version `a` is older than, the same as or newer than
-    `b`, by their numeric cores ("0.12" == "0.12.0", "0.12.0-dev(3)" ==
-    "0.12.0"). None when either is not a version. Pure."""
+    `b`: by their numeric cores ("0.12" == "0.12.0", "0.12.0-dev(3)" ==
+    "0.12.0"), then a pre-release before its release ("0.14.0-alpha.1" <
+    "0.14.0-beta" < "0.14.0-rc.1" < "0.14.0"). None when either is not a
+    version. Pure."""
     pa, pb = _parse_version(a), _parse_version(b)
     if pa is None or pb is None:
         return None
     pa, pb = _pad(pa, pb)
-    return (pa > pb) - (pa < pb)
+    ka, kb = (pa, _pre_release(a)), (pb, _pre_release(b))
+    return (ka > kb) - (ka < kb)
 
 
 def should_show_popup(info: Optional[dict], manual: bool,
@@ -108,11 +135,11 @@ def check_for_update(current_version: str,
             return None
         tag = str(payload.get("tag_name") or "")
         url = str(payload.get("html_url") or "")
-        latest = _parse_version(tag)
-        current = _parse_version(current_version)
-        if latest is None or current is None:
+        # An alpha is older than its release: someone on 0.14.0-alpha.1
+        # is offered 0.14.0 when it comes out.
+        order = compare_versions(tag, current_version)
+        if order is None:
             return None
-        latest_p, current_p = _pad(latest, current)
         # The downloadable exe, when the release has one. Imported lazily
         # and guarded so a problem in the updater can never turn a working
         # notice-only check into no check at all.
@@ -123,7 +150,7 @@ def check_for_update(current_version: str,
         except Exception:
             asset = None
         return {
-            "available": latest_p > current_p,
+            "available": order > 0,
             "latest": tag[1:] if tag[:1] in ("v", "V") else tag,
             "url": url,
             "asset": asset,

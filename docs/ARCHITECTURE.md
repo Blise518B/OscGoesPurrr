@@ -36,7 +36,8 @@ following anti-tangling rules:
    primitive data to UI facade methods (`ui.update_device_visuals()`,
    `ui.update_osc_status()`, etc.) and let the UI handle the drawing.
 3. **No Shared Hardware State (sealed engines).** Every hardware backend
-   — here, `HapticEngine` — is a sealed black box. Do not pass
+   — here, `HapticEngine`, `PiShockEngine`, `BHapticsEngine` and
+   `OwoEngine` — is a sealed black box. Do not pass
    dictionaries between threads. The outside world communicates with each
    engine exclusively via its primitive-only facade and (where
    applicable) via the shared `thread_queue`.
@@ -85,6 +86,11 @@ replicated per haptic backend.
   can be True for a single VRChat frame, so a poller that only reads the
   current value misses most of them; a router compares the counts
   against its last tick instead. OSCQuery snapshots never count.
+* **Types:** the OSCQuery tree's type tag per parameter is kept
+  (`get_param_types()`: Bool / Int / Float — as declared, else as the
+  live value is) for the Avatar Remote page, whose controls must send the
+  avatar's own type; `get_values(names)` reads a few values under one
+  lock.
 * **Rule:** UDP and OSCQuery snapshot writes lock and mutate it. The UI
   and all routers read from it via `.copy()` semantics (or the atomic
   `snapshot()` getter) to prevent dictionary size-change exceptions.
@@ -135,12 +141,16 @@ become a failure mode of its own. Gated by `feature_osc_router_518`.
 
 ### 3. The Muscles — a sealed engine
 
-This edition ships one hardware backend. The full-featured build fans the
-same OSC state out to eight of them side-by-side — SteamVR tracker
-haptics, bHaptics, PiShock, DG-Lab Coyote, OWO, The Handy, PSVR2 — all
-following the sealed-box contract below, and they are deliberately absent
-here rather than shipped half-finished. What stays is the contract, so
-adding one back is adding files (see "How to add a new haptic backend").
+This edition ships four hardware backends: Buttplug toys, and — each
+behind a switch that is off by default — shockers (a PiShock or OpenShock
+hub on USB), a bHaptics suit (straight over Bluetooth) and an OWO suit
+(through the My OWO app). The full-featured build fans the same OSC
+state out to eight of them side-by-side — SteamVR tracker haptics,
+bHaptics, PiShock, DG-Lab Coyote, OWO, The Handy, PSVR2 — all following
+the sealed-box contract below; the others are deliberately absent here
+rather than shipped half-finished. What stays is the contract, so adding
+one back is adding files (see "How to add a new haptic backend") — which
+is how PiShock and the suits came back.
 
 * **`haptic_engine.py` — Buttplug.io toys.** Runs its own isolated
   `asyncio` event loop in a worker thread. Owns the
@@ -163,6 +173,271 @@ adding one back is adding files (see "How to add a new haptic backend").
       (Settings → Intiface Engine). The engine binary is not in the repo;
       it lives in `src/intiface-engine/` and is bundled by `tools/build_OGP.bat`
       (Windows) and `tools/build_linux.sh` (Linux, which also builds it).
+      Next to it, tracked, is the device list it is started with
+      (`--device-config-file`): Buttplug's own list from the engine
+      checkout without the Lovense match on the Nordic UART Service, which
+      made the engine connect to every Bluetooth serial device in range.
+      `tools/make_engine_device_config.py` writes it; regenerate it after
+      every engine rebuild.
+
+* **`pishock_engine.py` — shockers over USB (PiShock or OpenShock
+  firmware).** The last gate before a
+  shock reaches a person, so every send goes through it and its rules
+  hold whatever the caller does: intensity and pulse length capped (the
+  user's caps -- one for shocks, its own for vibrates -- never past 100 /
+  15 s; each shocker may have its own of these three, `set_shocker_limits`,
+  resolved against the hub-wide ones at every send), shock downgraded to
+  vibrate until armed (remembered across launches since 2026-10-28:
+  `armed` in `pishock_settings.json`, applied at init), a per-shocker rest after each
+  pulse — except that a *stronger* pulse may take over one still
+  running — and continuous holds limited to `max_hold_s` before a forced
+  break (a let-go shorter than the break doesn't restart that clock).
+  Every limit's range lives in one table, `pishock_limits.py`, which the
+  engine, the settings store and the Shockers page all read. Each send is
+  decided and written under the engine's lock, so a Stop or disarm can
+  never land between deciding a pulse and sending it. Paused (the page's
+  Stop all, Home's switch to Off, `set_paused`) refuses every send until
+  Resume / On -- and unlike arming it is kept: `PiShockFacade` saves it
+  as `enabled` in `pishock_settings.json` and pauses the engine again at
+  the next launch. Only `pishock_stop_all` / `pishock_resume` change it,
+  so the engine and the file never disagree. The rules router
+  (`pishock_router.py`) only ever lets go of shockers it holds itself — a
+  friend may be holding one too. Holds go out as short overlapping chunks (`HOLD_CHUNK_MS`,
+  refreshed every `HOLD_REFRESH_S`) with an `end` on release, so a dead
+  app stops the shocker within one chunk; every indirect source (and
+  OpenShock's firmware source) says a new operate for a shocker replaces
+  the running one rather than queuing. A small supervisor thread keeps
+  the link up while it is wanted (connect-on-start, or after Connect).
+  * `pishock_serial.py` is the transport: finds the hub by USB id
+    (CH340 / CH9102 / CP210x, or Espressif's own USB) and confirms it with
+    a handshake that asks both firmwares at once — PiShock's `info`, and
+    OpenShock's `version` — then writes one line per operate
+    (fire-and-forget, 100 ms write timeout), and a reader thread drains
+    the hub's log and reports a vanished port. PiShock's info block
+    carries the hub's Wi-Fi passwords, MAC and public IP; `safe_info()`
+    keeps only the firmware and shocker list — never log the raw line.
+  * `openshock_serial.py` is OpenShock's wire format: one
+    `$rftransmit {model, id, type, intensity, durationMs}` line per send
+    (`beep` → `sound`, `end` → `stop`). The `$` (no echo) is only
+    understood from firmware 1.4.0 on — older firmware calls
+    `$rftransmit` an unknown command — so the handshake asks a plain
+    `version` and the prefix goes on only when the reported version
+    allows it. The firmware replaces a running
+    command for the same model + id (its RF task overwrites the
+    sequence), so the hold chunks work unchanged. It keeps no shocker
+    list over serial, so the page's list (model + transmitter id) is the
+    list; a shocker taken off it is stopped before it is forgotten.
+    OpenShock is only identified by a line only it prints (a `$SYS$|`
+    reply or its boot banner), never by a bare `Version:` line. Its
+    `$SYS$|Error|` replies (E-Stop pressed, say) reach the log, throttled.
+    The firmware reads one line per 20 ms, so several shockers sent in
+    one tick go out ~20 ms apart.
+
+* **`bhaptics_engine.py` — the bHaptics suit over Bluetooth, no bHaptics
+  Player.** Its own asyncio loop on a worker thread runs everything
+  Bluetooth (`bleak`, behind `bhaptics_ble.py`'s radio / link interface so
+  the engine never imports it — and never on the Qt GUI thread, where
+  WinRT's apartment rules break bleak's callbacks). Scans by advertised
+  name (`TactSuit*`, `Tactosy*`, `Tactal*`), connects without Windows
+  pairing, keeps several devices at once, reads battery every minute. The
+  router's `submit_frame(position, dots)` only stores the newest frame and
+  wakes that device's writer: one write without response in flight per
+  device, at most every `MIN_WRITE_GAP_S` (the first change after idle never
+  waits; a burst collapses into its newest frame). A frame left non-zero
+  with no submit for `FRAME_TTL_S` goes to zero — the job the Player's
+  `durationMillis` used to do — and stop / release / Off / disconnect write
+  all-zero twice. Paused (Home's switch to Off, `set_paused`) writes
+  all-zero twice and drops every frame until it is switched on again; kept
+  across restarts like the shockers' (`bhaptics.enabled` in
+  `suits_settings.json`, set only by `bhaptics_stop_all` / `_resume`).
+  A suit takes one connection, so `release()` lets it go
+  (and stops reconnecting) for the Player or a game. The byte layout is
+  `bhaptics_models.py` (pure), chosen per model from the advertised name:
+  the TactSuit Pro and Air take 40 bytes on `6e400014`, one per motor,
+  0..100, 32 motors in four groups of eight (the bHaptics Player's own
+  frame, read off its logs); older vests take 20 bytes = 40 slots of 0..15
+  on `6e40000a`, two per byte, even slot high; sleeves, head, hands, feet
+  one byte per motor, 0..100. The engine opens each device on its model's
+  characteristic. The avatar's five rows a side fold onto the Pro / Air's
+  four (rows 2 and 3 share one). The protocol is unpublished (SenseShift's
+  reverse engineering, checked against three other implementations, all
+  GPL / LGPL — none of their code is in here); which side of each grid is
+  the wearer's left is unverified until a model is checked on the suit
+  (Suits page dots, or `tools/bhaptics_probe.py walk --interactive`).
+
+* **`owo_engine.py` — the OWO suit, through the My OWO app.** EMS, so this
+  is the last gate before current reaches a person, like the shocker
+  engine: per-muscle and overall ceilings clamped to `ABSOLUTE_MAX` (100 %
+  = the user's own calibrated max in My OWO), paused (the page's Stop all,
+  Home's switch to Off -- kept across restarts as `owo.enabled`, set only by
+  `owo_stop_all` / `owo_resume`) refuses every send, Off / feature off /
+  VRChat quiet / exit send a stop twice, never the
+  OGP/Test floor. Sensations are 0.3 s pulses re-sent every 0.25 s while a
+  muscle is held — one datagram per muscle, its level as the intensity, as
+  the vrc-owo-suit bridge does — woken early on a change, at most every
+  50 ms. If OGP dies the suit stops within one pulse. `owo_link.py` speaks
+  My OWO's UDP protocol natively (port 54020: `ping` → `okay`, AUTH →
+  `pong`, then `<id>*SENSATION*…` / `*STOP`; the app says `OWO_Close` when
+  it goes) — byte for byte what OWO's SDK sends, pinned by tests against a
+  capture (`tools/owo_udp_capture.py`) and following OWO's MIT-licensed
+  C++ SDK. No `OWO.dll`, no pythonnet.
+
+* **`remote_link.py` — the Friends link.** Other OGP users over the
+  internet: QUIC between two PCs via iroh, dialled by public key (the ID a
+  friend pastes), hole punching for a direct path and n0's free relays when
+  that fails — nobody runs a server. A sealed engine like the others: its
+  own asyncio loop on a worker thread, primitive methods in
+  (`start`, `stop`, `pair_with`, `answer`, `set_contacts`, `set_nickname`,
+  `push_cmd`, `send_event`, `drop`, `peers`, `forget_identity`), and
+  `on_event(kind, peer, data)` out, called on its thread. Unlike the
+  hardware engines it does hand dicts across threads — the messages in
+  and out — so the rule here is: a dict is built fresh for the hand-over
+  and nobody changes it afterwards. One connection's wire behaviour (what
+  goes out when, keepalive, why it ended) is `remote_session.py`. A stop
+  always stops, even before the link is online (`online()` waits for a
+  home relay, which never answers without internet). One per process:
+  the iroh bindings keep a single asyncio loop for every call — and one
+  per PC: a second OGP window finds the first on the link pipe
+  (`link_handoff`) and keeps Friends offline until it closes, since one ID
+  online twice loses links. The identity key lives in `friends_key.bin`,
+  never in a `.json`, so a settings backup restored on a second PC can't
+  make it the same friend; **New ID** deletes it (`forget_identity`).
+  * **Light on the network** (n0's relays are free; we stay a good
+    guest). No polling of offline friends: an OGP that comes online dials
+    each friend once, one per `DIAL_GAP_S`, and whoever comes online later
+    dials us. Failed dials back off (`RETRY_S`, 10 s → then every 30 min; a
+    pasted ID or invite `ASK_RETRY_S`, given up after `ASK_GIVE_UP` tries);
+    a friend who closed OGP is next tried after 30 min, a dropped link is
+    redialled at once. The retries of friends who weren't there share one
+    budget, one per `BACKGROUND_GAP_S` (`_next_dial`: the fewest failed
+    dials first), so the length of the list never adds to the traffic; the
+    first round after coming online, a pasted ID and a dropped link don't
+    wait for it. A live link looks at `status_for` /
+    `cmd_for` four times a second but sends only changes (plus `REPEATS`
+    copies, the status every `STATE_REFRESH_S`) — except a `cmd` that
+    drives toys, which goes every `SEND_S` because the receiver lets it go
+    stale. Your toys' live levels change every tick while they move, so the
+    status carries them only to a friend whose page shows your panel
+    (`lw`, below) — to everyone else it stays unchanged and goes out every
+    `STATE_REFRESH_S`. A ping only after `PING_S` of silence; `DEAD_S`
+    without a word drops the link. Idle, a link sends a datagram every few
+    seconds.
+    The debug log (`debug=` → `ogp_debug.log` only) says how each link
+    does: its path when it starts and every change (relay / direct / no
+    working path), a quality line every `QUALITY_EVERY_S` and when it ends
+    (round trip by QUIC and by OGP's own ping, datagrams in / out, QUIC's
+    lost packets, why), the link loop running `LAG_WARN_S` late, building
+    one friend's sends taking `SLOW_BUILD_S`; the facade adds the GUI
+    tick's own hold-ups and a friend's drive going quiet (the Friends log
+    says "dropped out … back after 1.3 s" instead of a stop / start pair).
+    The Online switch (`friends.json` `online`) takes Friends off the
+    network entirely.
+  * **Pairing.** A pasted ID dials with `ask` in its `hello` and the other
+    side is asked. An invite link (`friend_links.py`:
+    `friend.html#<id>.<code>.<nick>` on the site → `ogp://friend/…`,
+    registered by `link_scheme.py`, handed to a running OGP by
+    `link_handoff.py`) carries a code in the `hello`; a live code
+    (`once` / `day` / `week` / `forever`, settings `invites`) is accepted
+    without asking. A clicked invite opens the Friends page; without a
+    nickname (or with Friends off) a small window asks for one first
+    (`prompt_friends_invite` → `accept_friends_invite`), and once linked
+    the page shows that friend's panel. A browser on your **web remote**
+    (`docs/remote.html`: a friend's panel -- `assets/remote.js` with
+    `remote-toys.js`, `remote-shockers.js`, `remote-board.js` and the
+    protocol port `remote-proto.js`, held against the Python by
+    `tests/test_web_remote.py`; iroh compiled to WebAssembly from
+    `tools/web_guest`, datagrams and the board's stream, always through a
+    relay, since a browser can't send UDP) speaks the same protocol with
+    `web` in its `hello`: your web
+    remote's code (`friend_links.remote_link`, settings `web`) lets it in
+    through `invite_ok` like an invite, any other is closed with
+    `WEB_CLOSED` (`nolink`) and never asked about; `drop(peer, reason)`
+    lets one go (`nolink`, or `kicked`). Unfriending closes the link with `removed`, and the
+    other OGP drops you; an unfriended ID that redials by itself (no
+    `ask`) is told `removed` again instead of becoming a request. A
+    request nobody answers (or that is still open when OGP closes) ends
+    `unanswered`, not `refused`: the asker asks again later.
+  * `remote_protocol.py` is the wire format, pure and unit-tested: one JSON
+    object per datagram. `st` (my toys, strength, what you may do, my
+    shockers; the toys' live output only while you watch — your `lw`, sent
+    while your page shows my panel, repeated like a status and stale after
+    `WATCH_STALE_S`; an OGP older than protocol 2 gets it always) and `cmd` (your levels for my toys — a state: a friend
+    whose `cmd` stops arriving drives nothing after `DRIVE_STALE_S` — plus
+    a strength change as `[seq, value]`, applied once per new seq) go when
+    they change; `shk` (one shock) goes three times and is acted on once
+    per id. **Several friends on one receiver** (Blise's ask, 2026-10-27):
+    the receiver tells each friend who may drive its toys the nicknames
+    of the *other* friends driving right now (`oth` → "+1 OTHER", names on
+    hover; nothing while nobody else drives), and friends with **Sync with
+    others** on (per friend, `friends.json` `sync`, on by default) share
+    one set of toy cards: their `cmd` carries `syn`, a version their own
+    change raises past the newest they have seen; the receiver plays only
+    the newest change among those who sync (`_sync_playing`: highest
+    version, the first on a tie; "off" counts; a newest whose updates went
+    stale hands over to the newest live one) and sends it back as `pnl`
+    while two or more sync, and each takes it as its own panel. Friends
+    with Sync off drive as before, the higher level winning. Everything that arrives is cleaned before use, and a `cmd`
+    never outgrows one datagram (`MAX_DATAGRAM`). An ID is 64 hex digits
+    and an invite code 16 everywhere (`remote_protocol.valid_id` /
+    `valid_code`).
+  * Shocks from a friend go through `PiShockEngine` like every other
+    shock — the receiver's caps, rest and arming all hold; a friend's
+    strengths and lengths are parts of the receiver's own caps
+    (`remote_protocol.shock_values`: shocks under the shock cap, vibrates
+    under the vibrate cap). The friend's card is PiShock's own panel,
+    laid out and named as PiShock's is (`ui/views/shocker_card.py`, its
+    tiles, range slider and in-window pickers in `shocker_parts.py`):
+    Tap (`pulse`), Remote and Continuous (the `cmd`'s `hold`, pumped into
+    `hold` / `release` on the GUI tick and let go when it goes stale),
+    Random (a min-max range, a fresh pick per shock, on the sender's side),
+    a Small / Mid / Long warning — in Tap the `shk`'s `wms` (the receiver's
+    GUI tick holds a vibrate that long, then sends the shock, checked
+    again right then); in Remote and Continuous the sender's card holds a
+    vibrate first and then the shock, so the receiver's hold rules apply
+    to both — and STOP (`stp` → `end` for that shocker, a waiting warned
+    shock dropped). PiShock's Party Mode (`ui/views/shock_party.py`, the
+    facade's `party_*`) drives shockers picked one by one, of one friend
+    or a whole group: Sync (all), Random (one per press) or Round Robin
+    (one after the other); its lengths are real seconds, each friend's own
+    longest pulse at most.
+  * A friend's auto mode (`friend_patterns.py`: Sine, Square, Triangle,
+    Saw, Random — the simulator's own `mixer.sample_pattern` — plus
+    Heartbeat, Build-up and Oscillate, a sine around the friend's level)
+    is three numbers in the `cmd`; the receiver plays it at the router's
+    own rate (`friends_need_tick` keeps the routing tick running), so it
+    costs the link nothing while it runs. On the sender's card
+    (`ui/views/toy_card.py`; the shocker's is `shocker_card.py`, their
+    shared parts `card_parts.py`) a toy is Off (0, the card only asks for
+    a mode), Direct control (the slider) or an auto mode, with a small
+    graph of what it sends and what their toy does. The panel stacks
+    under the friends list in a half-width window, and Control mode
+    shows only the picked friend or group, with big controls for VR.
+  * **Avatar boards** (the Avatar Remote page, shared with friends —
+    `remote_params.py`, the wire format, pure and tested). Nothing goes
+    out until a friend has your board open: your `st` only says that you
+    share one (`prm`: its version, YOLO, `stop` while you paused all
+    friends, and `a`, a short key of the worn avatar -- the board carries
+    it too, so a friend's page shows "Getting their board…" rather than
+    the old avatar's board after a change, and its `pw` asks again every
+    `_ASK_AGAIN_S` until the new one is there). Their `pw` slot ("watching,
+    I have version b") makes you send the board — too big for a datagram,
+    so over a stream of its own (`RemoteLink.send_blob`, one message per
+    uni stream, at most `MAX_BLOB`; only `pbd` is taken from a stream) —
+    and again whenever it changes; then its values follow in `pv0`, `pv1`
+    … slots, only the board's parameters (plus every settable one while
+    their YOLO list is open), only on change and the usual refresh. Those
+    slots come from `more_for(peer)`, sent by `send_state` like `st`
+    (`remote_session.drives` / `refreshes` say which repeat). A set
+    (`pst`) is an event sent a few times and applied once per id, never an
+    older one; a hold button (`ph`) is a state the holder's OGP repeats
+    every `SEND_S` while held, and the owner lets it go after
+    `HOLD_STALE_S` without it — a dropped link can't leave a button
+    pressed. A friend sees your *worn* avatar's active preset, never the
+    one you are editing offline. Locks, YOLO, Pause all friends,
+    their AVATAR switch and VRChat itself (nothing worn → no board)
+    are all checked on the owner's side, from a snapshot
+    (`_params_share`) the GUI thread swaps whole after each change; the
+    set goes straight to VRChat from the link's thread, no queue hop.
 
 * **Toys in SteamVR (display only, not a backend).** `controllers/
   steamvr_toys_facade.py` mirrors the connected toys — name, icon, battery
@@ -196,6 +471,35 @@ what to do.
   each tick; only fires a queue event when the target value actually
   changes. It is driven from the UI thread via `force_recalculate`, not a
   poll thread.
+
+* **`pishock_router.py` — shocker rules.** A ~100 Hz `PollingThread`
+  that the controller also wakes the moment a watched parameter arrives
+  (`OscFacade.on_osc_message` → `notify`), so a contact goes out on the
+  same packet. Four rule kinds from the Shockers page: *continuous* (a
+  float above a threshold holds the shocker, strength scaled by the
+  value), *triggers* (a bool contact pulses once per edge or holds while
+  on), *impacts* (OnEnter receivers with different Min Velocity; the
+  strongest tier that fired picks the pulse) and *zones* (Touch zones:
+  several bool contacts, each a trigger of its own on its own shockers).
+  Every rule drives the shockers dropped on it -- `shockers`, "all" or a
+  list of ids; none dropped, it is still watched (the page shows what its
+  contact sees) but drives nothing. Contacts are read as
+  rising edges from the store's counters. Per shocker the strongest hold
+  wins, pulses go before holds; Off, Stop, a lost link and a stale
+  signal end everything once.
+
+* **`suits_router.py` + `body_map.py` — both suits from one body.**
+  `body_map.read_body()` (pure) reads every suit input in one parameter
+  snapshot — the official bHaptics package (`bOSC/v2[m]/<Pos>/<n>/self|others`),
+  older bHapticsOSC keys, the OWO package (`owo_suit_<Muscle>`) and zone
+  routes (an OGB / SPS zone or synthetic source onto a body region) —
+  into one frame on the bHaptics layout; each OWO muscle is the strongest
+  node in its patch. The two suits share contacts both ways unless their
+  "follows" switches say otherwise. `SuitsRouter` is a ~60 Hz
+  `PollingThread` the OSC thread also wakes (`notify`), re-submits the
+  bHaptics frames every tick (which keeps the engine's timeout from
+  expiring a held contact) and hands OWO its muscle levels; strength
+  scales both, Off and a stale signal silence both once.
 
 Two shared pieces outlive the backends that used to subclass them, and
 are kept because they are the documented extension point for adding one
@@ -234,18 +538,30 @@ back:
     `ui_accent_hue`): `accent_shift.py` turns every green token — the
     mode's chrome, the palette's green, the section-bar fill — by one
     angle in OKLCH, so the turned colours keep the green's lightness
-    and contrast; the identity hues and the semantic roles are left
-    alone. A turned colour is always computed from a token, never
-    typed. Both the colour and the mode apply **while the app runs,
+    and contrast; the identity hues and the semantic roles keep theirs
+    — except one the accent lands too close to (within
+    `IDENTITY_MIN_GAP`, 20°): `accent_shift.identity_hues` moves it
+    out of the way, the closest to where the green was, a second to
+    where it stands out most (pick Pink and the pink turns green). Each
+    identity colour can also be set by hand (Appearance → Other
+    colours, `ui_identity_hues`), which always wins; the colours in
+    play are `constants.IDENTITY_HUES`. A moved colour is turned the
+    same way and keeps its own lightness, as does its Neon section bar.
+    The website's demo runs the same move (`ogp-accent.js`
+    `identityHues`, checked against the Python by
+    `tools/site_ports/check_accent.py`). A turned colour is always
+    computed from a token, never typed. Both the colour and the mode apply **while the app runs,
     with no lag spike** — nothing restarts — in three parts:
     * `theme.set_accent_hue()` / `theme.set_mode()` move the module
       state at once: the tokens, and — through `retint.py`, which swaps
       one hex for another by value — every `COLOR_*` copy, class-level
       `QColor` and default argument in the colour-holding modules.
       Swapping by value is safe because the table behind it
-      (`theme._table`: role → colour, for a mode at a turn) gives
-      **every role a colour of its own, in both modes**, and never
-      lands on an identity hue (`accent_shift.unique_table`). The
+      (`theme._table`: role → colour, for a mode at a turn and the
+      colours set by hand) gives **every role a colour of its own, in
+      both modes**, and an identity tone only ever to its own role —
+      its own tone, or none once it moved (`accent_shift.unique_table`;
+      the identity colours are roles too, `pink.0` … and `bar.blue.0` …). The
       chrome is the tokens character for character at no turn; where
       the tokens give two roles one colour — Midnight's accent is the
       palette's green, Neon's frame line is the section bar's frame
@@ -279,17 +595,50 @@ back:
     class isn't the only home for view-layer code:
     * `ui/widgets.py` — `Card`, `ToggleSwitch`, `RainbowMeter`,
       `RainbowScrollBar`, `MainWindow`, `SliderProxy`,
-      `ProgressProxy`, `Invoker`, scrollbar install.
+      `ProgressProxy`, `Invoker`, `IdentityMark` (an identity icon as a
+      widget; every one redraws on a colour change), scrollbar install.
     * `ui/icons.py` + `ui/lovense_icons.py` — `QPainter`-drawn vector
-      icons and the Lovense-shape icon set.
+      icons (the Friends cards' wave and glyph icons too) and the
+      Lovense-shape icon set. `identity_icon` is the one icon per thing,
+      wherever it shows (sidebar, Friends list heads and panel sections,
+      "What are you here for?"): toys the pink capsule, shockers the
+      yellow bolt, Avatar Remote the remote in the accent green; anything
+      else gets a blank of the same size so a column of labels lines up.
     * `ui/geometry.py` — Tk-style geometry string parsing (kept for
       compat with on-disk settings written by older versions).
-    * `ui/layout_helpers.py`, `ui/text_helpers.py` — small helpers.
+    * `ui/layout_helpers.py`, `ui/text_helpers.py` — small helpers
+      (`layout_helpers` also has `CardGrid` and `SideBySide`, the layouts
+      that follow the window's width).
     * `ui/stats_charts.py` — the Statistics page's custom-painted charts
-      (session sparkline, weekday x hour heatmap, month calendar, session
-      timeline). Fed primitive data by the view; they read nothing.
+      (session sparkline, weekday x hour heatmap, month calendar, the
+      pre-timeline span charts) and the painting helpers they share;
+      `ui/session_timeline.py` — one session's timeline; `ui/stats_widgets.py`
+      — the page's session row, number tile and name field. Fed primitive
+      data by the view; they read nothing.
+    * `ui/theme_friends.py` — the Friends page's stylesheet rules, built
+      with the rest by `theme.build_qss`; `ui/theme_params.py` the same
+      for the Avatar Remote page's categories and cards (each category in
+      its palette hue, so the colour picker turns them too; the Suits page
+      borrows them in the orange), and `ui/theme_suits.py` the Suits
+      page's own: its tags, chips and switches in bHaptics orange / OWO purple.
     * `ui/views/` — one module per sidebar view (`home`, `sps_sources`,
-      `sessions`, `statistics`, `diagnostics`, `settings`),
+      `pishock`, `suits`, `friends`, `params`, `sessions`, `statistics`,
+      `diagnostics`, `settings`) — the bigger ones split into parts the view's mixin
+      inherits: `pishock_rules` (the behaviour cards) with `pishock_cards` (a
+      card per shocker, the shared timing, the drop zones shockers are
+      dragged onto); `body_view` (the Suits page's painted body: a cat girl's
+      front and back from `src/Images/suits` -- line art tinted in the accent,
+      made by `tools/make_suit_figure.py` -- with every bHaptics dot placed in
+      the drawing's own pixels and OWO's muscle patches around them) with
+      `suits_cards` (the inspector's part, muscle and tracker cards that
+      open with a line from her, the chips, the contact check's pills);
+      `friends_list`, `friends_panel`,
+      `friends_shockers` (a friend's or a group's shockers, PiShock-style),
+      `friends_board` (a friend's avatar board), `friends_vrc_tip`,
+      `friends_update` (a friend's OGP is newer: the window and the banner);
+      `param_cards` (the board's category boxes and control cards, with
+      drag and drop — also drawn read-only for a friend's board) and
+      `param_dialogs` (a control's Edit dialog); `statistics_people`, `statistics_session` —
       plus `device_frame` — the toy cards Home lists — and `dashboard` —
       named for the page it used to build — which now holds the sidebar's
       control block (modes, the total output strength bar, Off / Sleep)
@@ -298,7 +647,13 @@ back:
       both the at-a-glance overview (a bar per toy, offline ones in a
       grey outline) and the editor (click a bar to open the toy's signal
       chains in place). It replaced the separate Overview and Device
-      Routing pages, which showed the same toys twice.
+      Routing pages, which showed the same toys twice. The shocker hub and
+      the suits have a row each in the same list (`home_devices`):
+      `device_frame._reorder_device_frames` is the one place that orders
+      it -- connected toys, the rows that are switched on and connected,
+      the other toys, then the other rows under small dividers -- asking
+      Home for its rows (`_toy_list_rows`) and touching the layout only
+      when the order changed.
     * `ui/motor_signal_chain.py` — the per-motor signal-chain widget
       (Input → Depth/Speed/Punch → Combine → Wake → Envelope →
       Zero cut → Output; Wake merges the old Gate + Arming into one
@@ -313,7 +668,18 @@ back:
     * `ui/osc_variable_picker.py` — modal picker listing live avatar
       parameters from `parameter_store`, with search + manual entry.
       Shared by the toy cards' motors and SPS Sources contacts.
-    * `ui/tooltips.py` — hover explanations, the app's only in-place
+    * `ui/help_mode.py` — help mode ("Show me around": F1, the status
+      bar's button, a Help card's Show me; `ui/views/help.py` wires it
+      in). It explains the page on screen on the page itself: the page's
+      steps from `ui/page_steps.py` on a strip above it, each step's
+      control lit and numbered, and whatever the pointer rests on lit
+      with its hover explanation's title and first sentence. Clicks do
+      nothing while it is on (the sidebar's pages excepted), it reads
+      nothing but the widgets' tooltips and the steps, and it only runs
+      while on. `ui/page_steps.py` is shared with the VRChat gallery
+      (`tools/make_vrc_group_images.py`), which stops when a step's
+      control is gone.
+    * `ui/tooltips.py` — hover explanations, the app's in-place
       help: `explain(target, title, text)` puts a themed, word-wrapped
       tooltip on a widget, every widget in a layout, or a container whose
       plain children fall back to it through Qt's parent lookup. Every
@@ -365,12 +731,91 @@ back:
       (synthetic SPS source CRUD; the routers read the live source map)
     * `controllers/sessions_facade.py` — `SessionsFacade` (session-logger
       lifecycle — see "Session logging" below)
+    * `controllers/pishock_facade.py` — `PiShockFacade` (owns the
+      shocker settings, engine and router; `feature_pishock` starts and
+      stops them; connect / arm / stop / test, the OpenShock shocker
+      list and the rule CRUD the Shockers page calls)
+    * `controllers/suits_facade.py` — `SuitsFacade` (owns the suits
+      settings, both engines and the shared router; `feature_bhaptics` and
+      `feature_owo` each start and stop their engine, the router runs while
+      either is on; connect / let go / stop / test and the zone-route CRUD
+      the Suits page calls)
+    * `controllers/friends_facade.py` — `FriendsFacade`, in seven files:
+      this one (lifecycle, the page, contacts, invites, groups, the log)
+      inheriting `friends_control.py` (you driving friends),
+      `friends_menu.py` (the avatar menu's Friends part),
+      `friends_receive.py` (friends driving you), `friends_params.py`
+      (a friend's avatar board: watching it, setting and holding its
+      controls), `friends_me.py` (you, always first on your own list: a Me
+      row, peer `ME`, whose panel is what a friend who may do everything
+      sees and works on your own toys / shockers / avatar -- `MeLink` wraps
+      the `RemoteLink` and hands what goes to ME straight back in,
+      `_me_tick` feeds the status, drive and board values on the GUI tick;
+      every friend rule holds, and ME is never named to real friends) and
+      `friends_versions.py` (each hello carries the app's `VERSION`, the
+      link reports it as a `version` event once a link and again only on a
+      change; a friend's newer one opens `show_friend_update_warning` once
+      a launch -- Update now when the launch update check found a release
+      this copy can install that reaches theirs, else the release page --
+      and puts `behind` in the status for the Friends banner; an older one,
+      or none, is `version: "older"` on their entry, the row's OLD tag)
+      and `friends_web.py` (the web remote: a browser that comes with your
+      web remote's code is a web guest -- never a friend or a contact, so
+      nobody dials it -- under one Web remote row, `WEB`; its share of
+      `_friend_perms` is the row's Toys / Shockers / Avatar switches (toys
+      on, the others off until ticked), its messages take a friend's own
+      path, and its `oth` carries a count, never names; Copy / New link /
+      On / the switches / Kick / Remove, `ui/views/friends_web_panel.py`),
+      with what they share in
+      `friends_common.py`. The list's column icons
+      set a permission for every friend at once (`set_friend_permission_all`:
+      off while any has it, then on). All together: the Friends
+      page (nickname, the Online switch, contacts, per-friend toys /
+      shockers boxes, groups of friends, the selection, Pause all friends,
+      invite links, unfriending, New ID, the log; owns the `RemoteLink`
+      and the `LinkListener`; `feature_friends`, on by default, but the
+      link only goes online with a nickname). `OGP_FRIENDS_DEMO=1` adds
+      `friends_demo.py`'s example friends to the page, never to the
+      network or the router. Inbound: a
+      friend's level becomes `get_friend_drive(device)`, which the router
+      reads; their strength goes through `set_strength(source="friend")`;
+      their shocks through the shocker engine. Outbound: the page's sliders
+      and the VRChat menu's `OGP/Friend/*` (handled on the OSC thread, no
+      queue hop) become `cmd`/`shk` — the menu's for whatever is picked on
+      the page: one friend, or every member of a group. The menu's *Both
+      of us* (`OGP/Both/*`) sends the same to them and drives you as well:
+      your own toys through `_self_drive` (read by `get_friend_drive` like
+      a friend's, never stale, still there while friends are paused) and
+      your shockers through the same `_friend_shock_in` path under the
+      `_SELF` sender, so your caps and arming hold. Whether the avatar
+      wears the menu (`OGP/Strength` / `OGP/Friend/Level` in the
+      parameter store) is `get_avatar_menu()`, shown at the page's foot
+    * `controllers/params_facade.py` — `ParamsFacade` (the Avatar Remote
+      page, VRC Parameter Relay's board inside OGP: owns the
+      `param_board.BoardBook` and its file, follows the worn avatar and
+      its parameter types, sends a control's value to VRChat; edits come
+      in through `params_edit(op, ...)` — a BoardBook method from a fixed
+      list — and every change rebuilds what friends see; the owner's half
+      of a friend's board: `_params_prm_for`, `_params_more_for`,
+      `_params_on_watch` / `_on_set` / `_on_holds` on the link's thread;
+      Import from VRC Parameter Relay; `feature_params`, off by default)
     * `controllers/stats_facade.py` — `StatsFacade` (usage statistics:
-      owns the `StatsTracker` and the `StatsHistory`, samples usage at
-      1 Hz off the UI heartbeat, exposes `get_stats_snapshot()`,
-      `get_stats_sessions()`, `get_stats_session_detail()`,
+      owns the `StatsTracker`, the `StatsHistory` and the `StatsPeople`
+      tag store, samples usage at 1 Hz off the UI heartbeat and keeps the
+      last minute's thrusts for the live pace, exposes
+      `get_stats_snapshot()`, `get_stats_sessions()`,
+      `get_stats_session_detail()` (with the session's tags),
       `get_stats_patterns()`, `get_stats_month()`,
       `get_stats_fun_facts()` / `reset_stats()`)
+    * `controllers/people_facade.py` — `PeopleFacade` (who sessions were
+      with: `tag_session()`, `tag_session_stretch()`,
+      `remove_session_tag()`, `get_people_table()`, and the opt-in
+      VRChat-log tagging — a `vrchat_log.LogWatcher` thread it starts
+      and stops, read once a second off the heartbeat by `_people_tick()`)
+    * `controllers/thrust_params_facade.py` — `ThrustParamsFacade` (the
+      opt-in thrust counters: lifetime total, session count and live
+      pace as avatar Int parameters, plain and digit by digit; only
+      changes go out, everything again on link-up and avatar change)
     * `controllers/toy_sounds_facade.py` — `ToySoundsFacade` (the
       optional connect / disconnect chimes: diffs the engine's
       connected-toy list after `connection_status`, `devices_found` and
@@ -447,8 +892,37 @@ an ack adds latency. Keep each stage tight.
      pinned at 0, so `updates` goes empty while contact keeps moving;
      riding it would freeze the mirror exactly when the panic switch is
      on.
-Every other backend in the full edition (bHaptics, SteamVR trackers,
-Coyote, OWO, PiShock, Handy, PSVR2) obeys the same shape: poll the store
+* **A friend's level** (their OGP → `remote_link` → `FriendsFacade` →
+  `motor_router` → `haptic_engine`). Datagrams, fire-and-forget, a change
+  goes out at once (≤60 Hz per friend), and while any level is up the
+  `cmd` repeats every 250 ms, which repairs a lost one. On arrival the facade swaps its drive table (no lock
+  on the router's side) and sets `_needs_recalculation`, so the next
+  routing tick (≤16 ms) picks it up — no queue hop. In the router it joins
+  the motor's output at the end (`_apply_friend_drive`, fed by
+  `get_friend_drive_mode` → `(level, override)`): the higher of the two
+  wins — or, while a friend drives that toy with Override, theirs
+  replaces it — scaled by the global strength (0 under Off) and remapped
+  into the motor's output band, so a toy's own maximum still holds. ~3 ms
+  one-way between two OGPs on one PC, plus the internet's round trip.
+* **Shockers** (`pishock_router` → `pishock_engine` → USB serial). The
+  router wakes on the OSC receive thread's packet for a watched key (no
+  poll wait) and dispatches on its own thread; the engine writes one
+  line to the port, fire-and-forget, no ack waited for (PiShock sends
+  none; OpenShock's reply is only read for the log). OpenShock firmware
+  polls its serial input every 20 ms, one line per poll.
+  Holds are re-sent as chunks, change-gated to at most one per
+  `HOLD_CHANGE_GAP_S` except the first after idle.
+
+* **Suits** (`suits_router` → `bhaptics_engine` → Bluetooth, and →
+  `owo_engine` → UDP → My OWO). The router wakes on the OSC packet for any
+  key the body reads and dispatches on its own thread; `submit_frame` and
+  `set_active` only store the newest value and wake the engine (one
+  `call_soon_threadsafe` hop into the Bluetooth loop — bleak's own). Writes
+  go without response; OWO datagrams are fire-and-forget, then My OWO's own
+  Bluetooth hop.
+
+Every other backend in the full edition (SteamVR trackers, Coyote, Handy,
+PSVR2) obeys the same shape: poll the store
 at ~60 Hz debounced, dispatch fire-and-forget on the producing thread, and
 where the hardware, an account quota or the human needs a send cap, own it
 in the engine with an event-driven early wake so the first change after
@@ -570,6 +1044,32 @@ manager is owned by `SessionsFacade` instead):
 * **`known_devices`** (`KnownDevicesRegistry`) — global registry of
   every toy ever seen; the wiring store (and each mode's feel presets)
   are seeded from it.
+* **`pishock_settings`** (`PiShockSettingsManager`, owned by
+  `PiShockFacade` like the session settings, file `pishock_settings.json`)
+  — USB port, connect-on-start, the safety limits, the OpenShock
+  shocker list (model + transmitter id, unique ids), your names for the
+  hub's shockers, Home's "Share with friends" (`friends_may_use`) and
+  On / Off (`enabled`) -- either off, friends don't see the shockers at
+  all (`allow_shock` false in their status) -- and the
+  three rule lists. Global, not per mode: the rules name avatar
+  parameters. Every value is cleaned on the way in and out; `set_limit`
+  takes only the limits' own keys; arming is deliberately not stored.
+* **`suits_settings`** (`SuitsSettingsManager`, owned by `SuitsFacade`,
+  file `suits_settings.json` — its own name: the full edition keeps
+  separate bHaptics / OWO files in the same folder) — bHaptics On / Off,
+  per-position on/strength, who it reacts to, whether it follows OWO's
+  contacts, connect-on-start (on); OWO's On / Off, address, game id,
+  frequency, per-muscle top, overall ceiling (starts at 60 %), whether it
+  follows bHaptics' contacts, connect-on-start (off); the shared zone
+  routes. Every value cleaned on the way in and out — it feeds the EMS
+  gate. On / Off has its own setters (`set_bhaptics_enabled` /
+  `set_owo_enabled`), never the generic option setters.
+* **`param_boards`** (`ParamBoardsSettingsManager`, owned by
+  `ParamsFacade`, file `param_boards.json`) — the Avatar Remote page: every
+  avatar's profile (VRC Parameter Relay's shape), the last one open and
+  YOLO (a `stop` from before 2026-10-27 is dropped on load). It is the store `param_board.BoardBook` loads from and saves
+  to; a profile only ever worn (no name of its own, nothing on a board)
+  is pruned past the `SCRATCH_KEEP` most recent. Cleaned on the way in.
 * **`sps_sources`** (`SpsSourceManager`) — global registry of
   user-defined *synthetic SPS sources*: virtual contact zones assembled
   from raw VRChat receivers (proximity + activation gate + velocity
@@ -634,6 +1134,17 @@ recalculate.
   poll loop over a daemon `PollingThread`, and the pure OGB / SPS
   zone→strength evaluator. See "The Stateless Routers" for which parts
   have a live caller in this edition.
+* `param_board.py` — the Avatar Remote page's board model, VRC Parameter
+  Relay's AppCore without OSC or sharing: per-avatar profiles (name,
+  last parameter list, presets), categories, controls (toggle, hold
+  button, slider, stepper; an Int as a toggle / button with its own ON /
+  OFF values), what a control sends (`send_value`), YOLO's ranges
+  (`any_value`), controls following a parameter whose type changed, and
+  the Relay's file shape (`relay_profile` imports its `avatars/*.json`).
+  Pure; `BoardBook` takes a store with `load` / `save` / `list_profiles`
+  — `settings/param_boards.py`, one `param_boards.json` so the settings
+  backups carry the boards (avatars only ever worn, never named and with
+  nothing on a board are kept for the `SCRATCH_KEEP` most recent).
 * `utilities.py` — small helpers (`value_to_hex_color`,
   `toggle_windows_console`, `create_default_icon`).
 * `update_checker.py` — sealed one-shot GitHub release check
@@ -652,6 +1163,15 @@ recalculate.
   `release.bat` refuses to publish while the newest notes sit under a
   version later than `VERSION` (`tools/check_whats_new.py`) — they would
   never be shown.
+* `interests.py` — "What are you here for?": one choice per public
+  feature switch, under *what you have* and *what you want*, and the rule
+  for an answer (only the switches that differ flip). Asked once at
+  launch — a new install, or one from before the question
+  (`interests_asked` in the app settings) — and "What's new" and an
+  update offer wait for it to close; Settings → Features → *Choose what
+  you use…* opens it again. `controllers/interests_facade.py` is the
+  launch hook, `ui/views/interests.py` the window. A test fails on a
+  public feature switch the question leaves out.
 * `updater.py` — sealed self-update for the frozen single-exe build:
   streams the release asset, verifies it against the size and SHA-256
   GitHub reports, and hands the swap to a detached `.cmd` that waits for
@@ -697,6 +1217,25 @@ recalculate.
   (`stats_history.regate`) to timelines recorded under an older
   `GATE_VERSION`, discounting the tracker's totals to match and
   dropping totals-only sessions that couldn't have passed it.
+* `stats_people.py` — sealed store of who each session was with
+  (`stats_people.json`, apart from `stats.json` for the same reason as
+  the history): tags for the whole session or for stretches of it, each
+  with one or more names, plus the pure `credit()` that gives every
+  person the active time, thrusts and peak pace inside their tags (two
+  people on one stretch both get all of it). Finished sessions' credit
+  is cached and dropped on any tag edit or re-gate; the People table is
+  summed from the caches plus the running session.
+* `vrchat_log.py` — who is in the VRChat instance, read from VRChat's
+  own `output_log_*.txt` (join / leave / room lines). `InstanceTracker`
+  is the pure parser; `LogWatcher` follows the newest log on a daemon
+  thread and publishes an immutable snapshot, so a log of hundreds of MB
+  is never read on the GUI thread (the routing tick's thread). Only runs
+  while the People card's opt-in switch is on.
+* `thrust_params.py` — pure helpers behind the thrust counters: the
+  parameter names (`OGP/Thrusts/Total|Session|PerMin` plus `/D1`… digit
+  Ints, since an avatar Int stops at 255) and `PaceWindow`, the thrusts
+  of the last 60 s by each sample's own epoch (the activity gate
+  releases held-back samples late).
 * `stats_backfill.py` — pure, one-time estimate of the hours before the
   hourly history existed, so the charts don't start empty: each saved
   `stats.json` session's active time and thrusts are spread over the
@@ -752,6 +1291,9 @@ code differs:
   without a tray gets the window minimized, never hidden.
 * **Windows only**: the SteamVR toy driver (a DLL; its toggle says so)
   and the console toggle.
+* **Bluetooth for the bHaptics suit**: bleak talks to BlueZ over D-Bus
+  (`dbus-fast`, pure Python — nothing extra is bundled), so the host needs
+  bluetoothd running, which it is on most desktops.
 
 ---
 
@@ -797,17 +1339,17 @@ live in `tools/testbench/tests/`
 
 ## How to add a new haptic backend (the official pattern)
 
-This edition ships only the Buttplug backend, but the seams it was built
-against are all still here, so a backend is added by adding files rather
-than by rewriting old ones.
+The seams every backend was built against are all still here, so a
+backend is added by adding files rather than by rewriting old ones (the
+shockers and the suits came back this way).
 
 1. **Engine** — write `myhardware_engine.py` with a sealed-box class:
    primitive-only public methods, all state private. Run your own loop /
    thread and talk to the outside world via the shared `thread_queue`
    and/or a `state_callback`. (The full edition shares a cold-path
    connect / reconnect / backoff supervisor in `engine_base.py` between
-   its reconnecting backends; with one backend left there was nothing to
-   share, so it is not in this tree.)
+   its reconnecting backends. This tree has only PiShock's small one,
+   inside `pishock_engine.py`, so it was not ported.)
 2. **Router** — write `myhardware_router.py` as a pure stateless
    calculator. If it maps zones to a continuous level, subclass
    `PollingRouter` from `router_base.py` (declare only `compute_targets()` +

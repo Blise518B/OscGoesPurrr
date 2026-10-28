@@ -13,7 +13,8 @@ import sys
 import time
 
 from PySide6.QtCore import (
-    Qt, QThread, QTimer, Signal, QObject, QEvent, QSize, QPointF, QRect, QRectF
+    Qt, QThread, QTimer, Signal, QObject, QEvent, QSize, QPointF, QRect, QRectF,
+    QByteArray,
 )
 from PySide6.QtGui import (
     QFont, QColor, QTextCharFormat, QTextCursor, QIcon, QLinearGradient,
@@ -54,8 +55,10 @@ from ui.icons import (
     icon_check as _icon_check,
     icon_cross as _icon_cross,
     icon_home as _icon_home,
+    page_icon as _page_icon,
 )
 from ui.widgets import (
+    IdentityMark,
     ToggleSwitch,
     Invoker as _Invoker,
     MainWindow as _MainWindow,
@@ -72,6 +75,7 @@ from ui.live_theme import LiveTheme as _LiveTheme
 # refactor). Each mixin owns a coherent slice of the UI; this class
 # composes them so external code keeps calling OscGoesPurrrUI(...).
 from ui import theme as _theme
+from ui import wheel_guard as _wheel_guard
 from version import __version__ as _APP_VERSION, build_number as _build_number
 from ui.views.dashboard import DashboardMixin
 from ui.views.diagnostics import DiagnosticsMixin
@@ -81,7 +85,13 @@ from ui.views.device_frame import DeviceFrameMixin
 from ui.views.home import HomeMixin
 from ui.views.sps_sources import SpsSourcesMixin
 from ui.views.statistics import StatisticsMixin
+from ui.views.pishock import PiShockMixin
+from ui.views.suits import SuitsMixin
+from ui.views.friends import FriendsMixin
+from ui.views.params import ParamsMixin
 from ui.views.whats_new import WhatsNewMixin
+from ui.views.interests import InterestsMixin
+from ui.views.help import HelpMixin
 
 
 # ============================================================
@@ -89,6 +99,10 @@ from ui.views.whats_new import WhatsNewMixin
 # ============================================================
 
 GLOBAL_QSS = _theme.build_qss()
+
+# A window saved as "WxH+X+Y" that is as wide as its screen and at most
+# this much (a title bar and then some) shorter was a maximized one.
+_MAXIMIZED_TITLE_SLACK = 80
 
 
 # ============================================================
@@ -146,7 +160,13 @@ class OscGoesPurrrUI(
     HomeMixin,
     SpsSourcesMixin,
     StatisticsMixin,
+    PiShockMixin,
+    SuitsMixin,
+    FriendsMixin,
+    ParamsMixin,
     WhatsNewMixin,
+    InterestsMixin,
+    HelpMixin,
 ):
     """UI Component class — handles all GUI rendering and updates."""
 
@@ -165,6 +185,8 @@ class OscGoesPurrrUI(
             self.qapp.setDesktopFileName(APP_NAME)
         _theme.install_fonts()
         self.qapp.setStyleSheet(GLOBAL_QSS)
+        # The wheel scrolls pages; it never changes a setting it passes over
+        _wheel_guard.install(self.qapp)
         # Rich-text links (update notice, update window) in the accent, not
         # Qt's default blue — the stylesheet cannot reach them, the palette can.
         pal = self.qapp.palette()
@@ -185,6 +207,7 @@ class OscGoesPurrrUI(
         # once and never again; a colour change is swept through the
         # sections registered with this, a slice per event-loop turn.
         self.live_theme = _LiveTheme(self.window)
+        self.live_theme.on_change(IdentityMark.redraw_all)
         self.live_theme.on_change(self._after_colour_change)
         # Dialogs and message boxes are parented to this (invisible, zero
         # size) section instead of the window, so they open in the colour
@@ -303,6 +326,7 @@ class OscGoesPurrrUI(
         _install_rainbow_scrollbars(sidebar_scroll)
         sidebar_scroll.setWidget(self.sidebar_frame)
         root_layout.addWidget(sidebar_scroll)
+        self.sidebar_scroll = sidebar_scroll      # Friends' control mode hides it
         self.live_theme.add_root(sidebar_scroll)
 
         # Main content area (stacked views). Each page sits inside its own
@@ -329,16 +353,30 @@ class OscGoesPurrrUI(
             f"font-weight: bold; padding: 6px; border-radius: 4px;"
         )
         main_content_lay.addWidget(self.replay_banner_label)
+        # OGP opened twice and kept anyway (main.py asked first)
+        self.second_window_banner = QLabel(
+            "⚠  OscGoesPurrr is open twice. This second window shares the toys, "
+            "VRChat's OSC and your Friends ID with the other one - things here "
+            "may not work. Close one of them.")
+        self.second_window_banner.setObjectName("secondWindowBanner")
+        self.second_window_banner.setAlignment(Qt.AlignCenter)
+        self.second_window_banner.setWordWrap(True)
+        self.second_window_banner.setVisible(False)
+        main_content_lay.addWidget(self.second_window_banner)
         main_content_lay.addWidget(self.main_stack, 1)
         root_layout.addWidget(main_content, 1)
 
-        view_names = ["Home", "Statistics",
+        view_names = ["Home", "Friends", "My Avatar Remote", "Shockers", "Suits", "Statistics",
                       "SPS Sources",
                       "OSC Inspector", "OSC Diagnostics", "System Log",
                       "Settings", "Help"]
         builders = {
             "Home": self._build_home_view,
             "Statistics": self._build_statistics_view,
+            "Shockers": self._build_pishock_view,
+            "Suits": self._build_suits_view,
+            "Friends": self._build_friends_view,
+            "My Avatar Remote": self._build_params_view,
             "SPS Sources": self._build_sps_sources_view,
             "OSC Inspector": self._build_network_debug_view,
             "OSC Diagnostics": self._build_osc_diagnostics_view,
@@ -446,6 +484,7 @@ class OscGoesPurrrUI(
         self.status_message_label = _StatusLabel()
         self.status_message_label.setObjectName("statusMessage")
         bar.addWidget(self.status_message_label, 1)
+        self._add_help_button(bar)           # Show me around, and F1
         tag = QLabel(_theme.status_tag_html(
             getattr(_constants, "APP_NAME", "OscGoesPurrr"), _APP_VERSION))
         tag.setObjectName("statusTag")
@@ -473,6 +512,19 @@ class OscGoesPurrrUI(
         "Home": "Your toys, live: what's connected, battery and output at "
                 "a glance, with Test and Mute. Click a toy to set up which "
                 "parts of your avatar drive it and how each motor responds.",
+        "Friends": "Other OGP users over the internet: let a friend drive "
+                   "your toys or shockers, and drive theirs. Everything they "
+                   "do is logged.",
+        "My Avatar Remote": "The remote for your own avatar: boards of controls "
+                            "for its parameters, per avatar - toggles, hold "
+                            "buttons, sliders, steppers - that friends you allow "
+                            "can use too (VRC Parameter Relay's board). A "
+                            "friend's avatar you use from Friends.",
+        "Shockers": "Your PiShock or OpenShock hub over USB: continuous, "
+                    "contact-trigger and impact rules, with the safety limits "
+                    "every shock obeys.",
+        "Suits": "Your bHaptics suit over Bluetooth and your OWO suit through "
+                 "My OWO, both driven by the same contacts on your avatar.",
         "Statistics": "Your sessions with a timeline for each, lifetime "
                       "totals and fun facts, and when you play.",
         "SPS Sources": "Build your own contact zones out of raw VRChat "
@@ -485,8 +537,9 @@ class OscGoesPurrrUI(
         "System Log": "Everything the app has reported this session.",
         "Settings": "Connections, appearance, updates, settings backups and "
                     "session recording.",
-        "Help": "The manual: how modes, signal chains and the rest fit "
-                "together.",
+        "Help": "Every page explained: pick one to see what you do there, on "
+                "the page itself - or read how modes, signal chains and the "
+                "rest fit together.",
     }
 
     def _build_sidebar(self) -> QFrame:
@@ -525,10 +578,13 @@ class OscGoesPurrrUI(
         lay.addSpacing(8)
 
         # Home is the landing page -- where the app opens and where the
-        # toys are -- so it is the one entry that is framed, larger and
-        # has an icon. The rest follow in the order they are reached for:
-        # the everyday pages, the tools for digging into OSC, then
-        # Settings and Help.
+        # toys are -- so it is the one entry that is framed and larger. The
+        # rest follow in the order they are reached for: the everyday
+        # pages, the tools for digging into OSC, then Settings and Help.
+        # Every entry has an icon (Blise's ask, 2026-10-28): what is a kind
+        # of thing -- Friends, Avatar Remote, Shockers, Suits -- the one it
+        # has everywhere, in its colour (ui/icons.identity_icon); the other
+        # pages theirs in the entries' own tone (ui/icons.page_icon).
         def nav_button(name: str, role: str = "nav") -> QPushButton:
             btn = QPushButton(name)
             btn.setProperty("role", role)
@@ -548,8 +604,9 @@ class OscGoesPurrrUI(
         self.live_theme.on_change(
             lambda: home.setIcon(_icon_home(COLOR_ACCENT)))
         lay.addSpacing(2)
-        for name in ("Statistics",):
-            nav_button(name)
+        plain = []
+        for name in ("Friends", "My Avatar Remote", "Shockers", "Suits", "Statistics"):
+            plain.append(nav_button(name))
         # The same break before each of the two lower groups; the TOOLS
         # label sits tight above the group it names.
         lay.addSpacing(self._NAV_GROUP_GAP)
@@ -558,10 +615,18 @@ class OscGoesPurrrUI(
         lay.addWidget(tools)
         for name in ("SPS Sources", "OSC Inspector", "OSC Diagnostics",
                      "System Log"):
-            nav_button(name)
+            plain.append(nav_button(name))
         lay.addSpacing(self._NAV_GROUP_GAP)
         for name in ("Settings", "Help"):
-            nav_button(name)
+            plain.append(nav_button(name))
+
+        def nav_icons_drawn() -> None:
+            for btn in plain:
+                btn.setIcon(_page_icon(self._NAV_ICONS.get(btn.text(), ""), 16))
+        for btn in plain:
+            btn.setIconSize(QSize(16, 16))
+        nav_icons_drawn()
+        self.live_theme.on_change(nav_icons_drawn)
 
         # Stretch pushes the bottom section down
         lay.addStretch(1)
@@ -700,6 +765,12 @@ class OscGoesPurrrUI(
 
     _SIDEBAR_LINK_BTN_H = 26
     _NAV_GROUP_GAP = 10
+    # Each sidebar entry's icon under Home's own (ui/icons.page_icon)
+    _NAV_ICONS = {"Friends": "friends", "My Avatar Remote": "params",
+                  "Shockers": "shock", "Suits": "suits", "Statistics": "stats",
+                  "SPS Sources": "sps", "OSC Inspector": "inspector",
+                  "OSC Diagnostics": "diagnostics", "System Log": "log",
+                  "Settings": "settings", "Help": "help"}
 
     # ----------------------------------------------------------
     # View switching
@@ -729,6 +800,10 @@ class OscGoesPurrrUI(
         arrival_refreshers = {
             "Home": ("_refresh_home_dynamic",),
             "Statistics": ("_refresh_statistics_view",),
+            "Shockers": ("refresh_pishock_status", "_refresh_pishock_live"),
+            "Suits": ("refresh_suits_status", "_refresh_suits_live"),
+            "Friends": ("refresh_friends",),
+            "My Avatar Remote": ("refresh_params_live",),
             "Settings": ("_refresh_sessions_view",
                          "_repopulate_replay_sessions"),
         }
@@ -799,7 +874,7 @@ class OscGoesPurrrUI(
         the application palette (cheap to set -- unlike the app's
         stylesheet, it re-styles nothing), and the no-battery glyphs are
         pixmaps drawn in the text colour, which carries a trace of the
-        accent's hue."""
+        accent's hue (the Friends cards' glyphs, likewise)."""
         pal = self.qapp.palette()
         for role in (QPalette.Link, QPalette.LinkVisited):
             pal.setColor(role, QColor(_theme.CHROME["accent"]))
@@ -811,6 +886,10 @@ class OscGoesPurrrUI(
                     self._show_no_battery_glyph(label)
             except RuntimeError:
                 pass          # card rebuilt meanwhile
+        # The Friends cards' glyphs, in identity colours that can move too.
+        recolour = getattr(self, "_friends_recolour", None)
+        if recolour is not None:
+            recolour()
 
     def refresh_link_buttons(self) -> None:
         """Show each sidebar button only while it has something to do:
@@ -942,7 +1021,34 @@ class OscGoesPurrrUI(
     def set_title(self, text: str) -> None:
         self.window.setWindowTitle(text)
 
+    def set_window_state(self, state: str) -> bool:
+        """Put the window back the way get_window_state found it: its
+        place and size, maximized or full screen if it was, on the screen
+        it was on while that one is still there (Qt pulls it onto a screen
+        that is). Before the window is shown. False, changing nothing, for
+        a missing or unreadable state -- set_geometry is the fallback."""
+        if not state:
+            return False
+        try:
+            blob = QByteArray.fromBase64(str(state).encode("ascii"))
+            return bool(blob) and bool(self.window.restoreGeometry(blob))
+        except Exception:
+            return False
+
+    def get_window_state(self) -> str:
+        """The window's place, size and maximized / full-screen state, as
+        text for the settings file ("" when Qt has none). The plain
+        geometry string alone can't say "maximized", so a maximized window
+        came back as a normal one of the same size, a little off to the
+        side."""
+        try:
+            return bytes(self.window.saveGeometry().toBase64()).decode("ascii")
+        except Exception:
+            return ""
+
     def set_geometry(self, geometry: str) -> None:
+        """The fallback for set_window_state: a "WxH+X+Y" string, as every
+        version before window_state saved it."""
         parsed = _parse_tk_geometry(geometry)
         if parsed is None:
             return
@@ -967,14 +1073,32 @@ class OscGoesPurrrUI(
                     x = max(avail.left(), min(x, avail.right() - int(w)))
                     y = max(avail.top(), min(y, avail.bottom() - 100))
             self.window.move(x, y)
+            # Those versions saved a maximized window as its full size: one
+            # that fills its screen was maximized, so it comes back so.
+            screen = QApplication.screenAt(QRect(x, y, int(w), int(h)).center())
+            if screen is not None:
+                avail = screen.availableGeometry()
+                if (int(w) >= avail.width()
+                        and int(h) >= avail.height() - _MAXIMIZED_TITLE_SLACK):
+                    self.window.setWindowState(
+                        self.window.windowState() | Qt.WindowMaximized)
 
     def get_geometry(self) -> str:
         # Width/height come from geometry() (client-area size, matches
         # resize()). x/y come from pos() (frame position, matches move()) —
         # mixing geometry().x()/y() with move() makes the window walk
         # down-and-right by the title-bar height on every restart.
+        # Maximized, minimized or full screen: the size it goes back to.
         g = self.window.geometry()
         p = self.window.pos()
+        if self.window.windowState() & (
+                Qt.WindowMaximized | Qt.WindowMinimized | Qt.WindowFullScreen):
+            frame = p - g.topLeft()             # the frame's own offset
+            g = self.window.normalGeometry()
+            if g.isValid():
+                p = g.topLeft() + frame
+            else:
+                g = self.window.geometry()
         return _format_tk_geometry(g.width(), g.height(), p.x(), p.y())
 
     def set_close_handler(self, callback) -> None:
@@ -1037,13 +1161,21 @@ class OscGoesPurrrUI(
     def hide_window(self) -> None:
         self.window.hide()
 
+    def show_second_window_banner(self) -> None:
+        """Controller facade: this is the second OGP window (main.py)."""
+        self.second_window_banner.setVisible(True)
+
     def show_window(self) -> None:
-        # Thread-safe restore.
-        self._invoker.schedule(0, lambda: (
-            self.window.showNormal(),
-            self.window.activateWindow(),
-            self.window.raise_(),
-        ))
+        # Thread-safe restore, to the state it had: a maximized window
+        # comes back maximized (showNormal() would shrink it).
+        def restore():
+            w = self.window
+            w.setWindowState(
+                (w.windowState() & ~Qt.WindowMinimized) | Qt.WindowActive)
+            w.show()
+            w.activateWindow()
+            w.raise_()
+        self._invoker.schedule(0, restore)
 
     def minimize_window(self) -> None:
         self.window.showMinimized()

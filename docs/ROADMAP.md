@@ -3,12 +3,22 @@
 A loose list of features we want to land, grouped by theme.
 Order within a group is rough priority, not a hard sequence.
 
-**Scope note.** This is the toys-only edition. Bringing back the other
-haptic backends -- SteamVR tracker haptics, bHaptics, PiShock, DG-Lab
-Coyote, OWO, The Handy, PSVR2 rumble -- is its own line item, and the
-seams they were built against are all still here (see ARCHITECTURE.md,
-"How to add a new haptic backend"). Items below assume the toy path
-unless they say otherwise.
+**Scope note.** This is the toys-first edition. PiShock / OpenShock and
+the bHaptics and OWO suits have come back; bringing back the other haptic
+backends -- SteamVR tracker haptics, DG-Lab Coyote, The Handy, PSVR2
+rumble -- is its own line item, and the seams they were built against are
+all still here (see ARCHITECTURE.md, "How to add a new haptic backend").
+Items below assume the toy path unless they say otherwise.
+
+**Suits, next steps.**
+- The bHaptics dot -> motor tables measured on real suits
+  (`tools/bhaptics_probe.py walk --interactive`), per model.
+- OWO straight over Bluetooth, without My OWO: a research track in
+  `tools/owo_ble/` (capture what My OWO sends, decode, replay). Only once
+  it's understood -- and with calibration and caps inside OGP -- does it
+  replace the My OWO path.
+- TactGlove, the suits in SteamVR's device list, and friends driving
+  your suits (Friends page).
 
 ## Haptics Features
 
@@ -192,6 +202,17 @@ unless they say otherwise.
   Per-OSC-parameter ceiling (0.0–1.0) so a single zone or contact can't
   push a motor to full output. Lets users cap noisy or overly-eager
   inputs without rewriting the whole routing.
+- **In-world leaderboard display.** _Planned, not designed yet._
+  A display in VRChat (a shader on the avatar or a prop) showing the
+  top 10 people by thrusts with you, from the per-person statistics.
+  The hard part is the shader: OSC can only set avatar parameters, and
+  an Int parameter holds 0–255, so names and counts would have to be
+  streamed a slot at a time (row, character index, character code) into
+  a shader that keeps them, e.g. in a custom render texture. Local-only
+  parameters are enough for you to see it; letting others see it means
+  synced parameters, which costs sync bits and bandwidth, so a slow
+  trickle at most. Builds on the People statistics and the thrust
+  counter parameters (both built 2026-10-08).
 
 ## Reliability & Lifecycle
 

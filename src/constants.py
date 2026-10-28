@@ -11,8 +11,10 @@ from pathlib import Path as _Path
 # and NOTHING in this project retypes a hex; everything below is a name
 # for a token. The stylesheet itself is built in `ui/theme.py`.
 #
-# The one thing a user can change is the hue of "the green": Settings ->
-# Appearance turns every green token by one angle (see accent_shift.py).
+# What a user can change is the hue of "the green": Settings -> Appearance
+# turns every green token by one angle (see accent_shift.py) -- and with it,
+# any identity colour that would land too close to it moves out of the way,
+# unless the user set that colour by hand (Appearance -> Other colours).
 # The tokens stay the source; a turned colour is computed from one,
 # never typed.
 #
@@ -72,6 +74,46 @@ def _load_ui_accent_hue():
         return None          # absent, null, "default" or junk: the green
 
 
+def _load_ui_identity_hues() -> tuple:
+    """Persisted `ui_identity_hues`: the identity colours the user set by
+    hand, `((name, hue), ...)`. Not read while `OGP_UI_ACCENT` is set:
+    tests and screenshots get the house colours."""
+    import os as _os
+    if _os.environ.get("OGP_UI_ACCENT") is not None:
+        return ()
+    try:
+        p = (_Path.home() / "AppData" / "Roaming" / "OscGoesPurrr"
+             / "app_settings.json")
+        with open(p, "r", encoding="utf-8") as f:
+            raw = _json.load(f).get("ui_identity_hues") or {}
+    except Exception:
+        return ()
+    return clean_identity_hues(raw)
+
+
+# The identity colours OGP gives a meaning to: the live signal and
+# penetration (pink), errors (red), touch and warnings (amber), shocks
+# (yellow), running jobs and the toys (cyan, blue, purple), the haptic suits
+# (orange). Grey has no hue to turn. Orange came last, so adding it moved
+# nothing the others already had.
+IDENTITY_HUES = ("pink", "red", "amber", "yellow", "cyan", "blue", "purple", "orange")
+
+
+def clean_identity_hues(raw) -> tuple:
+    """`{name: hue}` (or pairs) as stored -> `((name, hue 0..360), ...)`,
+    sorted, unknown names and junk dropped."""
+    out = {}
+    items = raw.items() if isinstance(raw, dict) else (raw or ())
+    for item in items:
+        try:
+            name, hue = item
+            if name in IDENTITY_HUES:
+                out[name] = round(float(hue) % 360.0, 1)
+        except (TypeError, ValueError):
+            continue
+    return tuple(sorted(out.items()))
+
+
 UI_MODE = _load_ui_mode()
 # What the two modes are called in THIS app. The design system's names
 # (and the stored setting, and OGP_UI_MODE) stay `neon` / `midnight`.
@@ -88,7 +130,31 @@ import accent_shift as _accent
 GREEN_ROLES = ("green.0", "green.1", "green.2")
 
 
-def accent_table(delta: float, mode_name: str = "") -> dict:
+def identity_moves(delta: float, chosen: tuple = ()) -> dict:
+    """`{name: hue}` for the identity colours that do not wear their own
+    hue with the green turned by `delta` and `chosen` set by hand (see
+    accent_shift.identity_hues)."""
+    return dict(_identity_moves(float(delta), tuple(chosen)))
+
+
+@_lru_cache(maxsize=1024)
+def _identity_moves(delta: float, chosen: tuple) -> tuple:
+    green = _accent.hue_of(_tokens.PALETTE["green"][0])
+    accent = (None if not delta
+              else (_accent.hue_of(_tokens.NEON["accent"]) + delta) % 360.0)
+    own = {n: _accent.hue_of(_tokens.PALETTE[n][0]) for n in IDENTITY_HUES}
+    moves = _accent.identity_hues(accent, own, green, dict(chosen))
+    # a colour "set" to its own hue is simply its own colour
+    return tuple(sorted((n, h) for n, h in moves.items()
+                        if _accent.hue_distance(h, own[n]) >= 0.5))
+
+
+def identity_delta(name: str, hue: float) -> float:
+    """Degrees to turn identity colour `name` by so it wears `hue`."""
+    return (float(hue) - _accent.hue_of(_tokens.PALETTE[name][0])) % 360.0
+
+
+def accent_table(delta: float, mode_name: str = "", chosen: tuple = ()) -> dict:
     """`{role: its colour with the green turned by delta degrees}` for
     every green token of a mode: its chrome (the roles are the token
     names -- `bg`, `line`, `accent`, ...) and the palette's green
@@ -106,11 +172,13 @@ def accent_table(delta: float, mode_name: str = "") -> dict:
     key = _tokens.LEGACY_MODE_ALIASES.get(key, key)
     if key not in _tokens.MODES:
         key = _tokens.DEFAULT_MODE
-    return dict(_accent_table(float(delta), key))
+    return dict(_accent_table(float(delta), key, tuple(chosen)))
 
 
 @_lru_cache(maxsize=1024)
-def _accent_table(delta: float, mode_name: str) -> dict:
+def _accent_table(delta: float, mode_name: str, chosen: tuple) -> dict:
+    # Every identity tone, as the tokens have it, is protected for good:
+    # no other role ever takes one, whichever colours have moved.
     protected = [tone for name, tri in _tokens.PALETTE.items()
                  if name != "green" for tone in tri]
     chromes = {name: _accent.unique_table(dict(tokens), delta, protected)
@@ -119,16 +187,30 @@ def _accent_table(delta: float, mode_name: str) -> dict:
                          for c in chrome.values()]
     green = _accent.unique_table(
         dict(zip(GREEN_ROLES, _tokens.PALETTE["green"])), delta, taken)
-    return {**chromes[mode_name], **green}
+    taken += list(green.values())
+    # The identity colours, as roles "pink.0".."pink.2": their own tones,
+    # or -- moved -- turned to their new hue, each value of its own.
+    moves = dict(_identity_moves(delta, chosen))
+    identity = {}
+    for name in IDENTITY_HUES:
+        roles = {f"{name}.{i}": tone for i, tone in enumerate(_tokens.PALETTE[name])}
+        if name in moves:
+            roles = _accent.unique_table(roles, identity_delta(name, moves[name]), taken)
+            taken += list(roles.values())
+        identity.update(roles)
+    return {**chromes[mode_name], **green, **identity}
 
 
 UI_ACCENT_HUE = _load_ui_accent_hue()
 UI_ACCENT_DELTA = _accent.delta_for(UI_ACCENT_HUE, _tokens.NEON["accent"])
-_startup_table = accent_table(UI_ACCENT_DELTA)
+UI_IDENTITY_HUES = _load_ui_identity_hues()
+_startup_table = accent_table(UI_ACCENT_DELTA, chosen=UI_IDENTITY_HUES)
 CHROME = {k: _startup_table[k] for k in _tokens.mode(UI_MODE)}
 PALETTE = dict(_tokens.PALETTE)
 PALETTE["green"] = tuple(_startup_table[r] for r in GREEN_ROLES)
-del _startup_table
+for _name in IDENTITY_HUES:
+    PALETTE[_name] = tuple(_startup_table[f"{_name}.{i}"] for i in range(3))
+del _startup_table, _name
 
 # The four surfaces + the frame, by their token names.
 COLOR_BG = CHROME["bg"]            # the window
@@ -275,15 +357,15 @@ AUTO_REFRESH_RATE_S = 30.0
 # One scan is TOY_SCAN_SECONDS of Bluetooth listening. With a toy connected
 # the app rescans every AUTO_REFRESH_RATE_S and no faster: scanning shares
 # the radio with the toy's own link, and that link's latency comes first.
-# With NO toy connected there is nothing to protect, so the app searches
-# hard -- a scan starts every TOY_SEARCH_RATE_S -- but only for
-# TOY_SEARCH_WINDOW_S after the last reason to expect a toy (the toy server
-# came up, a toy dropped, the user opened the window). Unbounded, it would
-# keep the radio 40% busy and add ~3.5 MB a day to the toy server's log for
-# every session spent with the toys switched off.
+# With NO toy connected there is nothing to protect, so a scan starts every
+# few seconds for as long as none is: the user's own setting
+# (`toy_scan_interval_s`, Settings -> Connection Settings, TOY_SEARCH_RATE_S
+# by default, within TOY_SEARCH_RATE_RANGE). Blise's call (2026-10-23):
+# found within seconds beats the radio and the toy server's log (it grows a
+# few MB a day of scanning while the toys stay off).
 TOY_SCAN_SECONDS = 2.0
-TOY_SEARCH_RATE_S = 5.0
-TOY_SEARCH_WINDOW_S = 180.0
+TOY_SEARCH_RATE_S = 5
+TOY_SEARCH_RATE_RANGE = (3, 60)
 
 # --- OGP avatar parameters (VRChat expression-menu control) ---
 # Stored/compared in the bare parameter_store form (the OSC prefix is
@@ -299,6 +381,35 @@ OGP_OFF_PARAMETER = "OGP/Off"      # Bool
 # Sleep. Toggle ON and the toy chain's Wake stage switches to the
 # stroke counter, so a brush against a sleeping partner does nothing.
 OGP_SLEEP_PARAMETER = "OGP/Sleep"  # Bool
+# The menu's Friends submenu: it acts on the friend or group picked on the
+# Friends page (see controllers/friends_facade.py). All unsynced, so 0 sync
+# bits. Toys ▸
+OGP_FRIEND_LEVEL_PARAMETER = "OGP/Friend/Level"        # Float: drive their toys
+OGP_FRIEND_TOY_PARAMETERS = tuple(f"OGP/Friend/Toy{i}" for i in range(1, 5))  # Bools, all on
+OGP_FRIEND_MODE_PARAMETER = "OGP/Friend/Mode"          # Int: 0 none, 1-8 the auto modes
+OGP_FRIEND_SPEED_PARAMETER = "OGP/Friend/Speed"        # Float: 0 slow .. 1 fast
+OGP_FRIEND_RANGE_PARAMETER = "OGP/Friend/Range"        # Float: the auto mode's high point
+OGP_FRIEND_OVERRIDE_PARAMETER = "OGP/Friend/Override"  # Bool
+OGP_FRIEND_STOP_TOYS_PARAMETER = "OGP/Friend/StopToys"  # Bool, a button
+OGP_FRIEND_STRENGTH_PARAMETER = "OGP/Friend/Strength"  # Float: their strength slider
+# Shockers ▸
+OGP_FRIEND_SHOCK_PARAMETER = "OGP/Friend/Shock"        # Bool, a button: one pulse
+OGP_FRIEND_VIBRATE_PARAMETER = "OGP/Friend/Vibrate"    # Bool, a button
+OGP_FRIEND_BEEP_PARAMETER = "OGP/Friend/Beep"          # Bool, a button
+OGP_FRIEND_STOP_SHOCK_PARAMETER = "OGP/Friend/StopShock"  # Bool, a button
+OGP_FRIEND_SHOCK_STRENGTH_PARAMETER = "OGP/Friend/ShockStrength"  # Float, of their cap
+OGP_FRIEND_SHOCK_LENGTH_PARAMETER = "OGP/Friend/ShockLength"      # Float, of their cap
+OGP_FRIEND_WARNING_PARAMETER = "OGP/Friend/Warning"    # Bool: 1-3 s of vibration first
+OGP_FRIEND_SHOCKER_PARAMETERS = tuple(f"OGP/Friend/Shocker{i}" for i in range(1, 5))  # Bools, all on
+# Both of us ▸ -- the picked friend and you at once
+OGP_BOTH_LEVEL_PARAMETER = "OGP/Both/Level"            # Float
+OGP_BOTH_MODE_PARAMETER = "OGP/Both/Mode"              # Int: 0 none, 1-8 the auto modes
+OGP_BOTH_SPEED_PARAMETER = "OGP/Both/Speed"            # Float
+OGP_BOTH_STOP_PARAMETER = "OGP/Both/Stop"              # Bool, a button
+OGP_BOTH_SHOCK_PARAMETER = "OGP/Both/Shock"            # Bool, a button
+OGP_BOTH_VIBRATE_PARAMETER = "OGP/Both/Vibrate"        # Bool, a button
+OGP_BOTH_STRENGTH_PARAMETER = "OGP/Both/Strength"      # Float, of each one's cap
+OGP_BOTH_LENGTH_PARAMETER = "OGP/Both/Length"          # Float, of each one's cap
 # Level the OGP/Test pulse drives every connected motor at — high enough
 # to feel, low enough to be unmistakably a connectivity check.
 OGP_TEST_LEVEL = 0.2

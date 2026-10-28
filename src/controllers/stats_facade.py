@@ -27,14 +27,18 @@ from typing import Any, Dict, List, Optional, Tuple
 import debug_log
 from parameter_store import store
 from router_base import StaleSignalMonitor
-from settings import STATS_FILE, STATS_HOURS_FILE, STATS_SESSIONS_DIR
+from settings import (
+    STATS_FILE, STATS_HOURS_FILE, STATS_PEOPLE_FILE, STATS_SESSIONS_DIR,
+)
 from stats_backfill import estimate as estimate_history, parse_runs
 from stats_gate import ActivityGate, GATE_VERSION, MIN_CONTACT_S, MIN_THRUSTS
 from stats_history import (
     StatsHistory, analyse, dense, fun_facts, hour_key, month_days,
     summarize, weekday_hour,
 )
+from stats_people import StatsPeople, credit, held_nothing, tag_measure
 from stats_tracker import StatsTracker
+from thrust_params import PaceWindow
 from utilities import process_alive
 from zone_strength import zone_filter_strength
 
@@ -88,8 +92,9 @@ _SAME_SESSION_S = 2.0
 
 def _delete_stats_files() -> None:
     """Every file the statistics keep: the totals, the hourly history, the
-    session timelines, and their backups and leftovers."""
-    for path in (STATS_FILE, STATS_HOURS_FILE):
+    session timelines, who each session was with, and their backups and
+    leftovers."""
+    for path in (STATS_FILE, STATS_HOURS_FILE, STATS_PEOPLE_FILE):
         for suffix in ("", ".bak", ".before-gate.bak", ".tmp"):
             target = path.with_name(path.name + suffix)
             try:
@@ -118,6 +123,10 @@ class StatsFacade:
         now = time.time()
         self.stats_tracker = None
         self.stats_history = None
+        self.stats_people = None
+        # The last minute's thrusts, for the live pace the thrust counters
+        # send to the avatar (thrust_params_facade).
+        self._stats_pace = PaceWindow()
         # Monotonic timestamp of the previous sample; None = no sample
         # yet (the first heartbeat only anchors the clock).
         self._stats_last_sample_t = None
@@ -149,6 +158,11 @@ class StatsFacade:
         except Exception as e:
             print(f"[stats] history init failed, charts disabled: {e}")
             self.stats_history = None
+        try:
+            self.stats_people = StatsPeople(STATS_PEOPLE_FILE)
+        except Exception as e:
+            print(f"[stats] people init failed, people disabled: {e}")
+            self.stats_people = None
         reestimate = False
         try:
             reestimate = self._stats_clean_history()
@@ -170,17 +184,36 @@ class StatsFacade:
 
     def _stats_set_enabled(self, enabled: bool) -> None:
         """Settings → Features → Usage statistics (main's feature switch).
-        Off: stop recording and delete everything recorded — the user
-        asked for it gone, and the Settings switch asked first. On: start
-        recording afresh."""
+        Off: stop recording -- the running session is filed and everything
+        recorded stays (Settings → Delete statistics… is what deletes it).
+        On: carry on recording, from what is there."""
         if enabled:
             if self.stats_tracker is None and self.stats_history is None:
                 self._stats_init()
             return
+        if self.stats_tracker is not None or self.stats_history is not None:
+            self._stats_shutdown()
+        self._stats_drop()
+
+    def _stats_drop(self) -> None:
         self.stats_tracker = None
         self.stats_history = None
+        self.stats_people = None
         self._stats_gate = ActivityGate()
+        self._stats_pace = PaceWindow()
+
+    def delete_stats(self) -> None:
+        """Settings → Delete statistics…: everything recorded is deleted
+        from this PC (the page asked first). While statistics are on,
+        recording starts afresh."""
+        on = self.stats_tracker is not None or self.stats_history is not None
+        self._stats_drop()
         _delete_stats_files()
+        if on:
+            self._stats_init()
+        log = getattr(self, "log_message", None)
+        if log is not None:
+            log("Statistics deleted")
 
     def _stats_clean_history(self) -> bool:
         """Apply the activity gate to what was recorded before it existed,
@@ -214,8 +247,14 @@ class StatsFacade:
                     shutil.copy2(path, backup)
             except OSError as e:
                 print(f"[stats] backup of {path.name} failed: {e}")
-        for res in hist.regate_finished():
+        regated = hist.regate_finished()
+        for res in regated:
             tracker.discount(res["started_ts"], res["dropped"], res["removed"])
+        people = getattr(self, "stats_people", None)
+        if regated and people is not None:
+            # What each person was credited came from the old buckets.
+            people.invalidate_all()
+            people.flush()
         removed = tracker.drop_sessions(keep)
         tracker.flush(force=True)
         est = hist.estimate_info()
@@ -251,6 +290,10 @@ class StatsFacade:
         flush. Called from quit_app before engine teardown."""
         now = time.time()
         try:
+            self._stats_people_close_live(now)
+        except Exception as e:
+            print(f"[stats] closing the session's people failed: {e}")
+        try:
             self.stats_tracker.finalize_session(now)
         except Exception:
             pass
@@ -258,6 +301,30 @@ class StatsFacade:
             self.stats_history.finalize_session(now)
         except Exception:
             pass
+
+    def _stats_people_close_live(self, now: float) -> None:
+        """Before the running session is filed: end its open stretches,
+        drop the ones the VRChat log tagged that held nothing, and cache
+        what everyone gets from it. An idle run is never filed, so its
+        tags go."""
+        people, hist = getattr(self, "stats_people", None), self.stats_history
+        if people is None or hist is None:
+            return
+        tl = hist.live
+        sid = tl["id"]
+        if not people.tags(sid):
+            return
+        if not tl["buckets"]:
+            people.drop_session(sid)
+        else:
+            people.close_open(sid, now)
+            for tag in people.tags(sid):
+                if tag.get("auto") and held_nothing(tl, tag, now):
+                    people.remove_tag(sid, tag["id"])
+            tags = people.tags(sid)
+            if tags:
+                people.set_credit(sid, credit(tl, tags, now))
+        people.flush()
 
     # ------------------------------------------------------------------
     # 1 Hz sampling (called from main.py's device-state heartbeat)
@@ -341,7 +408,10 @@ class StatsFacade:
             released = self._stats_gate.push(
                 sample[0], sample, bool(levels),
                 dt if contact_zones else 0.0, thrusts)
+            pace = getattr(self, "_stats_pace", None)
             for epoch, s_dt, s_levels, s_toys, s_zones, s_thrusts in released:
+                if pace is not None:
+                    pace.add(epoch, s_thrusts)
                 if self.stats_tracker is not None:
                     self.stats_tracker.sample(s_dt, s_toys, s_zones, s_thrusts)
                 # Separately guarded: a history bug must not stop the
@@ -361,6 +431,9 @@ class StatsFacade:
                         self.stats_history.flush()
                 except Exception as e:
                     print(f"[stats] history flush failed: {e}")
+                people = getattr(self, "stats_people", None)
+                if people is not None:
+                    people.flush()
         except Exception:
             pass
 
@@ -378,8 +451,8 @@ class StatsFacade:
 
     def reset_stats(self) -> None:
         """Zero ALL statistics — lifetime totals, recent sessions, every
-        session timeline and the hourly history — and start a fresh
-        session anchored now."""
+        session timeline, the hourly history and who each session was with
+        — and start a fresh session anchored now."""
         now = time.time()
         try:
             self.stats_tracker.reset_lifetime()
@@ -388,6 +461,14 @@ class StatsFacade:
             pass
         try:
             self.stats_history.reset(now)
+        except Exception:
+            pass
+        try:
+            self.stats_people.reset()
+        except Exception:
+            pass
+        try:
+            self._stats_pace.reset()
         except Exception:
             pass
 
@@ -399,7 +480,8 @@ class StatsFacade:
 
         Each row: id, kind ("live" / "timeline" / "summary"), started_ts,
         duration_s, active_s, thrusts, peak_pace, spark (None for
-        "summary"), recovered, timeline (bool), toys, zones."""
+        "summary"), recovered, timeline (bool), toys, zones, people
+        (everyone tagged in it) and whole_people (the whole-session tag)."""
         rows: List[Dict[str, Any]] = []
         hist = self.stats_history
         if hist is not None:
@@ -452,6 +534,11 @@ class StatsFacade:
                               for k, v in (s.get("zones") or {}).items()},
                 })
         rows.sort(key=lambda r: r["started_ts"], reverse=True)
+        people = getattr(self, "stats_people", None)
+        for r in rows:
+            r["people"] = people.people_in(r["id"]) if people is not None else []
+            r["whole_people"] = (people.whole_people(r["id"])
+                                 if people is not None else [])
         return rows
 
     def get_stats_sessions(self) -> List[Dict[str, Any]]:
@@ -473,6 +560,7 @@ class StatsFacade:
             if sid.startswith("summary:"):
                 for row in self._stats_all_sessions():
                     if row["id"] == sid:
+                        row["tags"] = self._stats_tag_rows(sid, None, row)
                         return row
                 return None
             hist = self.stats_history
@@ -486,10 +574,32 @@ class StatsFacade:
             out.update(kind="live" if live else "timeline", timeline=True,
                        bucket_s=tl["bucket_s"], dense=dense(tl),
                        analysis=analyse(tl))
+            out["tags"] = self._stats_tag_rows(sid, tl, out)
             return out
         except Exception as e:
             print(f"[stats] session detail failed: {e}")
             return None
+
+    def _stats_tag_rows(self, sid: str, tl: Optional[Dict[str, Any]],
+                        row: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """A session's tags for its page, each with what happened inside
+        it (active_s, thrusts, peak_pace). Without a timeline only the
+        whole-session tag exists, and it holds the session's totals."""
+        people = getattr(self, "stats_people", None)
+        if people is None:
+            return []
+        out = []
+        end = row["started_ts"] + float(row.get("duration_s") or 0.0)
+        for tag in people.tags(sid):
+            if tl is not None:
+                tag.update(tag_measure(tl, tag, end))
+            elif tag["whole"]:
+                tag.update(active_s=float(row.get("active_s") or 0.0),
+                           thrusts=int(row.get("thrusts") or 0), peak_pace=0)
+            else:
+                continue
+            out.append(tag)
+        return out
 
     def get_stats_patterns(self, days: Optional[int] = None) -> Dict[str, Any]:
         """Weekday x hour grids of active seconds and thrusts over the

@@ -251,11 +251,87 @@
     return out;
   }
 
+  // An identity colour this close to the accent (OKLCH hue degrees) reads
+  // as the same colour, and moves out of the way (identityHues).
+  var IDENTITY_MIN_GAP = 20.0;
+
+  /** Degrees between two hues the short way round, 0..180. */
+  function hueDistance(a, b) {
+    return Math.abs(pyMod(Number(a) - Number(b) + 180.0, 360.0) - 180.0);
+  }
+
+  /**
+   * {name: hue} for every identity colour that does not keep its own hue
+   * (`own`, by name): the ones set by hand (`chosen`, kept as they are) and
+   * the ones within IDENTITY_MIN_GAP of the accent (`accentHue`; null - the
+   * house green - moves nobody). The closest one to the accent takes the
+   * spot the accent left (`vacated`) when that is clear of every other
+   * colour; otherwise - or for a second one - the whole degree furthest
+   * from every colour already placed (ties: nearest its own hue, then the
+   * lowest). A port of accent_shift.identity_hues.
+   */
+  function identityHues(accentHue, own, vacated, chosen) {
+    chosen = chosen || {};
+    var out = {}, n, i;
+    for (n in chosen) {
+      if (Object.prototype.hasOwnProperty.call(chosen, n) &&
+          Object.prototype.hasOwnProperty.call(own, n)) {
+        out[n] = pyMod(Number(chosen[n]), 360.0);
+      }
+    }
+    if (accentHue === null || accentHue === undefined) { return out; }
+    var accent = pyMod(Number(accentHue), 360.0);
+    var hit = [];
+    for (n in own) {
+      if (Object.prototype.hasOwnProperty.call(own, n) && !(n in out) &&
+          hueDistance(own[n], accent) < IDENTITY_MIN_GAP) { hit.push(n); }
+    }
+    hit.sort(function (a, b) {
+      var da = hueDistance(own[a], accent), db = hueDistance(own[b], accent);
+      return da !== db ? da - db : (a < b ? -1 : a > b ? 1 : 0);
+    });
+    var taken = [accent];
+    for (n in out) { if (Object.prototype.hasOwnProperty.call(out, n)) { taken.push(out[n]); } }
+    for (n in own) {
+      if (Object.prototype.hasOwnProperty.call(own, n) && !(n in out) && hit.indexOf(n) < 0) {
+        taken.push(Number(own[n]));
+      }
+    }
+    function room(h) {
+      var m = Infinity;
+      for (var k = 0; k < taken.length; k++) { m = Math.min(m, hueDistance(h, taken[k])); }
+      return m;
+    }
+    for (i = 0; i < hit.length; i++) {
+      n = hit[i];
+      var best;
+      if (room(vacated) >= IDENTITY_MIN_GAP) {
+        best = pyMod(Number(vacated), 360.0);
+      } else {
+        var bestKey = null;
+        for (var d = 0; d < 360; d++) {
+          var key = [pyRound(room(d), 6), -hueDistance(d, own[n]), -d];
+          if (bestKey === null || key[0] > bestKey[0] ||
+              (key[0] === bestKey[0] && (key[1] > bestKey[1] ||
+               (key[1] === bestKey[1] && key[2] > bestKey[2])))) {
+            bestKey = key; best = d;
+          }
+        }
+      }
+      out[n] = best;
+      taken.push(best);
+    }
+    return out;
+  }
+
   return {
     shiftHex: shiftHex,
     hueOf: hueOf,
     deltaFor: deltaFor,
     shiftTokens: shiftTokens,
+    hueDistance: hueDistance,
+    identityHues: identityHues,
+    IDENTITY_MIN_GAP: IDENTITY_MIN_GAP,
     toOklch: toOklch,
     fromOklch: fromOklch,
     maxChroma: maxChroma,

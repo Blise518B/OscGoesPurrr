@@ -8,11 +8,15 @@ Read-only dashboard over the controller's stats facade, top to bottom:
   per minute, a contact lane per zone, and a short analysis.
 * **Lifetime** — the headline totals, a row of fun facts, and per-toy /
   per-zone time (lifetime and this session side by side).
+* **People** — everyone sessions were tagged with, most thrusts first,
+  and the opt-in switch that tags from VRChat's log.
 * **When you play** — active time by weekday x hour over a chosen span.
 * **Month** — a calendar of active time per day with the month's totals.
 
-The only mutating control is the Reset button (`controller.reset_stats()`),
-double-confirmed.
+Mutating controls: the Reset button (`controller.reset_stats()`),
+double-confirmed; the session tags — a right-click on a session in the
+list, or on its page (whole session, or a stretch dragged out on its
+timeline); and the People card's VRChat-log switch.
 
 Refresh follows the hidden-pages rule: a 1 s QTimer whose handler
 early-outs while the page isn't visible (same gate as overview.py), with
@@ -21,23 +25,21 @@ refreshes every tick; the charts and fun facts every few ticks.
 """
 
 from datetime import date, datetime
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtWidgets import (
-    QFrame, QGridLayout, QLabel, QMessageBox, QPushButton,
-    QVBoxLayout, QWidget,
-)
+from PySide6.QtWidgets import QGridLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout, QWidget
 
 from constants import BTN_HEIGHT_SMALL
-
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox, clear_layout
 from ui.stats_charts import (
-    MonthCalendar, SessionTimeline, SpanStrip, SpanTimeline, Sparkline,
-    WEEKDAYS_LONG, WeekHourChart,
-    fmt_clock, fmt_day, fmt_dur, fmt_short, toy_color, zone_label,
+    MonthCalendar, WEEKDAYS_LONG, WeekHourChart, fmt_day, fmt_dur, fmt_short, zone_label,
 )
+from ui.stats_widgets import SessionRow, Tile
+from ui.text_helpers import fmt_when
 from ui.widgets import Card as _Card
+from ui.views.statistics_people import StatisticsPeopleMixin
+from ui.views.statistics_session import StatisticsSessionMixin
 
 
 _REFRESH_MS = 1000
@@ -62,146 +64,16 @@ _DEFAULT_SPAN = 1
 _fmt_dur = fmt_dur
 
 
-def _fmt_when(unix_ts: Any) -> str:
-    if not unix_ts:
-        return "—"
-    try:
-        return datetime.fromtimestamp(float(unix_ts)).strftime("%Y-%m-%d %H:%M")
-    except (TypeError, ValueError, OSError):
-        return "—"
-
-
-class _SessionRow(QFrame):
-    """One clickable session in the list."""
-
-    def __init__(self, on_click: Callable[[], None]) -> None:
-        super().__init__()
-        self.setObjectName("statsSessionRow")
-        self.setAttribute(Qt.WA_Hover)
-        self.setCursor(Qt.PointingHandCursor)
-        self._on_click = on_click
-        lay = _hbox(8, 10)
-        lay.setContentsMargins(8, 4, 8, 4)
-        self.setLayout(lay)
-        # Date and the "recording" badge share one fixed-width cell, so
-        # the running session's columns line up with the rest.
-        when_cell = QWidget()
-        when_cell.setFixedWidth(206)
-        when_lay = _hbox(0, 6)
-        when_cell.setLayout(when_lay)
-        self.when = QLabel()
-        self.badge = QLabel("recording")
-        self.badge.setProperty("role", "pill")
-        self.badge.setProperty("tone", "run")
-        when_lay.addWidget(self.when)
-        when_lay.addWidget(self.badge)
-        when_lay.addStretch(1)
-        self.duration = QLabel()
-        self.active = QLabel()
-        self.thrusts = QLabel()
-        for lbl, width in ((self.duration, 64), (self.active, 86),
-                           (self.thrusts, 104)):
-            lbl.setProperty("muted", "true")
-            lbl.setMinimumWidth(width)
-        self.spark = Sparkline()
-        self.strip = SpanStrip()
-        self.no_spark = QLabel("totals only")
-        self.no_spark.setProperty("hint", "true")
-        chevron = QLabel("›")
-        chevron.setProperty("muted", "true")
-        lay.addWidget(when_cell)
-        lay.addWidget(self.duration)
-        lay.addWidget(self.active)
-        lay.addWidget(self.thrusts)
-        lay.addWidget(self.spark, 1)
-        lay.addWidget(self.strip, 1)
-        lay.addWidget(self.no_spark, 1)
-        lay.addWidget(chevron)
-        for w in (when_cell, self.when, self.badge, self.duration,
-                  self.active, self.thrusts, self.no_spark, chevron):
-            w.setAttribute(Qt.WA_TransparentForMouseEvents)
-
-    def fill(self, row: Dict[str, Any]) -> None:
-        live = row.get("kind") == "live"
-        if live:
-            self.when.setText(f"Now, since {fmt_clock(row.get('started_ts'))}")
-        else:
-            self.when.setText(f"{fmt_day(row.get('started_ts'))}  "
-                              f"{fmt_clock(row.get('started_ts'))}")
-        self.badge.setVisible(live)
-        self.duration.setText(fmt_short(row.get("duration_s", 0.0)))
-        self.active.setText(f"{fmt_short(row.get('active_s', 0.0))} active")
-        self.thrusts.setText(f"{int(row.get('thrusts', 0) or 0):,} thrusts")
-        has_spark = row.get("spark") is not None
-        connected = None if has_spark else row.get("connected")
-        self.spark.setVisible(has_spark)
-        self.strip.setVisible(bool(connected))
-        self.no_spark.setVisible(not has_spark and not connected)
-        if has_spark:
-            self.spark.set_values(row.get("spark"))
-        elif connected:
-            self.strip.set_spans(connected, row.get("started_ts", 0.0),
-                                 row.get("duration_s", 0.0))
-        if row.get("recovered"):
-            self.setToolTip("The app was closed without shutting down "
-                            "(killed or crashed). This session was rebuilt "
-                            "from its last save, so its last minute may be "
-                            "missing.")
-        elif connected:
-            self.setToolTip("Recorded before session timelines existed, so "
-                            "only its totals are known. The bars show when a "
-                            "toy was connected, from the app's log.")
-        elif not has_spark:
-            self.setToolTip("Recorded before session timelines existed, or "
-                            "by the full edition — totals only.")
-        else:
-            self.setToolTip("")
-
-    def mouseReleaseEvent(self, event) -> None:
-        if event.button() == Qt.LeftButton and self.rect().contains(
-                event.position().toPoint()):
-            self._on_click()
-        super().mouseReleaseEvent(event)
-
-
-class _Tile(QFrame):
-    """Caption over a bold value over a dim note."""
-
-    def __init__(self, caption: str = "", big: bool = False) -> None:
-        super().__init__()
-        self.setObjectName("statsTile")
-        lay = _vbox(0, 1)
-        lay.setContentsMargins(10, 6, 10, 7)
-        self.setLayout(lay)
-        self.caption = QLabel(caption)
-        self.caption.setProperty("muted", "true")
-        self.value = QLabel("—")
-        vf = self.value.font()
-        vf.setBold(True)
-        vf.setPixelSize(20 if big else 16)
-        self.value.setFont(vf)
-        self.note = QLabel("")
-        self.note.setProperty("hint", "true")
-        self.note.setWordWrap(True)
-        lay.addWidget(self.caption)
-        lay.addWidget(self.value)
-        lay.addWidget(self.note)
-        lay.addStretch(1)
-        self.note.setVisible(False)
-
-    def set(self, value: str, note: str = "", caption: Optional[str] = None) -> None:
-        if caption is not None:
-            self.caption.setText(caption)
-        self.value.setText(value)
-        self.note.setText(note)
-        self.note.setVisible(bool(note))
-
-
-class StatisticsMixin:
-    """Statistics sidebar view. Controller methods used:
-    `get_stats_snapshot`, `get_stats_sessions`, `get_stats_session_detail`,
-    `get_stats_patterns`, `get_stats_month`, `get_stats_fun_facts`,
-    `reset_stats`."""
+class StatisticsMixin(StatisticsPeopleMixin, StatisticsSessionMixin):
+    """Statistics sidebar view (this file: the overview -- sessions,
+    lifetime, when you play, month; statistics_people.py: people and
+    tagging; statistics_session.py: one session's page). Controller methods
+    used: `get_stats_snapshot`, `get_stats_sessions`,
+    `get_stats_session_detail`, `get_stats_patterns`, `get_stats_month`,
+    `get_stats_fun_facts`, `reset_stats`, and the people ones
+    (`get_people_table`, `get_people_names`, `tag_session`,
+    `tag_session_stretch`, `remove_session_tag`,
+    `get_people_autodetect_status`, `set_people_autodetect`)."""
 
     # ----------------------------------------------------------
     # View construction
@@ -232,6 +104,7 @@ class StatisticsMixin:
         ))
         self._stats_build_sessions_card(ov)
         self._stats_build_lifetime_card(ov)
+        self._stats_build_people_card(ov)
         self._stats_build_patterns_card(ov)
         self._stats_build_month_card(ov)
         self._stats_build_detail_page(dv)
@@ -266,8 +139,6 @@ class StatisticsMixin:
         parent_lay.addWidget(card)
         return lay, head
 
-    # ---- Sessions ------------------------------------------------------
-
     def _stats_build_sessions_card(self, parent_lay) -> None:
         lay, head = self._stats_card(parent_lay, "Sessions")
         self._explain(head,
@@ -275,19 +146,22 @@ class StatisticsMixin:
             "Every app run that saw activity, newest first. The graph is "
             "how busy each part of it was. Click a session for its "
             "timeline: each toy's intensity, thrusts per minute, which "
-            "zones were touched, and a short analysis.<br><br>With no toy "
+            "zones were touched, and a short analysis. Right-click a "
+            "session to tag who it was with.<br><br>With no toy "
             "running, stray contacts don't start a session: contact only "
             "counts once it adds up to 20 thrusts without a pause longer "
             "than 10 seconds, or to a minute of touching within three "
             "minutes. Strokes counted while nothing is touching you never "
             "count."
         )
-        self._stats_rows: List[_SessionRow] = []
+        self._stats_rows: List[SessionRow] = []
         self._stats_row_ids: List[str] = []
         self._stats_list_host = QWidget()
         self._stats_list_lay = _vbox(0, 2)
         self._stats_list_host.setLayout(self._stats_list_lay)
         lay.addWidget(self._stats_list_host)
+        self._stats_row_data: Dict[str, Dict[str, Any]] = {}
+        self._stats_build_list_editor()
         self._stats_list_empty = self._muted_label(
             "Sessions land here as soon as something happens: a toy "
             "running or a zone being touched.")
@@ -302,8 +176,6 @@ class StatisticsMixin:
         more_row.addWidget(self._stats_more_btn)
         lay.addLayout(more_row)
         self._stats_list_limit = _LIST_PAGE
-
-    # ---- Lifetime ------------------------------------------------------
 
     def _stats_build_lifetime_card(self, parent_lay) -> None:
         lay, head = self._stats_card(parent_lay, "Lifetime")
@@ -334,9 +206,9 @@ class StatisticsMixin:
         tiles = QGridLayout()
         tiles.setHorizontalSpacing(8)
         tiles.setVerticalSpacing(8)
-        self._stats_active_tile = _Tile("Total active time", big=True)
-        self._stats_thrusts_tile = _Tile("Thrusts", big=True)
-        self._stats_sessions_tile = _Tile("Sessions", big=True)
+        self._stats_active_tile = Tile("Total active time", big=True)
+        self._stats_thrusts_tile = Tile("Thrusts", big=True)
+        self._stats_sessions_tile = Tile("Sessions", big=True)
         for col, tile in enumerate((self._stats_active_tile,
                                     self._stats_thrusts_tile,
                                     self._stats_sessions_tile)):
@@ -367,7 +239,7 @@ class StatisticsMixin:
         self._stats_facts_empty = self._muted_label(
             "Fun facts show up once there is a session or two to go on.")
         lay.addWidget(self._stats_facts_empty)
-        self._stats_fact_tiles: Dict[str, _Tile] = {}
+        self._stats_fact_tiles: Dict[str, Tile] = {}
         self._stats_facts_sig: Optional[tuple] = None
 
         # Per-toy and per-zone tables (name / lifetime / this session).
@@ -394,8 +266,6 @@ class StatisticsMixin:
         # always takes the rebuild branch — otherwise a fresh install's
         # empty table would skip it and never show the empty-state hint.
         return {"host": host, "grid": grid, "rows": {}, "keys": None}
-
-    # ---- When you play -------------------------------------------------
 
     def _stats_build_patterns_card(self, parent_lay) -> None:
         lay, head = self._stats_card(parent_lay, "When you play")
@@ -428,8 +298,6 @@ class StatisticsMixin:
                           else "segIdle")
             self._repolish(b)
 
-    # ---- Month ---------------------------------------------------------
-
     def _stats_build_month_card(self, parent_lay) -> None:
         lay, head = self._stats_card(parent_lay, "Month")
         today = date.today()
@@ -457,7 +325,7 @@ class StatisticsMixin:
         order = (("active", "Active"), ("thrusts", "Thrusts"),
                  ("sessions", "Sessions"), ("days", "Days with play"),
                  ("best", "Best day"), ("per_day", "Average play day"))
-        self._stats_month_tiles = {key: _Tile(caption) for key, caption in order}
+        self._stats_month_tiles = {key: Tile(caption) for key, caption in order}
         for i, (key, _caption) in enumerate(order):
             tiles.addWidget(self._stats_month_tiles[key], i // 2, i % 2)
         tiles.setColumnStretch(0, 1)
@@ -469,50 +337,6 @@ class StatisticsMixin:
         self._stats_month_hint.setProperty("hint", "true")
         self._stats_month_hint.setWordWrap(True)
         lay.addWidget(self._stats_month_hint)
-
-    # ---- One session ---------------------------------------------------
-
-    def _stats_build_detail_page(self, parent_lay) -> None:
-        head = _hbox(0, 8)
-        back = QPushButton("←  All sessions")
-        back.setMinimumHeight(BTN_HEIGHT_SMALL)
-        back.clicked.connect(self._stats_close_session)
-        head.addWidget(back)
-        self._stats_detail_title = QLabel("Session")
-        self._stats_detail_title.setObjectName("sectionTitle")
-        head.addWidget(self._stats_detail_title, 1)
-        parent_lay.addLayout(head)
-
-        card = _Card()
-        lay = _vbox(14, 10)
-        card.setLayout(lay)
-        parent_lay.addWidget(card)
-
-        self._stats_detail_note = QLabel("")
-        self._stats_detail_note.setProperty("hint", "true")
-        self._stats_detail_note.setWordWrap(True)
-        lay.addWidget(self._stats_detail_note)
-
-        tiles = QGridLayout()
-        tiles.setHorizontalSpacing(8)
-        self._stats_detail_tiles = [_Tile() for _ in range(4)]
-        for i, tile in enumerate(self._stats_detail_tiles):
-            tiles.addWidget(tile, 0, i)
-            tiles.setColumnStretch(i, 1)
-        lay.addLayout(tiles)
-
-        self._stats_timeline = SessionTimeline()
-        lay.addWidget(self._stats_timeline)
-        self._stats_span_chart = SpanTimeline()
-        lay.addWidget(self._stats_span_chart)
-
-        self._stats_insights_head = QLabel("Analysis")
-        hf = self._stats_insights_head.font()
-        hf.setBold(True)
-        self._stats_insights_head.setFont(hf)
-        lay.addWidget(self._stats_insights_head)
-        self._stats_insights_lay = _vbox(0, 4)
-        lay.addLayout(self._stats_insights_lay)
 
     # ----------------------------------------------------------
     # Refresh
@@ -542,12 +366,12 @@ class StatisticsMixin:
             return
         self._stats_fill_sessions()
         self._stats_fill_lifetime()
+        self._stats_fill_people_status()
         if slow:
+            self._stats_fill_people()
             self._stats_fill_facts()
             self._stats_fill_patterns()
             self._stats_fill_month()
-
-    # ---- Sessions ------------------------------------------------------
 
     def _stats_fill_sessions(self) -> None:
         try:
@@ -556,14 +380,25 @@ class StatisticsMixin:
             rows = []
         shown = rows[:self._stats_list_limit]
         ids = [r["id"] for r in shown]
+        self._stats_row_data = {r["id"]: r for r in shown}
         if ids != self._stats_row_ids:
+            # The name field survives the rebuild: out first, back under
+            # its row after (or away, if that row is gone).
+            self._stats_list_lay.removeWidget(self._stats_list_editor)
             clear_layout(self._stats_list_lay)
             self._stats_rows = []
             for r in shown:
-                row = _SessionRow(lambda sid=r["id"]: self._stats_open_session(sid))
+                row = SessionRow(
+                    lambda sid=r["id"]: self._stats_open_session(sid),
+                    lambda pos, sid=r["id"]: self._stats_row_menu(sid, pos))
                 self._stats_list_lay.addWidget(row)
                 self._stats_rows.append(row)
             self._stats_row_ids = ids
+            if self._stats_list_edit_id in ids:
+                self._stats_list_lay.insertWidget(
+                    ids.index(self._stats_list_edit_id) + 1, self._stats_list_editor)
+            else:
+                self._on_stats_list_cancel()
         for widget, r in zip(self._stats_rows, shown):
             widget.fill(r)
         self._stats_list_empty.setVisible(not rows)
@@ -572,8 +407,6 @@ class StatisticsMixin:
         self._stats_more_label.setText(
             f"Showing {len(shown)} of {len(rows)}" if more else "")
         self._stats_more_label.setVisible(more)
-
-    # ---- Lifetime ------------------------------------------------------
 
     def _stats_fill_lifetime(self) -> None:
         try:
@@ -588,7 +421,7 @@ class StatisticsMixin:
         self._stats_sessions_tile.set(f"{int(lifetime.get('sessions', 0)):,}")
 
         started = session.get("started_ts") or 0.0
-        started_txt = _fmt_when(started) if started else "—"
+        started_txt = fmt_when(started) if started else "—"
         self._stats_session_label.setText(
             f"This session: {fmt_dur(session.get('active_s', 0.0))} active"
             f"  •  {int(session.get('thrusts', 0)):,} thrusts"
@@ -670,7 +503,7 @@ class StatisticsMixin:
             self._stats_fact_tiles = {}
             cols = 3
             for i, (key, caption, _v, _n) in enumerate(tiles):
-                tile = _Tile(caption)
+                tile = Tile(caption)
                 self._stats_facts_grid.addWidget(tile, i // cols, i % cols)
                 self._stats_fact_tiles[key] = tile
             for c in range(cols):
@@ -732,8 +565,6 @@ class StatisticsMixin:
                 w.hide()
                 w.setParent(None)
                 w.deleteLater()
-
-    # ---- Charts --------------------------------------------------------
 
     def _stats_fill_patterns(self) -> None:
         _label, days, phrase = _SPANS[self._stats_span]
@@ -807,172 +638,6 @@ class StatisticsMixin:
             t["best"].set("—", "nothing this month")
             t["per_day"].set("—")
 
-    # ---- One session ---------------------------------------------------
-
-    def _stats_open_session(self, session_id: str) -> None:
-        view = self.views.get("Statistics") if hasattr(self, "views") else None
-        bar = view.verticalScrollBar() if view is not None else None
-        self._stats_list_scroll = bar.value() if bar is not None else 0
-        self._stats_detail_id = session_id
-        if not self._stats_fill_detail():
-            self._stats_detail_id = None
-            return
-        self._stats_overview.setVisible(False)
-        self._stats_detail.setVisible(True)
-        if bar is not None:
-            QTimer.singleShot(0, lambda: bar.setValue(0))
-
-    def _stats_close_session(self) -> None:
-        self._stats_detail_id = None
-        self._stats_detail_kind = None
-        self._stats_detail.setVisible(False)
-        self._stats_overview.setVisible(True)
-        self._refresh_statistics_view()
-        view = self.views.get("Statistics") if hasattr(self, "views") else None
-        if view is not None:
-            pos = self._stats_list_scroll
-            QTimer.singleShot(0, lambda: view.verticalScrollBar().setValue(pos))
-
-    def _stats_fill_detail(self) -> bool:
-        """Populate the session page from the controller. False when the
-        session no longer exists (reset, pruned)."""
-        sid = self._stats_detail_id
-        try:
-            d = self.controller.get_stats_session_detail(sid) if sid else None
-        except Exception:
-            d = None
-        if not d:
-            if self._stats_detail.isVisible():
-                self._stats_close_session()
-            return False
-        kind = d.get("kind")
-        self._stats_detail_kind = kind
-        started = d.get("started_ts", 0.0)
-        if kind == "live":
-            title = f"{fmt_day(started)}  {fmt_clock(started)}, still going"
-        else:
-            end = started + float(d.get("duration_s", 0.0))
-            title = (f"{fmt_day(started)}  {fmt_clock(started)} to "
-                     f"{fmt_clock(end)}  ·  app open "
-                     f"{fmt_short(d.get('duration_s', 0.0))}")
-        self._stats_detail_title.setText(title)
-
-        notes = {
-            "live": "This session is still being recorded; the page "
-                    "updates every second.",
-            "summary": "Recorded before session timelines existed, or by "
-                       "the full edition, so only the totals are known.",
-        }
-        note = notes.get(kind, "")
-        if kind == "summary" and d.get("connected"):
-            note = ("Recorded before session timelines existed, so only the "
-                    "totals are known. The bars show when each toy was "
-                    "connected, from the app's log.")
-        if d.get("recovered"):
-            note = ("The app was closed without shutting down. This session "
-                    "was rebuilt from its last save, so its last minute may "
-                    "be missing.")
-        self._stats_detail_note.setText(note)
-        self._stats_detail_note.setVisible(bool(note))
-
-        active = float(d.get("active_s", 0.0))
-        thrusts = int(d.get("thrusts", 0) or 0)
-        tiles = self._stats_detail_tiles
-        a = d.get("analysis") or {}
-        if kind == "summary":
-            minutes = active / 60.0
-            tiles[0].set(fmt_short(active), "toy on or zone touched",
-                         caption="Active")
-            tiles[1].set(f"{thrusts:,}", "", caption="Thrusts")
-            tiles[2].set(fmt_short(d.get("duration_s", 0.0)), "",
-                         caption="App open")
-            tiles[3].set(f"{thrusts / minutes:.0f} / min" if minutes >= 1 else "—",
-                         "thrusts per active minute", caption="Average pace")
-        else:
-            window = float(a.get("window_s", 0.0))
-            share = f"{active / window:.0%} of " if window else ""
-            w0 = started + float(a.get("window_start_s", 0.0))
-            tiles[0].set(fmt_short(active),
-                         f"{share}{fmt_clock(w0)} to {fmt_clock(w0 + window)}",
-                         caption="Active")
-            per_min = thrusts / (active / 60.0) if active >= 60 else 0.0
-            tiles[1].set(f"{thrusts:,}",
-                         f"{per_min:.0f} per active minute" if per_min else "",
-                         caption="Thrusts")
-            pace = int(a.get("peak_pace", 0))
-            tiles[2].set(f"{pace} / min" if pace else "—",
-                         f"at {fmt_clock(started + a.get('peak_pace_at_s', 0))}"
-                         if pace else "no thrusts", caption="Peak pace")
-            tiles[3].set(fmt_short(a.get("streak_s", 0)),
-                         "without a real break", caption="Longest streak")
-        self._stats_timeline.setVisible(kind != "summary")
-        spans = d.get("connected") if kind == "summary" else None
-        self._stats_span_chart.setVisible(bool(spans))
-        if spans:
-            self._stats_span_chart.set_spans(spans, started,
-                                             float(d.get("duration_s", 0.0)))
-        self._stats_insights_head.setText(
-            "Totals" if kind == "summary" else "Analysis")
-        if kind != "summary":
-            self._stats_timeline.set_detail(d)
-        self._stats_fill_insights(d)
-        return True
-
-    def _stats_fill_insights(self, d: Dict[str, Any]) -> None:
-        clear_layout(self._stats_insights_lay)
-        started = d.get("started_ts", 0.0)
-        a = d.get("analysis") or {}
-        lines: List[str] = []
-        if d.get("kind") != "summary" and a.get("hot_len_s"):
-            t0 = started + a.get("hot_at_s", 0)
-            t1 = t0 + a.get("hot_len_s", 0)
-            if a.get("hot_kind") == "thrusts":
-                lines.append(f"Hottest 5 minutes: {fmt_clock(t0)} to "
-                             f"{fmt_clock(t1)}, {int(a.get('hot_value', 0)):,} "
-                             f"thrusts.")
-            else:
-                lines.append(f"Most intense 5 minutes: {fmt_clock(t0)} to "
-                             f"{fmt_clock(t1)}, toys at "
-                             f"{a.get('hot_value', 0):.0%} on average.")
-        if a.get("top_toy"):
-            lines.append(f"{a['top_toy']} did {a['top_toy_share']:.0%} of the "
-                         f"buzzing, at {a['top_toy_level']:.0%} on average.")
-        if a.get("break_s"):
-            lines.append(f"Longest break: {fmt_short(a['break_s'])}, from "
-                         f"{fmt_clock(started + a['break_at_s'])}.")
-        if a.get("top_zone"):
-            lines.append(f"Most contact: {zone_label(a['top_zone'])}, "
-                         f"{fmt_short(a['top_zone_s'])}.")
-        toys = d.get("toys") or {}
-        if toys:
-            order = sorted(toys, key=lambda n: -float(toys[n]))
-            if d.get("kind") != "summary":
-                lane_order = self._stats_timeline.toy_order()
-            elif d.get("connected"):
-                lane_order = self._stats_span_chart.toy_order()
-            else:
-                lane_order = order
-            parts = []
-            for name in order:
-                dot = ""
-                if name in lane_order:
-                    color = toy_color(lane_order.index(name))
-                    dot = f"<span style='color:{color}'>&#9632;</span> "
-                parts.append(f"{dot}{name} {fmt_short(toys[name])}")
-            lines.append("Toy time: " + "  ·  ".join(parts))
-        zones = d.get("zones") or {}
-        if zones:
-            order = sorted(zones, key=lambda z: -float(zones[z]))
-            lines.append("Contact: " + "  ·  ".join(
-                f"{zone_label(z)} {fmt_short(zones[z])}" for z in order))
-        if not lines:
-            lines.append("Nothing much happened in this one.")
-        for text in lines:
-            lbl = QLabel(text)
-            lbl.setTextFormat(Qt.RichText)
-            lbl.setWordWrap(True)
-            self._stats_insights_lay.addWidget(lbl)
-
     # ----------------------------------------------------------
     # Handlers
     # ----------------------------------------------------------
@@ -1000,7 +665,9 @@ class StatisticsMixin:
         confirm = QMessageBox.question(
             (getattr(self, "dialog_parent", None) or self.window), "Reset statistics",
             "Reset ALL statistics: the lifetime totals, every session and "
-            "its timeline, and the charts? This cannot be undone.",
+            "its timeline, the charts, and who each session was with (the "
+            "people tags and the names remembered from VRChat)? This cannot "
+            "be undone.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )

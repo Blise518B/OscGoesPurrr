@@ -330,4 +330,5 @@ class TestIdentityHues:
             assert (f'QWidget#toyBar[hue="cyan"] QLabel#deviceName '
                     f'{{ color: {vib}; }}' in sheet)
             assert 'QWidget#toyBar[hue="cyan"] { background-color' not in sheet
-            assert fill not in sheet
+            # (other things may use the filled bar -- a friend's panel header)
+            assert not any(fill in line for line in sheet.splitlines() if "toyBar" in line)

@@ -30,8 +30,7 @@ from typing import Any, Dict
 
 import debug_log
 from constants import (
-    AUTO_REFRESH_RATE_S, TOY_SCAN_SECONDS, TOY_SEARCH_RATE_S,
-    TOY_SEARCH_WINDOW_S,
+    AUTO_REFRESH_RATE_S, TOY_SCAN_SECONDS, TOY_SEARCH_RATE_RANGE, TOY_SEARCH_RATE_S,
 )
 
 
@@ -371,9 +370,15 @@ class IntifaceFacade:
 
     async def _async_start_scanning(self):
         """Start scanning for devices without connecting (just scan)"""
-        if not self.haptic_engine:
-            return
+        if not self.haptic_engine or getattr(self, "_toy_scanning", False):
+            return                      # one scan at a time (Scan now, the loop)
+        self._toy_scanning = True
+        try:
+            await self._async_scan_once()
+        finally:
+            self._toy_scanning = False
 
+    async def _async_scan_once(self):
         try:
             # Snapshot the pre-scan device set so we can diff after.
             known_devices = set(self.haptic_engine.list_connected_device_names())
@@ -405,28 +410,52 @@ class IntifaceFacade:
     def note_toy_search_wanted(self) -> None:
         """Facade: there is a reason to expect a toy about now -- the toy
         server just came up, a toy dropped, or the user opened the window.
-        (Re)opens the fast-search window; see _toy_scan_pause. Cheap and
-        safe from any thread: one float store."""
-        self._toy_search_until = time.monotonic() + TOY_SEARCH_WINDOW_S
+        While no toy is connected, the next scan starts at once instead of
+        when its pause is over. Cheap and safe from any thread."""
+        self._toy_scan_soon = True
+
+    def get_toy_scan_interval(self) -> int:
+        """Seconds from one scan to the next while no toy is connected."""
+        lo, hi = TOY_SEARCH_RATE_RANGE
+        try:
+            value = int(self.get_app_setting("toy_scan_interval_s", TOY_SEARCH_RATE_S))
+        except (TypeError, ValueError, AttributeError):
+            value = TOY_SEARCH_RATE_S
+        return max(lo, min(hi, value))
+
+    def set_toy_scan_interval(self, seconds: int) -> None:
+        lo, hi = TOY_SEARCH_RATE_RANGE
+        self.set_app_setting("toy_scan_interval_s", max(lo, min(hi, int(seconds))))
+
+    def _no_toys(self) -> bool:
+        try:
+            return not self.haptic_engine.list_connected_device_names()
+        except Exception:
+            return False
 
     def _toy_scan_pause(self) -> float:
         """Seconds to rest between two scans, decided by what is at stake.
 
         A toy is connected: AUTO_REFRESH_RATE_S, as ever -- a scan shares
         the radio with that toy's link, and its latency comes first.
-        No toy is connected and one is expected (inside the search
-        window): scan again as soon as the TOY_SEARCH_RATE_S beat allows.
-        No toy and no reason to expect one: the slow beat again, so a
-        session spent with the toys off costs what it always did."""
-        try:
-            no_toys = not self.haptic_engine.list_connected_device_names()
-        except Exception:
-            no_toys = False
-        searching = no_toys and (
-            time.monotonic() < getattr(self, "_toy_search_until", 0.0))
-        if searching:
-            return max(1.0, TOY_SEARCH_RATE_S - TOY_SCAN_SECONDS)
+        No toy is connected: the user's interval (minus the scan itself,
+        so a scan STARTS every that many seconds)."""
+        if self._no_toys():
+            return max(1.0, self.get_toy_scan_interval() - TOY_SCAN_SECONDS)
         return AUTO_REFRESH_RATE_S
+
+    def get_toy_scan_status(self) -> Dict[str, Any]:
+        """For Home's "Next scan in 4 s": whether the toy server is up,
+        whether the app looks by itself, a scan running, and when the next
+        one starts (seconds, None while nothing is scheduled)."""
+        eng = getattr(self, "haptic_engine", None)
+        up = bool(eng is not None and getattr(eng, "is_connected", False))
+        auto = bool(getattr(self, "auto_refresh_enabled", False))
+        at = getattr(self, "_toy_scan_next_at", None)
+        next_in = (max(0, round(at - time.monotonic()))
+                   if up and auto and at is not None else None)
+        return {"up": up, "auto": auto, "scanning": bool(getattr(self, "_toy_scanning", False)),
+                "next_in": next_in}
 
     async def _async_auto_refresh_loop(self):
         """Background task for periodic device scanning.
@@ -439,9 +468,15 @@ class IntifaceFacade:
         while self.auto_refresh_enabled and self.haptic_engine.is_connected:
             await asyncio.sleep(1.0)
             rested += 1.0
-            if rested < self._toy_scan_pause():
+            pause = self._toy_scan_pause()
+            now = getattr(self, "_toy_scan_now", False)       # Scan now
+            soon = getattr(self, "_toy_scan_soon", False) and self._no_toys()
+            if rested < pause and not now and not soon:
+                self._toy_scan_next_at = time.monotonic() + (pause - rested)
                 continue
+            self._toy_scan_now = self._toy_scan_soon = False
             rested = 0.0
+            self._toy_scan_next_at = None
             if self.auto_refresh_enabled and self.haptic_engine.is_connected:
                 try:
                     await self._async_start_scanning()
@@ -458,6 +493,11 @@ class IntifaceFacade:
             self.log_message("Scan for toys: connect to Intiface first.")
             return
         self.log_message("Scanning for new toys…")
+        task = getattr(self, "_auto_refresh_task", None)
+        if task is not None and not task.done():
+            # the loop scans within a second and starts its countdown over
+            self._toy_scan_now = True
+            return
         try:
             asyncio.run_coroutine_threadsafe(self._async_start_scanning(), self.async_loop)
         except Exception as e:

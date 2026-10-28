@@ -110,6 +110,14 @@ class LiveTheme(QObject):
         self._changed()
         return True
 
+    def set_identity(self, chosen) -> bool:
+        """Set the identity colours picked by hand (`{name: hue}`; the rest
+        automatic) and start the sweep. False when nothing changes."""
+        if not _theme.set_identity_hues(chosen):
+            return False
+        self._changed()
+        return True
+
     def set_mode(self, mode) -> bool:
         """Switch to the other mode and start the sweep. False when that
         is the mode already in use."""

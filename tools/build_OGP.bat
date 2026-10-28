@@ -131,13 +131,16 @@ set ENGINE_DATA=
 if exist "src\intiface-engine\intiface-engine.exe" set ENGINE_DATA=--add-data "src\intiface-engine;intiface-engine"
 if defined ENGINE_DATA (echo Bundling built-in intiface-engine.) else (echo intiface-engine binary NOT found in src\intiface-engine\ - building WITHOUT integrated mode. Drop intiface-engine.exe there to enable it.)
 
-REM Everything the app imports beyond the bundled engine is pure Python, so
-REM PyInstaller's own import analysis covers it -- no --collect-all flags
-REM needed. (The full edition needs them for openvr's and bleak's native
-REM payloads; this edition ships neither.)
+REM PyInstaller's own import analysis covers everything the app imports --
+REM including bleak's WinRT backend and the winrt extension modules behind
+REM it (the bHaptics suit; checked in a built exe) -- except iroh (the
+REM Friends link): its Rust library is a DLL loaded through ctypes from the
+REM package folder, which import analysis can't see, hence
+REM --collect-binaries iroh.
 "%VENV_PY%" -m PyInstaller --noconfirm ^
     --onefile ^
     --windowed ^
+    --collect-binaries iroh ^
     --icon "src\Images\OGP_Icon.ico" ^
     --add-data "src\Images;Images" ^
     --add-data "LICENSE;." ^

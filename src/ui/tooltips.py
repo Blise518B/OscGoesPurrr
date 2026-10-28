@@ -1,9 +1,11 @@
-"""Hover explanations -- the app's only in-place help.
+"""Hover explanations -- the app's in-place help.
 
 Rest the mouse on a control for Qt's standard ~0.7 s and its explanation
 appears on its own, styled by the QToolTip rule in ui/theme.py. There is
 no mode to switch on first: every explanation is always there, one
-still pointer away.
+still pointer away. Help mode (F1, ui/help_mode.py) reads the same
+explanations -- the title and the first sentence of the one a pointed-at
+control carries -- so write that sentence to stand on its own.
 
 An explanation is a bold title and a short body that may carry simple
 HTML (<b>, <br>). Qt word-wraps rich-text tooltips at a comfortable

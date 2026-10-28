@@ -44,7 +44,7 @@ from stats_gate import (
     ActivityGate, CONTACT_GRACE_S, CONTACT_WINDOW_S, GATE_VERSION, LEAD_S,
     MIN_CONTACT_S, MIN_THRUSTS, SCENE_END_S, STREAK_GAP_S,
 )
-from stats_tracker import _count, _num
+from stats_tracker import safe_count, safe_num
 from utilities import atomic_write_json
 
 
@@ -135,20 +135,20 @@ def _parse_rows(raw: Any) -> Dict[int, Dict[str, Any]]:
     for row in raw:
         if not isinstance(row, list) or len(row) < 3:
             continue
-        i = _count(row[0], -1)
+        i = safe_count(row[0], -1)
         if i < 0:
             continue
         b = _new_bucket()
-        b["a"] = _num(row[1])
-        b["t"] = _count(row[2])
+        b["a"] = safe_num(row[1])
+        b["t"] = safe_count(row[2])
         if len(row) > 3 and isinstance(row[3], dict):
             for name, v in row[3].items():
                 if isinstance(v, list) and len(v) >= 2:
-                    on = _num(v[0])
-                    b["y"][str(name)] = [on, min(_num(v[1]), on)]
+                    on = safe_num(v[0])
+                    b["y"][str(name)] = [on, min(safe_num(v[1]), on)]
         if len(row) > 4 and isinstance(row[4], dict):
             for zone, s in row[4].items():
-                b["z"][str(zone)] = _num(s)
+                b["z"][str(zone)] = safe_num(s)
         out[i] = b
     return out
 
@@ -198,13 +198,13 @@ def _load_timeline(path: Path) -> Optional[Dict[str, Any]]:
         name = path.name
         sid = name[:-len(_LIVE_SUFFIX)] if name.endswith(_LIVE_SUFFIX) else path.stem
         ended = raw.get("ended_ts")
-        tl = _fresh_timeline(_num(raw.get("started_ts")), sid)
-        tl["ended_ts"] = None if ended is None else _num(ended)
-        tl["bucket_s"] = _count(raw.get("bucket_s"), BUCKET_S) or BUCKET_S
+        tl = _fresh_timeline(safe_num(raw.get("started_ts")), sid)
+        tl["ended_ts"] = None if ended is None else safe_num(ended)
+        tl["bucket_s"] = safe_count(raw.get("bucket_s"), BUCKET_S) or BUCKET_S
         tl["recovered"] = bool(raw.get("recovered"))
-        tl["gated"] = _count(raw.get("gated"))      # old files: true/false
+        tl["gated"] = safe_count(raw.get("gated"))      # old files: true/false
         tl["buckets"] = _parse_rows(raw.get("buckets"))
-        tl["pid"] = _count(raw.get("pid"))
+        tl["pid"] = safe_count(raw.get("pid"))
         return tl
     except Exception as e:
         # Field coercion should catch everything; this is the "never
@@ -220,7 +220,7 @@ def _parse_hours(raw: Any) -> Dict[str, List[float]]:
     for key, v in raw.items():
         if (isinstance(key, str) and _HOUR_RE.fullmatch(key)
                 and isinstance(v, list) and len(v) >= 2):
-            out[key] = [_num(v[0]), _count(v[1])]
+            out[key] = [safe_num(v[0]), safe_count(v[1])]
     return out
 
 
@@ -235,13 +235,13 @@ def _parse_connected(raw: Any) -> List[Dict[str, Any]]:
         toys = {}
         for name, spans in entry["toys"].items():
             if isinstance(spans, list):
-                clean = [[_num(s[0]), _num(s[1])] for s in spans
+                clean = [[safe_num(s[0]), safe_num(s[1])] for s in spans
                          if isinstance(s, list) and len(s) >= 2
-                         and _num(s[1]) > _num(s[0])]
+                         and safe_num(s[1]) > safe_num(s[0])]
                 if clean:
                     toys[str(name)] = clean
         if toys:
-            out.append({"started_ts": _num(entry.get("started_ts")), "toys": toys})
+            out.append({"started_ts": safe_num(entry.get("started_ts")), "toys": toys})
     return out
 
 
@@ -255,19 +255,19 @@ def _sanitize_entry(raw: Any) -> Optional[Dict[str, Any]]:
     ended = raw.get("ended_ts")
     return {
         "id": sid,
-        "started_ts": _num(raw.get("started_ts")),
-        "ended_ts": None if ended is None else _num(ended),
-        "duration_s": _num(raw.get("duration_s")),
-        "active_s": _num(raw.get("active_s")),
-        "thrusts": _count(raw.get("thrusts")),
-        "peak_pace": _count(raw.get("peak_pace")),
+        "started_ts": safe_num(raw.get("started_ts")),
+        "ended_ts": None if ended is None else safe_num(ended),
+        "duration_s": safe_num(raw.get("duration_s")),
+        "active_s": safe_num(raw.get("active_s")),
+        "thrusts": safe_count(raw.get("thrusts")),
+        "peak_pace": safe_count(raw.get("peak_pace")),
         "recovered": bool(raw.get("recovered")),
-        "gated": _count(raw.get("gated")),
-        "spark": [min(1.0, _num(v)) for v in spark[:SPARK_POINTS * 2]]
+        "gated": safe_count(raw.get("gated")),
+        "spark": [min(1.0, safe_num(v)) for v in spark[:SPARK_POINTS * 2]]
         if isinstance(spark, list) else [],
-        "toys": {str(k): _num(v) for k, v in (raw.get("toys") or {}).items()}
+        "toys": {str(k): safe_num(v) for k, v in (raw.get("toys") or {}).items()}
         if isinstance(raw.get("toys"), dict) else {},
-        "zones": {str(k): _num(v) for k, v in (raw.get("zones") or {}).items()}
+        "zones": {str(k): safe_num(v) for k, v in (raw.get("zones") or {}).items()}
         if isinstance(raw.get("zones"), dict) else {},
     }
 
@@ -321,11 +321,11 @@ class StatsHistory:
         if isinstance(est, dict):
             self.estimated = {
                 "hours": _parse_hours(est.get("hours")),
-                "sessions": [_num(t) for t in est.get("sessions") or []
+                "sessions": [safe_num(t) for t in est.get("sessions") or []
                              if isinstance(t, (int, float))],
-                "extra_starts": [_num(t) for t in est.get("extra_starts") or []
+                "extra_starts": [safe_num(t) for t in est.get("extra_starts") or []
                                  if isinstance(t, (int, float))],
-                "until_ts": _num(est.get("until_ts")),
+                "until_ts": safe_num(est.get("until_ts")),
                 "connected": _parse_connected(est.get("connected")),
             }
 
@@ -367,7 +367,7 @@ class StatsHistory:
     def start_session(self, epoch: float) -> None:
         """Begin recording a fresh session anchored at `epoch`. Nothing is
         written until it sees activity."""
-        started = _num(epoch)
+        started = safe_num(epoch)
         base = _session_id(started)
         sid, n = base, 2
         while (self._final_path(sid).exists()
@@ -388,11 +388,11 @@ class StatsHistory:
         contact. Same activity rule as StatsTracker.sample: a toy on or a
         zone in contact makes the interval active; thrusts count either
         way."""
-        dt = _num(dt_s)
-        n_thrusts = _count(thrusts)
+        dt = safe_num(dt_s)
+        n_thrusts = safe_count(thrusts)
         levels = {}
         for name, lvl in (toy_levels or {}).items():
-            v = min(1.0, _num(lvl))
+            v = min(1.0, safe_num(lvl))
             if v > 0.0:
                 levels[str(name)] = v
         zones = [str(z) for z in (contact_zones or ())]
@@ -400,7 +400,7 @@ class StatsHistory:
         if not active and not n_thrusts:
             return
         tl = self.live
-        offset = max(0.0, _num(epoch) - tl["started_ts"])
+        offset = max(0.0, safe_num(epoch) - tl["started_ts"])
         i = int(offset // tl["bucket_s"])
         b = tl["buckets"].get(i)
         if b is None:
@@ -416,7 +416,7 @@ class StatsHistory:
             for zone in zones:
                 b["z"][zone] = b["z"].get(zone, 0.0) + dt
         b["t"] += n_thrusts
-        key = hour_key(_num(epoch))
+        key = hour_key(safe_num(epoch))
         h = self.hours.get(key)
         if h is None:
             h = self.hours[key] = [0.0, 0]
@@ -477,7 +477,7 @@ class StatsHistory:
             "hours": _parse_hours(est.get("hours")),
             "sessions": [float(t) for t in est.get("sessions") or []],
             "extra_starts": [float(t) for t in est.get("extra_starts") or []],
-            "until_ts": _num(est.get("until_ts")),
+            "until_ts": safe_num(est.get("until_ts")),
             "connected": _parse_connected(est.get("connected")),
         }
         self._write_hours()
@@ -499,7 +499,7 @@ class StatsHistory:
         tl = self.live
         summary = None
         if tl["buckets"]:
-            tl["ended_ts"] = max(tl["started_ts"], _num(epoch))
+            tl["ended_ts"] = max(tl["started_ts"], safe_num(epoch))
             summary = self._close(tl, self._live_path(tl["id"]))
             if summary is None:
                 # Couldn't write the final file: bring its .live file up
@@ -809,7 +809,7 @@ def summarize(tl: Mapping[str, Any], now_epoch: Optional[float] = None) -> Dict[
     `ended_ts`) measures its duration to `now_epoch`."""
     buckets = tl.get("buckets") or {}
     bs = tl.get("bucket_s") or BUCKET_S
-    started = _num(tl.get("started_ts"))
+    started = safe_num(tl.get("started_ts"))
     toys: Dict[str, float] = {}
     zones: Dict[str, float] = {}
     active = 0.0
@@ -977,14 +977,14 @@ def month_days(hours: Mapping[str, List[float]],
             e["active_s"] += a
             e["thrusts"] += int(t)
     for s in sessions:
-        lt = time.localtime(_num(s.get("started_ts")))
+        lt = time.localtime(safe_num(s.get("started_ts")))
         if lt.tm_year != year or lt.tm_mon != month:
             continue
         e = day(lt.tm_mday)
         e["sessions"] += 1
         if not s.get("timeline") and not s.get("in_hours"):
-            e["active_s"] += _num(s.get("active_s"))
-            e["thrusts"] += _count(s.get("thrusts"))
+            e["active_s"] += safe_num(s.get("active_s"))
+            e["thrusts"] += safe_count(s.get("thrusts"))
     return days
 
 
@@ -994,22 +994,22 @@ def fun_facts(lifetime: Mapping[str, Any],
     """The lifetime card's fun facts. Each key is present only when there
     is enough data to say something; the view shows what it gets."""
     out: Dict[str, Any] = {}
-    n = _count(lifetime.get("sessions"))
-    active = _num(lifetime.get("active_s"))
-    thrusts = _count(lifetime.get("thrusts"))
+    n = safe_count(lifetime.get("sessions"))
+    active = safe_num(lifetime.get("active_s"))
+    thrusts = safe_count(lifetime.get("thrusts"))
     if n:
         out["avg_session_s"] = active / n
         out["avg_session_thrusts"] = thrusts / n
     if active >= 60.0 and thrusts:
         out["pace"] = thrusts / (active / 60.0)
 
-    toys = {k: _num((v or {}).get("on_s")) for k, v in
+    toys = {k: safe_num((v or {}).get("on_s")) for k, v in
             (lifetime.get("toys") or {}).items() if isinstance(v, dict)}
     total = sum(toys.values())
     if total > 0:
         fav = max(toys, key=toys.get)
         out["fav_toy"] = (fav, toys[fav] / total)
-    zones = {k: _num((v or {}).get("contact_s")) for k, v in
+    zones = {k: safe_num((v or {}).get("contact_s")) for k, v in
              (lifetime.get("zones") or {}).items() if isinstance(v, dict)}
     total = sum(zones.values())
     if total > 0:
@@ -1026,17 +1026,17 @@ def fun_facts(lifetime: Mapping[str, Any],
 
     sessions = list(sessions)
     if sessions:
-        best = max(sessions, key=lambda s: _count(s.get("thrusts")))
-        if _count(best.get("thrusts")):
-            out["best_session"] = (_count(best.get("thrusts")),
-                                   _num(best.get("started_ts")))
-        longest = max(sessions, key=lambda s: _num(s.get("active_s")))
-        if _num(longest.get("active_s")):
-            out["longest_session"] = (_num(longest.get("active_s")),
-                                      _num(longest.get("started_ts")))
-        paced = [s for s in sessions if _count(s.get("peak_pace"))]
+        best = max(sessions, key=lambda s: safe_count(s.get("thrusts")))
+        if safe_count(best.get("thrusts")):
+            out["best_session"] = (safe_count(best.get("thrusts")),
+                                   safe_num(best.get("started_ts")))
+        longest = max(sessions, key=lambda s: safe_num(s.get("active_s")))
+        if safe_num(longest.get("active_s")):
+            out["longest_session"] = (safe_num(longest.get("active_s")),
+                                      safe_num(longest.get("started_ts")))
+        paced = [s for s in sessions if safe_count(s.get("peak_pace"))]
         if paced:
-            rec = max(paced, key=lambda s: _count(s.get("peak_pace")))
-            out["record_pace"] = (_count(rec.get("peak_pace")),
-                                  _num(rec.get("started_ts")))
+            rec = max(paced, key=lambda s: safe_count(s.get("peak_pace")))
+            out["record_pace"] = (safe_count(rec.get("peak_pace")),
+                                  safe_num(rec.get("started_ts")))
     return out

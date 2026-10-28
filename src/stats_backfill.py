@@ -27,7 +27,7 @@ import re
 import time
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
-from stats_tracker import _count, _num
+from stats_tracker import safe_count, safe_num
 
 
 # A log line: "2026-07-11 12:42:16,672 INFO    [MainThread] ogp: ..."
@@ -170,12 +170,12 @@ def estimate(runs: Sequence[Mapping[str, Any]],
     until = 0.0
 
     all_toys = [(t0, t1) for r in runs for (_n, t0, t1) in r["toys"]]
-    saved = sorted(recent_sessions, key=lambda s: _num(s.get("started_ts")))
+    saved = sorted(recent_sessions, key=lambda s: safe_num(s.get("started_ts")))
     for s in saved:
-        start = _num(s.get("started_ts"))
-        end = start + _num(s.get("duration_s"))
-        active = _num(s.get("active_s"))
-        thrusts = _count(s.get("thrusts"))
+        start = safe_num(s.get("started_ts"))
+        end = start + safe_num(s.get("duration_s"))
+        active = safe_num(s.get("active_s"))
+        thrusts = safe_count(s.get("thrusts"))
         if not start or end <= start or any(abs(start - t) < 2.0 for t in skip):
             continue
         if active <= 0 and thrusts <= 0:
@@ -201,12 +201,12 @@ def estimate(runs: Sequence[Mapping[str, Any]],
             })
 
     # What the lifetime totals hold beyond the saved sessions.
-    rem_n = _count(lifetime.get("sessions")) - len(saved)
-    rem_active = _num(lifetime.get("active_s")) - sum(_num(s.get("active_s")) for s in saved)
-    rem_thrusts = _count(lifetime.get("thrusts")) - sum(_count(s.get("thrusts")) for s in saved)
+    rem_n = safe_count(lifetime.get("sessions")) - len(saved)
+    rem_active = safe_num(lifetime.get("active_s")) - sum(safe_num(s.get("active_s")) for s in saved)
+    rem_thrusts = safe_count(lifetime.get("thrusts")) - sum(safe_count(s.get("thrusts")) for s in saved)
     extra: List[float] = []
     if rem_n > 0 and (rem_active > 60 or rem_thrusts > 0):
-        first_saved = _num(saved[0].get("started_ts")) if saved else float("inf")
+        first_saved = safe_num(saved[0].get("started_ts")) if saved else float("inf")
         candidates = []
         for r in runs:
             if r["end"] > first_saved:

@@ -1,7 +1,8 @@
 /* Compares the website's colour port, docs/assets/ogp-accent.js, with a
  * reference written by check_accent.py from the app's accent_shift.py.
  * Colour strings must be equal character for character; doubles are
- * compared bit for bit and the largest difference is reported.
+ * compared bit for bit and the largest difference is reported. The hue of
+ * a grey is not compared (see GREYS below).
  *
  *   node tools/site_ports/check_accent.js [accent_reference.json | its folder] [--js FILE]
  *
@@ -17,10 +18,20 @@ var os = require('os');
 var path = require('path');
 
 var REPO = path.resolve(__dirname, '..', '..');
-// hueOf / deltaFor go through atan2 and pow, which V8 and the Microsoft C
-// runtime round differently in the last bit, so those doubles get a
-// tolerance (in degrees). Everything else must be exact.
+// hueOf / deltaFor go through atan2 and pow, which V8, the Microsoft C
+// runtime and glibc round differently in the last bit, so those doubles
+// get a tolerance (in degrees). Everything else must be exact.
 var DOUBLE_TOL = 1e-9;
+
+// GREYS. A hue is atan2(b, a), so a rounding difference e in a/b turns it
+// by about e / C radians. A grey's a/b is nothing but the rounding of the
+// OKLab matrix (#808080 has C = 2e-8), so its hue is the angle of that
+// noise: glibc and V8 put #808080's 7e-7 degrees apart while its a/b agree
+// to 3e-16. Below the app's NEUTRAL_CHROMA (the reference carries it)
+// shiftHex returns a colour untouched, so that hue reaches no colour, and
+// it is not compared. Its L and C still are, and every colour above the
+// line keeps the full tolerance: at C = 1e-4 even 1e-15 of a/b noise is
+// 6e-10 degrees.
 
 var argv = process.argv.slice(2);
 var jsPath = path.join(REPO, 'docs', 'assets', 'ogp-accent.js');
@@ -120,6 +131,30 @@ function main() {
   console.log('  ' + okT + '/' + nT + ' tokens identical');
   if (!nT) { failed = true; }
 
+  console.log("identityHues (identity colours moving out of the accent's way)");
+  var idRef = ref.identity, okI = 0, nI = 0;
+  if (!idRef) {
+    console.log('  the reference has no identity cases - write it again with check_accent.py');
+    failed = true;
+  } else {
+    idRef.cases.forEach(function (c) {
+      nI++;
+      var got = A.identityHues(c[0], idRef.own, idRef.vacated, c[1]), want = c[2];
+      var keys = Object.keys(want).sort(), gk = Object.keys(got).sort();
+      var same = keys.join() === gk.join() && keys.every(function (k) {
+        return Math.abs(got[k] - want[k]) <= 1e-9;
+      });
+      if (same) { okI++; } else {
+        if (nI - okI <= 8) {
+          console.log('  MISMATCH accent ' + c[0] + ' chosen ' + JSON.stringify(c[1]) +
+            ': python ' + JSON.stringify(want) + '  js ' + JSON.stringify(got));
+        }
+        failed = true;
+      }
+    });
+    console.log('  ' + okI + '/' + nI + ' cases identical');
+  }
+
   console.log('doubles');
   doubles('  math.hypot port', ref.hypot.map(function (r) {
     return [A._pyHypot(r[0], r[1]), r[2]];
@@ -130,15 +165,25 @@ function main() {
   doubles('  round(x, 3) port', ref.round.map(function (r) {
     return [A._pyRound(r[0], 3), r[2]];
   }), 0);
-  var worstHue = doubles('  hueOf', ref.hues.map(function (r) {
+  var grey = ref.neutral_chroma;
+  if (typeof grey !== 'number') {
+    console.log('  the reference has no neutral_chroma - write it again with check_accent.py');
+    failed = true;
+  }
+  function hasHue(chroma) { return chroma >= grey; }
+  var hueRows = ref.hues.filter(function (r) { return hasHue(r[2]); });
+  var greys = ref.hues.length - hueRows.length;
+  var worstHue = doubles('  hueOf', hueRows.map(function (r) {
     return [A.hueOf(r[0]), r[1]];
   }), DOUBLE_TOL);
   var lch = [];
   ref.oklch.forEach(function (r) {
     var got = A.toOklch(r[0]);
-    lch.push([got[0], r[1][0]]); lch.push([got[1], r[1][1]]); lch.push([got[2], r[1][2]]);
+    lch.push([got[0], r[1][0]]); lch.push([got[1], r[1][1]]);
+    if (hasHue(r[1][1])) { lch.push([got[2], r[1][2]]); }
   });
   doubles('  toOklch (L, C, h)', lch, DOUBLE_TOL);
+  console.log('  (' + greys + ' greys below chroma ' + grey + ': hue not compared, L and C are)');
   var worstDelta = doubles('  deltaFor', ref.deltas.map(function (r) {
     return [A.deltaFor(r[0], r[1]), r[2]];
   }), DOUBLE_TOL);
@@ -149,7 +194,11 @@ function main() {
     ok: !failed,
     strings: stringsTotal + nT,
     strings_bad: stringsBad + (nT - okT),
+    identity_cases: nI,
+    identity_bad: nI - okI,
     token_cases: ref.required.length,
+    hues_compared: hueRows.length,
+    grey_hues_skipped: greys,
     worst_hue_diff: (worstHue === worstHue) ? worstHue : null,
     worst_delta_diff: (worstDelta === worstDelta) ? worstDelta : null
   }));

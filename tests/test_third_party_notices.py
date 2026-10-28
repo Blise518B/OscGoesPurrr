@@ -50,6 +50,32 @@ def test_notices_cover_the_bundled_engine():
     assert "## Source for intiface-engine" in notices
 
 
+_PICTURE = (".png", ".jpg", ".jpeg", ".svg", ".ico")
+
+
+def test_every_bundled_picture_folder_is_named():
+    """The builds bundle all of src/Images and the folders build_OGP.bat
+    names; a folder of other makers' pictures (the Lovense toys, the shocker
+    and suit logos) must say whose they are -- tools/make_third_party_notices.py
+    PICTURES."""
+    notices = _read("THIRD_PARTY_NOTICES.md")
+    src = os.path.join(REPO, "src")
+    folders = [os.path.join("Images", name)
+               for name in os.listdir(os.path.join(src, "Images")) if name != "fonts"]
+    folders += [m.group(1) for m in re.finditer(r'--add-data "src\\([^";]+);', _read("tools/build_OGP.bat"))
+                if m.group(1) != "Images"]   # the font has its own notice
+    for rel in sorted(folders):
+        folder = os.path.join(src, rel)
+        if not os.path.isdir(folder) or not any(
+                n.lower().endswith(_PICTURE) for n in os.listdir(folder)):
+            continue        # a file, or no pictures in it
+        named = rel.replace("\\", "/")
+        assert f"`{named}/`" in notices, (
+            f"src/{named} ships in the exe but THIRD_PARTY_NOTICES.md doesn't say "
+            f"whose it is -- add it to PICTURES (another maker's) or OWN_PICTURES (ours) "
+            f"in tools/make_third_party_notices.py")
+
+
 def test_build_bundles_the_license_and_notices():
     bat = _read("tools/build_OGP.bat")
     assert '--add-data "LICENSE;."' in bat

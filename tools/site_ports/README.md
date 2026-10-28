@@ -77,6 +77,13 @@ directory at `<out>\_fakehome` before importing anything, and they never
 write bytecode caches.
 
 One known, accepted difference: `hueOf` / `deltaFor` return numbers that
-can differ from Python's in the last digits (about 6e-14 degrees), because
-V8 and the Microsoft C runtime round `atan2` and `pow` differently in the
-last bit. The colour strings are identical.
+can differ from Python's in the last digits (below 1e-12 degrees), because
+V8, the Microsoft C runtime and glibc round `atan2` and `pow` differently
+in the last bit. The colour strings are identical.
+
+The hue of a grey is not compared. Below `NEUTRAL_CHROMA` (OKLCH chroma
+1e-4) a colour's a/b is only the rounding of the OKLab matrix, so its hue
+is the angle of that noise: on Linux, glibc and V8 put `#808080`'s hue
+7e-7 degrees apart while its a/b agree to 3e-16. `shiftHex` returns such a
+colour untouched, so that hue never reaches a colour. Its lightness and
+chroma are still compared, and every other hue keeps the 1e-9 tolerance.

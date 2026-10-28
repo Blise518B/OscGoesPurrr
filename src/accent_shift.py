@@ -144,6 +144,54 @@ def shift_tokens(tokens: Mapping[str, str], delta: float) -> Dict[str, str]:
             for k, v in tokens.items()}
 
 
+# An identity colour (a toy's, the live pink, the warning amber, ...) whose
+# hue is closer than this to the chosen accent reads as the same colour, so
+# it moves out of the way (identity_hues).
+IDENTITY_MIN_GAP = 20.0
+
+
+def hue_distance(a: float, b: float) -> float:
+    """Degrees between two hues the short way round, 0..180."""
+    return abs((float(a) - float(b) + 180.0) % 360.0 - 180.0)
+
+
+def identity_hues(accent_hue: Optional[float], own: Mapping[str, float],
+                  vacated: float, chosen: Mapping[str, float] = ()) -> Dict[str, float]:
+    """`{name: hue}` for every identity colour that does not keep its own
+    hue (`own`, by name): the ones the user set by hand (`chosen`, kept as
+    they are) and the ones within IDENTITY_MIN_GAP of the accent
+    (`accent_hue`; None -- the house green -- moves nobody).
+
+    Those move where they stand out most: the closest one to the accent
+    takes the spot the accent left (`vacated`, the green's own hue) when
+    that is clear of every other colour, and otherwise -- or for a second
+    one -- the whole degree that is furthest from every colour already
+    placed (ties: the one nearest its own hue, then the lowest)."""
+    chosen = dict(chosen or {})
+    out = {n: float(h) % 360.0 for n, h in chosen.items() if n in own}
+    if accent_hue is None:
+        return out
+    accent = float(accent_hue) % 360.0
+    hit = sorted((n for n, h in own.items()
+                  if n not in out and hue_distance(h, accent) < IDENTITY_MIN_GAP),
+                 key=lambda n: (hue_distance(own[n], accent), n))
+    taken = [accent] + list(out.values()) + [
+        float(h) for n, h in own.items() if n not in out and n not in hit]
+
+    def room(h: float) -> float:
+        return min(hue_distance(h, t) for t in taken)
+
+    for n in hit:
+        if room(vacated) >= IDENTITY_MIN_GAP:
+            best = float(vacated) % 360.0
+        else:
+            best = max((float(d) for d in range(360)),
+                       key=lambda h: (round(room(h), 6), -hue_distance(h, own[n]), -h))
+        out[n] = best
+        taken.append(best)
+    return out
+
+
 def _nudge(hex_color: str, taken) -> str:
     """The nearest colour to `hex_color` that is not in `taken`: the blue
     channel stepped by one, then two, ... Nobody can see one step."""

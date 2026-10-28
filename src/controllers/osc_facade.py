@@ -162,6 +162,19 @@ class OscFacade:
         batch rapid updates. Runs on the OSC UDP server thread — anything
         beyond a flag/queue-put belongs on the GUI side of thread_queue."""
         self._needs_recalculation = True
+        # A contact the PiShock rules watch goes out on this packet, not
+        # on the router's next poll.
+        wake = getattr(self, "_pishock_on_osc", None)
+        if wake is not None:
+            wake(address)
+        # ...and so does a contact either suit reads.
+        suits = getattr(self, "_suits_on_osc", None)
+        if suits is not None:
+            suits(address)
+        # The menu's Friends submenu goes out to the friend on this packet.
+        friends = getattr(self, "_friends_on_osc", None)
+        if friends is not None:
+            friends(address, value)
         # VRChat reports the freshly-loaded avatar's ID via /avatar/change.
         # The OSC layer strips the leading slash, so we see "avatar/change".
         if address == "avatar/change":

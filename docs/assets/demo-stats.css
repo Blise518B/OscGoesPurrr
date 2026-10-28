@@ -143,7 +143,13 @@
   cursor: pointer; outline: none;
 }
 .pg-stats .st-row:hover, .pg-stats .st-row:focus-visible { background: var(--hover); border-color: var(--line); }
-.pg-stats .st-when { flex: none; width: 206px; white-space: pre; overflow: hidden; }
+.pg-stats .st-when { flex: none; width: 206px; display: flex; align-items: baseline; gap: 6px; overflow: hidden; }
+.pg-stats .st-date { flex: none; white-space: pre; }
+/* who it was with, in what the date leaves of the cell */
+.pg-stats .st-who {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--dim); font-size: 11px; line-height: 15px; letter-spacing: .28px;
+}
 .pg-stats .st-c { flex: none; color: var(--muted); font-size: 12px; line-height: 16px; letter-spacing: 0; white-space: nowrap; }
 .pg-stats .st-c-dur { min-width: 64px; }
 .pg-stats .st-c-act { min-width: 86px; }
@@ -190,6 +196,36 @@
 .pg-stats .st-dot-blue { color: var(--blue); }
 .pg-stats .st-dot-purple { color: var(--purple); }
 .pg-stats .st-dot-pink { color: var(--pink); }
+
+/* ── people: the card's switch + table, the session page's tags ────────── */
+.pg-stats .st-swrow { display: flex; align-items: center; gap: 8px; min-height: 22px; }
+.pg-stats .st-people {
+  display: grid; grid-template-columns: auto 1fr auto auto auto auto auto;
+  column-gap: 20px; row-gap: 2px; align-items: center; padding-top: 4px;
+}
+.pg-stats .st-people > span { white-space: nowrap; line-height: 17px; overflow: hidden; text-overflow: ellipsis; }
+.pg-stats .st-people > .st-th { color: var(--muted); font-size: 12px; line-height: 16px; letter-spacing: 0; }
+.pg-stats .st-people > .st-td-s { color: var(--muted); }
+.pg-stats .st-tags { display: flex; flex-direction: column; gap: 6px; }
+.pg-stats .st-withrow, .pg-stats .st-editor, .pg-stats .st-stretch { display: flex; align-items: center; min-width: 0; }
+.pg-stats .st-withrow { gap: 8px; }
+.pg-stats .st-editor { gap: 8px; }
+.pg-stats .st-stretch { gap: 10px; }
+.pg-stats .st-chips { display: flex; gap: 6px; }
+.pg-stats .st-grow { flex: 1 1 0; }
+.pg-stats .st-stretches { display: flex; flex-direction: column; gap: 2px; }
+.pg-stats .st-str-when { flex: none; min-width: 110px; white-space: nowrap; }
+.pg-stats .st-str-who { flex: none; font-weight: 700; white-space: nowrap; }
+.pg-stats .st-btn.st-ghost { border-color: transparent; color: var(--muted); }
+.pg-stats .st-btn.st-ghost:hover { border-color: var(--line); background: var(--hover); color: var(--txt); }
+.pg-stats .st-input {
+  flex: 1 1 0; min-width: 0; height: 31px; margin: 0; padding: 0 8px;
+  font: inherit; font-size: 13px; color: var(--txt);
+  background: var(--well); border: 1px solid var(--line); border-radius: var(--r-btn);
+  outline: none; -webkit-user-select: text; user-select: text;
+}
+.pg-stats .st-input:focus { border-color: var(--accent); }
+.pg-stats .st-input::placeholder { color: var(--dim); }
 
 /* ── hover explanations (the app's QToolTip) ───────────────────────────── */
 .pg-stats .st-tip {

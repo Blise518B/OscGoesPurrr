@@ -1444,8 +1444,16 @@ class VRChatOSCManager:
 
     def send_parameter(self, address: str, value: Any,
                        ignore_rate_limit: bool = False,
-                       force_type: Optional[str] = None):
+                       force_type: Optional[str] = None,
+                       default_type: Optional[str] = None):
+        """`default_type` is the type to send as when OSCQuery hasn't
+        declared one for the address (a declared type always wins, unlike
+        `force_type`). Only honoured by an immediate send
+        (`ignore_rate_limit`); the thrust counters' digit Ints use it."""
         if not self.is_connected or not self.osc_client: return
+        if default_type and ignore_rate_limit:
+            self._send_raw(address, value, default_type)
+            return
         if force_type:
             # Pin the declared type for this address so every send —
             # including a later trailing flush — coerces the same way,
@@ -1465,8 +1473,10 @@ class VRChatOSCManager:
             return
         self._send_raw(address, value)
 
-    def _send_raw(self, address: str, value: Any) -> None:
-        value = coerce_outgoing_value(value, self._param_types.get(address))
+    def _send_raw(self, address: str, value: Any,
+                  default_type: Optional[str] = None) -> None:
+        value = coerce_outgoing_value(
+            value, self._param_types.get(address) or default_type)
         self.osc_client.send_message(address, value)
 
     def _arm_flush_timer(self) -> None:

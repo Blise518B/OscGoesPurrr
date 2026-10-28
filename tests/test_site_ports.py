@@ -230,11 +230,15 @@ class TestAccentPort:
 
     def test_hue_numbers_agree(self, accent_check):
         # Not bit-identical by nature (atan2/pow round differently across
-        # runtimes), but far inside anything a colour could show.
+        # runtimes), but far inside anything a colour could show. The few
+        # greys in the set (#808080, #ffffff, ...) have no hue to compare
+        # -- see GREYS in check_accent.js -- so make sure it IS only a few.
         _code, result, output = accent_check
         for key in ("worst_hue_diff", "worst_delta_diff"):
             assert result[key] is not None and result[key] <= TOL, \
                 _tail(output)
+        assert result["hues_compared"] >= 60, _tail(output)
+        assert result["grey_hues_skipped"] <= 8, _tail(output)
 
     def test_a_drifted_constant_is_caught(self, node, accent_reference,
                                           workdir, home):

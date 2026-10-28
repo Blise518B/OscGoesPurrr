@@ -380,7 +380,8 @@ class MotorRouter:
 
     def __init__(self, clock: Callable[[], float] = time.monotonic,
                  get_sleep_active: Optional[Callable[[], bool]] = None,
-                 get_master_scale: Optional[Callable[[], float]] = None) -> None:
+                 get_master_scale: Optional[Callable[[], float]] = None,
+                 get_friend_drive: Optional[Callable[[str], Any]] = None) -> None:
         # `clock` is dependency-injected so tests can drive time deterministically.
         # Defaults to time.monotonic so production callers don't change.
         self._clock = clock
@@ -396,6 +397,10 @@ class MotorRouter:
         # back into the toy's dead zone. Every other backend still
         # applies its own scale at its own dispatch.
         self.get_master_scale = get_master_scale or (lambda: 1.0)
+        # A friend driving this toy over the Friends link, 0..1 per device
+        # name (the highest of every friend allowed to). Joins the motor's
+        # own output at the end — see _apply_friend_drive.
+        self.get_friend_drive = get_friend_drive or (lambda _name: 0.0)
         # Tracks last calculated outputs to prevent flooding the UI/hardware thread.
         self.last_outputs: Dict[tuple, float] = {}
         # Same motors, but the value BEFORE the chain's Output stage — no
@@ -1493,6 +1498,32 @@ class MotorRouter:
         the engine."""
         return (str(device_name), int(motor_idx)) not in self._toy_output_suppressed
 
+    def _apply_friend_drive(self, device_name: str, motor_idx: int,
+                            final_out: float, master_scale: float) -> float:
+        """A friend's level for this toy joins the motor's own output: the
+        higher of the two wins -- or, while a friend drives it with
+        Override, theirs replaces the motor's own. The hook returns a level
+        or (level, override). It is a level, not a contact, so it skips the
+        chain's shaping — but not the person's own safety: it is scaled by
+        the global strength (0 while Off is on) and remapped into this
+        motor's output band, so the toy's own maximum still holds. Never
+        raises into the routing tick."""
+        try:
+            got = self.get_friend_drive(device_name)
+            level, override = got if isinstance(got, tuple) else (got, False)
+            level = float(level)
+        except Exception:
+            return final_out
+        if not math.isfinite(level):
+            return final_out
+        if level <= 0.0:
+            return 0.0 if override else final_out
+        friend_out = self.map_into_output_band(
+            device_name, motor_idx, min(1.0, level) * master_scale)
+        if override:
+            return friend_out
+        return friend_out if friend_out > final_out else final_out
+
     def _safe_master_scale(self) -> float:
         """Global strength, never raising into the routing tick. A getter
         that throws must not silence every toy, so it reads as 1.0 and the
@@ -2072,6 +2103,9 @@ class MotorRouter:
         if chain_ceilings:
             self.last_output_bands[(device_name, motor_idx)] = (
                 max(chain_floors), max(chain_ceilings))
+
+        final_out = self._apply_friend_drive(device_name, motor_idx,
+                                             final_out, master_scale)
 
         # (Anti-stuck is applied per chain inside the loop above — each
         # chain's own frozen input fades its own contribution, so a live

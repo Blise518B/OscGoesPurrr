@@ -4,6 +4,10 @@ from typing import Dict, Any, List, Set, Tuple
 from utilities import classify_ogb_zone
 
 
+# OSCQuery's type tags -> the types the Avatar Remote page speaks
+_TYPE_TAGS = {"T": "Bool", "F": "Bool", "i": "Int", "f": "Float"}
+
+
 class ParameterStore:
     """
     Central thread-safe repository for all VRChat avatar parameters and detected zones.
@@ -34,6 +38,17 @@ class ParameterStore:
         # just no-op here, so a partner or a stray packet can't fight the
         # replayed motion. Toggled by the replay facade on the GUI thread.
         self._input_locked: bool = False
+        # Per-key count of bool False->True edges seen on the live UDP path.
+        # An OnEnter contact can be True for a single VRChat frame, so a
+        # poller that only reads the current value misses most of them; a
+        # router compares these counts against its last tick instead
+        # (see pishock_router). Only bools count, and only live writes —
+        # an OSCQuery snapshot re-reading a held contact is not an entry.
+        self._rises: Dict[str, int] = {}
+        # The OSCQuery tree's type tag per parameter ("T"/"F" Bool, "i"
+        # Int, "f" Float) -- the Avatar Remote page's controls need to know
+        # what to send. A parameter only ever seen live takes its value's.
+        self._declared_types: Dict[str, str] = {}
         self.lock = threading.Lock()
 
     # The OSCQuery tree is rooted at avatar/parameters/* for VRChat avatars,
@@ -111,7 +126,11 @@ class ParameterStore:
             key = prefix
             if key.startswith(self._AVATAR_PARAM_PREFIX):
                 key = key[len(self._AVATAR_PARAM_PREFIX):]
-            self.all_parameters[self._canon_param_key(key)] = val
+            key = self._canon_param_key(key)
+            self.all_parameters[key] = val
+            tag = node.get("TYPE")
+            if isinstance(tag, str) and tag[:1] in _TYPE_TAGS:
+                self._declared_types[key] = tag[:1]
 
     def set_input_locked(self, locked: bool) -> None:
         """Gate live writes. While locked, update_parameter and
@@ -171,6 +190,7 @@ class ParameterStore:
                 return len(self.all_parameters)
             self.all_parameters.clear()
             self._zone_tuples.clear()
+            self._declared_types.clear()
             self._parse_oscquery_node(data)
 
             for path in self.all_parameters.keys():
@@ -194,6 +214,8 @@ class ParameterStore:
             if self._input_locked:
                 return  # session replay owns the store; drop live writes
             is_new_key = address not in self.all_parameters
+            if value is True and self.all_parameters.get(address) is not True:
+                self._rises[address] = self._rises.get(address, 0) + 1
             self.all_parameters[address] = value
             self._version += 1
             self.packets_received += 1
@@ -229,6 +251,39 @@ class ParameterStore:
         with self.lock:
             return self.packets_received
 
+    def has_parameters(self, *keys: str) -> Tuple[bool, ...]:
+        """Whether each key is in the current avatar's parameters (no copy
+        of the whole store) -- e.g. which parts of OGP's menu it carries."""
+        with self.lock:
+            return tuple(k in self.all_parameters for k in keys)
+
+    def parameter_count(self) -> int:
+        with self.lock:
+            return len(self.all_parameters)
+
+    def get_param_types(self) -> Dict[str, str]:
+        """{name: "Bool" | "Int" | "Float"} for every parameter whose type
+        is known: as OSCQuery declared it, else as its live value is."""
+        with self.lock:
+            out = {}
+            for key, value in self.all_parameters.items():
+                tag = self._declared_types.get(key)
+                if tag is not None:
+                    out[key] = _TYPE_TAGS[tag]
+                elif isinstance(value, bool):
+                    out[key] = "Bool"
+                elif isinstance(value, int):
+                    out[key] = "Int"
+                elif isinstance(value, float):
+                    out[key] = "Float"
+            return out
+
+    def get_values(self, names) -> Dict[str, Any]:
+        """The current values of `names` (those the store has)."""
+        with self.lock:
+            params = self.all_parameters
+            return {n: params[n] for n in names if n in params}
+
     def get_all_parameters(self) -> Dict[str, Any]:
         """Safely returns a copy of the current parameter state."""
         with self.lock:
@@ -247,6 +302,17 @@ class ParameterStore:
                 self._version,
                 set(self._zone_tuples),
             )
+
+    def read_watched(self, keys) -> Tuple[Dict[str, Any], Dict[str, int]]:
+        """`(values, rise_counts)` for just `keys`, under one lock hold.
+        Keys never seen are absent from `values` and count 0 rises. For a
+        router that watches a handful of parameters and would rather not
+        copy the whole table every tick."""
+        with self.lock:
+            params = self.all_parameters
+            rises = self._rises
+            return ({k: params[k] for k in keys if k in params},
+                    {k: rises.get(k, 0) for k in keys})
 
     def get_version(self) -> int:
         """Monotonic counter — bumps on every write. Use to short-circuit

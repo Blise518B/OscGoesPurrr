@@ -84,14 +84,65 @@ class TestTable:
     @pytest.mark.parametrize("mode", ["neon", "midnight"])
     def test_every_turn_gives_every_token_its_own_colour(self, mode):
         """Recolouring by value needs a one-to-one table: two tokens on one
-        colour could not be told apart again on the next turn."""
-        fixed = {tone for name, tri in T.PALETTE.items() if name != "green"
-                 for tone in tri}
-        for hue in range(0, 360, 3):
-            table = theme._table(A.delta_for(float(hue), T.NEON["accent"]), mode)
-            values = list(table.values())
-            assert len(set(values)) == len(values), (mode, hue)
-            assert not (set(values) & fixed), (mode, hue)
+        colour could not be told apart again on the next turn. An identity
+        tone is only ever its own role's colour: an identity role wears its
+        own tone (or, moved, none at all), and nothing else ever lands on
+        one."""
+        own = {f"{name}.{i}": tone for name, tri in T.PALETTE.items()
+               if name != "green" for i, tone in enumerate(tri)}
+        own.update({f"bar.{name}.{i}": tone for name, pair in theme._OTHER_BARS.items()
+                    for i, tone in enumerate(pair)})
+        fixed = set(own.values())
+        for chosen in ((), (("red", 200.0), ("cyan", 20.0))):
+            for hue in range(0, 360, 3):
+                delta = A.delta_for(float(hue), T.NEON["accent"])
+                table = theme._table(delta, mode, chosen=chosen)
+                values = list(table.values())
+                assert len(set(values)) == len(values), (mode, hue, chosen)
+                for role, value in table.items():
+                    if value in fixed:
+                        assert own.get(role) == value, (mode, hue, chosen, role)
+
+    def test_an_identity_colour_moves_out_of_the_accents_way(self):
+        """Pick Pink and the pink moves to where the green was; pick
+        between pink and red and both move, apart from each other and from
+        the accent; a colour set by hand stays where it was put."""
+        own = {n: A.hue_of(T.PALETTE[n][0]) for n in C.IDENTITY_HUES}
+        pink = own["pink"]
+        moves = C.identity_moves(A.delta_for(pink, T.NEON["accent"]))
+        assert set(moves) == {"pink"}
+        assert A.hue_distance(moves["pink"], A.hue_of(T.PALETTE["green"][0])) < 0.5
+        moves = C.identity_moves(A.delta_for(10.0, T.NEON["accent"]))
+        assert set(moves) == {"pink", "red"}
+        placed = [10.0, *moves.values()] + [h for n, h in own.items() if n not in moves]
+        for i, a in enumerate(placed):
+            for b in placed[i + 1:]:
+                assert A.hue_distance(a, b) >= A.IDENTITY_MIN_GAP - 1e-6
+        kept = C.identity_moves(A.delta_for(pink, T.NEON["accent"]), (("pink", pink),))
+        assert kept == {}                         # set by hand to its own hue: stays
+        assert C.identity_moves(0.0) == {}        # the house green moves nobody
+
+    def test_moving_an_identity_colour_recolours_it_and_its_bar(self):
+        try:
+            mapping = theme.set_accent_hue(A.hue_of(T.PALETTE["blue"][0]))
+            assert T.PALETTE["blue"][0] in mapping            # the blue toy colour moved
+            assert theme._OTHER_BARS["blue"][0] in mapping    # and its Neon bar
+            assert theme.PALETTE["blue"] != T.PALETTE["blue"]
+            assert theme.identity_state()["blue"]["moved"]
+        finally:
+            theme.set_accent_hue(None)
+        assert theme.PALETTE["blue"] == T.PALETTE["blue"]
+        assert theme.NEON_CAT_BARS["blue"] == theme._OTHER_BARS["blue"]
+
+    def test_a_colour_set_by_hand_applies_and_goes_back_to_auto(self):
+        try:
+            mapping = theme.set_identity_hues({"amber": 200.0})
+            assert T.PALETTE["amber"][0] in mapping
+            assert theme.identity_state()["amber"]["chosen"]
+            assert A.hue_distance(A.hue_of(theme.PALETTE["amber"][0]), 200.0) < 3
+        finally:
+            theme.set_identity_hues({})
+        assert theme.PALETTE["amber"] == T.PALETTE["amber"]
 
     def test_a_collision_steps_one_blue_level_aside(self):
         table = A.unique_table(["#112233", "#112233"[:-1] + "3"], 0.0)
@@ -276,6 +327,28 @@ class TestSetAccentHue:
         theme.set_accent_hue(313.0)
         assert walked == (dict(theme.CHROME), theme.PALETTE["green"],
                           C.COLOR_ACCENT)
+
+
+    def test_identity_colours_land_where_a_fresh_start_does(self, green_again):
+        """Moves and hand-set colours are composed swap by swap too: after
+        any walk, every identity colour (and its bar) is what the table for
+        that colour and those choices says."""
+        try:
+            for hue in list(range(0, 360, 11)) + [357.4, 10.0, 263.0]:
+                theme.set_accent_hue(float(hue))
+            theme.set_identity_hues({"cyan": 30.0})
+            theme.set_accent_hue(357.4)
+            want = theme._table(A.delta_for(357.4, T.NEON["accent"]),
+                                chosen=(("cyan", 30.0),))
+            for name in C.IDENTITY_HUES:
+                assert theme.PALETTE[name] == tuple(want[f"{name}.{i}"] for i in range(3)), name
+                assert C.PALETTE[name] == theme.PALETTE[name]
+            for name in theme._OTHER_BARS:
+                assert theme.NEON_CAT_BARS[name] == tuple(want[f"bar.{name}.{i}"] for i in (0, 1))
+        finally:
+            theme.set_identity_hues({})
+        assert all(theme.PALETTE[n] == T.PALETTE[n] or theme.identity_state()[n]["moved"]
+                   for n in C.IDENTITY_HUES)
 
 
 class TestSetMode:

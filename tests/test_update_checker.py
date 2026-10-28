@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 import update_checker
-from update_checker import _parse_version, check_for_update
+from update_checker import _parse_version, _pre_release, check_for_update, compare_versions
 
 
 # ---------------------------------------------------------------- _parse_version
@@ -104,6 +104,48 @@ class TestCheckForUpdate:
         _install_requests(monkeypatch, resp=_Resp(payload=_release("v1.2.52")))
         info = check_for_update("1.2.51-dev(3)")
         assert info is not None and info["available"] is True
+
+    def test_an_alpha_is_offered_its_release(self, monkeypatch):
+        _install_requests(monkeypatch, resp=_Resp(payload=_release("v0.14.0")))
+        info = check_for_update("0.14.0-alpha.1")
+        assert info is not None and info["available"] is True
+
+    def test_an_alpha_is_not_offered_the_release_before_it(self, monkeypatch):
+        _install_requests(monkeypatch, resp=_Resp(payload=_release("v0.13.0")))
+        info = check_for_update("0.14.0-alpha.1")
+        assert info is not None and info["available"] is False
+
+    def test_a_release_is_never_offered_its_own_alpha(self, monkeypatch):
+        _install_requests(monkeypatch, resp=_Resp(payload=_release("v0.14.0-alpha.1")))
+        info = check_for_update("0.14.0")
+        assert info is not None and info["available"] is False
+        assert info["latest"] == "0.14.0-alpha.1"
+
+
+class TestPreReleases:
+    @pytest.mark.parametrize("older, newer", [
+        ("0.14.0-alpha.1", "0.14.0"),
+        ("0.14.0-alpha.1", "0.14.0-alpha.2"),
+        ("0.14.0-alpha.9", "0.14.0-beta"),
+        ("0.14.0-beta.3", "0.14.0-rc.1"),
+        ("0.14.0-rc.2", "v0.14.0"),
+        ("0.13.0", "0.14.0-alpha.1"),
+    ])
+    def test_stages_come_before_their_release(self, older, newer):
+        assert compare_versions(older, newer) == -1
+        assert compare_versions(newer, older) == 1
+
+    @pytest.mark.parametrize("build, version", [
+        ("0.13.0-dev(3)", "0.13.0"),                  # a branch build is its release
+        ("0.14.0-alpha.1-dev(3)", "0.14.0-alpha.1"),  # ... or its alpha
+        ("0.13.0-alpha(2)", "0.13.0"),                # a branch called alpha is no stage
+    ])
+    def test_branch_suffixes_take_no_part(self, build, version):
+        assert compare_versions(build, version) == 0
+
+    def test_the_numeric_core_is_unchanged(self):
+        assert _parse_version("v0.14.0-alpha.1") == (0, 14, 0)
+        assert _pre_release("0.14.0-rc.2") == (2, 2)
 
     def test_network_error_is_none(self, monkeypatch):
         _install_requests(monkeypatch, exc=OSError("no route to host"))

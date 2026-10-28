@@ -27,7 +27,16 @@ class PollingThread:
 
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
-            return
+            if not self._stop.is_set():
+                return
+            # Stopped a moment ago and not gone yet (a feature switched off
+            # and on within one sleep slice): let it finish first, or
+            # clearing the event would keep the old loop alive -- or, if it
+            # already saw the stop, leave nothing running at all.
+            if self._thread is not threading.current_thread():
+                self._thread.join(timeout=2.0)
+            if self._thread.is_alive():
+                return
         self._stop.clear()
         self._thread = threading.Thread(
             target=self._run, daemon=True, name=self._thread_name

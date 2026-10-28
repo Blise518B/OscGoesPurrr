@@ -28,7 +28,7 @@ import retint as _retint
 import constants as _constants
 # Resolved once, Qt-free, in constants.py: the mode, and how far the user
 # turned the green (0.0 = the house green, tokens untouched).
-from constants import UI_MODE, UI_ACCENT_DELTA, UI_ACCENT_HUE
+from constants import UI_MODE, UI_ACCENT_DELTA, UI_ACCENT_HUE, UI_IDENTITY_HUES
 from constants import PALETTE as _PALETTE
 from constants import GREEN_ROLES as _GREEN_ROLES
 
@@ -76,22 +76,29 @@ _OTHER_BARS = {
 # How far the green is turned RIGHT NOW, in degrees. Starts at what the
 # user had saved; set_accent_hue() moves it while the app runs.
 _delta: float = UI_ACCENT_DELTA
+# The identity colours the user set by hand, ((name, hue), ...);
+# set_identity_hues() changes them while the app runs.
+_chosen: tuple = UI_IDENTITY_HUES
 
 
-def _table(delta: float, mode_name: str = "") -> Dict[str, str]:
-    """`{role: its colour at this turn}` for every green token of a mode:
-    constants' table (the chrome, by token name, + the palette's green)
-    plus the green section bar (`bar.0`, `bar.1`). Every role has a value
-    of its own and none lands on a colour that must not change -- in
-    either mode -- which is the guarantee that lets the running app be
-    recoloured by value (see retint.py), whether the hue or the mode
-    changed. Read-only: the result is shared (cached)."""
-    return _table_cached(float(delta), normalize_mode(mode_name or MODE))
+def _table(delta: float, mode_name: str = "", chosen=None) -> Dict[str, str]:
+    """`{role: its colour at this turn}` for every colour that can change:
+    constants' table (the chrome, by token name; the palette's green; each
+    identity colour, "pink.0".."pink.2" -- its own tones, or turned where
+    it had to move or was set by hand) plus the section bars (the green's
+    `bar.0` / `bar.1`, and "bar.blue.0" ... for the other hues). Every role
+    has a value of its own and none lands on a colour that must not
+    change -- in either mode -- which is the guarantee that lets the
+    running app be recoloured by value (see retint.py), whether the hue,
+    the mode or an identity colour changed. Read-only: the result is
+    shared (cached)."""
+    return _table_cached(float(delta), normalize_mode(mode_name or MODE),
+                         _chosen if chosen is None else tuple(chosen))
 
 
 @lru_cache(maxsize=1024)
-def _table_cached(delta: float, mode_name: str) -> Dict[str, str]:
-    base = _constants.accent_table(delta, mode_name)
+def _table_cached(delta: float, mode_name: str, chosen: tuple) -> Dict[str, str]:
+    base = _constants.accent_table(delta, mode_name, chosen)
     fixed = [tone for name, tri in T.PALETTE.items() if name != "green"
              for tone in tri]
     fixed += [tone for pair in _OTHER_BARS.values() for tone in pair]
@@ -99,13 +106,24 @@ def _table_cached(delta: float, mode_name: str) -> Dict[str, str]:
     # steps clear of what ANY mode's chrome uses (Neon's `line` is the
     # bar's frame tone).
     for other in T.MODES:
-        fixed += list(_constants.accent_table(delta, other).values())
+        fixed += list(_constants.accent_table(delta, other, chosen).values())
     bar = _accent.unique_table(dict(zip(_BAR_ROLES, _GREEN_BAR)), delta, fixed)
-    return {**base, **bar}
+    # The other hues' bars follow their colour when it moved.
+    moves = _constants.identity_moves(delta, chosen)
+    taken = fixed + list(bar.values())
+    bars = {}
+    for name, pair in _OTHER_BARS.items():
+        roles = {f"bar.{name}.{i}": tone for i, tone in enumerate(pair)}
+        if name in moves:
+            roles = _accent.unique_table(
+                roles, _constants.identity_delta(name, moves[name]), taken)
+            taken += list(roles.values())
+        bars.update(roles)
+    return {**base, **bar, **bars}
 
 
 def current_table() -> Dict[str, str]:
-    """The table for the colour in use now."""
+    """The table for the colours in use now."""
     return _table(_delta)
 
 
@@ -166,6 +184,38 @@ def toy_hue(index: int) -> str:
     return TOY_HUES[int(index) % len(TOY_HUES)]
 
 
+# The Friends page: each friend wears one of the toys' three cool hues (its
+# avatar, its row when picked, the control panel's frame and bar), and the
+# two kinds of control wear the hue of what they drive -- everything about
+# toys the live pink, everything about shocks yellow -- so the toys / shocks
+# boxes in the list match the panel's sections. Strength keeps the accent.
+FRIEND_HUES = TOY_HUES
+FRIEND_TOYS_HUE = "pink"
+FRIEND_SHOCK_HUE = "yellow"
+# Friends itself, wherever it is named (its icon, ui/icons.identity_icon):
+# cyan, like the friends icons of the VRChat menu (tools/make_menu_icons.py).
+FRIENDS_HUE = "cyan"
+
+# Home's rows under the toys, for what isn't an Intiface toy, wear the hue of
+# what they are (Appearance -> Other colours): the shocker hub yellow, the
+# haptic suits orange.
+SHOCKERS_HUE = FRIEND_SHOCK_HUE
+SUITS_HUE = "orange"
+DEVICE_ROW_HUES = (SHOCKERS_HUE, SUITS_HUE)
+# The Suits page tells its two suits apart (2026-10-28): bHaptics wears the
+# suits' orange, OWO purple -- the one identity hue nothing on that page
+# means already (it is the third toy's, and no toy is there).
+BHAPTICS_HUE = SUITS_HUE
+OWO_HUE = "purple"
+# ... and Vive trackers blue (the second toy's; no toy there either).
+TRACKERS_HUE = "blue"
+
+
+def friend_hue(index: int) -> str:
+    """The hue for the friend at list position `index` (0-based)."""
+    return FRIEND_HUES[int(index) % len(FRIEND_HUES)]
+
+
 def toy_frame_colors(hue_name: str, mode_name: str = ""):
     """`(outline, ground)` for a toy's frame; ground is None for no fill.
 
@@ -178,9 +228,9 @@ def toy_frame_colors(hue_name: str, mode_name: str = ""):
     mode_name = mode_name or MODE
     neon = normalize_mode(mode_name) == "neon"
     ground = CHROME["panel"] if mode_name == MODE else chrome(mode_name)["panel"]
-    if hue_name in TOY_HUES:
-        return (NEON_CAT_BARS[hue_name][1] if neon else PALETTE[hue_name][1],
-                ground)
+    if hue_name in TOY_HUES or hue_name in DEVICE_ROW_HUES:
+        bars = NEON_CAT_BARS.get(hue_name)
+        return (bars[1] if neon and bars else PALETTE[hue_name][1], ground)
     if hue_name == OFFLINE_HUE:
         dim = CHROME["dim"] if mode_name == MODE else chrome(mode_name)["dim"]
         return (dim if neon else PALETTE["grey"][1]), None
@@ -205,7 +255,7 @@ TRACE_HUES = {
 # The section bars in use: the green pair at the current turn, the rest
 # as the reference apps have them (see _GREEN_BAR / _OTHER_BARS above).
 NEON_CAT_BARS = dict(
-    _OTHER_BARS,
+    {name: tuple(current_table()[f"bar.{name}.{i}"] for i in (0, 1)) for name in _OTHER_BARS},
     green=tuple(current_table()[r] for r in _BAR_ROLES))
 NEON_CAT_BAR = NEON_CAT_BARS["green"][0]
 
@@ -220,7 +270,7 @@ DEFAULT_ACCENT_HUE = _accent.hue_of(T.NEON["accent"])
 ACCENT_HUE = UI_ACCENT_HUE
 #: One-click choices: the green, then the identity palette's own hues (red
 #: and amber are left to the slider -- they are what errors and warnings
-#: wear).
+#: wear). Picking one moves that identity colour out of the way.
 ACCENT_PRESETS = (("Green (default)", None),) + tuple(
     (name.capitalize(), _accent.hue_of(T.PALETTE[name][0]))
     for name in ("cyan", "blue", "purple", "pink", "orange", "yellow"))
@@ -244,7 +294,8 @@ def accent_preview(hue_deg, mode_name: str = "") -> Dict[str, str]:
 
 def set_accent_hue(hue_deg) -> Dict[str, str]:
     """Turn the app's green to `hue_deg` (None = the house green) while it
-    runs, and return `{old hex: new hex}` for every colour that changed.
+    runs -- and every identity colour that has to move with it -- and
+    return `{old hex: new hex}` for every colour that changed.
 
     Everything that is module state follows at once: this module's and
     `constants`' tokens, every `COLOR_*` copy in every colour module,
@@ -252,15 +303,68 @@ def set_accent_hue(hue_deg) -> Dict[str, str]:
     already ON SCREEN -- the stylesheet each widget was polished with and
     the colours widgets copied into themselves -- is the caller's to
     update with the returned mapping; ui/live_theme.py does it in slices."""
-    global _delta, ACCENT_HUE
-    new_delta = _accent.delta_for(hue_deg, T.NEON["accent"])
-    old, new = _table(_delta), _table(new_delta)
-    mapping = {old[role]: new[role] for role in old if old[role] != new[role]}
-    _delta, ACCENT_HUE = new_delta, hue_deg
-    _constants.UI_ACCENT_DELTA = new_delta
+    global ACCENT_HUE
+    mapping = _retable(_accent.delta_for(hue_deg, T.NEON["accent"]), _chosen)
+    ACCENT_HUE = hue_deg
     _constants.UI_ACCENT_HUE = hue_deg
+    return mapping
+
+
+def set_identity_hues(chosen) -> Dict[str, str]:
+    """Set the identity colours the user picked by hand -- `{name: hue}`;
+    a name left out is automatic again -- while the app runs, and return
+    `{old hex: new hex}` like set_accent_hue (the same follow-up)."""
+    return _retable(_delta, _constants.clean_identity_hues(chosen))
+
+
+def _retable(new_delta: float, new_chosen: tuple) -> Dict[str, str]:
+    global _delta, _chosen
+    old, new = _table(_delta), _table(new_delta, chosen=new_chosen)
+    mapping = {old[role]: new[role] for role in old if old[role] != new[role]}
+    _delta, _chosen = new_delta, tuple(new_chosen)
+    _constants.UI_ACCENT_DELTA = new_delta
+    _constants.UI_IDENTITY_HUES = _chosen
     _retint.modules(mapping)
     return mapping
+
+
+#: The identity colours Appearance -> Other colours offers, and what each
+#: one marks in the app.
+IDENTITY_ROLES = (
+    ("pink", "Pink", "the live signal, penetration, friends' toys"),
+    ("red", "Red", "errors and Stop"),
+    ("amber", "Amber", "touch contact and warnings"),
+    ("yellow", "Yellow", "shockers"),
+    ("cyan", "Cyan", "your first toy, friends, things running"),
+    ("blue", "Blue", "your second toy"),
+    ("purple", "Purple", "your third toy"),
+    ("orange", "Orange", "the haptic suits"),
+)
+
+
+def identity_chosen() -> Dict[str, float]:
+    """The identity colours set by hand now, {name: hue}."""
+    return dict(_chosen)
+
+
+def identity_state() -> Dict[str, Dict[str, object]]:
+    """For Other colours: each identity colour's hue now, its own hue,
+    whether the user set it by hand, and whether it moved for the accent."""
+    chosen = dict(_chosen)
+    moves = _constants.identity_moves(_delta, _chosen)
+    out = {}
+    for name in _constants.IDENTITY_HUES:
+        own = _accent.hue_of(T.PALETTE[name][0])
+        out[name] = {"hue": moves.get(name, own), "own": own,
+                     "chosen": name in chosen,
+                     "moved": name in moves and name not in chosen}
+    return out
+
+
+def identity_preview(name: str, hue_deg: float) -> str:
+    """Identity colour `name` turned to `hue_deg` (its vibrant tone), for
+    the Other colours sliders. Nothing is applied."""
+    return _accent.shift_hex(T.PALETTE[name][0], _constants.identity_delta(name, hue_deg))
 
 
 def set_mode(mode_name) -> Dict[str, str]:
@@ -276,7 +380,7 @@ def set_mode(mode_name) -> Dict[str, str]:
     painted, never copied, so it follows MODE."""
     global MODE
     new_mode = normalize_mode(mode_name)
-    old, new = _table(_delta, MODE), _table(_delta, new_mode)
+    old, new = _table(_delta, MODE), _table(_delta, new_mode)  # same identity colours
     mapping = {old[role]: new[role] for role in old if old[role] != new[role]}
     MODE = new_mode
     _constants.UI_MODE = new_mode
@@ -471,6 +575,7 @@ QWidget#toyBar:hover { background-color: %(hover)s; }
 QWidget#toyBar QLabel { background: transparent; }
 QWidget#toyBar QPushButton { padding: 3px 12px; }
 QWidget#toyBar QLabel#toyZones { color: %(muted)s; font-size: 11px; }
+QFrame#listDividerLine { background-color: %(line)s; border: none; }
 QFrame#motorBlock {
     background-color: %(panel)s;
     border: 1px solid %(green_mid)s; border-radius: %(r_group)spx;
@@ -530,7 +635,9 @@ QLabel#homeTitle {
     color: %(accent)s;
 }
 QLabel#sidebarLinkTitle { font-size: 12px; font-weight: 600; color: %(txt)s; }
-QLabel#setupStepTitle, QLabel#newsTitle { font-size: 13px; font-weight: 600; }
+QLabel#setupStepTitle, QLabel#newsTitle, QCheckBox#interestChoice {
+    font-size: 13px; font-weight: 600;
+}
 QLabel#deviceName { font-size: 14px; font-weight: 600; color: %(txt)s; }
 QLabel#motorLabel { font-size: 14px; font-weight: 600; color: %(txt)s; }
 QLabel[accent="live"]    { color: %(live)s; }
@@ -603,7 +710,7 @@ QPushButton[role="nav"][active="true"] {
     background-color: %(tint)s; color: %(accent)s; font-weight: 600;
 }
 /* Home is where the app opens and where everything else leads back to:
-   the one nav entry that is framed, larger and carries an icon. */
+   the one nav entry that is framed and larger. */
 QPushButton[role="navHome"] {
     background-color: transparent; border: 1px solid %(home_edge)s;
     color: %(txt)s; text-align: left;
@@ -622,10 +729,11 @@ QPushButton[role="sideSmall"] {
 }
 QPushButton[role="sideSmall"]:hover { color: %(accent)s; border-color: %(accent)s; }
 QPushButton[role="sideSmall"]:disabled { color: %(dim)s; }
-QLabel#navGroup {
+/* the sidebar's group captions, and the toy list's small dividers on Home */
+QLabel#navGroup, QLabel#listDivider {
     color: %(dim)s; font-size: 10px; font-weight: 700; letter-spacing: 1px;
-    padding: 0px 10px 2px 10px;
 }
+QLabel#navGroup { padding: 0px 10px 2px 10px; }
 QPushButton[role="modeBtn"] {
     font-size: 12px; padding: 3px; color: %(muted)s;
 }
@@ -715,9 +823,16 @@ QCheckBox::indicator {
     border: 1px solid %(line)s; border-radius: 4px;
     background-color: %(well)s;
 }
-QCheckBox::indicator:checked { background-color: %(accent)s; border-color: %(accent)s; }
+/* ticked: the frame in the hue with a smaller square inside, not one solid
+   fill -- the gap keeps it reading as a box that is ticked (Blise's pick,
+   2026-10-27). Same outer size as the empty box: 10 + 2 x 3 padding. */
+QCheckBox::indicator:checked {
+    background-color: %(accent)s; border-color: %(accent)s;
+    width: 10px; height: 10px; padding: 3px; background-clip: content;
+}
 QCheckBox::indicator:hover { border-color: %(accent)s; }
 QCheckBox[role="switch"]::indicator { width: 32px; height: 16px; border-radius: 8px; }
+QCheckBox[role="switch"]::indicator:checked { padding: 0px; background-clip: border; }
 
 /* ---- sliders / meters ------------------------------------------------ */
 QSlider { background: transparent; border: none; }
@@ -739,8 +854,8 @@ QSlider::handle:horizontal:disabled { background: %(green_mid)s; }
 QSlider#strengthSlider::groove:horizontal { height: 12px; border-radius: 7px; }
 QSlider#strengthSlider::sub-page:horizontal { border-radius: 6px; }
 QSlider#strengthSlider::handle:horizontal {
-    width: 26px; height: 26px; margin: -8px 0; border-radius: 13px;
-    border: 3px solid %(panel)s;
+    width: 26px; height: 26px; margin: -8px -3px; border-radius: 13px;
+    border: 3px solid %(panel)s;   /* the ring hangs past the ends: the green reaches them */
 }
 QLabel#strengthTitle { color: %(muted)s; font-size: 12px; }
 QLabel#strengthValue { color: %(accent)s; font-size: 17px; font-weight: 700; }
@@ -803,15 +918,18 @@ QGroupBox {
 QGroupBox::title { subcontrol-origin: margin; subcontrol-position: top left; left: 12px; padding: 0 6px; }
 QSplitter::handle { background: %(line)s; }
 QSplitter::handle:hover { background: %(accent)s; }
+QSplitter#paramsSplit::handle { background: transparent; border: none;
+    border-left: 2px solid %(line)s; margin: 40px 3px; }
+QSplitter#paramsSplit::handle:hover { border-left-color: %(accent)s; }
 """
 
 
 def _hue_variants(mode_name: str, v: Dict[str, str]) -> str:
     """Per-hue rules: a toy's bar for every toy hue, a chain frame + fold
-    bar for every chain-type hue. (The toy's FRAME is painted, not styled:
-    toy_frame_colors.)"""
+    bar for every chain-type hue, and the Friends page's (theme_friends).
+    (The toy's FRAME is painted, not styled: toy_frame_colors.)"""
     out = []
-    for hue in TOY_HUES:
+    for hue in TOY_HUES + DEVICE_ROW_HUES:
         vib, _mid, _tint = PALETTE[hue]
         # The name wears the hue's vibrant in both modes.
         out.append(
@@ -830,6 +948,17 @@ def _hue_variants(mode_name: str, v: Dict[str, str]) -> str:
             f'QFrame#chainFoldBar[hue="{hue}"]:hover {{ border-color: {vib}; }}\n'
             f'QFrame#motorBlock[hue="{hue}"] {{ border-color: {mid}; }}\n'
         )
+    from ui.theme_friends import friends_qss      # imports this module
+    out.append(friends_qss(mode_name, v))
+    from ui.theme_params import params_qss        # imports this module
+    out.append(params_qss(mode_name, v))
+    from ui.theme_suits import suits_qss          # imports this module
+    out.append(suits_qss(mode_name, v))
+    # OGP open twice: a banner nobody can miss
+    out.append(
+        f'QLabel#secondWindowBanner {{ background-color: {v["err_tint"]}; color: {v["err"]};'
+        f' border: 2px solid {v["err"]}; border-radius: {v["r_btn"]}px; padding: 10px;'
+        ' font-size: 15px; font-weight: 700; }\n')
     return "".join(out)
 
 

@@ -7,6 +7,8 @@ Python runtime, PySide6/Qt, the Python packages in requirements.txt (and
 what they pull in), the Aldrich font and the Buttplug intiface-engine with
 the Rust crates compiled into it. Each keeps its own license; several
 (BSD, MIT, Apache, LGPL) require their notice to travel with the binary.
+It also shows other makers' pictures (Lovense's toys, the shocker and suit
+makers' logos: PICTURES), which stay theirs.
 The file is bundled into both builds and shown from Help -> License.
 
 Sources, all read locally:
@@ -115,6 +117,40 @@ SOFTWARE."""
 # to re-check after a dependency change.
 ALSO_BUNDLED = ("numpy", "packaging", "setuptools")
 
+# Bundled only into the other platform's build: pip's markers decide what
+# each build installs, and this script only sees the venv it runs in (the
+# Windows one). Version from constraints.txt, license text from
+# tools/licenses/. (distribution, license, source, platform)
+OTHER_PLATFORM = (
+    ("dbus-fast", "MIT", "https://github.com/Bluetooth-Devices/dbus-fast", "linux"),
+)
+
+# Pictures the app shows that aren't ours: the makers' own artwork, there
+# only to say whose device a toy or a row is, and not under OscGoesPurrr's
+# license. Every picture folder the builds bundle is here (the tests check
+# src/Images and build_OGP.bat's --add-data folders). the_handy.png in the
+# Lovense folders is our own drawing of The Handy, not Lovense's.
+# (folder under src/, what it is, whose, source)
+PICTURES = (
+    ("Images/lovense_icons", "Lovense toy pictures (all but the_handy.png, our own drawing)",
+     "Lovense", "https://www.lovense.com/"),
+    ("Images/flat_lovense_icons", "Lovense toy pictures, flattened by "
+     "tools/flatten_lovense_icons.py (all but the_handy.png)", "Lovense", "https://www.lovense.com/"),
+    ("steamvr_toy_driver/icon_assets_64", "Lovense toy pictures at 64 px for SteamVR's device "
+     "strip, Windows build (all but the_handy.png)", "Lovense", "https://www.lovense.com/"),
+    ("Images/brand_icons", "PiShock, OpenShock, bHaptics and OWO logos (their site icons)",
+     "PiShock, OpenShock, bHaptics and OWO",
+     "https://pishock.com/ · https://openshock.org/ · https://www.bhaptics.com/ · https://owogame.com/"),
+)
+
+# Picture folders that are ours, under OscGoesPurrr's MIT license like the
+# code, named so the list of what the builds bundle is complete.
+# (folder under src/, what it is)
+OWN_PICTURES = (
+    ("Images/suits", "the Suits page's cat girl, front and back -- drawn for OscGoesPurrr "
+     "with ChatGPT's image generator, turned into line art by tools/make_suit_figure.py"),
+)
+
 # PySide6's wheels only carry a pointer to Qt's commercial terms; the
 # license OscGoesPurrr uses them under is the LGPL v3.
 QT_FAMILY = {"pyside6", "pyside6-essentials", "pyside6-addons", "shiboken6"}
@@ -159,6 +195,21 @@ def python_packages() -> list[md.Distribution]:
             if r.marker is None or r.marker.evaluate({"extra": ""}):
                 stack.append(r.name)
     return sorted(seen.values(), key=lambda d: d.metadata["Name"].lower())
+
+
+def _pinned(name: str) -> str:
+    """The version constraints.txt pins `name` to, or "-"."""
+    for line in (REPO / "constraints.txt").read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if "==" in line and _key(line.split("==", 1)[0]) == _key(name):
+            return line.split("==", 1)[1].split(";", 1)[0].strip()
+    return "-"
+
+
+def _other_platform() -> list[tuple[str, str, str, str]]:
+    """OTHER_PLATFORM entries this run can't see in its own venv."""
+    return [(name, lic, src, plat) for name, lic, src, plat in OTHER_PLATFORM
+            if not sys.platform.startswith(plat)]
 
 
 def _license_of(dist: md.Distribution) -> str:
@@ -328,6 +379,12 @@ def main() -> int:
          "https://github.com/ValveSoftware/openvr"),
     ]
     rows += [(d.metadata["Name"], d.version, _license_of(d), _source_of(d)) for d in dists]
+    rows += [(f"{name} ({plat} build only)", _pinned(name), lic, src)
+             for name, lic, src, plat in _other_platform()]
+    for folder, what, whose, src in PICTURES:
+        if not (REPO / "src" / folder).is_dir():
+            print(f"warning: src/{folder} is gone -- take it out of PICTURES", file=sys.stderr)
+        rows.append((what, "-", f"not under this license (© {whose})", src))
 
     notices: list[str] = []
 
@@ -364,6 +421,10 @@ def main() -> int:
                 f"against any compatible PySide6 build of your own (README -> Running from source).")
             continue
         add_notice(f"{name} {d.version}", _license_files(d))
+    for name, _lic, _src, _plat in _other_platform():
+        fallback = FALLBACK_LICENSES / f"{_key(name)}.txt"
+        if fallback.exists():
+            add_notice(f"{name} {_pinned(name)}", [fallback.read_text(encoding="utf-8")])
 
     # the Qt family and every LGPL v3 component need both GNU texts
     lgpl3 = [t for d in dists for t in _license_files(d) if _standard_kind(t) == "LGPL-3.0"]
@@ -418,6 +479,11 @@ def main() -> int:
         "for Windows by `tools/rebuild_intiface_engine.bat`, for Linux by `tools/build_linux.sh`.",
         "Both only add compiler flags that strip build-machine paths. It runs as its own",
         "process next to OscGoesPurrr.",
+        "",
+        "OscGoesPurrr starts it with `src/intiface-engine/buttplug-device-config-v4.json`:",
+        "that commit's device configuration with one change, made by",
+        "`tools/make_engine_device_config.py`: Lovense toys are no longer looked for by the",
+        "Nordic UART Service alone.",
     ]
     for c, lic in copyleft:
         lines += [
@@ -426,6 +492,19 @@ def main() -> int:
             "are the complete corresponding source for the engine binary, and both stay",
             "publicly available at the links above.",
         ]
+    lines += [
+        "",
+        "## Pictures of other makers' devices",
+        "",
+        "These pictures are shown only to say whose device a toy or a row is. They",
+        "belong to their makers (artwork and trademarks) and are not covered by",
+        "OscGoesPurrr's MIT license:",
+        "",
+    ]
+    lines += [f"- `{folder}/`: {what} -- {whose}, {src}"
+              for folder, what, whose, src in PICTURES]
+    lines += ["", "These picture folders are OscGoesPurrr's own, under its MIT license:", ""]
+    lines += [f"- `{folder}/`: {what}" for folder, what in OWN_PICTURES]
     lines += ["", "## Notices", ""]
     lines += ["\n\n".join(notices), ""]
     lines += [

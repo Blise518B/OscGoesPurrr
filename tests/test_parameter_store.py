@@ -170,3 +170,46 @@ class TestZoneTupleRecovery:
             s.all_parameters["OGB/Orf/Booty/TouchSelf"] = 0.5
         assert ("Orf", "Booty") in s.get_zone_tuples()
         assert s.get_detected_zones()["Orifices"] == ["Booty"]
+
+
+class TestRisingEdges:
+    """OnEnter contacts can be True for a single VRChat frame, so the store
+    counts False->True edges for routers that must not miss one between
+    two polls (pishock_router)."""
+
+    def test_counts_each_false_to_true_edge(self):
+        s = ParameterStore()
+        for v in (True, False, True, True, False):
+            s.update_parameter("Hit", v)
+        _values, rises = s.read_watched(["Hit"])
+        assert rises["Hit"] == 2
+
+    def test_a_pulse_between_two_reads_is_still_seen(self):
+        s = ParameterStore()
+        _v, before = s.read_watched(["Hit"])
+        s.update_parameter("Hit", True)
+        s.update_parameter("Hit", False)
+        values, after = s.read_watched(["Hit"])
+        assert values["Hit"] is False
+        assert after["Hit"] == before["Hit"] + 1
+
+    def test_non_bool_values_never_count(self):
+        s = ParameterStore()
+        s.update_parameter("Prox", 0.0)
+        s.update_parameter("Prox", 1.0)
+        s.update_parameter("Prox", 1)
+        assert s.read_watched(["Prox"])[1]["Prox"] == 0
+
+    def test_an_oscquery_snapshot_is_not_an_edge(self):
+        s = ParameterStore()
+        s.rebuild_from_json(_oscquery_tree())      # Seated arrives True
+        assert s.read_watched(["Seated"])[1]["Seated"] == 0
+        s.update_parameter("Seated", True)          # still True: no edge
+        assert s.read_watched(["Seated"])[1]["Seated"] == 0
+
+    def test_read_watched_only_returns_known_keys(self):
+        s = ParameterStore()
+        s.update_parameter("A", 0.5)
+        values, rises = s.read_watched(["A", "Missing"])
+        assert values == {"A": 0.5}
+        assert rises == {"A": 0, "Missing": 0}

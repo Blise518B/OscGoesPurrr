@@ -18,14 +18,19 @@ from PySide6.QtWidgets import (
 
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
 from ui.text_helpers import html_escape as _html_escape
+from ui.widgets import IdentityMark
 
 # Where a "Take me there" button leads: the page, and the attribute that
 # holds the card to scroll to and light up ("" = the page is enough).
 PLACES = {
     "appearance":   ("Settings", "_appearance_card"),
     "home":         ("Home", ""),
+    "friends":      ("Friends", ""),
     "toy_presence": ("Settings", "_connection_card"),
     "toy_safety":   ("Settings", "_toy_safety_card"),
+    # Settings → Features, not the Suits page: the page only exists once a
+    # suit is switched on there.
+    "features":     ("Settings", "_features_card"),
 }
 # The card a jump leads to is lit, goes out for a blink, and is lit again
 # -- one beat is enough to pull the eye without being a flashing light.
@@ -36,6 +41,11 @@ _SPOT_MS = _SPOT_BEATS[-1][0]
 _SPOT_TOP_PX = 12
 # The window is this wide; its height follows from the text.
 _WIDTH_PX = 580
+# A change about toys, shockers or Avatar Remote carries the icon it has
+# everywhere (ui/icons.identity_icon), as tall as the title line; the
+# others a blank one, so the titles stay in one column.
+_ICON_PX = 18
+_ICON_GAP_PX = 8
 # The jump waits this long for a page that was never shown to lay itself
 # out, so there is something to scroll to.
 _SETTLE_MS = 30
@@ -53,9 +63,15 @@ class WhatsNewMixin:
 
     def show_whats_new(self, releases) -> None:
         """Controller facade: open the window for `releases` --
-        `[(version, [(title, text, target), ...]), ...]`, newest first."""
+        `[(version, [(title, text, target, icon), ...]), ...]`, newest
+        first (`icon` may be left out)."""
         releases = [(v, items) for v, items in (releases or []) if items]
         if not releases or getattr(self, "_whats_new_dialog", None) is not None:
+            return
+        if getattr(self, "_interests_dialog", None) is not None:
+            # One window at a time: this opens when "What are you here
+            # for?" closes (ui/views/interests.py).
+            self._whats_new_waiting = releases
             return
 
         dlg = QDialog(getattr(self, "dialog_parent", None) or self.window)
@@ -64,6 +80,10 @@ class WhatsNewMixin:
         lay = _vbox(20, 14)
         dlg.setLayout(lay)
         jumped = []
+        releases = [(v, [tuple(item) + ("",) * (4 - len(item)) for item in items])
+                    for v, items in releases]
+        # The icon column only when there is an icon to show
+        icons = any(item[3] for _v, items in releases for item in items)
 
         for index, (version, items) in enumerate(releases):
             head = QLabel(
@@ -72,8 +92,10 @@ class WhatsNewMixin:
             head.setObjectName("sectionTitle")
             head.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
             lay.addWidget(head)
-            for title, text, target in items:
-                lay.addWidget(self._whats_new_row(dlg, title, text, target, jumped))
+            for title, text, target, icon in items:
+                lay.addWidget(self._whats_new_row(
+                    dlg, title, text, target, jumped,
+                    icon if icons else None))
 
         lay.addSpacing(4)
         foot = _hbox(0, 12)
@@ -112,10 +134,19 @@ class WhatsNewMixin:
         dlg.open()
 
     def _whats_new_row(self, dlg: QDialog, title: str, text: str,
-                       target: str, jumped: list) -> QWidget:
+                       target: str, jumped: list, icon=None) -> QWidget:
+        """One change. `icon`: its identity icon, "" for a blank of the
+        same size, None for no icon column at all."""
         row = QWidget()
         row_lay = _hbox(0, 14)
         row.setLayout(row_lay)
+        if icon is not None:
+            # beside the title line; the text hangs under the title
+            mark = IdentityMark(str(icon), _ICON_PX)
+            mark.setObjectName("newsIcon")
+            mark.setProperty("what", str(icon))
+            row_lay.addWidget(mark, 0, Qt.AlignTop)
+            row_lay.addSpacing(_ICON_GAP_PX - row_lay.spacing())
         col = _vbox(0, 2)
         name = QLabel(str(title))
         name.setObjectName("newsTitle")

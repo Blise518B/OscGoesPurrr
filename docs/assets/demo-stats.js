@@ -4,6 +4,10 @@
    The numbers below are sample data (ten sessions in September 2026),
    computed with the app's own helpers so they add up.
 
+   Who the sessions were with (TAGS) is sample data too, with made-up
+   names; tagging on the session page works on it in memory, like the app's
+   session tags (stats_people), and resets on reload.
+
    window.OGPDemoStats.init(rootElement)   build the page inside the fragment
    window.OGPDemoStats.redraw()            repaint the charts (after a colour
                                            change: they read the CSS tokens
@@ -18,6 +22,19 @@
      `zr` the contact runs [from, to) in buckets. */
   var DATA = {"today":[2026,9,26],"now":1790458740,"app_started":1790457240,"lifetime":{"active_s":22322.0,"thrusts":20519,"sessions":10,"toys":{"Lovense Lush":21462.0,"Lovense Edge":9604.0,"Lovense Gush":3470.0},"zones":{"Orf/Pussy":20981.0,"Orf/Mouth":2498.0,"Orf/Anal":3743.0,"Pen/Penis":2134.0}},"facts":{"avg_session_s":2232.2,"avg_session_thrusts":2051.9,"pace":55.1536600663023,"fav_toy":["Lovense Lush",0.6214384989576095],"fav_zone":["Orf/Pussy",0.7147090884316665],"night_share":0.6091300062718394,"busiest_weekday":5,"best_session":[3606,1789165865],"longest_session":[3607.0,1789165865],"record_pace":[120,1789165865]},"hours":{"2026-09-05T21":[673.0,480],"2026-09-05T22":[2272.0,2461],"2026-09-06T19":[1462.0,1010],"2026-09-11T22":[1274.0,1121],"2026-09-11T23":[2333.0,2485],"2026-09-12T23":[1337.0,1192],"2026-09-13T00":[1307.0,1141],"2026-09-15T20":[1322.0,1189],"2026-09-17T22":[438.0,413],"2026-09-17T23":[1321.0,1314],"2026-09-19T20":[940.0,706],"2026-09-19T21":[2454.0,2191],"2026-09-20T16":[860.0,811],"2026-09-23T21":[1014.0,802],"2026-09-23T22":[861.0,1046],"2026-09-25T22":[1778.0,1501],"2026-09-25T23":[676.0,656]},"sessions":[{"id":"20260925-221503","start":1790374503,"duration_s":4056.0,"active_s":2454.0,"thrusts":2157,"peak_pace":101,"spark":[0.63,0.61,0.93,0.6,0.45,1.0,0.6,0.83,0.65,0.99,0.89,0.93,0.6,0.0,0.0,0.39,0.66,0.73,0.79,0.91,0.91,0.94,0.8,0.79,0.9,0.93,0.86,0.97,0.96,0.91,0.71,0.53,0.93,0.42,0.0,0.0,0.41,0.34,0.67,0.96,0.53,0.55,0.93,0.57,0.63,0.79,0.87,0.9],"toys":{"Lovense Lush":2454.0,"Lovense Edge":1073.0},"zones":{"Orf/Pussy":2397.0,"Orf/Mouth":550.0,"Orf/Anal":530.0},"bucket_s":10,"start_i":27,"n":359,"lv":{"Lovense Lush":"29aceb56522225278a88485222233329b00b0immnknlmmlkf0008989b34456586nsuonqqrrrtolqrrosrxupkhhha9b00000000000000000000006445768c67639856678cf7b9bb57dabgfedfgfccmidgifceknmgfh5656qmpnrqkkldc8aabgcfikgljjgigfbddaggf9ebidfijjmooln8787onlinl000mmosotvpromjii000000000000000000000889c69e000a8a9bfc344egdagjlnk000lmkjmo79889vkgkkig344jfc343bd8d000ehijhffghiklnoswxosqni","Lovense Edge":"00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000ermemneaahkjaag8b7culrptsijiec8978fcilnjqnojmjfa995ccf7dcmejnlmoqogj9554jllhpj000m000000000000000000000000000000000000000000000000000000000000hjg000ijllmo7haadskbghgf186mig87dgh9g0008fgggggfimomor00000000"},"thr":"0000000000003334454535330000000470060bbedbdccceb90007645800000000dhieggefiehacffgdfhlica7bb76800000000000000000000000000000000000000000000000034787a98788a77ba99b768bcea980000fefdfeca9965766865ca6cb77ba75896aa75a799baadceddb0000cae8d9000dd9hagieef9acc000000000000000000000000000000000007970009a977bdfd000cbcbaa00000kd7c8b900096900069470009bac689686eadgihjcihb7","zr":{"Orf/Pussy":[[0,33],[35,49],[52,94],[116,233],[236,250],[271,278],[281,300],[303,334],[337,359]],"Orf/Mouth":[[24,33],[37,49],[173,212],[297,300],[303,317]],"Orf/Anal":[[32,33],[35,45],[47,49],[186,228],[315,334]]},"an":{"window_start_s":270,"window_s":3590,"peak_pace":101,"peak_pace_at_s":3780,"hot_kind":"thrusts","hot_value":396,"hot_at_s":910,"hot_len_s":300,"streak_s":1340,"streak_at_s":1430,"break_s":220,"break_at_s":1210,"top_toy":"Lovense Lush","top_toy_share":0.6958,"top_toy_level":0.5094,"top_zone":"Orf/Pussy","top_zone_s":2397.0}},{"id":"20260923-212826","start":1790198906,"duration_s":3168.0,"active_s":1875.0,"thrusts":1848,"peak_pace":119,"spark":[0.4,0.74,0.83,0.96,0.87,0.94,0.97,0.56,0.68,0.52,0.68,0.72,0.87,0.48,0.9,0.2,0.0,0.0,0.0,0.1,0.67,0.26,0.58,0.92,0.92,0.95,0.92,0.97,0.76,0.35,0.98,0.9,0.82,0.97,0.84,0.85,0.9,0.98,0.94,0.95,0.94,0.85,0.42,0.83,0.94,0.82,0.4,0.97],"toys":{"Lovense Lush":1875.0,"Lovense Edge":1012.0},"zones":{"Orf/Pussy":1828.0,"Orf/Mouth":444.0},"bucket_s":10,"start_i":30,"n":263,"lv":{"Lovense Lush":"766658623349555addkdhgmoqmklgonghimfhhnmk237da3354g3566ikki00heeknkjlmoo8675knmmhed00000000000000000000000006576999680007a8addbgcifddbceibcfidechgnlihklijhf4344500imnqnphkoolinnnmlknnmpa79cggjdhkoiegd9cdedfgffidinihjkdinokoollnpr888979asutyxwzzzooowvss97977qsmrsj","Lovense Edge":"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000099000366affemepkfhdfei68egbb9kgppojqqhjfb2312300gmnsrtjmopkdighgghjiinccdhkgmcijlfafd5aghfjmmjnfjnddhi8dkmimnlmmsugdca7a9qlj000000000000000000000000"},"thr":"000000000000002777c8a98df8b98fea8be899a99007860000a00009bdc00978db9bbebd00009cdea6800000000000000000000000000000000000000000096989a9864aa757b98798fcb8bbaca80000000beegfd7caddaa9c9bcdedd74568898a7cba6a68798a88aa88fc8cb8cdcccebdfbd0000000gfhjijlkmeedihfe00000egdfgb","zr":{"Orf/Pussy":[[0,59],[61,83],[108,117],[120,161],[163,263]],"Orf/Mouth":[[40,59],[136,161],[163,185]]},"an":{"window_start_s":300,"window_s":2630,"peak_pace":119,"peak_pace_at_s":2690,"hot_kind":"thrusts","hot_value":361,"hot_at_s":2520,"hot_len_s":300,"streak_s":1550,"streak_at_s":1380,"break_s":250,"break_at_s":1130,"top_toy":"Lovense Lush","top_toy_share":0.6495,"top_toy_level":0.5624,"top_zone":"Orf/Pussy","top_zone_s":1828.0}},{"id":"20260920-161209","start":1789920729,"duration_s":1352.0,"active_s":860.0,"thrusts":811,"peak_pace":101,"spark":[0.55,0.65,0.85,0.65,0.55,0.95,0.67,1.0,0.7,0.95,0.8,0.95,0.9,0.93,1.0,0.95,0.95,0.95,1.0,1.0,0.9,0.95,0.9,0.95,0.55,1.0,0.75,0.57,0.35,0.45,1.0,0.85,0.9,0.85,0.87,0.9,0.8,0.9,0.85,0.35,1.0,0.9,1.0,1.0,1.0,0.95,0.85,0.87],"toys":{"Lovense Edge":860.0},"zones":{"Orf/Anal":833.0},"bucket_s":10,"start_i":15,"n":103,"lv":{"Lovense Edge":"24459ab6743856998b97ab9bcehihindflmhhfhhiffihdbffgi54hhd54443432deijjkklloosqovsyvs0orqstqnovwpuokkeha8"},"thr":"00000000000000056444555698ab9cd99bb9c8bbba89a76999a009980000000099a9aa9bbadedchgkjh0bfgcggefihghd99a764","zr":{"Orf/Anal":[[0,103]]},"an":{"window_start_s":150,"window_s":1030,"peak_pace":101,"peak_pace_at_s":920,"hot_kind":"thrusts","hot_value":407,"hot_at_s":820,"hot_len_s":300,"streak_s":1030,"streak_at_s":150,"break_s":0,"break_at_s":150,"top_toy":"Lovense Edge","top_toy_share":1.0,"top_toy_level":0.5276,"top_zone":"Orf/Anal","top_zone_s":833.0}},{"id":"20260919-203647","start":1789850207,"duration_s":4884.0,"active_s":3394.0,"thrusts":2897,"peak_pace":107,"spark":[0.52,0.69,0.92,0.72,0.97,0.6,0.93,0.93,0.8,0.64,0.92,0.69,0.64,0.0,0.04,0.7,0.55,0.78,0.94,0.93,0.88,0.94,0.84,0.71,0.94,0.82,0.99,0.73,0.9,0.93,0.93,0.86,0.67,0.72,0.77,0.0,0.46,0.68,0.71,0.85,0.88,0.76,0.79,0.8,0.82,0.71,0.86,0.93],"toys":{"Lovense Lush":3394.0,"Lovense Gush":2331.0,"Lovense Edge":2041.0},"zones":{"Orf/Pussy":3309.0,"Orf/Anal":806.0,"Orf/Mouth":654.0,"Pen/Penis":712.0},"bucket_s":10,"start_i":20,"n":455,"lv":{"Lovense Lush":"48b980979754374a337742283885b333c9eba8cb6c69ac6b6266700086eb5egignoiolknknnmlmjnlfde54566igdfkijmmrosmmosyoqn887775fhf9d70000000000000000000069adbaa7eba7643233777643257aa6adc574246599aa9dajdljnligekopjoqocd988a4b6aacd43354kloihihmmooopmikknjlmi0lgmigjkmpskk00tmksqou7a7875d9ec8ageb8cfg9acgfglgdhlnlsonoqomll877787aavotstqkjfehecb000000000000000989dbffh99fagejknhl677rtsuqoqljoorsvoedebcb8c00fgaaciiflllmpo77887vwuusvuye8587f4439dgj645iigilhijlmkmnjjehefa6","Lovense Gush":"000000000005183b1376656g9ge8g463d8d989ce9iaehkah8386700085he8kkojrrhmjfichieglhoohhi7a978gb8bgdelmsnvnlorwolh7866500000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000006b1a389bf787aepoqihgbheifjnnhlkrnori0mfjc9ceejqgi00vmkvoos6b6443d7hdadnigdhhj76bebdjdajoqkvnmpsomjf64449700000000000000000000000000000000000000000000000000007pqlniikednomntoifkhhe8b00cf9aailgpqoosodcb97polpqooxkdafdl9b87bde858ijijnilm0000000000000","Lovense Edge":"00000000000000000000000000000003d8d989ce9iaehkah8386700085he8kkojrrhmjfichieglhoohhi7a978gb8bgdelmsnvnlorwolh7000000000000000000000000000000000000000000000000000000000000000000000000000eg8i8hfjhgeempskssnii976b1a389bf787aepoqihgbheifjnnhlkrnori0mfjc9ceejqgi00vmkvoos6b6443d7hdadnigdhhj76bebdjd000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000khhe8b00cf9aailgpqoosodcb97polpqooxkdafdl9b87bde858ijij00000000000000000"},"thr":"000000000000000000043135454250008577577659546635323350004268487b9eddeeada8d9dbcbb76a0000097988abcdfdidbbgldgf000000bb66530000000000000000000000000000000000000000000000456667634422465743775a9caaab989ebcaef886758265577a00000abd8a9accgffe99bdbc9cb0b9db8cbdfhac00hbbgccf576653a58735887778b6779aac96a8aahbdeebcad00000000gfgeig8b78a8780000000000000000000000000000000aab000ffehc9h8baahika8585775700ab657bc8ccaaga00000hihjgiij64343700046aa0009b78b7b9dbaefc9599764","zr":{"Orf/Pussy":[[0,53],[56,121],[141,257],[259,329],[344,389],[391,455]],"Orf/Anal":[[12,20],[22,39],[41,44],[172,185],[188,243],[355,373],[375,389],[391,393]],"Orf/Mouth":[[44,53],[56,72],[74,87],[177,210],[387,389],[391,411]],"Pen/Penis":[[56,95],[200,248],[406,426]]},"an":{"window_start_s":200,"window_s":4550,"peak_pace":107,"peak_pace_at_s":4320,"hot_kind":"thrusts","hot_value":342,"hot_at_s":2470,"hot_len_s":300,"streak_s":1880,"streak_at_s":1610,"break_s":200,"break_at_s":1410,"top_toy":"Lovense Lush","top_toy_share":0.437,"top_toy_level":0.5011,"top_zone":"Orf/Pussy","top_zone_s":3309.0}},{"id":"20260917-224833","start":1789685313,"duration_s":2712.0,"active_s":1759.0,"thrusts":1727,"peak_pace":107,"spark":[0.66,0.74,0.92,0.94,0.86,0.7,0.86,0.94,0.98,0.96,0.92,0.98,0.58,0.74,0.3,0.93,0.88,0.92,0.88,0.48,0.98,0.56,0.0,0.0,0.0,0.0,0.0,0.34,0.76,0.72,0.82,0.93,0.76,0.9,0.6,0.9,0.94,0.96,0.86,0.92,0.94,0.64,0.36,0.68,0.96,0.92,1.0,0.98],"toys":{"Lovense Lush":1759.0,"Lovense Edge":605.0},"zones":{"Orf/Pussy":1736.0,"Orf/Anal":154.0},"bucket_s":10,"start_i":18,"n":243,"lv":{"Lovense Lush":"55452894689b79dcfdiiefijf666nklkclpkqorpoqvuttpqnokokoefb9fggi00b7da34340348bb77a8fhhggnloosvsrno7687spopoicd00000000000000000000000000000088b567839dbb69b6degba9efcdh0hllh5555kjkjjmonnrststpq9babfgdffkjfdhfnijm575554565fijpmnptuxuotsuvxtsustmh","Lovense Edge":"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000a28c5ggjefgmmehj0gjhc2277lmonkosmorommnii477bfhegimnfdgblbfj4766779abgjjrmk000000000000000000"},"thr":"000000000000389878aa789a9000bd9c6bbcfchgfhifgideccccac78948b8a0084740000000568564486b9aeefdihfdab0000egdgg969000000000000000000000000000000000000000000000678a875999790abb900009cabb9debghifhgf6847786a8db87a8e9be0000000006c8ebbfhgjgchghjjigieicc","zr":{"Orf/Pussy":[[0,62],[64,109],[139,243]],"Orf/Anal":[[150,174]]},"an":{"window_start_s":180,"window_s":2430,"peak_pace":107,"peak_pace_at_s":2510,"hot_kind":"thrusts","hot_value":369,"hot_at_s":460,"hot_len_s":300,"streak_s":1090,"streak_at_s":180,"break_s":300,"break_at_s":1270,"top_toy":"Lovense Lush","top_toy_share":0.7441,"top_toy_level":0.5508,"top_zone":"Orf/Pussy","top_zone_s":1736.0}},{"id":"20260915-200518","start":1789502718,"duration_s":1994.0,"active_s":1322.0,"thrusts":1189,"peak_pace":99,"spark":[0.53,0.7,0.65,0.53,0.7,0.57,0.85,0.93,0.82,0.63,0.38,0.6,0.93,0.88,0.93,0.97,0.4,0.53,0.87,0.97,0.97,0.95,1.0,0.93,1.0,0.9,0.85,0.97,0.82,0.9,0.33,1.0,0.78,0.8,0.97,0.0,0.9,0.88,0.93,0.42,0.93,0.93,1.0,0.93,1.0,0.93,1.0,0.9],"toys":{"Lovense Lush":1322.0},"zones":{"Orf/Pussy":1305.0},"bucket_s":10,"start_i":14,"n":166,"lv":{"Lovense Lush":"9a97be8acc79da79aa7d8bb98ca67c5c233334222afefdhhijilkqlo77776oononoppploprpqstvrnsp9chddgijg8699487ca752333bddddedaafafdc000bhfgegeaggd00lnmpmkmmmnkrqtorooqmlmmhhnoke"},"thr":"000000000000000000004567574247480000000006888998bbaeaed900000eeabcdgdgcecgdghijdeid87976ca9955761549642000077a5667559599800059886887967009ddb8dfddccfhfafcddebcccaacb8","zr":{"Orf/Pussy":[[0,121],[124,135],[137,166]]},"an":{"window_start_s":140,"window_s":1660,"peak_pace":99,"peak_pace_at_s":870,"hot_kind":"thrusts","hot_value":382,"hot_at_s":750,"hot_len_s":300,"streak_s":1660,"streak_at_s":140,"break_s":0,"break_at_s":140,"top_toy":"Lovense Lush","top_toy_share":1.0,"top_toy_level":0.5193,"top_zone":"Orf/Pussy","top_zone_s":1305.0}},{"id":"20260912-232552","start":1789255552,"duration_s":3747.0,"active_s":2644.0,"thrusts":2333,"peak_pace":89,"spark":[0.7,0.7,0.51,0.43,0.76,0.67,0.89,0.74,0.73,0.9,0.96,0.97,0.93,0.96,0.91,0.99,0.99,0.93,0.96,0.83,0.99,0.97,0.8,0.0,0.0,0.53,0.4,0.64,0.86,0.79,0.97,0.64,0.9,0.9,0.79,0.69,0.9,0.96,0.94,0.97,0.46,0.94,0.87,0.93,0.79,0.94,0.9,0.97],"toys":{"Lovense Lush":2644.0,"Lovense Gush":1139.0},"zones":{"Orf/Pussy":2582.0,"Pen/Penis":552.0},"bucket_s":10,"start_i":30,"n":334,"lv":{"Lovense Lush":"38452226aagcae858c899f900afdfkko56576eggkmjgkhiig56id9ehfeb08gaa56a899aaedcfhcdejkeijfccccedejklnlmokikolkokmqmlmnjfilmhgiklgmikkmlqnss88ppopnkjkmqqqmmeghcb26900000000000000004526422000232222223366422224658234aabikhkjk777jkonokmigjmnroplpoqqv7a9s0ptoosqn5462768388244258cfdeiecege65545eifklihkefhklmllmlkkimk0ilkonmkppqppsrtqqonnef957","Lovense Gush":"000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000bea8675496a134bbaknlqlka78ffjggcjfdgjktosntoolr7b7i0hnojssobcf7b8a2a9113147chfhkhgihda55238fbkkijohhikokkkjhhigkk0inorpnlsookllijijijo00000"},"thr":"00000000000000000000000000009abb00000888aab7c9a9900b767a75604765343456767769c679baaba8876888adadeebfb7ddbcfbefcdedcabcc8bbac7bacbbcgddh00geedccaadgfcce8aa8724500000000000000000000000000000000000000000000034233759bd99b8000cafbdbd96cbefbe9fbghi000h0gibdhed24614432453332247a79b698a6000009a8dc899788d8cabeadcadb08cbdc9bfdeeehcibfccf78556","zr":{"Orf/Pussy":[[0,23],[25,159],[175,182],[185,334]],"Pen/Penis":[[35,79],[226,236],[238,266]]},"an":{"window_start_s":300,"window_s":3340,"peak_pace":89,"peak_pace_at_s":2770,"hot_kind":"thrusts","hot_value":362,"hot_at_s":3290,"hot_len_s":300,"streak_s":1590,"streak_at_s":300,"break_s":160,"break_at_s":1890,"top_toy":"Lovense Lush","top_toy_share":0.6989,"top_toy_level":0.4962,"top_zone":"Orf/Pussy","top_zone_s":2582.0}},{"id":"20260911-223105","start":1789165865,"duration_s":5297.0,"active_s":3607.0,"thrusts":3606,"peak_pace":120,"spark":[0.58,0.63,0.63,0.98,0.94,0.59,0.94,0.97,0.91,0.96,0.95,0.82,0.85,0.67,0.66,0.43,0.0,0.0,0.53,0.66,0.85,0.77,0.81,0.83,0.66,0.98,0.95,0.69,0.94,0.77,0.88,0.0,0.0,0.49,0.58,0.93,0.58,0.81,0.78,0.95,0.96,0.87,0.95,0.68,0.95,0.69,1.0,0.67],"toys":{"Lovense Lush":3607.0,"Lovense Edge":1559.0},"zones":{"Orf/Pussy":3537.0,"Pen/Penis":870.0,"Orf/Anal":734.0},"bucket_s":10,"start_i":16,"n":499,"lv":{"Lovense Lush":"2267572422624767666ab9aghddddachfikfihhjefhegecdb87ccc000f44ehdeddbdjjkmnnptsvtslnnekmjffidbbdcaeb97bfeigdiinmokdhmlkjojjn6555kjmjijjjjl000nstpornlk67565gdcd6840000000000000000000000000000bbbahegfacedeejhaggie7bdecc9bcbdffd84232c7bbec7ca3322eicfagefbcfhmq000tsuwsostwprttosrloqnmh5500nqmjiknorostvvyzyzvobbcdzyyvsovzpnjea600000000000000000000000657665562535422688bca758cdgddc6333200eehilhcdkjff0ggcciek565jioikmrtsoxqqtzxxibggmnhhfadbgekehhopkfkmno66789utvvvxvvwszxvtormo77777nqvtyzwttzyyvts000kligi","Lovense Edge":"0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000cgdhf6b95111eibjbkjjghkjmp000nmnsnkstypputoqqhilijd5400msoljoqpqojlsqptpuvohfglvvtrsopqgg0000000000000000000000000000000000000000000000000000000000000000000000000000000ccliqbaajipegfklnnsmmqzywnekinmcdc7a6fdlegisslglnmj54757mluvvvtvxsztupiofh59a77nqxqzztopvpqoil00000000"},"thr":"0000000000000000000000000000009aaad8998c97988867875566000900aa887878b8aedefhfhggdcf89fba888788876686997888bcdccd9adbc9gcca0000b8cbbcba8d000ehgedfadd00000a6594450000000000000000000000000000000000000000000000000000086458766a75400085689649600009a786858889aad000iihiggffiefhgcifcffdcb0000def8adceecifijlmjkje0000mliigfikceb963000000000000000000000000000000000000000005953476787684000000588c86977ab809896b59000caea9egifckefgljjb5a7af9785777aa7baefb8db9d00000hikkhijikemlijghfd00000dcgglmkgglljgfh000ac98a","zr":{"Orf/Pussy":[[0,54],[57,136],[139,160],[188,255],[258,282],[284,322],[345,380],[382,491],[494,499]],"Pen/Penis":[[25,53],[57,75],[237,255],[258,268],[270,275],[383,393],[395,396],[398,429]],"Orf/Anal":[[63,68],[71,92],[210,243],[373,380],[382,421]]},"an":{"window_start_s":160,"window_s":4990,"peak_pace":120,"peak_pace_at_s":3130,"hot_kind":"thrusts","hot_value":443,"hot_at_s":4740,"hot_len_s":300,"streak_s":1600,"streak_at_s":160,"break_s":280,"break_at_s":1760,"top_toy":"Lovense Lush","top_toy_share":0.6982,"top_toy_level":0.5694,"top_zone":"Orf/Pussy","top_zone_s":3537.0}},{"id":"20260906-191040","start":1788721840,"duration_s":2284.0,"active_s":1462.0,"thrusts":1010,"peak_pace":70,"spark":[0.65,0.75,0.5,0.38,0.97,0.93,0.95,0.93,0.68,0.57,0.95,0.93,0.97,0.9,0.97,0.93,0.93,1.0,0.93,0.68,0.82,0.93,0.85,0.97,0.95,0.42,0.0,0.15,0.45,0.65,0.6,0.88,0.93,0.65,1.0,0.82,0.45,0.8,0.95,0.9,0.62,0.55,0.82,0.97,0.35,0.75,0.88,0.95],"toys":{"Lovense Lush":1462.0},"zones":{"Orf/Pussy":1444.0,"Orf/Mouth":331.0},"bucket_s":10,"start_i":27,"n":192,"lv":{"Lovense Lush":"42222232222563006522259789babcbfgi22229bcgjeefeaa98dbfkljmigedchfihkaadhaccbad453elhgmhheclikjmnfgfbd40000000003477834379d997ccda6a6224a989ehjqo77876jm44356aa78d703556kemjjbggd05567lpopmnieha9"},"thr":"000000000000000043241543457576878900003588a977a5755866aaacc898766b8b678c48887a0009db9cbc75e899dd7aa675000000000000000000000648865545004566589dec00000aa444527724a500000d8b9c69a800000ee9f8aba766","zr":{"Orf/Pussy":[[0,14],[16,102],[111,192]],"Orf/Mouth":[[59,67],[69,99],[156,168]]},"an":{"window_start_s":270,"window_s":1920,"peak_pace":70,"peak_pace_at_s":2080,"hot_kind":"thrusts","hot_value":254,"hot_at_s":960,"hot_len_s":300,"streak_s":1020,"streak_at_s":270,"break_s":90,"break_at_s":1290,"top_toy":"Lovense Lush","top_toy_share":1.0,"top_toy_level":0.3877,"top_zone":"Orf/Pussy","top_zone_s":1444.0}},{"id":"20260905-214211","start":1788644531,"duration_s":4465.0,"active_s":2945.0,"thrusts":2941,"peak_pace":115,"spark":[0.56,0.64,0.67,0.95,0.78,0.94,0.86,0.95,0.69,0.98,0.26,0.91,0.72,0.91,0.12,0.0,0.33,0.79,0.74,0.94,0.72,0.26,0.89,0.84,0.89,0.94,0.9,0.86,0.93,0.77,0.12,0.0,0.57,0.69,0.77,0.59,0.84,0.75,0.93,0.94,0.95,0.86,0.86,0.49,0.94,0.96,0.95,0.91],"toys":{"Lovense Lush":2945.0,"Lovense Edge":2454.0},"zones":{"Orf/Pussy":2843.0,"Orf/Mouth":519.0,"Orf/Anal":686.0},"bucket_s":10,"start_i":23,"n":405,"lv":{"Lovense Lush":"4222765653552069898bdh000fghcjcfga9aec7353b47654bggeijkfjikghgibbdhiecj434fkhigbgffd66656000mjormrssobaasyzysssstqlokjh00000000000000000000ac77633888adafdd8eecdbea9789abbcdgea00f3000343ec9ehegfdhn0nqpoorqlnnrowvzzxqtuuvqvqusysuxqposrovoxyvovyrqaaayssnqpl000000000000000009a63228abha9bc65252a77a2000eijfdhffiggb54456mkmoollnlmprprmnnjimnqr7de99bafbedcefjjmklhjciik0000cdbdekgfglilrpmnkmkrprrrnqrqutusyotqmh","Lovense Edge":"0000000fd88a10694769fm000hljdl9ge866bb65c9iahgb7fhfbdei9dhkeginfgfjmg9g212cheigbjhjheac67000geknfoqpojaasxwurmjljj000000000000000000000000000000000000bafdb7ihekgmhfa897699cefa00k7000795hd8becde9fo0qtrposqijikooktsslqvsvovnsstmnqgggsontoxztovxonda8skne000000000000000000000000000000000e997a8iedf9000begc9hggnlngd9787kiiijfilikpsstmnmggihhi3cd7adekekihkjlgidhbh7ghj0000hihheldccfbdmmi00000000000000000000000"},"thr":"000000000000406766687b000aab7b887646a8300073652257c8ab8786aa99a6787b88b0009b9ba6989700000000d9decefge000ikjkfehfhbbbc9c00000000000000000000000000000000000000059776546656877b7700a0000000775776888ad0ecfafedbdbhclglllfgggiciefelefjfd9fibhdjkhegldh000jdfdedd000000000000000000000000000000000000000700009c878b79a8a700000dcdfgb9cdadcghaaecbbfhg589785474987969beccc8497a000067568bb89aaafedbbccgbhdfegidghgelbgfc8","zr":{"Orf/Pussy":[[0,22],[25,89],[92,119],[139,175],[177,179],[182,254],[271,295],[298,363],[367,405]],"Orf/Mouth":[[12,22],[27,38],[195,230],[346,363]],"Orf/Anal":[[63,73],[75,89],[92,101],[165,175],[177,179],[182,195],[302,307],[309,341]]},"an":{"window_start_s":230,"window_s":4050,"peak_pace":115,"peak_pace_at_s":2320,"hot_kind":"thrusts","hot_value":490,"hot_at_s":2320,"hot_len_s":300,"streak_s":1190,"streak_at_s":230,"break_s":200,"break_at_s":1420,"top_toy":"Lovense Lush","top_toy_share":0.5455,"top_toy_level":0.5646,"top_zone":"Orf/Pussy","top_zone_s":2843.0}}]};
 
+  /* Session tags (stats_people): `whole` = who the whole session was with;
+     `str` = stretches [from, to) in the session's buckets (the timeline's
+     k), their people, and whether VRChat's log tagged it. */
+  var TAGS = {
+    "20260925-221503": { whole: ["Alex"], str: [] },
+    "20260923-212826": { whole: ["Sam"], str: [] },
+    "20260919-203647": { whole: [], str: [[0, 196, ["Alex"], true], [214, 455, ["Sam", "Kim"], false]] },
+    "20260917-224833": { whole: ["Alex"], str: [] },
+    "20260915-200518": { whole: ["Kim"], str: [] },
+    "20260911-223105": { whole: ["Sam"], str: [] },
+    "20260905-214211": { whole: ["Alex"], str: [] }
+  };
+
   var WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   var WEEKDAYS_LONG = ['Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays', 'Sundays'];
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -27,12 +44,13 @@
   var TOY_HUES = ['cyan', 'blue', 'purple'];          /* theme.TOY_HUES */
   var SPANS = [[28, 'over the last 4 weeks'], [91, 'over the last 3 months'], [null, 'all time']];
   var TOKENS = ['card', 'well', 'accent', 'ink', 'txt', 'muted', 'dim',
-    'green', 'green-mid', 'green-tint', 'cyan', 'blue', 'purple', 'pink', 'amber'];
+    'green', 'green-mid', 'green-tint', 'cyan', 'blue', 'purple', 'pink', 'amber',
+    'grey', 'grey-mid'];
 
   var S = {
     root: null, el: {}, span: 1, month: null, detail: null, listScroll: 0,
     colors: null, family: '"Segoe UI", sans-serif', hoverCol: null, tipTimer: 0,
-    sparks: [], tl: null
+    sparks: [], tl: null, drag: null, sel: null, edit: null, auto: false
   };
 
   /* ── formatting (stats_charts.fmt_*) ──────────────────────────────────── */
@@ -125,6 +143,83 @@
     var out = new Array(str.length);
     for (var i = 0; i < str.length; i++) out[i] = parseInt(str.charAt(i), 36);
     return out;
+  }
+
+  /* ── who it was with (stats_people.credit / table) ─────────────────────── */
+
+  function key(name) { return String(name).split(/\s+/).filter(Boolean).join(' ').toLowerCase(); }
+  function cleanNames(text) {
+    var out = [], seen = {};
+    String(text).split(',').forEach(function (n) {
+      n = n.split(/\s+/).filter(Boolean).join(' ').slice(0, 48);
+      if (n && !seen[key(n)]) { seen[key(n)] = 1; out.push(n); }
+    });
+    return out;
+  }
+  function tagsOf(s) { return TAGS[s.id] || (TAGS[s.id] = { whole: [], str: [] }); }
+  function peopleIn(s) {
+    var t = tagsOf(s), all = t.whole.slice();
+    t.str.slice().sort(function (a, b) { return a[0] - b[0]; }).forEach(function (r) { all = all.concat(r[2]); });
+    return cleanNames(all.join(','));
+  }
+  /* A bucket is active when a toy runs or a zone is touched. */
+  function activeAt(s) {
+    if (s._act) return s._act;
+    var act = [], lv = Object.keys(s.lv).map(function (n) { return decode(s.lv[n]); });
+    for (var k = 0; k < s.n; k++) {
+      act.push(lv.some(function (v) { return v[k] > 0; }) ||
+        Object.keys(s.zr).some(function (z) { return s.zr[z].some(function (r) { return r[0] <= k && k < r[1]; }); }));
+    }
+    return (s._act = act);
+  }
+  function measure(s, ks) {              /* ks: {bucket: true} */
+    var thr = decode(s.thr), act = activeAt(s), a = 0, t = 0, peak = 0;
+    Object.keys(ks).forEach(function (k) {
+      k = +k;
+      if (act[k]) a += s.bucket_s;
+      t += thr[k];
+      var w = 0;
+      for (var j = k; j < k + 60 / s.bucket_s; j++) if (ks[j]) w += thr[j];
+      peak = Math.max(peak, w);
+    });
+    return { active_s: a, thrusts: t, peak_pace: peak };
+  }
+  function credit(s) {                   /* name key -> {name, active_s, thrusts, peak_pace} */
+    var t = tagsOf(s), out = {};
+    t.whole.forEach(function (n) {
+      out[key(n)] = { name: n, active_s: s.active_s, thrusts: s.thrusts, peak_pace: s.peak_pace };
+    });
+    var cover = {};
+    t.str.forEach(function (r) {
+      r[2].forEach(function (n) {
+        if (out[key(n)]) return;           /* the whole session already counts */
+        var c = cover[key(n)] || (cover[key(n)] = { name: n, ks: {} });
+        for (var k = r[0]; k < r[1]; k++) c.ks[k] = true;
+      });
+    });
+    Object.keys(cover).forEach(function (k) {
+      var m = measure(s, cover[k].ks);
+      m.name = cover[k].name;
+      out[k] = m;
+    });
+    return out;
+  }
+  function peopleTable() {
+    var per = {};
+    DATA.sessions.forEach(function (s) {
+      var c = credit(s);
+      Object.keys(c).forEach(function (k) {
+        var v = c[k];
+        if (!v.active_s && !v.thrusts) return;
+        var r = per[k] || (per[k] = { name: v.name, sessions: 0, active_s: 0, thrusts: 0, peak_pace: 0, last: 0 });
+        r.sessions += 1; r.active_s += v.active_s; r.thrusts += v.thrusts;
+        r.peak_pace = Math.max(r.peak_pace, v.peak_pace);
+        if (s.start >= r.last) { r.last = s.start; r.name = v.name; }
+      });
+    });
+    return Object.keys(per).map(function (k) { return per[k]; }).sort(function (a, b) {
+      return (b.thrusts - a.thrusts) || (b.active_s - a.active_s) || byName(a.name, b.name);
+    });
   }
 
   /* ── colours: the CSS tokens, read when a chart draws ─────────────────── */
@@ -402,7 +497,8 @@
 
   var TL = {
     LABEL_W: 116, TOP: 20, TOY_H: 36, TOY_GAP: 8, THR_H: 44, THR_GAP: 12,
-    CAPTION_H: 16, ZONE_H: 14, ZONE_GAP: 6, AXIS_H: 20, MIN_COL_PX: 3
+    CAPTION_H: 16, ZONE_H: 14, ZONE_GAP: 6, PEOPLE_H: 16, PEOPLE_GAP: 4,
+    AXIS_H: 20, MIN_COL_PX: 3
   };
 
   function timelineModel(s) {
@@ -414,10 +510,19 @@
     });
     var lv = {};
     toys.forEach(function (name) { lv[name] = decode(s.lv[name]).map(function (q) { return q / 35; }); });
+    /* Tagged stretches on rows of the people lane (overlaps stack). */
+    var rowsEnd = [], bars = tagsOf(s).str.slice().sort(function (a, b) { return (a[0] - b[0]) || (a[1] - b[1]); })
+      .map(function (r) {
+        var row = -1;
+        for (var i = 0; i < rowsEnd.length; i++) if (rowsEnd[i] <= r[0]) { row = i; break; }
+        if (row < 0) { row = rowsEnd.length; rowsEnd.push(r[1]); } else rowsEnd[row] = r[1];
+        return [r[0], r[1], r[2].join(', '), row];
+      });
     return {
-      s: s, toys: toys, zones: zones, lv: lv, thr: decode(s.thr),
+      s: s, toys: toys, zones: zones, lv: lv, thr: decode(s.thr), bars: bars, rows: rowsEnd.length,
       height: TL.TOP + toys.length * (TL.TOY_H + TL.TOY_GAP) + TL.THR_H + TL.THR_GAP +
-        (zones.length ? TL.CAPTION_H + zones.length * (TL.ZONE_H + TL.ZONE_GAP) : 0) + TL.AXIS_H
+        (zones.length ? TL.CAPTION_H + zones.length * (TL.ZONE_H + TL.ZONE_GAP) : 0) +
+        (rowsEnd.length ? TL.CAPTION_H + rowsEnd.length * (TL.PEOPLE_H + TL.PEOPLE_GAP) : 0) + TL.AXIS_H
     };
   }
   function tlColumns(n, pw) {
@@ -471,6 +576,12 @@
       text(ctx, Math.min(right - half, Math.max(left + half, (hx0 + hx1) / 2)), TL.TOP - 8, label, txt, 'center');
     }
 
+    /* Tagged stretches, faintly, behind the lanes. */
+    M.bars.forEach(function (b) {
+      ctx.fillStyle = css(C.grey, 0.08);
+      ctx.fillRect(xOf(b[0]), TL.TOP - 4, xOf(b[1]) - xOf(b[0]), bottom - TL.TOP + 4);
+    });
+
     var y = TL.TOP, base;
     /* Toy intensity lanes. */
     M.toys.forEach(function (name, idx) {
@@ -521,12 +632,46 @@
       });
     }
 
+    /* The people lane: one bar per tagged stretch, its names inside. */
+    if (M.rows) {
+      text(ctx, 0, y + 11, 'People', txt, 'left', 11, true);
+      y += TL.CAPTION_H;
+      for (var r = 0; r < M.rows; r++) fillRR(ctx, left, y + r * (TL.PEOPLE_H + TL.PEOPLE_GAP), pw, TL.PEOPLE_H, 3, css(C.well));
+      M.bars.forEach(function (b) {
+        var x0 = xOf(b[0]), x1 = xOf(b[1]), by = y + b[3] * (TL.PEOPLE_H + TL.PEOPLE_GAP), bw = Math.max(3, x1 - x0);
+        rrect(ctx, x0 + 0.5, by + 0.5, bw - 1, TL.PEOPLE_H - 1, 3);
+        ctx.fillStyle = css(C.grey, 0.28); ctx.fill();
+        ctx.strokeStyle = css(C['grey-mid']); ctx.lineWidth = 1; ctx.stroke();
+        font(ctx, 11);
+        var label = elide(ctx, b[2], bw - 8);
+        if (label && bw > 14) text(ctx, x0 + 4, by + 12, label, txt);
+      });
+      y += M.rows * (TL.PEOPLE_H + TL.PEOPLE_GAP);
+    }
+
+    /* The selection being made (or waiting to be tagged). */
+    if (S.sel) {
+      var sx0 = xOf(S.sel[0]), sx1 = xOf(S.sel[1]);
+      ctx.fillStyle = css(C.accent, 0.16);
+      ctx.fillRect(sx0, TL.TOP - 4, sx1 - sx0, bottom - TL.TOP + 4);
+      line(ctx, sx0, TL.TOP - 4, sx0, bottom, css(C.accent), 1.5);
+      line(ctx, sx1, TL.TOP - 4, sx1, bottom, css(C.accent), 1.5);
+    }
+
     /* Hover crosshair. */
     if (S.hoverCol !== null && S.hoverCol < cols.length) {
       var hc = cols[S.hoverCol], hx = xOf((hc[0] + hc[1]) / 2);
       line(ctx, hx, TL.TOP - 4, hx, bottom, muted, 1);
     }
   }
+  /* The bucket edge nearest to x (SessionTimeline._epoch_of_x). */
+  function bucketAt(x, w) {
+    var s = S.tl.s, left = TL.LABEL_W, pw = Math.max(10, w - left - 6);
+    return r0(Math.min(Math.max(0, (x - left) / pw), 1) * s.n);
+  }
+  function inPlot(x, w) { return x >= TL.LABEL_W && x <= Math.max(10, w - TL.LABEL_W - 6) + TL.LABEL_W; }
+  function bucketClock(s, k) { return clock(s.start + (s.start_i + k) * s.bucket_s); }
+
   function timelineHit(x, w) {
     var M = S.tl, s = M.s, left = TL.LABEL_W, pw = Math.max(10, w - left - 6);
     var cols = tlColumns(s.n, pw);
@@ -578,7 +723,14 @@
       row.setAttribute('role', 'button');
       row.tabIndex = 0;
       row.dataset.id = s.id;
-      row.appendChild(make('span', 'st-when', day(s.start) + '  ' + clock(s.start)));
+      var when = make('span', 'st-when');
+      when.appendChild(make('span', 'st-date', day(s.start) + '  ' + clock(s.start)));
+      var who = peopleIn(s);
+      if (who.length) {
+        when.appendChild(make('span', 'st-who', who.join(', ')));
+        row.dataset.stTip = 'With ' + esc(who.join(', '));
+      }
+      row.appendChild(when);
       row.appendChild(make('span', 'st-c st-c-dur', fmtShort(s.duration_s)));
       row.appendChild(make('span', 'st-c st-c-act', fmtShort(s.active_s) + ' active'));
       row.appendChild(make('span', 'st-c st-c-thr', num(s.thrusts) + ' thrusts'));
@@ -620,6 +772,29 @@
       return [zoneLabel(key), life.zones[key]];
     }));
   }
+  function fillPeople() {
+    var rows = peopleTable(), host = q('people');
+    host.textContent = '';
+    if (rows.length) {
+      ['', 'Name', 'Sessions', 'Active', 'Thrusts', 'Peak pace', 'Last time'].forEach(function (h) {
+        host.appendChild(make('span', 'st-th', h));
+      });
+    }
+    rows.slice(0, 10).forEach(function (r, i) {
+      host.appendChild(make('span', 'st-td-s', String(i + 1)));
+      [r.name, num(r.sessions), fmtShort(r.active_s), num(r.thrusts),
+        r.peak_pace ? r.peak_pace + ' / min' : '—', day(r.last)].forEach(function (v) {
+        host.appendChild(make('span', '', v));
+      });
+    });
+    host.hidden = !rows.length;
+    q('people-empty').hidden = !!rows.length;
+    q('auto').classList.toggle('on', S.auto);
+    var st = q('auto-status');
+    st.textContent = S.auto ? 'Waiting for VRChat.' : '';
+    st.hidden = !S.auto;
+  }
+
   function table(host, rows) {
     host.textContent = '';
     ['', 'Lifetime', 'This session', ''].forEach(function (h) { host.appendChild(make('span', 'st-th', h)); });
@@ -690,6 +865,7 @@
 
     S.tl = timelineModel(s);
     S.hoverCol = null;
+    fillTags(s);
 
     /* The analysis lines (statistics._stats_fill_insights). */
     var lines = [];
@@ -725,12 +901,82 @@
     lines.forEach(function (html) { var d = make('div'); d.innerHTML = html; host.appendChild(d); });
   }
 
+  /* The session's people (statistics._stats_fill_tags). */
+  function fillTags(s) {
+    var t = tagsOf(s), chips = q('with');
+    chips.textContent = '';
+    t.whole.forEach(function (n) { chips.appendChild(make('span', 'o-pill', n)); });
+    chips.hidden = !t.whole.length;
+    q('with-none').hidden = !!t.whole.length;
+    q('tag-whole').textContent = t.whole.length ? 'Change…' : 'Tag session…';
+    var host = q('stretches');
+    host.textContent = '';
+    t.str.slice().sort(function (a, b) { return a[0] - b[0]; }).forEach(function (r) {
+      var row = make('div', 'st-stretch'), ks = {};
+      for (var k = r[0]; k < r[1]; k++) ks[k] = true;
+      var m = measure(s, ks);
+      row.appendChild(make('span', 'st-str-when', bucketClock(s, r[0]) + ' to ' + bucketClock(s, r[1])));
+      row.appendChild(make('span', 'st-str-who', r[2].join(', ')));
+      row.appendChild(make('span', 'st-c', num(m.thrusts) + ' thrusts  ·  ' + fmtShort(m.active_s) + ' active'));
+      if (r[3]) {
+        var pill = make('span', 'o-pill idle', 'from VRChat');
+        pill.dataset.stTip = "Tagged from VRChat's log: you were alone in the instance with them.";
+        row.appendChild(pill);
+      }
+      row.appendChild(make('span', 'st-grow'));
+      var rm = make('button', 'st-btn st-ghost', 'Remove');
+      rm.type = 'button';
+      rm.addEventListener('click', function () {
+        t.str.splice(t.str.indexOf(r), 1);
+        refreshTags();
+      });
+      row.appendChild(rm);
+      host.appendChild(row);
+    });
+    q('tags-hint').hidden = !!t.str.length;
+  }
+  function openEditor(mode, what, prefill) {
+    S.edit = mode;
+    q('editor-what').textContent = what;
+    var input = q('editor-input');
+    input.value = prefill;
+    q('editor').hidden = false;
+    input.focus();
+    input.select();
+  }
+  function closeEditor() {
+    S.edit = null;
+    S.sel = null;
+    if (!S.root) return;
+    q('editor').hidden = true;
+    q('editor-input').value = '';
+  }
+  function saveEditor() {
+    var s = S.detail && sessionById(S.detail), mode = S.edit;
+    if (!s || !mode) return;
+    var names = cleanNames(q('editor-input').value), t = tagsOf(s);
+    if (mode[0] === 'whole') t.whole = names;
+    else if (names.length) t.str.push([mode[1], mode[2], names, false]);
+    closeEditor();
+    refreshTags();
+  }
+  function refreshTags() {
+    var s = sessionById(S.detail);
+    if (!s) return;
+    S.tl = timelineModel(s);
+    fillTags(s);
+    fillSessions();
+    fillPeople();
+    drawTimeline();
+  }
+
   /* ── the two pages ────────────────────────────────────────────────────── */
 
   function openSession(id) {
     var s = sessionById(id);
     if (!s || !S.root) return;
     hideTip();
+    closeEditor();
     S.listScroll = S.root.scrollTop;
     S.detail = id;
     fillDetail(s);
@@ -742,6 +988,7 @@
   function showOverview() {
     if (!S.root) return;
     hideTip();
+    closeEditor();
     S.detail = null;
     S.tl = null;
     S.el.detail.hidden = true;
@@ -831,6 +1078,7 @@
 
     fillSessions();
     fillLifetime();
+    fillPeople();
     fillPatterns();
     fillMonth();
 
@@ -844,6 +1092,40 @@
       if (row) { ev.preventDefault(); openSession(row.dataset.id); }
     });
     q('back').addEventListener('click', showOverview);
+    q('auto').addEventListener('click', function () { S.auto = !S.auto; fillPeople(); });
+    q('tag-whole').addEventListener('click', function () {
+      var s = sessionById(S.detail);
+      S.sel = null;
+      drawTimeline();
+      openEditor(['whole'], 'Whole session:', s ? tagsOf(s).whole.join(', ') : '');
+    });
+    q('editor-save').addEventListener('click', saveEditor);
+    q('editor-cancel').addEventListener('click', function () { closeEditor(); drawTimeline(); });
+    q('editor-input').addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter') { ev.preventDefault(); saveEditor(); }
+      if (ev.key === 'Escape') { ev.preventDefault(); closeEditor(); drawTimeline(); }
+    });
+    /* Drag across the timeline to select a stretch to tag. */
+    S.el.timeline.addEventListener('mousedown', function (ev) {
+      if (!S.tl || ev.button !== 0) return;
+      var p = local(ev, S.el.timeline), w = S.el.timeline.clientWidth;
+      if (!inPlot(p[0], w)) return;
+      ev.preventDefault();
+      S.drag = p[0];
+      S.sel = null;
+      drawTimeline();
+    });
+    window.addEventListener('mouseup', function (ev) {
+      if (S.drag === null || !S.tl) { S.drag = null; return; }
+      var p = local(ev, S.el.timeline), w = S.el.timeline.clientWidth, x0 = S.drag;
+      S.drag = null;
+      var a = bucketAt(Math.min(x0, p[0]), w), b = bucketAt(Math.max(x0, p[0]), w);
+      if (Math.abs(p[0] - x0) < 4 || b <= a) { S.sel = null; drawTimeline(); return; }
+      S.sel = [a, b];
+      drawTimeline();
+      hideTip();
+      openEditor(['stretch', a, b], bucketClock(S.tl.s, a) + ' to ' + bucketClock(S.tl.s, b) + ':', '');
+    });
     root.querySelectorAll('[data-span]').forEach(function (b) {
       b.addEventListener('click', function () { S.span = +b.dataset.span; S.colors = null; fillPatterns(); });
     });
@@ -861,7 +1143,16 @@
     chartTips(S.el.cal, calHit);
     S.el.timeline.addEventListener('mousemove', function (ev) {
       if (!S.tl) return;
-      var p = local(ev, S.el.timeline), hit = timelineHit(p[0], S.el.timeline.clientWidth);
+      var p = local(ev, S.el.timeline), w = S.el.timeline.clientWidth;
+      S.el.timeline.style.cursor = inPlot(p[0], w) ? 'crosshair' : 'default';
+      if (S.drag !== null) {
+        var a = bucketAt(Math.min(S.drag, p[0]), w), b = bucketAt(Math.max(S.drag, p[0]), w);
+        S.sel = [a, b];
+        drawTimeline();
+        showTip(ev, bucketClock(S.tl.s, a) + ' to ' + bucketClock(S.tl.s, b), true);
+        return;
+      }
+      var hit = timelineHit(p[0], w);
       if (!hit) { if (S.hoverCol !== null) { S.hoverCol = null; drawTimeline(); } hideTip(); return; }
       if (hit.col !== S.hoverCol) { S.hoverCol = hit.col; drawTimeline(); }
       showTip(ev, hit.html, true);
@@ -899,4 +1190,4 @@
 })();
 
 // The page's markup (stats.html), so the demo can mount it without a request.
-window.OGPDemoStats.HTML = "<div class=\"pg pg-stats\">\n  <div class=\"st-page\">\n    <div class=\"st-title\">Statistics</div>\n\n    <!-- ── the overview: sessions, lifetime, when you play, month ── -->\n    <div class=\"st-overview\" data-st=\"overview\">\n      <div class=\"st-muted\">How much your gear actually gets used, and when. Sampled once per second; nothing here touches the haptic path.</div>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\" data-st-tiptitle=\"Sessions\" data-st-tip=\"Every app run that saw activity, newest first. The graph is how busy each part of it was. Click a session for its timeline: each toy's intensity, thrusts per minute, which zones were touched, and a short analysis.&lt;br&gt;&lt;br&gt;With no toy running, stray contacts don't start a session: contact only counts once it adds up to 20 thrusts without a pause longer than 10 seconds, or to a minute of touching within three minutes. Strokes counted while nothing is touching you never count.\">Sessions</div>\n        </div>\n        <div class=\"st-list\" data-st=\"list\"></div>\n      </section>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\" data-st-tiptitle=\"Lifetime statistics\" data-st-tip=\"What counts: a toy is &lt;b&gt;on&lt;/b&gt; while any of its motors is driven above zero; a zone is &lt;b&gt;in contact&lt;/b&gt; while any of its OGB signals reads above zero; &lt;b&gt;active time&lt;/b&gt; ticks while either is true. One full in-out stroke = one &lt;b&gt;thrust&lt;/b&gt;. Everything is sampled once per second, so sub-second blips can round away. Sessions are app runs that saw any activity.&lt;br&gt;&lt;br&gt;While no toy is running, contact is held back until it turns into a real scene: 20 thrusts with no pause longer than 10 seconds, or a minute of touching within three minutes (one long touch or many short ones), and a stroke only counts while something is touching you. Then the 30 seconds before it count as well, and it keeps counting until half an hour of quiet. Stray contacts and lone strokes never count.\">Lifetime</div>\n          <button type=\"button\" class=\"st-btn\" data-st=\"reset\" data-st-tip=\"Zero every statistic, session and chart. Asks first.\">Reset</button>\n        </div>\n        <div class=\"st-tiles st-cols-3\">\n          <div class=\"st-tile\"><div class=\"st-cap\">Total active time</div><div class=\"st-val\" data-st=\"life-active\">—</div></div>\n          <div class=\"st-tile\"><div class=\"st-cap\">Thrusts</div><div class=\"st-val\" data-st=\"life-thrusts\">—</div></div>\n          <div class=\"st-tile\"><div class=\"st-cap\">Sessions</div><div class=\"st-val\" data-st=\"life-sessions\">—</div></div>\n        </div>\n        <div class=\"st-muted st-pre\" data-st=\"this-session\"></div>\n        <div class=\"st-h\">Fun facts</div>\n        <div class=\"st-tiles st-cols-3\" data-st=\"facts\"></div>\n        <div class=\"st-h\">Toys</div>\n        <div class=\"st-table\" data-st=\"toys\"></div>\n        <div class=\"st-h\">Zones</div>\n        <div class=\"st-table\" data-st=\"zones\"></div>\n      </section>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\" data-st-tiptitle=\"When you play\" data-st-tip=\"Active time by weekday and hour of the day. The brighter the cell, the more happened in that hour. The bars below add up every day per hour; the bars on the right add up each weekday. Hover anything for the numbers.\">When you play</div>\n          <button type=\"button\" class=\"st-btn st-seg\" data-span=\"0\">4 weeks</button>\n          <button type=\"button\" class=\"st-btn st-seg\" data-span=\"1\">3 months</button>\n          <button type=\"button\" class=\"st-btn st-seg\" data-span=\"2\">All time</button>\n        </div>\n        <canvas class=\"st-week\" data-st=\"week\"></canvas>\n        <div class=\"st-hint\" data-st=\"week-hint\"></div>\n      </section>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\">Month</div>\n          <button type=\"button\" class=\"st-btn\" data-month=\"-1\" data-st-tip=\"Previous month\">←</button>\n          <div class=\"st-month-label\" data-st=\"month-label\"></div>\n          <button type=\"button\" class=\"st-btn\" data-month=\"1\" data-st-tip=\"Next month\">→</button>\n        </div>\n        <div class=\"st-month\">\n          <canvas class=\"st-cal\" data-st=\"cal\"></canvas>\n          <div class=\"st-tiles st-cols-2\">\n            <div class=\"st-tile\"><div class=\"st-cap\">Active</div><div class=\"st-val\" data-st=\"m-active\">—</div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Thrusts</div><div class=\"st-val\" data-st=\"m-thrusts\">—</div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Sessions</div><div class=\"st-val\" data-st=\"m-sessions\">—</div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Days with play</div><div class=\"st-val\" data-st=\"m-days\">—</div><div class=\"st-note\" data-st=\"m-days-note\"></div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Best day</div><div class=\"st-val\" data-st=\"m-best\">—</div><div class=\"st-note\" data-st=\"m-best-note\"></div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Average play day</div><div class=\"st-val\" data-st=\"m-avg\">—</div><div class=\"st-note\" data-st=\"m-avg-note\"></div></div>\n          </div>\n        </div>\n        <div class=\"st-hint\">Sessions from before the charts existed count on the day they started.</div>\n      </section>\n    </div>\n\n    <!-- ── one session's page (shown instead of the overview) ── -->\n    <div class=\"st-detail\" data-st=\"detail\" hidden>\n      <div class=\"st-head\">\n        <button type=\"button\" class=\"st-btn st-pre\" data-st=\"back\">←  All sessions</button>\n        <div class=\"st-sec st-pre\" data-st=\"detail-title\">Session</div>\n      </div>\n      <section class=\"st-card st-card-detail\">\n        <div class=\"st-tiles st-cols-4\" data-st=\"detail-tiles\"></div>\n        <canvas class=\"st-timeline\" data-st=\"timeline\"></canvas>\n        <div class=\"st-h\">Analysis</div>\n        <div class=\"st-insights\" data-st=\"insights\"></div>\n      </section>\n    </div>\n  </div>\n  <div class=\"st-tip\" data-st=\"tip\" hidden></div>\n</div>\n";
+window.OGPDemoStats.HTML = "<div class=\"pg pg-stats\">\n  <div class=\"st-page\">\n    <div class=\"st-title\">Statistics</div>\n\n    <!-- ── the overview: sessions, lifetime, when you play, month ── -->\n    <div class=\"st-overview\" data-st=\"overview\">\n      <div class=\"st-muted\">How much your gear actually gets used, and when. Sampled once per second; nothing here touches the haptic path.</div>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\" data-st-tiptitle=\"Sessions\" data-st-tip=\"Every app run that saw activity, newest first. The graph is how busy each part of it was. Click a session for its timeline: each toy's intensity, thrusts per minute, which zones were touched, and a short analysis.&lt;br&gt;&lt;br&gt;With no toy running, stray contacts don't start a session: contact only counts once it adds up to 20 thrusts without a pause longer than 10 seconds, or to a minute of touching within three minutes. Strokes counted while nothing is touching you never count.\">Sessions</div>\n        </div>\n        <div class=\"st-list\" data-st=\"list\"></div>\n      </section>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\" data-st-tiptitle=\"Lifetime statistics\" data-st-tip=\"What counts: a toy is &lt;b&gt;on&lt;/b&gt; while any of its motors is driven above zero; a zone is &lt;b&gt;in contact&lt;/b&gt; while any of its OGB signals reads above zero; &lt;b&gt;active time&lt;/b&gt; ticks while either is true. One full in-out stroke = one &lt;b&gt;thrust&lt;/b&gt;. Everything is sampled once per second, so sub-second blips can round away. Sessions are app runs that saw any activity.&lt;br&gt;&lt;br&gt;While no toy is running, contact is held back until it turns into a real scene: 20 thrusts with no pause longer than 10 seconds, or a minute of touching within three minutes (one long touch or many short ones), and a stroke only counts while something is touching you. Then the 30 seconds before it count as well, and it keeps counting until half an hour of quiet. Stray contacts and lone strokes never count.\">Lifetime</div>\n          <button type=\"button\" class=\"st-btn\" data-st=\"reset\" data-st-tip=\"Zero every statistic, session and chart. Asks first.\">Reset</button>\n        </div>\n        <div class=\"st-tiles st-cols-3\">\n          <div class=\"st-tile\"><div class=\"st-cap\">Total active time</div><div class=\"st-val\" data-st=\"life-active\">—</div></div>\n          <div class=\"st-tile\"><div class=\"st-cap\">Thrusts</div><div class=\"st-val\" data-st=\"life-thrusts\">—</div></div>\n          <div class=\"st-tile\"><div class=\"st-cap\">Sessions</div><div class=\"st-val\" data-st=\"life-sessions\">—</div></div>\n        </div>\n        <div class=\"st-muted st-pre\" data-st=\"this-session\"></div>\n        <div class=\"st-h\">Fun facts</div>\n        <div class=\"st-tiles st-cols-3\" data-st=\"facts\"></div>\n        <div class=\"st-h\">Toys</div>\n        <div class=\"st-table\" data-st=\"toys\"></div>\n        <div class=\"st-h\">Zones</div>\n        <div class=\"st-table\" data-st=\"zones\"></div>\n      </section>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\" data-st-tiptitle=\"People\" data-st-tip=\"Everyone you tagged sessions with, most thrusts first. Each person gets what happened while they were tagged: the active time, the thrusts, and their best minute (peak pace).&lt;br&gt;&lt;br&gt;Tag a session on its page: the whole session, or drag across its timeline to tag a stretch of it — for a session that had more than one person in it. Two people tagged on the same stretch both get all of it. Names match without regard to upper and lower case.\">People</div>\n        </div>\n        <div class=\"st-swrow\" data-st-tiptitle=\"Tag who you're with from VRChat's log\" data-st-tip=\"While you are alone in an instance with exactly one other person, the running session is tagged with them, from the moment that was true until it isn't any more (someone joins, they leave, you change world). A stretch with nothing in it is dropped again. With more people around nobody is tagged; tag those sessions yourself.&lt;br&gt;&lt;br&gt;VRChat writes who joins and leaves your instance to a log file on this PC; the app reads that file while this is on, and keeps only the names of people you were tagged with. Nothing leaves your PC. Off by default.\"><span class=\"o-sw\" data-st=\"auto\"></span><span>Tag who you're with from VRChat's log</span></div>\n        <div class=\"st-hint\" data-st=\"auto-status\" hidden></div>\n        <div class=\"st-people\" data-st=\"people\"></div>\n        <div class=\"st-muted\" data-st=\"people-empty\" hidden>Nobody tagged yet. Open a session and tag who it was with: the whole session, or drag across its timeline to tag a stretch.</div>\n      </section>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\" data-st-tiptitle=\"When you play\" data-st-tip=\"Active time by weekday and hour of the day. The brighter the cell, the more happened in that hour. The bars below add up every day per hour; the bars on the right add up each weekday. Hover anything for the numbers.\">When you play</div>\n          <button type=\"button\" class=\"st-btn st-seg\" data-span=\"0\">4 weeks</button>\n          <button type=\"button\" class=\"st-btn st-seg\" data-span=\"1\">3 months</button>\n          <button type=\"button\" class=\"st-btn st-seg\" data-span=\"2\">All time</button>\n        </div>\n        <canvas class=\"st-week\" data-st=\"week\"></canvas>\n        <div class=\"st-hint\" data-st=\"week-hint\"></div>\n      </section>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\">Month</div>\n          <button type=\"button\" class=\"st-btn\" data-month=\"-1\" data-st-tip=\"Previous month\">←</button>\n          <div class=\"st-month-label\" data-st=\"month-label\"></div>\n          <button type=\"button\" class=\"st-btn\" data-month=\"1\" data-st-tip=\"Next month\">→</button>\n        </div>\n        <div class=\"st-month\">\n          <canvas class=\"st-cal\" data-st=\"cal\"></canvas>\n          <div class=\"st-tiles st-cols-2\">\n            <div class=\"st-tile\"><div class=\"st-cap\">Active</div><div class=\"st-val\" data-st=\"m-active\">—</div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Thrusts</div><div class=\"st-val\" data-st=\"m-thrusts\">—</div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Sessions</div><div class=\"st-val\" data-st=\"m-sessions\">—</div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Days with play</div><div class=\"st-val\" data-st=\"m-days\">—</div><div class=\"st-note\" data-st=\"m-days-note\"></div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Best day</div><div class=\"st-val\" data-st=\"m-best\">—</div><div class=\"st-note\" data-st=\"m-best-note\"></div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Average play day</div><div class=\"st-val\" data-st=\"m-avg\">—</div><div class=\"st-note\" data-st=\"m-avg-note\"></div></div>\n          </div>\n        </div>\n        <div class=\"st-hint\">Sessions from before the charts existed count on the day they started.</div>\n      </section>\n    </div>\n\n    <!-- ── one session's page (shown instead of the overview) ── -->\n    <div class=\"st-detail\" data-st=\"detail\" hidden>\n      <div class=\"st-head\">\n        <button type=\"button\" class=\"st-btn st-pre\" data-st=\"back\">←  All sessions</button>\n        <div class=\"st-sec st-pre\" data-st=\"detail-title\">Session</div>\n      </div>\n      <section class=\"st-card st-card-detail\">\n        <div class=\"st-tiles st-cols-4\" data-st=\"detail-tiles\"></div>\n        <div class=\"st-tags\">\n          <div class=\"st-withrow\"><span class=\"st-h\">With</span><span class=\"st-chips\" data-st=\"with\"></span><span class=\"st-hint\" data-st=\"with-none\">nobody tagged</span><span class=\"st-grow\"></span><button type=\"button\" class=\"st-btn\" data-st=\"tag-whole\" data-st-tiptitle=\"Tag session\" data-st-tip=\"Who this whole session was with. Type one name or several, separated by commas; names you used before are suggested. Clear the field to remove the tag. For a session with more than one person in it, drag across the timeline below instead and tag each stretch.\">Tag session…</button></div>\n          <div class=\"st-editor\" data-st=\"editor\" hidden><span data-st=\"editor-what\"></span><input class=\"st-input\" data-st=\"editor-input\" type=\"text\" autocomplete=\"off\" placeholder=\"Who? Separate several names with commas\"><button type=\"button\" class=\"st-btn\" data-st=\"editor-save\">Tag</button><button type=\"button\" class=\"st-btn st-ghost\" data-st=\"editor-cancel\">Cancel</button></div>\n          <div class=\"st-stretches\" data-st=\"stretches\"></div>\n          <div class=\"st-hint\" data-st=\"tags-hint\">More than one person? Drag across the timeline to tag a stretch of the session with someone.</div>\n        </div>\n        <canvas class=\"st-timeline\" data-st=\"timeline\"></canvas>\n        <div class=\"st-h\">Analysis</div>\n        <div class=\"st-insights\" data-st=\"insights\"></div>\n      </section>\n    </div>\n  </div>\n  <div class=\"st-tip\" data-st=\"tip\" hidden></div>\n</div>\n";

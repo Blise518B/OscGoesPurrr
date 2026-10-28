@@ -54,9 +54,13 @@ Notes:
   - Do NOT pass --stay-open: it is not a valid flag on this engine and makes it
     exit immediately. The engine stays serving until OGP kills it, which is what
     the supervise/teardown model wants.
-  - (Optional) To override the toy database, place a
-    `buttplug-device-config.json` in this folder; it is auto-detected and
-    passed via --device-config-file.
+  - `buttplug-device-config-v4.json` in this folder is the toy database the
+    engine starts with (auto-detected, passed via --device-config-file). It
+    is Buttplug's own list without the Lovense match on the Nordic UART
+    Service, which made the engine connect to every Bluetooth serial device.
+    It is written by tools/make_engine_device_config.py from the engine
+    checkout, so regenerate it after every engine rebuild
+    (rebuild_intiface_engine.bat does).
   - The engine's stdout/stderr is captured to
     %APPDATA%\OscGoesPurrr\intiface_engine.log (Linux:
     ~/.config/OscGoesPurrr/intiface_engine.log) for troubleshooting.

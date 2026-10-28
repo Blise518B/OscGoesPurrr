@@ -15,6 +15,8 @@ from typing import Callable
 # green's tokens, so it must not pick up a colour the developer chose in
 # their own Settings → Appearance.
 os.environ.setdefault("OGP_UI_ACCENT", "default")
+# Widgets the tests show never open a window on the desktop.
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest
 
@@ -53,6 +55,18 @@ def _never_touch_real_appdata(monkeypatch, tmp_path):
     for const, name in (("MODES_FILE", "modes.json"),):
         if hasattr(config_manager, const):
             monkeypatch.setattr(config_manager, const, tmp_path / name)
+    from settings.pishock import PiShockSettingsManager
+    monkeypatch.setattr(PiShockSettingsManager, "FILE_PATH",
+                        tmp_path / "pishock_settings.json")
+    from settings.friends import FriendsSettingsManager
+    monkeypatch.setattr(FriendsSettingsManager, "FILE_PATH",
+                        tmp_path / "friends.json")
+    from settings.suits import SuitsSettingsManager
+    monkeypatch.setattr(SuitsSettingsManager, "FILE_PATH",
+                        tmp_path / "suits_settings.json")
+    from settings.param_boards import ParamBoardsSettingsManager
+    monkeypatch.setattr(ParamBoardsSettingsManager, "FILE_PATH",
+                        tmp_path / "param_boards.json")
     # The SteamVR toy driver installs under %LOCALAPPDATA% and edits
     # SteamVR's openvrpaths.vrpath there — never the real ones.
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))

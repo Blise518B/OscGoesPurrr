@@ -1,22 +1,25 @@
-"""Custom-painted charts for the Statistics page.
+"""Custom-painted charts for the Statistics page, and the colours and
+painting helpers they share (`qcolor`, `chart_font`, `draw_text`,
+`chrome_color`, `runs` -- ui/session_timeline.py uses them too).
 
-Four widgets, all fed primitive data by `ui/views/statistics.py` (which
-gets it from the controller's stats facade) and none of them reading
-anything themselves:
+All fed primitive data by the Statistics view (which gets it from the
+controller's stats facade), none of them reading anything themselves:
 
 * `Sparkline` — the small activity graph on each session row.
+* `SpanStrip` / `SpanTimeline` — when a toy was connected, for sessions
+  recorded before timelines existed (a row's strip, the session's page).
 * `WeekHourChart` — active time by weekday x hour as a heatmap, with
   totals per hour underneath and per weekday on the right.
 * `MonthCalendar` — one month, a cell per day shaded by active time.
-* `SessionTimeline` — one session over clock time: an intensity lane per
-  toy, thrusts per minute, a contact lane per zone, the hottest five
-  minutes marked. Hover shows the values under the pointer.
+* One session's timeline is `ui/session_timeline.SessionTimeline`.
 
 Colours follow the 518 rules: active time is the green sequential ramp
 (tint -> vibrant), thrusts and socket/plug contact are penetration pink,
 touch contact is amber, and a session's toys take the cool toy hues in
-the order they were used. Text stays in text tokens; colour marks carry
-identity. Every value is also in a hover tooltip.
+the order they were used. Tagged stretches are neutral grey — a note on
+the session, not a signal — and a selection being made is the accent.
+Text stays in text tokens; colour marks carry identity. Every value is
+also in a hover tooltip.
 """
 
 import math
@@ -107,7 +110,7 @@ def zone_label(key: str) -> str:
 # Colour helpers
 # ----------------------------------------------------------------------
 
-def _qc(hex_value: str, alpha: Optional[float] = None) -> QColor:
+def qcolor(hex_value: str, alpha: Optional[float] = None) -> QColor:
     c = QColor(hex_value)
     if alpha is not None:
         c.setAlphaF(max(0.0, min(1.0, alpha)))
@@ -124,7 +127,7 @@ def _blend(a: str, b: str, t: float) -> QColor:
     )
 
 
-def _chrome(name: str) -> str:
+def chrome_color(name: str) -> str:
     return _theme.CHROME[name]
 
 
@@ -132,7 +135,7 @@ def ramp(t: float) -> QColor:
     """Green sequential ramp for active time: nothing = the well, then
     the green tint stepping up to the vibrant green."""
     if t <= 0.0:
-        return QColor(_chrome("well"))
+        return QColor(chrome_color("well"))
     vib, _mid, tint = _theme.tri("green")
     return _blend(tint, vib, 0.22 + 0.78 * min(1.0, t))
 
@@ -145,17 +148,17 @@ def zone_color(key: str) -> str:
     return _theme.hue("amber" if str(key).startswith("Touch/") else "pink")
 
 
-def _font(px: int, bold: bool = False) -> QFont:
+def chart_font(px: int, bold: bool = False) -> QFont:
     f = QFont("Segoe UI")
     f.setPixelSize(px)
     f.setBold(bold)
     return f
 
 
-def _text(p: QPainter, x: float, y: float, s: str, color: str,
+def draw_text(p: QPainter, x: float, y: float, s: str, color: str,
           align: str = "left", px: int = 11, bold: bool = False) -> None:
     """Draw `s` with its baseline at y; align left / center / right on x."""
-    p.setFont(_font(px, bold))
+    p.setFont(chart_font(px, bold))
     p.setPen(QColor(color))
     w = p.fontMetrics().horizontalAdvance(s)
     if align == "center":
@@ -194,7 +197,7 @@ class Sparkline(QWidget):
         green = _theme.hue("green")
         vals = self._values
         if not vals:
-            p.setPen(QPen(_qc(_theme.tri("green")[1]), 1))
+            p.setPen(QPen(qcolor(_theme.tri("green")[1]), 1))
             p.drawLine(QPointF(0, base), QPointF(w, base))
             return
         n = len(vals)
@@ -207,7 +210,7 @@ class Sparkline(QWidget):
             area.lineTo(pt)
         area.lineTo(QPointF(pts[-1].x(), base))
         area.closeSubpath()
-        p.fillPath(area, _qc(green, 0.32))
+        p.fillPath(area, qcolor(green, 0.32))
         line = QPainterPath(pts[0])
         for pt in pts[1:]:
             line.lineTo(pt)
@@ -274,11 +277,11 @@ class WeekHourChart(QWidget):
         cols = [sum(act[d][h] for d in range(7)) for h in range(24)]
         row_max, col_max = max(rows), max(cols)
         green = _theme.hue("green")
-        muted, dim, txt = _chrome("muted"), _chrome("dim"), _chrome("txt")
+        muted, dim, txt = chrome_color("muted"), chrome_color("dim"), chrome_color("txt")
 
         for d in range(7):
             y = self._TOP + d * self._ROW
-            _text(p, self._LEFT - 6, y + 13, WEEKDAYS[d], muted, "right")
+            draw_text(p, self._LEFT - 6, y + 13, WEEKDAYS[d], muted, "right")
             for h in range(24):
                 v = act[d][h]
                 r = QRectF(self._LEFT + h * pitch, y, pitch - 2, self._ROW - 2)
@@ -290,10 +293,10 @@ class WeekHourChart(QWidget):
                 p.setBrush(QColor(green))
                 p.drawRoundedRect(QRectF(grid_r + 12, y + 3, bw, 12), 3, 3)
                 if rows[d] == row_max:
-                    _text(p, grid_r + 12 + bw + 5, y + 13,
+                    draw_text(p, grid_r + 12 + bw + 5, y + 13,
                           fmt_short(rows[d]), txt)
         if right:
-            _text(p, grid_r + 12, self._TOP + 7 * self._ROW + 12,
+            draw_text(p, grid_r + 12, self._TOP + 7 * self._ROW + 12,
                   "by weekday", dim)
 
         base = self._bars_base()
@@ -307,23 +310,23 @@ class WeekHourChart(QWidget):
                 p.drawRoundedRect(QRectF(self._LEFT + h * pitch + pitch * 0.2,
                                          base - bh, pitch * 0.6 - 2, bh), 2, 2)
             peak = cols.index(col_max)
-            _text(p, self._LEFT + peak * pitch + (pitch - 2) / 2,
+            draw_text(p, self._LEFT + peak * pitch + (pitch - 2) / 2,
                   base - self._BARS_H - 3, "peak", txt, "center")
         for h in (0, 6, 12, 18, 23):
-            _text(p, self._LEFT + h * pitch + (pitch - 2) / 2, base + 14,
+            draw_text(p, self._LEFT + h * pitch + (pitch - 2) / 2, base + 14,
                   f"{h:02d}", dim, "center")
-        _text(p, self._LEFT - 6, base - 2, "hour", dim, "right")
+        draw_text(p, self._LEFT - 6, base - 2, "hour", dim, "right")
 
         if cell_max <= 0:
             msg = "Nothing recorded here yet. This fills in as you play."
-            p.setFont(_font(12))
+            p.setFont(chart_font(12))
             fm = p.fontMetrics()
             tw = fm.horizontalAdvance(msg) + 20
             cx = (self._LEFT + grid_r) / 2
             cy = self._TOP + 3.5 * self._ROW
             box = QRectF(cx - tw / 2, cy - 14, tw, 26)
             p.setPen(QPen(QColor(_theme.tri("green")[1]), 1))
-            p.setBrush(QColor(_chrome("card")))
+            p.setBrush(QColor(chrome_color("card")))
             p.drawRoundedRect(box, 8, 8)
             p.setPen(QColor(muted))
             p.drawText(box, Qt.AlignCenter, msg)
@@ -417,9 +420,9 @@ class MonthCalendar(QWidget):
     def paintEvent(self, _event) -> None:
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing)
-        dim, muted = _chrome("dim"), _chrome("muted")
+        dim, muted = chrome_color("dim"), chrome_color("muted")
         for i, name in enumerate(("Mo", "Tu", "We", "Th", "Fr", "Sa", "Su")):
-            _text(p, i * (self._CW + self._GAP) + self._CW / 2, 12,
+            draw_text(p, i * (self._CW + self._GAP) + self._CW / 2, 12,
                   name, dim, "center")
         top = max((v.get("active_s", 0.0) for v in self._days.values()),
                   default=0.0)
@@ -432,12 +435,12 @@ class MonthCalendar(QWidget):
             p.drawRoundedRect(r, 5, 5)
             is_today = self._today == (self._year, self._month, day)
             if is_today:
-                p.setPen(QPen(QColor(_chrome("accent")), 1.5))
+                p.setPen(QPen(QColor(chrome_color("accent")), 1.5))
                 p.setBrush(Qt.NoBrush)
                 p.drawRoundedRect(r.adjusted(0.75, 0.75, -0.75, -0.75), 5, 5)
-            color = _chrome("ink") if t > 0.6 else (
-                _chrome("txt") if is_today else muted)
-            _text(p, r.x() + 5, r.y() + 13, str(day), color, bold=is_today)
+            color = chrome_color("ink") if t > 0.6 else (
+                chrome_color("txt") if is_today else muted)
+            draw_text(p, r.x() + 5, r.y() + 13, str(day), color, bold=is_today)
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position()
@@ -473,265 +476,7 @@ class MonthCalendar(QWidget):
 # One session over time
 # ----------------------------------------------------------------------
 
-class SessionTimeline(QWidget):
-    """A session's timeline: intensity lane per toy, thrusts per minute,
-    contact lane per zone, on one clock-time axis. Hover shows a
-    crosshair and the values in that slice."""
-
-    _LABEL_W = 116
-    _TOP = 20
-    _TOY_H, _TOY_GAP = 36, 8
-    _THR_H, _THR_GAP = 44, 12
-    _CAPTION_H = 16
-    _ZONE_H, _ZONE_GAP = 14, 6
-    _AXIS_H = 20
-    _MIN_COL_PX = 3.0
-
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self._d: Dict[str, Any] = {}
-        self._a: Dict[str, Any] = {}
-        self._toys: List[str] = []
-        self._zones: List[str] = []
-        self._started = 0.0
-        self._hover_col: Optional[int] = None
-        self.setMinimumWidth(420)
-        self.setMouseTracking(True)
-        self.setFixedHeight(self._TOP + self._AXIS_H)
-
-    def set_detail(self, detail: Mapping[str, Any]) -> None:
-        self._d = dict(detail.get("dense") or {})
-        self._a = dict(detail.get("analysis") or {})
-        self._started = float(detail.get("started_ts") or 0.0)
-        toys = detail.get("toys") or {}
-        self._toys = sorted(self._d.get("toys", {}),
-                            key=lambda n: (-float(toys.get(n, 0.0)), n.lower()))
-        zones = detail.get("zones") or {}
-        self._zones = sorted(self._d.get("zones", {}),
-                             key=lambda z: (-float(zones.get(z, 0.0)), z.lower()))
-        h = (self._TOP
-             + len(self._toys) * (self._TOY_H + self._TOY_GAP)
-             + self._THR_H + self._THR_GAP
-             + (self._CAPTION_H + len(self._zones) * (self._ZONE_H + self._ZONE_GAP)
-                if self._zones else 0)
-             + self._AXIS_H)
-        self.setFixedHeight(int(h))
-        self.update()
-
-    def toy_order(self) -> List[str]:
-        """Toys in lane order — lane k wears toy_color(k)."""
-        return list(self._toys)
-
-    # geometry -----------------------------------------------------------
-
-    def _plot(self) -> Tuple[float, float]:
-        left = float(self._LABEL_W)
-        return left, max(10.0, float(self.width()) - left - 6.0)
-
-    def _columns(self) -> List[Tuple[int, int]]:
-        """Bucket ranges [a, b) per drawn column."""
-        n = int(self._d.get("n", 0))
-        if n <= 0:
-            return []
-        _left, pw = self._plot()
-        c = max(1, min(n, int(pw // self._MIN_COL_PX)))
-        return [(k * n // c, max(k * n // c + 1, (k + 1) * n // c))
-                for k in range(c)]
-
-    def _x_of_bucket(self, k: float) -> float:
-        left, pw = self._plot()
-        n = max(1, int(self._d.get("n", 1)))
-        return left + k / n * pw
-
-    def _bucket_epoch(self, k: float) -> float:
-        bs = float(self._d.get("bucket_s", 10))
-        return self._started + (int(self._d.get("start_i", 0)) + k) * bs
-
-    # paint --------------------------------------------------------------
-
-    def paintEvent(self, _event) -> None:
-        if not self._d.get("n"):
-            return
-        p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        left, pw = self._plot()
-        right = left + pw
-        n = int(self._d["n"])
-        bs = float(self._d.get("bucket_s", 10))
-        cols = self._columns()
-        txt, muted, dim = _chrome("txt"), _chrome("muted"), _chrome("dim")
-        mid = _theme.tri("green")[1]
-        bottom = self.height() - self._AXIS_H
-
-        # Time grid + axis, under everything.
-        span_s = n * bs
-        px_per_s = pw / span_s if span_s else 1.0
-        step = next((s for s in (60, 120, 300, 600, 900, 1800, 3600, 7200,
-                                 10800, 21600) if s * px_per_s >= 72), 21600)
-        t0 = self._bucket_epoch(0)
-        offset = time.localtime(t0).tm_gmtoff
-        first = math.ceil((t0 + offset) / step) * step - offset
-        tick = first
-        p.setFont(_font(11))
-        half_label = p.fontMetrics().horizontalAdvance("00:00") / 2 + 1
-        while tick <= t0 + span_s:
-            x = left + (tick - t0) * px_per_s
-            p.setPen(QPen(_qc(mid, 0.55), 1))
-            p.drawLine(QPointF(x, self._TOP - 4), QPointF(x, bottom))
-            # Keep the label inside the widget at either end.
-            lx = min(max(x, left + half_label), self.width() - half_label)
-            _text(p, lx, bottom + 15, fmt_clock(tick), dim, "center")
-            tick += step
-
-        # The hottest five minutes, behind the lanes.
-        a = self._a
-        if a.get("hot_len_s"):
-            k0 = a["hot_at_s"] / bs - int(self._d.get("start_i", 0))
-            x0 = self._x_of_bucket(k0)
-            x1 = self._x_of_bucket(k0 + a["hot_len_s"] / bs)
-            p.setPen(Qt.NoPen)
-            p.setBrush(_qc(txt, 0.07))
-            p.drawRect(QRectF(x0, self._TOP - 4, max(3.0, x1 - x0),
-                              bottom - self._TOP + 4))
-            label = ("hottest 5 min" if a.get("hot_kind") == "thrusts"
-                     else "most intense 5 min")
-            p.setFont(_font(11))
-            half = p.fontMetrics().horizontalAdvance(label) / 2
-            cx = min(right - half, max(left + half, (x0 + x1) / 2))
-            _text(p, cx, self._TOP - 8, label, txt, "center")
-
-        y = float(self._TOP)
-        # Toy intensity lanes.
-        for idx, name in enumerate(self._toys):
-            vals = self._d["toys"][name]
-            color = toy_color(idx)
-            base = y + self._TOY_H
-            _text(p, 0, y + 15, name, txt, bold=True)
-            _text(p, 0, y + 29, "intensity", dim)
-            p.setPen(QPen(QColor(mid), 1))
-            p.drawLine(QPointF(left, base), QPointF(right, base))
-            pts = []
-            for a_i, b_i in cols:
-                v = sum(vals[a_i:b_i]) / (b_i - a_i)
-                pts.append(QPointF(self._x_of_bucket((a_i + b_i) / 2),
-                                   base - v * (self._TOY_H - 4)))
-            if pts:
-                area = QPainterPath(QPointF(pts[0].x(), base))
-                for pt in pts:
-                    area.lineTo(pt)
-                area.lineTo(QPointF(pts[-1].x(), base))
-                area.closeSubpath()
-                p.fillPath(area, _qc(color, 0.25))
-                line = QPainterPath(pts[0])
-                for pt in pts[1:]:
-                    line.lineTo(pt)
-                pen = QPen(QColor(color), 2)
-                pen.setJoinStyle(Qt.RoundJoin)
-                p.setPen(pen)
-                p.setBrush(Qt.NoBrush)
-                p.drawPath(line)
-            y += self._TOY_H + self._TOY_GAP
-
-        # Thrusts per minute.
-        thr = self._d.get("thrusts", [])
-        base = y + self._THR_H
-        rates = [sum(thr[a_i:b_i]) * 60.0 / ((b_i - a_i) * bs)
-                 for a_i, b_i in cols]
-        top_rate = max(rates, default=0.0)
-        _text(p, 0, y + 15, "Thrusts", txt, bold=True)
-        _text(p, 0, y + 29, f"up to {top_rate:.0f}/min" if top_rate
-              else "none", dim)
-        p.setPen(QPen(QColor(mid), 1))
-        p.drawLine(QPointF(left, base), QPointF(right, base))
-        if top_rate > 0:
-            pink = QColor(_theme.hue("pink"))
-            p.setPen(Qt.NoPen)
-            p.setBrush(pink)
-            for (a_i, b_i), r in zip(cols, rates):
-                if r <= 0:
-                    continue
-                x0, x1 = self._x_of_bucket(a_i), self._x_of_bucket(b_i)
-                bh = max(2.0, r / top_rate * (self._THR_H - 4))
-                w = max(1.0, x1 - x0 - 1.0)
-                p.drawRoundedRect(QRectF(x0, base - bh, w, bh),
-                                  min(2.0, w / 2), min(2.0, w / 2))
-        y += self._THR_H + self._THR_GAP
-
-        # Contact lanes.
-        if self._zones:
-            _text(p, 0, y + 11, "Contact", txt, bold=True)
-            y += self._CAPTION_H
-            for key in self._zones:
-                vals = self._d["zones"][key]
-                lane = QRectF(left, y, pw, self._ZONE_H)
-                p.setPen(Qt.NoPen)
-                p.setBrush(QColor(_chrome("well")))
-                p.drawRoundedRect(lane, 3, 3)
-                p.setPen(QColor(muted))
-                p.setFont(_font(11))
-                label = p.fontMetrics().elidedText(
-                    zone_label(key), Qt.ElideRight, int(self._LABEL_W - 8))
-                p.drawText(QPointF(0, y + 11), label)
-                p.setPen(Qt.NoPen)
-                p.setBrush(_qc(zone_color(key), 0.9))
-                for s, e in _runs(vals):
-                    x0, x1 = self._x_of_bucket(s), self._x_of_bucket(e)
-                    p.drawRoundedRect(QRectF(x0, y, max(2.0, x1 - x0),
-                                             self._ZONE_H), 3, 3)
-                y += self._ZONE_H + self._ZONE_GAP
-
-        # Hover crosshair.
-        if self._hover_col is not None and self._hover_col < len(cols):
-            a_i, b_i = cols[self._hover_col]
-            x = self._x_of_bucket((a_i + b_i) / 2)
-            p.setPen(QPen(QColor(muted), 1))
-            p.drawLine(QPointF(x, self._TOP - 4), QPointF(x, bottom))
-
-    # hover --------------------------------------------------------------
-
-    def mouseMoveEvent(self, event) -> None:
-        cols = self._columns()
-        left, pw = self._plot()
-        x = event.position().x()
-        if not cols or x < left or x > left + pw:
-            self._clear_hover()
-            return
-        n = int(self._d["n"])
-        k = min(n - 1, max(0, int((x - left) / pw * n)))
-        col = next((i for i, (a_i, b_i) in enumerate(cols) if a_i <= k < b_i), None)
-        if col is None:
-            self._clear_hover()
-            return
-        if col != self._hover_col:
-            self._hover_col = col
-            self.update()
-        a_i, b_i = cols[col]
-        bs = float(self._d.get("bucket_s", 10))
-        lines = [f"<b>{fmt_clock(self._bucket_epoch(a_i))}</b>"]
-        for idx, name in enumerate(self._toys):
-            vals = self._d["toys"][name][a_i:b_i]
-            lines.append(f"<span style='color:{toy_color(idx)}'>&#9632;</span> "
-                         f"{name} {round(sum(vals) / len(vals) * 100)}%")
-        rate = sum(self._d.get("thrusts", [])[a_i:b_i]) * 60.0 / ((b_i - a_i) * bs)
-        lines.append(f"<span style='color:{_theme.hue('pink')}'>&#9632;</span> "
-                     f"{rate:.0f} thrusts/min")
-        touching = [zone_label(z) for z in self._zones
-                    if any(v > 0 for v in self._d["zones"][z][a_i:b_i])]
-        lines.append(", ".join(touching) if touching else "no contact")
-        QToolTip.showText(event.globalPosition().toPoint(),
-                          "<br>".join(lines), self)
-
-    def _clear_hover(self) -> None:
-        if self._hover_col is not None:
-            self._hover_col = None
-            self.update()
-        QToolTip.hideText()
-
-    def leaveEvent(self, _event) -> None:
-        self._clear_hover()
-
-
-def _runs(values: Sequence[float], gap: int = 1) -> List[Tuple[int, int]]:
+def runs(values: Sequence[float], gap: int = 1) -> List[Tuple[int, int]]:
     """[start, end) bucket runs where values > 0, bridging gaps of up to
     `gap` empty buckets so a flickering contact reads as one span."""
     runs: List[Tuple[int, int]] = []
@@ -798,7 +543,7 @@ class SpanStrip(QWidget):
         w, h = float(self.width()), float(self.height())
         mid = _theme.tri("green")[1]
         y = h / 2
-        p.setPen(QPen(_qc(mid, 0.6), 1))
+        p.setPen(QPen(qcolor(mid, 0.6), 1))
         p.drawLine(QPointF(0, y), QPointF(w, y))
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(mid))
@@ -850,7 +595,7 @@ class SpanTimeline(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
         left = float(self._LABEL_W)
         right = self.width() - 6.0
-        dim = _chrome("dim")
+        dim = chrome_color("dim")
         mid = _theme.tri("green")[1]
         bottom = self.height() - self._AXIS_H
         pw = right - left
@@ -858,26 +603,26 @@ class SpanTimeline(QWidget):
                      if s * pw / self._length >= 72), 21600)
         offset = time.localtime(self._start).tm_gmtoff
         tick = math.ceil((self._start + offset) / step) * step - offset
-        p.setFont(_font(11))
+        p.setFont(chart_font(11))
         half = p.fontMetrics().horizontalAdvance("00:00") / 2 + 1
         while tick <= self._start + self._length:
             x = self._x(tick)
-            p.setPen(QPen(_qc(mid, 0.55), 1))
+            p.setPen(QPen(qcolor(mid, 0.55), 1))
             p.drawLine(QPointF(x, self._TOP), QPointF(x, bottom))
-            _text(p, min(max(x, left + half), self.width() - half), bottom + 15,
+            draw_text(p, min(max(x, left + half), self.width() - half), bottom + 15,
                   fmt_clock(tick), dim, "center")
             tick += step
         y = float(self._TOP)
         for idx, (name, spans) in enumerate(self._toys):
-            p.setPen(QColor(_chrome("txt")))
-            p.setFont(_font(11))
+            p.setPen(QColor(chrome_color("txt")))
+            p.setFont(chart_font(11))
             label = p.fontMetrics().elidedText(name, Qt.ElideRight,
                                                int(self._LABEL_W - 8))
             p.drawText(QPointF(0, y + 12), label)
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(_chrome("well")))
+            p.setBrush(QColor(chrome_color("well")))
             p.drawRoundedRect(QRectF(left, y, pw, self._LANE_H), 3, 3)
-            p.setBrush(_qc(toy_color(idx), 0.55))
+            p.setBrush(qcolor(toy_color(idx), 0.55))
             for a, b in spans:
                 x0, x1 = self._x(a), self._x(b)
                 p.drawRoundedRect(QRectF(x0, y, max(2.0, x1 - x0), self._LANE_H), 3, 3)

@@ -9,9 +9,16 @@
 # name and how many commits it sits ahead of that branch:
 #   0.9.0              (on the release branch)
 #   0.9.0-dev(3)       (on dev, 3 commits ahead)
-# The suffix is cosmetic. update_checker._parse_version() stops at the
-# first "-", so a suffixed build still compares as plain (0, 9, 0) and a
-# dev checkout is never told it is out of date against its own release.
+# The suffix is cosmetic: update_checker compares a suffixed build as its
+# plain version, so a dev checkout is never told it is out of date against
+# its own release.
+#
+# A pre-release carries its stage in VERSION itself -- "0.14.0-alpha.1",
+# "-beta.2", "-rc.1" -- and ships as the tag `v0.14.0-alpha.1`, published
+# as a GitHub pre-release (release.bat does that for any version with a
+# "-"). The update check orders it before its release, so someone on the
+# alpha is offered 0.14.0 when it comes out, while everyone on 0.13.0 keeps
+# being offered only full releases (GitHub's "latest" skips pre-releases).
 #
 # Frozen (PyInstaller) builds: build_OGP.bat writes `_version_baked.py` next
 # to this module before running PyInstaller and removes it during cleanup.
@@ -22,7 +29,7 @@
 import re
 import subprocess
 
-VERSION = "0.13.0"
+VERSION = "0.14.0"
 RELEASE_BRANCH = "release/lite"
 # Branches that print a bare version. `release/lite` is where releases are
 # cut; `main` is what a clone of the public repo is on (release.bat

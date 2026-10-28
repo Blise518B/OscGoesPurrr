@@ -83,6 +83,13 @@ if not defined REL_VERSION (
     exit /b 1
 )
 set "TAG=v!REL_VERSION!"
+REM A version with a stage after a dash ("0.14.0-alpha.1") is a
+REM pre-release: GitHub's "latest" -- what the in-app updater and the
+REM README's Download button follow -- keeps pointing at the last full
+REM release, so only people who pick it from the releases page get it.
+set "PRERELEASE="
+echo !REL_VERSION!| findstr /c:"-" >nul && set "PRERELEASE=--prerelease"
+if defined PRERELEASE echo This is a pre-release: everyone else stays on the last full release.
 REM The b<n> build number goes into the public commit, so the Linux
 REM AppImage that GitHub Actions builds from it shows the same one.
 set "BUILD_NO="
@@ -239,7 +246,7 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-gh release create "!TAG!" "!ASSET!" ^
+gh release create "!TAG!" "!ASSET!" !PRERELEASE! ^
     --repo "%PUBLIC_REPO%" ^
     --title "OscGoesPurrr !TAG!" ^
     --notes-file "tools\RELEASE_NOTES.md"
@@ -263,7 +270,12 @@ echo itself to this release when done ^(about 5 minutes; 15 when the engine
 echo commit changed^). Watch it at:
 echo   https://github.com/%PUBLIC_REPO%/actions/workflows/linux.yml
 echo.
-echo Every copy already out there will offer this update at next launch.
+if defined PRERELEASE (
+    echo A pre-release: copies already out there keep offering the last full
+    echo release. Whoever installs this one is offered the final release later.
+) else (
+    echo Every copy already out there will offer this update at next launch.
+)
 echo.
 pause
 endlocal

@@ -66,6 +66,18 @@ class TestContent:
             for item in release.items:
                 assert item.target == "" or item.target in PLACES, item
 
+    def test_every_icon_is_one_of_the_apps_own(self):
+        """A change wears the icon its subject has everywhere -- toys,
+        shockers, Avatar Remote, Friends ... (ui/icons) -- never one of
+        its own."""
+        from ui.icons import ICON_NAMES
+        icons = set()
+        for release in whats_new.RELEASES:
+            for item in release.items:
+                assert item.icon == "" or item.icon in ICON_NAMES, item
+                icons.add(item.icon)
+        assert {"toys", "shock", "params", "friends"} <= icons
+
     def test_the_colour_change_has_its_button(self):
         """The one this window was asked for: a jump to the colours."""
         notes = {r.version: r for r in whats_new.RELEASES}["0.12.0"]
@@ -120,13 +132,32 @@ class TestRule:
         got = whats_new.unseen_releases("not a version", "0.12.0")
         assert self._versions(got) == ["0.12.0"]
 
+    def test_a_final_release_stands_in_for_its_alphas(self, monkeypatch):
+        item = whats_new.Item("T", "x")
+        monkeypatch.setattr(whats_new, "RELEASES", (
+            whats_new.Release("0.14.0", (item,)),
+            whats_new.Release("0.14.0-alpha.2", (item,)),
+            whats_new.Release("0.14.0-alpha.1", (item,)),
+            whats_new.Release("0.13.0", (item,)),
+        ))
+        # from the last release, and from an alpha: the final's notes alone
+        assert self._versions(whats_new.unseen_releases("0.13.0", "0.14.0")) == ["0.14.0"]
+        assert self._versions(whats_new.unseen_releases(
+            "0.14.0-alpha.1", "0.14.0")) == ["0.14.0"]
+        assert self._versions(whats_new.releases_for("0.14.0")) == ["0.14.0", "0.13.0"]
+        # an alpha build still has its own
+        assert self._versions(whats_new.unseen_releases(
+            "0.14.0-alpha.1", "0.14.0-alpha.2")) == ["0.14.0-alpha.2"]
+
     def test_a_downgrade_shows_nothing(self):
         assert whats_new.unseen_releases("0.14.0", "0.12.0") == []
 
     def test_plain_form_for_the_ui(self):
         plain = whats_new.as_plain([whats_new.Release(
-            "1.0.0", (whats_new.Item("A", "b", "home"),))])
-        assert plain == [("1.0.0", [("A", "b", "home")])]
+            "1.0.0", (whats_new.Item("A", "b", "home", "toys"),
+                      whats_new.Item("C", "d")))])
+        assert plain == [("1.0.0", [("A", "b", "home", "toys"),
+                                    ("C", "d", "", "")])]
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +250,7 @@ class TestLaunch:
         app = _app(monkeypatch, "0.13.0", seen="0.13.0")
         got = app.get_whats_new()
         assert [v for v, _items in got] == ["0.13.0", "0.12.0"]
-        assert got[0][1] == [("T", "x", "home")]
+        assert got[0][1] == [("T", "x", "home", "")]
 
 
 class TestFreshInstallMarker:
@@ -338,6 +369,27 @@ class TestWindow:
         assert len(_buttons(dlg, "Take me there")) == 1
         assert len(_buttons(dlg, "Got it")) == 1
         dlg.reject()
+
+    def test_without_icons_there_is_no_icon_column(self, host):
+        from ui.widgets import IdentityMark
+        host.show_whats_new(NOTES)
+        assert host._whats_new_dialog.findChildren(IdentityMark) == []
+        host._whats_new_dialog.reject()
+
+    def test_each_change_wears_its_icon_and_the_rest_a_blank(self, host):
+        from ui.widgets import IdentityMark
+        notes = [("0.14.0", [
+            ("Shockers like PiShock's", "Bolt.", "", "shock"),
+            ("Friends check versions", "Nothing of the three.", ""),
+            ("Toys found faster", "Capsule.", "", "toys"),
+        ])]
+        host.show_whats_new(notes)
+        marks = host._whats_new_dialog.findChildren(IdentityMark)
+        # one per row, in order; the blank keeps the titles in one column
+        assert [m.property("what") for m in marks] == ["shock", "", "toys"]
+        assert len({m.mapTo(host._whats_new_dialog, m.rect().topLeft()).x()
+                    for m in marks}) == 1
+        host._whats_new_dialog.reject()
 
     def test_got_it_closes_and_the_window_can_open_again(self, host):
         host.show_whats_new(NOTES)

@@ -1,0 +1,17 @@
+{
+    "name": "OscGoesPurrr.PrefabBuild",
+    "references": [
+        "com.vrcfury.api"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

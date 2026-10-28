@@ -553,14 +553,25 @@ class DashboardMixin:
     _FEATURE_VIEW_REQUIREMENTS = {
         "OSC Inspector":         ("feature_osc_inspector",),
         "Statistics":            ("feature_statistics",),
+        "Shockers":              ("feature_pishock",),
+        "Friends":               ("feature_friends",),
+        "My Avatar Remote":      ("feature_params",),
+    }
+    # ...and entries shown while ANY one of their flags is on: the Suits
+    # page carries both suits, each behind its own switch.
+    _FEATURE_VIEW_ANY = {
+        "Suits":                 ("feature_bhaptics", "feature_owo"),
     }
 
     def _feature_allows_view(self, view_name: str) -> bool:
-        reqs = self._FEATURE_VIEW_REQUIREMENTS.get(view_name)
-        if not reqs:
-            return True
         get = getattr(self.controller, "get_feature_enabled", None)
         if get is None:
+            return True
+        any_of = self._FEATURE_VIEW_ANY.get(view_name)
+        if any_of and not any(bool(get(k)) for k in any_of):
+            return False
+        reqs = self._FEATURE_VIEW_REQUIREMENTS.get(view_name)
+        if not reqs:
             return True
         return all(bool(get(k)) for k in reqs)
 
@@ -584,6 +595,10 @@ class DashboardMixin:
                 w.setVisible(show)
         for name, btn in self.nav_buttons.items():
             btn.setVisible(self._feature_allows_view(name))
+        # A button that opens Friends goes with it (My Avatar Remote's)
+        to_friends = getattr(self, "_params_friends_btn", None)
+        if to_friends is not None:
+            to_friends.setVisible(self._feature_allows_view("Friends"))
         current = self.main_stack.currentWidget() if self.main_stack else None
         for name, page in self.views.items():
             if page is current:

@@ -13,7 +13,20 @@ zeroconf>=0.131.0
 # Tray icon: pystray draws it, Pillow renders the glow frames.
 pystray>=0.19.0
 Pillow>=9.0.0
+# PiShock over USB (pishock_serial.py): the hub is a USB-serial device.
+# Import is guarded -- without it the PiShock page just says so.
+pyserial>=3.5
+# bHaptics suits over Bluetooth LE (bhaptics_ble.py), no bHaptics Player:
+# bleak, which brings its WinRT backend on Windows and dbus-fast (BlueZ)
+# on Linux. Import is guarded -- without it the Suits page just says so.
+bleak>=3.0
 # Used by vrchat_osc.py for the OSCQuery HTTP probe and by update_checker.py
 # for the GitHub release check. The update check's import is guarded — a
 # missing requests only disables updating, it never blocks startup.
 requests>=2.31
+# The Friends link (remote_link.py): QUIC between two PCs, dialled by public
+# key, with n0's free relays when a direct path fails. A Rust library behind
+# a ctypes DLL -- the build scripts pass --collect-binaries iroh, or the
+# one-file exe can't find it. Import is guarded: without it the Friends
+# page just says so.
+iroh>=1.2.0

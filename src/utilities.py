@@ -281,6 +281,28 @@ def apply_window_frame_colors(hwnd: int,
         except Exception:
             return  # older Windows — leave the default frame
 
+
+# The taskbar's name for this app. Without one Windows files the window
+# under the exe's path, and for the 0.14.0 alphas it showed its generic
+# program icon there instead of OGP's; with one, the taskbar takes the
+# window's own icon. One ID for every build, so a renamed exe (each alpha
+# has its own name) is still the same app on the taskbar.
+WINDOWS_APP_ID = "Blise518B.OscGoesPurrr"
+
+
+def set_windows_app_id(app_id: str = WINDOWS_APP_ID) -> None:
+    """Give this process its taskbar identity (Windows only). Call it
+    before the first window opens: a window already on the taskbar keeps
+    the identity it was shown with."""
+    if sys.platform != "win32":
+        return
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            ctypes.c_wchar_p(app_id))
+    except Exception:
+        pass     # very old Windows -- the taskbar falls back to the exe
+
+
 def toggle_windows_console(show: bool):
     """Hides or shows the Windows terminal console (Windows only)."""
     if os.name == 'nt':

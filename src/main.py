@@ -36,9 +36,11 @@ from constants import *
 from utilities import (
     classify_ogb_zone, value_to_hex_color, toggle_windows_console,
     create_default_icon, relaunch_self, open_folder, png_bytes,
+    set_windows_app_id,
 )
 from version import __version__, build_number
 import debug_log
+import link_handoff
 import update_checker
 import updater
 from settings import APPDATA_DIR
@@ -53,11 +55,18 @@ from controllers import (
     SessionsFacade,
     SpsSourcesFacade,
     StatsFacade,
+    PeopleFacade,
+    ThrustParamsFacade,
     ReplayFacade,
     SteamVRToysFacade,
+    PiShockFacade,
+    SuitsFacade,
+    FriendsFacade,
+    ParamsFacade,
     ToySoundsFacade,
     ToyPresenceFacade,
     WhatsNewFacade,
+    InterestsFacade,
 )
 
 
@@ -68,11 +77,18 @@ class OscGoesPurrrApp(
     SessionsFacade,
     SpsSourcesFacade,
     StatsFacade,
+    PeopleFacade,
+    ThrustParamsFacade,
     ReplayFacade,
     SteamVRToysFacade,
+    PiShockFacade,
+    SuitsFacade,
+    FriendsFacade,
+    ParamsFacade,
     ToySoundsFacade,
     ToyPresenceFacade,
     WhatsNewFacade,
+    InterestsFacade,
 ):
     def __init__(self):
         self.async_loop: asyncio.AbstractEventLoop = None
@@ -163,7 +179,8 @@ class OscGoesPurrrApp(
 
         # Initialize standalone OSC routing engine
         self.motor_router = MotorRouter(get_sleep_active=self.is_sleep_active,
-                                        get_master_scale=self.get_master_scale)
+                                        get_master_scale=self.get_master_scale,
+                                        get_friend_drive=self.get_friend_drive_mode)
 
         # Tune view's pattern player + source picker were deleted in
         # Cut 8 of the chain-inlined-tuning redesign; the parametric
@@ -225,6 +242,41 @@ class OscGoesPurrrApp(
         except Exception as e:
             print(f"[steamvr-toys] init failed: {e}")
 
+        # Shockers (a PiShock or OpenShock hub on USB) — behind its feature
+        # switch, off by default. Built before the UI, whose Shockers page
+        # reads its status and rules while it is built; nothing connects
+        # unless the feature is on AND the user asked for it (Connect, or
+        # connect-on-start).
+        try:
+            self._pishock_init()
+        except Exception as e:
+            print(f"[pishock] init failed: {e}")
+
+        # Suits (a bHaptics suit over Bluetooth, an OWO suit through the My
+        # OWO app) — each behind its own feature switch, off by default.
+        # Before the UI, whose Suits page reads their status while it is
+        # built.
+        try:
+            self._suits_init()
+        except Exception as e:
+            print(f"[suits] init failed: {e}")
+
+        # Avatar Remote (avatar boards, VRC Parameter Relay's board inside OGP)
+        # — behind its feature switch, off by default. Before Friends, whose
+        # link shares the worn avatar's board, and before the UI.
+        try:
+            self._params_init()
+        except Exception as e:
+            print(f"[params] init failed: {e}")
+
+        # Friends (other OGP users over the internet) — on by default, but
+        # the link only goes online once a nickname is set. Before the UI,
+        # whose Friends page reads its status while it is built.
+        try:
+            self._friends_init()
+        except Exception as e:
+            print(f"[friends] init failed: {e}")
+
         # Instantiate UI Component (must be after haptic_engine is created).
         # The UI owns its own root window so this controller stays
         # framework-agnostic.
@@ -232,19 +284,27 @@ class OscGoesPurrrApp(
 
         # Push window-chrome settings through the UI facade.
         self.ui.set_title(f"{APP_NAME} v{__version__} · b{build_number()}")
-        saved_geometry = self.mode_manager.app_settings.settings.get(
-            "window_geometry", WINDOW_GEOMETRY
-        )
-        self.ui.set_geometry(saved_geometry)
+        # Where the window was, maximized if it was (window_state); the
+        # plain geometry string is the fallback from older versions.
+        saved = self.mode_manager.app_settings.settings
+        if not self.ui.set_window_state(saved.get("window_state", "")):
+            self.ui.set_geometry(saved.get("window_geometry", WINDOW_GEOMETRY))
 
         # Build stored devices UI after loading profiles
         self.ui.build_stored_devices_ui()
+        if hasattr(self, "friends_link"):
+            self._friends_ui_ready()
+        if hasattr(self, "_params_book"):
+            self._params_ui_ready()
 
         # Usage statistics — lifetime totals + per-session summaries.
         # Needs the motor router (thrust counter) so it comes last;
         # sampling rides the 1 Hz refresh_device_states heartbeat in
         # run(), and _stats_shutdown() in quit_app closes the session.
         self._stats_init()
+        # Who each session was with: the opt-in VRChat-log tagging starts
+        # here when it is switched on.
+        self._people_init()
 
     # Cap how many queue messages we drain per tick. Under an OSC storm this
     # keeps the UI thread responsive — anything not drained this tick gets
@@ -334,6 +394,9 @@ class OscGoesPurrrApp(
                 self.toy_presence_on_devices_changed()
             elif msg_type == "battery_update":
                 self.ui.update_battery_label(data["device_name"], data["level"])
+                # friends see it on their card for that toy
+                self._toy_batteries = {**getattr(self, "_toy_batteries", {}),
+                                       data["device_name"]: data["level"]}
                 self._steamvr_toys_event(self.steamvr_toys_on_battery,
                                          data["device_name"], data["level"])
             elif msg_type == "device_removed":
@@ -351,6 +414,18 @@ class OscGoesPurrrApp(
                 self.toy_presence_on_devices_changed()
             elif msg_type == "stored_devices_refresh":
                 self.ui.build_stored_devices_ui()
+            elif msg_type == "friends":
+                kind, payload = data
+                self._friends_on_queue(kind, payload)
+            elif msg_type == "pishock_state":
+                refresh = getattr(self.ui, "refresh_pishock_status", None)
+                if refresh is not None:
+                    refresh()
+            elif msg_type == "suits_state":
+                self._suits_note_connected()
+                refresh = getattr(self.ui, "refresh_suits_status", None)
+                if refresh is not None:
+                    refresh()
             elif msg_type == "osc_status":
                 is_connected, port = data
                 self.ui.update_osc_status(is_connected, port)
@@ -386,13 +461,22 @@ class OscGoesPurrrApp(
                         self._send_ogp_state_out()
                     except Exception:
                         pass
-                    # ...and for the connected-toy parameters.
+                    # ...and for the connected-toy parameters and the
+                    # thrust counters.
                     try:
                         self.toy_presence_send_all()
                     except Exception:
                         pass
+                    try:
+                        self.thrust_params_send_all()
+                    except Exception:
+                        pass
                 else:
                     self.ui.log_message("VRChat OSC Disconnected. Waiting for VRChat to come back...")
+                    try:
+                        self._params_vrchat_gone()
+                    except Exception:
+                        pass
                     # The OGP/Test release edge can never arrive on a dead
                     # link — drop the test floor so nothing stays latched
                     # at the pulse level.
@@ -422,8 +506,10 @@ class OscGoesPurrrApp(
                     self._is_updating_ui = False  # Unlock
             elif msg_type == "avatar_change":
                 self._on_avatar_change(data)
+                self._params_avatar_changed(data)
                 # The swap reset every avatar parameter, these included.
                 self.toy_presence_send_all()
+                self.thrust_params_send_all()
             elif msg_type == "ogp_mode":
                 # Expression-menu mode switch (OGP/Mode int from VRChat).
                 self._on_ogp_mode_osc(data)
@@ -772,15 +858,38 @@ class OscGoesPurrrApp(
         "feature_intiface",
         "feature_osc_router_518",
         "feature_statistics",
+        "feature_pishock",
+        "feature_bhaptics",
+        "feature_owo",
+        "feature_friends",
+        "feature_params",
     )
 
+    # Features that start switched off. Shockers and the suits do: this
+    # edition is toys-first, and someone without the hardware should never
+    # meet the page.
+    _FEATURE_DEFAULT_OFF = frozenset({"feature_pishock", "feature_bhaptics", "feature_owo",
+                                      "feature_params"})
+
+    # Features this build carries but doesn't offer yet: always off whatever
+    # was saved, and missing from Settings → Features and "What are you here
+    # for?" -- so their pages, Home rows and engines never come up. The suits
+    # wait for a release of their own (Blise's call, 2026-10-28: not with
+    # Friends and Avatar Remote); empty this to bring them back.
+    FEATURES_NOT_YET = frozenset({"feature_bhaptics", "feature_owo"})
+
     def get_feature_enabled(self, key: str) -> bool:
-        return bool(self.get_app_setting(key, True))
+        if key in self.FEATURES_NOT_YET:
+            return False
+        return bool(self.get_app_setting(key, key not in self._FEATURE_DEFAULT_OFF))
 
     def get_feature_flags(self) -> Dict[str, bool]:
-        return {k: self.get_feature_enabled(k) for k in self.FEATURE_KEYS}
+        return {k: self.get_feature_enabled(k) for k in self.FEATURE_KEYS
+                if k not in self.FEATURES_NOT_YET}
 
     def set_feature_enabled(self, key: str, enabled: bool) -> None:
+        if key in self.FEATURES_NOT_YET:
+            return                      # a tester's saved switch stays as it was
         enabled = bool(enabled)
         self.set_app_setting(key, enabled)
         try:
@@ -807,6 +916,16 @@ class OscGoesPurrrApp(
             else:
                 self.router518.stop()
                 self.log_message("518 router fallback OFF")
+        elif key == "feature_pishock":
+            self._pishock_feature_changed(enabled)
+        elif key == "feature_bhaptics":
+            self._bhaptics_feature_changed(enabled)
+        elif key == "feature_owo":
+            self._owo_feature_changed(enabled)
+        elif key == "feature_friends":
+            self._friends_feature_changed(enabled)
+        elif key == "feature_params":
+            self._params_feature_changed(enabled)
         elif key == "feature_statistics":
             # Off deletes everything recorded (the Settings switch asks
             # first); on starts recording afresh.
@@ -1175,9 +1294,11 @@ class OscGoesPurrrApp(
         # just copied back from the snapshot.
         skip_saves = getattr(self, "_skip_shutdown_saves", False)
         if not skip_saves:
-            current_geometry = self.ui.get_geometry()
-            if current_geometry:
-                self.mode_manager.app_settings.update_setting("window_geometry", current_geometry)
+            # window_geometry too, for an older version opened later.
+            for key, value in (("window_geometry", self.ui.get_geometry()),
+                               ("window_state", self.ui.get_window_state())):
+                if value:
+                    self.mode_manager.app_settings.update_setting(key, value)
 
             self.save_profiles()
 
@@ -1192,6 +1313,41 @@ class OscGoesPurrrApp(
         # is still up.
         try:
             self.toy_presence_shutdown()
+        except Exception:
+            pass
+        # ...and that nothing is being counted any more (the pace goes to 0).
+        try:
+            self.thrust_params_shutdown()
+        except Exception:
+            pass
+        # Stop following VRChat's log.
+        try:
+            self._people_shutdown()
+        except Exception:
+            pass
+
+        # Let go of any button a friend holds on your avatar.
+        try:
+            self._params_shutdown()
+        except Exception:
+            pass
+        # Tell friends we're going (they stop being driven at once), close
+        # the Friends link.
+        try:
+            self._friends_shutdown()
+        except Exception:
+            pass
+
+        # End anything a shocker is still doing and close the USB link.
+        try:
+            self._pishock_shutdown()
+        except Exception:
+            pass
+
+        # Zero the bHaptics suit and let it go; stop OWO and tell My OWO
+        # we've left.
+        try:
+            self._suits_shutdown()
         except Exception:
             pass
 
@@ -1308,6 +1464,12 @@ class OscGoesPurrrApp(
                         needs_tick = self.motor_router.has_tune_subscription()
                     except Exception:
                         pass
+                # A friend's auto mode plays on this PC: it moves every tick.
+                if not needs_tick and hasattr(self, 'friends_need_tick'):
+                    try:
+                        needs_tick = self.friends_need_tick()
+                    except Exception:
+                        pass
                 # Hardware safety: keep ticking while ANY motor output is
                 # non-zero, regardless of which page the UI shows (the UI
                 # trace subscriptions pause while hidden, so they no longer
@@ -1388,6 +1550,10 @@ class OscGoesPurrrApp(
             # sample per second, off every routing hot path. The facade
             # guards its own body so a stats bug can't kill this pump.
             self._stats_sample_tick()
+            # The thrust counters and the VRChat-log tagging follow the
+            # sample they depend on; both guard their own bodies too.
+            self._thrust_params_tick()
+            self._people_tick()
             self.ui.schedule_callback(1000, refresh_device_states)
 
         # Register clean shutdown handler to auto-save profiles
@@ -1423,10 +1589,13 @@ class OscGoesPurrrApp(
         if self.get_app_setting("update_check_enabled", True):
             self.ui.schedule_callback(3000, self._spawn_update_check)
 
-        # "What's new", once, when this is the first launch after an
-        # update. Ahead of the update check: an offer that arrives while
-        # the window is open waits for it to close.
-        self.ui.schedule_callback(1200, self.whats_new_on_launch)
+        # "What are you here for?", once (a new install, or the first
+        # launch with the question), then "What's new" when this is the
+        # first launch after an update. One window at a time: What's new
+        # waits for the question, and an update offer that arrives while
+        # either is open waits for both.
+        self.ui.schedule_callback(
+            1200, lambda: (self.interests_on_launch(), self.whats_new_on_launch()))
 
         # Start the OSC debugger UI refresh loop
         self.refresh_debugger_ui()
@@ -1442,12 +1611,62 @@ class OscGoesPurrrApp(
             relaunch_self()
 
 
+def _ask_switch_to_open_window() -> bool:
+    """OGP is already open: ask. True = the open one was brought to the
+    front and this one should quit."""
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    qapp = QApplication.instance() or QApplication(sys.argv)
+    box = QMessageBox()
+    box.setIcon(QMessageBox.Warning)
+    box.setWindowTitle(APP_NAME)
+    box.setText("OscGoesPurrr is already open.")
+    box.setInformativeText(
+        "Two windows get in each other's way: both talk to the same toys, "
+        "VRChat's OSC and your Friends ID, so things stop working and it gets "
+        "confusing fast.\n\nSwitch to the window that is open?")
+    switch = box.addButton("Switch to it", QMessageBox.AcceptRole)
+    box.addButton("Open a second one anyway", QMessageBox.DestructiveRole)
+    box.setDefaultButton(switch)
+    box.exec()
+    if box.clickedButton() is not switch:
+        return False
+    if sys.platform == "win32":
+        try:      # let the open window come to the front (Windows' focus rule)
+            import ctypes
+            ctypes.windll.user32.AllowSetForegroundWindow(-1)
+        except Exception:
+            pass
+    link_handoff.send_to_running(link_handoff.SHOW)
+    qapp.processEvents()
+    return True
+
+
 if __name__ == "__main__":
     # Set up durable logging + crash handlers FIRST, so even a failure during
     # app construction lands in the log file (the windowed build has no console).
     debug_log.setup_logging()
+    # Before any window, so the taskbar shows OGP's icon (utilities).
+    set_windows_app_id()
+    # A clicked invite link (ogp://friend/...) starts OGP with the link as
+    # its argument. When OGP is already running, hand the link to it and
+    # quit; otherwise this OGP opens it once its window is up.
+    startup_link = link_handoff.link_from_argv(sys.argv)
+    if startup_link and link_handoff.send_to_running(startup_link):
+        sys.exit(0)
+    # Opened a second time: switch to the open window, or knowingly run two
+    # (with a banner that says so -- toys, OSC and Friends trip over each
+    # other between two windows).
+    second = False
+    if not startup_link and link_handoff.another_running():
+        if _ask_switch_to_open_window():
+            sys.exit(0)
+        second = True
     try:
         app = OscGoesPurrrApp()
+        if second:
+            app.ui.show_second_window_banner()
+        if startup_link:
+            app.thread_queue.put(("friends", ("open_link", startup_link)))
         app.run()
     except BaseException:
         debug_log.get_logger().critical("fatal error in __main__", exc_info=True)

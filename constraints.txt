@@ -6,7 +6,8 @@
 # surprise upstream release can't break users overnight. A pip constraints
 # file never installs anything by itself — it only pins a package IF it is
 # being installed — so dev/build tool pins are ignored for plain runtime
-# installs.
+# installs -- and platform-specific entries (the winrt-* stack bleak pulls
+# in on Windows, dbus-fast on Linux) are simply ignored elsewhere.
 #
 # Usage:   pip install -r requirements.txt -c constraints.txt
 # Refresh: venv\Scripts\python.exe -m pip freeze  (drop pip/setuptools),
@@ -18,6 +19,9 @@
 PySide6==6.11.1
 buttplug==1.0.0
 python-osc==1.10.2
+iroh==1.2.0
+pyserial==3.5
+bleak==3.0.2
 zeroconf==0.149.16
 pystray==0.19.5
 pillow==12.2.0
@@ -39,6 +43,16 @@ idna==3.18
 urllib3==2.7.0
 ifaddr==0.2.0
 six==1.17.0
+winrt-runtime==3.2.1
+winrt-Windows.Devices.Bluetooth==3.2.1
+winrt-Windows.Devices.Bluetooth.Advertisement==3.2.1
+winrt-Windows.Devices.Bluetooth.GenericAttributeProfile==3.2.1
+winrt-Windows.Devices.Enumeration==3.2.1
+winrt-Windows.Devices.Radios==3.2.1
+winrt-Windows.Foundation==3.2.1
+winrt-Windows.Foundation.Collections==3.2.1
+winrt-Windows.Storage.Streams==3.2.1
+dbus-fast==5.0.26
 
 # ---- dev / build tools (only pinned when actually installed) ----
 pytest==9.0.3

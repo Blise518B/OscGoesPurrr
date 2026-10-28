@@ -31,8 +31,8 @@ from PySide6.QtGui import (QColor, QFont, QFontDatabase, QGuiApplication,  # noq
 
 T = icon.T
 OUT = icon.REPO / "docs" / "assets"
-TAGLINE = "Every touch in VRChat, felt for real."
-SUBLINE = "VRChat OSC \u2192 Bluetooth toys via Intiface \u00b7 free for Windows"
+TAGLINE = "All your VRChat haptics, in one app."
+SUBLINE = "Toys, shockers and suits from your avatar \u00b7 Windows & Linux"
 SEGOE = Path(r"C:\Windows\Fonts\segoeui.ttf")
 # The release asset's stable name: the README button links to
 # releases/latest/download/<this>, so it must never carry a version.

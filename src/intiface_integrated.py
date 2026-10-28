@@ -82,9 +82,11 @@ def _resolve_engine_path() -> Path:
 
 
 def _find_device_config(engine_dir: Path) -> Optional[Path]:
-    """Optional: if the user dropped a buttplug device-config JSON next to the
-    engine, pass it through. Absent by default (the engine ships built-in
-    defaults), so integrated mode works with zero extra files."""
+    """The device-config JSON next to the engine, passed through so it
+    replaces the engine's built-in list. OGP ships one
+    (buttplug-device-config-v4.json from tools/make_engine_device_config.py:
+    Buttplug's own list without the Lovense match that connects to every
+    Bluetooth serial device). Without one the engine uses its built-in list."""
     try:
         for pattern in ("buttplug-device-config*.json", "device-config*.json"):
             for match in sorted(engine_dir.glob(pattern)):
