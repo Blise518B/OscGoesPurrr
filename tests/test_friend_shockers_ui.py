@@ -130,3 +130,28 @@ def test_paused_rests_operate_and_says_why(qapp):
     assert w["state"].head.text() == "Paused"
     ui._update_panel(friend_st(friend(A, "Mika", ["Collar"])))
     assert card._tiles["shock"].isEnabled() and "ARMED" in w["state"].head.text()
+
+
+def test_all_their_toys_only_for_two_toys_or_more(qapp):
+    """Blise's call, 2026-10-29: one toy, one card -- its own name, battery
+    and meter, but it drives "all their toys" underneath, so the avatar
+    menu's Level (which drives all of them) still shows on it."""
+    from remote_protocol import ALL_TOYS
+
+    def with_toys(*names):
+        f = friend(A, "Mika", [])
+        f["theirs"].update(toys=[(n, 1) for n in names], allow_toys=True, allow_shock=False,
+                           batteries={n: 80 for n in names}, outputs={n: 0.4 for n in names})
+        f["my_levels"] = {ALL_TOYS: 0.6}
+        return f
+
+    one = panel(friend_st(with_toys("Lovense Lush 3")))
+    cards = one._panel_w["toys"]
+    assert len(cards) == 1
+    card = cards[0]
+    assert card.toy == ALL_TOYS and card.shows == "Lovense Lush 3"
+    one.controller.calls.clear()
+    card._on_level(0.3)                       # it drives all their toys
+    assert one.controller.calls[-1] == ("set_friend_level", A, ALL_TOYS, 0.3)
+    two = panel(friend_st(with_toys("Lovense Lush 3", "Lovense Hush 2")))
+    assert [c.toy for c in two._panel_w["toys"]] == [ALL_TOYS, "Lovense Lush 3", "Lovense Hush 2"]

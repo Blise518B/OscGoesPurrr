@@ -76,7 +76,10 @@ class FriendsMenuMixin:
                 or not self.get_feature_enabled(FEATURE_KEY)):
             return
         if time.monotonic() < getattr(self, "_ogp_mode_guard_until", 0.0):
-            return  # an avatar just loaded: VRChat is replaying defaults, not a hand
+            # an avatar just loaded: VRChat is replaying saved values, not a
+            # hand -- OGP's own go back, as for your own controls
+            self._menu_send(address)
+            return
         m = self._friend_menu
         b = m.both
         peers = self._friends_targets()
@@ -120,7 +123,7 @@ class FriendsMenuMixin:
                 self._menu_echo(OGP_FRIEND_MODE_PARAMETER, 0, "i")
         elif address == OGP_FRIEND_STRENGTH_PARAMETER:
             for peer in peers:
-                self.set_friend_strength(peer, unit(value))
+                self.set_friend_strength(peer, unit(value), source="menu")
         # Shockers ▸
         elif address == OGP_FRIEND_SHOCK_STRENGTH_PARAMETER:
             m.shock_int = unit(value)
@@ -193,6 +196,80 @@ class FriendsMenuMixin:
         except Exception:
             pass
 
+    # --- the page and the menu agree; OGP first (Blise's call, 2026-10-28)
+    def _menu_follow(self, peer: str, toy: str) -> None:
+        """You changed the picked friend's All their toys card on the page:
+        the menu's own Toys radials and toggles follow, so VRChat shows
+        what OGP does. Only the All card (the one the menu drives while
+        all four Which toys are on) and only for whoever is picked."""
+        m = self._friend_menu
+        if toy != proto.ALL_TOYS or not all(m.toys) or peer not in self._friends_targets():
+            return
+        level = (self._my_levels.get(peer) or {}).get(proto.ALL_TOYS, 0.0)
+        pat = (self._my_patterns.get(peer) or {}).get(proto.ALL_TOYS)
+        override = proto.ALL_TOYS in (self._my_override.get(peer) or ())
+        mode, speed, rng = 0, m.speed, m.range
+        if pat:
+            wave, period, lo, hi = pat
+            mode = friend_patterns.WAVES.index(wave) + 1
+            speed = friend_patterns.menu_speed(wave, period)
+            level, rng = ((lo + hi) / 2, hi - lo) if wave == "osc" else (m.level, hi)
+        sends = []
+        if abs(level - m.level) > 1e-3:
+            m.level = level
+            sends.append((OGP_FRIEND_LEVEL_PARAMETER, level, "f"))
+        if mode != m.mode:
+            m.mode = mode
+            sends.append((OGP_FRIEND_MODE_PARAMETER, mode, "i"))
+        if abs(speed - m.speed) > 1e-3:
+            m.speed = speed
+            sends.append((OGP_FRIEND_SPEED_PARAMETER, speed, "f"))
+        if abs(rng - m.range) > 1e-3:
+            m.range = rng
+            sends.append((OGP_FRIEND_RANGE_PARAMETER, rng, "f"))
+        if override != m.override:
+            m.override = override
+            sends.append((OGP_FRIEND_OVERRIDE_PARAMETER, override, "T"))
+        for param, value, kind in sends:
+            self._menu_echo(param, value, kind)
+
+    def _menu_follow_strength(self, peer: str, value: float) -> None:
+        """You moved the picked friend's strength slider: the menu's Their
+        strength follows."""
+        if peer in self._friends_targets():
+            self._menu_echo(OGP_FRIEND_STRENGTH_PARAMETER, unit(value), "f")
+
+    def _menu_values(self) -> List[tuple]:
+        """Every one of the menu's own radials and toggles as OGP has them,
+        as (parameter, value, OSC type)."""
+        m = self._friend_menu
+        b = m.both
+        out = [(OGP_FRIEND_LEVEL_PARAMETER, m.level, "f"), (OGP_FRIEND_MODE_PARAMETER, m.mode, "i"),
+               (OGP_FRIEND_SPEED_PARAMETER, m.speed, "f"), (OGP_FRIEND_RANGE_PARAMETER, m.range, "f"),
+               (OGP_FRIEND_OVERRIDE_PARAMETER, m.override, "T"),
+               (OGP_FRIEND_SHOCK_STRENGTH_PARAMETER, m.shock_int, "f"),
+               (OGP_FRIEND_SHOCK_LENGTH_PARAMETER, m.shock_len, "f"),
+               (OGP_FRIEND_WARNING_PARAMETER, m.warning, "T"),
+               (OGP_BOTH_LEVEL_PARAMETER, b.level, "f"), (OGP_BOTH_MODE_PARAMETER, b.mode, "i"),
+               (OGP_BOTH_SPEED_PARAMETER, b.speed, "f"), (OGP_BOTH_STRENGTH_PARAMETER, b.strength, "f"),
+               (OGP_BOTH_LENGTH_PARAMETER, b.length, "f")]
+        out += [(p, on, "T") for p, on in zip(OGP_FRIEND_TOY_PARAMETERS, m.toys)]
+        out += [(p, on, "T") for p, on in zip(OGP_FRIEND_SHOCKER_PARAMETERS, m.shockers)]
+        targets = self._friends_targets()
+        mine = self._my_strength.get(targets[0]) if targets else None
+        if mine is not None:
+            out.append((OGP_FRIEND_STRENGTH_PARAMETER, mine[1], "f"))
+        return out
+
+    def _menu_send(self, address: str = "") -> None:
+        """Put OGP's values back on the avatar: all of them (OSC reconnect,
+        avatar load), or the one VRChat just replayed."""
+        if not hasattr(self, "friends_settings") or not self.get_feature_enabled(FEATURE_KEY):
+            return
+        for param, value, kind in self._menu_values():
+            if not address or param == address:
+                self._menu_echo(param, value, kind)
+
     def _status_of(self, peer: str) -> Dict[str, Any]:
         """A friend's last status (an example friend's made up), or {}."""
         st = self._friend_status.get(peer)
@@ -220,7 +297,7 @@ class FriendsMenuMixin:
         self._menu_drive(peer, m.level, m.mode, m.speed, m.range, clear)
         for key in ([] if clear else self._menu_keys(peer)):
             if (key in self._my_override.get(peer, ())) != m.override:
-                self.set_friend_override(peer, key, m.override)
+                self.set_friend_override(peer, key, m.override, source="menu")
 
     def _menu_drive(self, peer: str, level: float, mode: int, speed: float,
                     rng: float, clear: bool = False) -> None:
@@ -230,16 +307,16 @@ class FriendsMenuMixin:
             # direct control: no auto mode left on those toys
             for key in list(self._my_patterns.get(peer) or {}):
                 if proto.ALL_TOYS in keys or key in keys or key == proto.ALL_TOYS:
-                    self.set_friend_pattern(peer, key, "")
+                    self.set_friend_pattern(peer, key, "", source="menu")
         for key in keys:
             if clear:
-                self.set_friend_pattern(peer, key, "")
-                self.set_friend_level(peer, key, 0.0)
+                self.set_friend_pattern(peer, key, "", source="menu")
+                self.set_friend_level(peer, key, 0.0, source="menu")
             elif pat is not None:
-                self.set_friend_level(peer, key, 0.0)
-                self.set_friend_pattern(peer, key, *pat)
+                self.set_friend_level(peer, key, 0.0, source="menu")
+                self.set_friend_pattern(peer, key, *pat, source="menu")
             else:
-                self.set_friend_level(peer, key, level)
+                self.set_friend_level(peer, key, level, source="menu")
 
     def _menu_both(self, clear: bool = False) -> None:
         """Both of us: the picked friend's toys (the Which toys toggles) and

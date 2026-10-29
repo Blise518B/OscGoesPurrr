@@ -269,7 +269,8 @@ class PiShockMixin(PiShockRulesMixin):
         if st.get("hub_kind") == "openshock" or (openshock and not st.get("connected")):
             return [dict(s) for s in openshock], True
         if st.get("connected"):
-            return list(st.get("shockers") or []), False
+            # the page shows the switched-off ones too: it's where they come back
+            return list(st.get("all_shockers") or st.get("shockers") or []), False
         return [], False
 
     def _rebuild_pishock_cards(self, st: Dict[str, Any]) -> None:
@@ -280,18 +281,20 @@ class PiShockMixin(PiShockRulesMixin):
         models = self.controller.openshock_models() if openshock else ()
         own = st.get("shocker_limits") or {}
         hub = st.get("limits") or {}
+        off = set(st.get("shockers_off") or [])
         for idx, s in enumerate(listed):
             sid = int(s["id"])
             limits = own.get(str(sid)) or {k: hub.get(k) for k in
                                            ("max_intensity", "max_vibrate", "max_pulse_ms")}
             card = ShockerSetupCard(
-                s, limits, ranges,
+                dict(s, off=sid in off), limits, ranges,
                 on_name=lambda text, i=idx, x=sid: self._pishock_named(i, x, text),
                 on_limit=lambda key, v, x=sid: self.controller.set_pishock_shocker_limit(
                     x, key, v),
                 on_test=lambda op, x=sid: self.controller.pishock_test(op, x),
                 openshock=({"models": [(m, label) for m, label in models],
-                            "model": s.get("model")} if openshock else None))
+                            "model": s.get("model")} if openshock else None),
+                on_use=lambda on, x=sid: self._pishock_use(x, on))
             if openshock:
                 card.model.currentIndexChanged.connect(
                     lambda _v, i=idx: self._push_openshock(i))
@@ -311,6 +314,15 @@ class PiShockMixin(PiShockRulesMixin):
                 or st.get("hub_kind") == "openshock"
                 else "Connect the hub to see its shockers here")
             self._pishock_cards_hint.show()
+
+    def _pishock_use(self, sid: int, on: bool) -> None:
+        """A card's On / Off: greyed at once, then everything that reads the
+        list (behaviours' chips, Home, friends) follows."""
+        card = self._pishock_cards.get(sid)
+        if card is not None:
+            card.set_on(on)
+        self.controller.set_pishock_shocker_on(sid, on)
+        self.refresh_pishock_status()
 
     def _pishock_named(self, idx: int, sid: int, text: str) -> None:
         st = self.controller.get_pishock_status()
@@ -403,16 +415,20 @@ class PiShockMixin(PiShockRulesMixin):
             self._rebuild_pishock_cards(st)
         else:
             own = st.get("shocker_limits") or {}
+            off = set(st.get("shockers_off") or [])
             for sid, card in self._pishock_cards.items():
                 if str(sid) in own:
                     card.set_limits(own[str(sid)])
+                card.set_on(sid not in off)
             if self._pishock_shared_card is not None:
                 self._pishock_shared_card.set_limits(st.get("limits") or {})
 
         # what the behaviours' drop zones call the shockers
         choices = tuple((int(s["id"]), self._pishock_shocker_label(s)) for s in listed)
-        if choices != self._pishock_shocker_choices:
+        off = frozenset(int(x) for x in st.get("shockers_off") or [])
+        if choices != self._pishock_shocker_choices or off != self._pishock_shockers_off:
             self._pishock_shocker_choices = choices
+            self._pishock_shockers_off = off
             self._rebuild_pishock_rules()
         self._refresh_pishock_live()
 
@@ -430,10 +446,14 @@ class PiShockMixin(PiShockRulesMixin):
         except Exception:
             return
         outputs = live.get("outputs", {})
-        paused_ids = {int(s["id"]) for s in st.get("shockers") or [] if s.get("paused")}
+        paused_ids = {int(s["id"]) for s in st.get("all_shockers") or st.get("shockers") or []
+                      if s.get("paused")}
+        off = set(st.get("shockers_off") or [])
         for sid, card in getattr(self, "_pishock_cards", {}).items():
             o = outputs.get(sid)
-            if o and o.get("kind") == "rest":
+            if sid in off:
+                card.set_state("OFF", "idle")
+            elif o and o.get("kind") == "rest":
                 card.set_state("BREAK", "warn")
             elif o:
                 # in the colour of what it does: a shock in the shockers' yellow

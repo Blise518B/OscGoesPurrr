@@ -139,13 +139,15 @@
 
   function toyHTML(toy) {
     var style = toy.hue ? ' style="--hue:var(--' + toy.hue + ');--hue-mid:var(--' + toy.hue + '-mid)"' : '';
+    // its place among the connected toys, in its corner (the app's ToyFrame)
+    var num = toy.on ? '<span class="o-tnum">' + (TOYS.filter(function (t) { return t.on; }).indexOf(toy) + 1) + '</span>' : '';
     var meters = '';
     for (var i = 0; i < toy.motors; i++) meters += '<span class="o-meter"><i></i></span>';
     var right = toy.on
       ? '<span class="o-batt">' + BATT_SVG + toy.batt + '%</span><span class="o-meters">' + meters + '</span>' +
         '<span class="o-btn small" data-act="mute" data-tip="mute">Mute</span><span class="o-btn small" data-act="test" data-tip="testone">Test</span>'
       : '<span class="o-pill idle">OFFLINE</span>';
-    return '<div class="o-toy' + (toy.on ? '' : ' offline') + '" data-toy="' + toy.id + '"' + style + '>' +
+    return '<div class="o-toy' + (toy.on ? '' : ' offline') + '" data-toy="' + toy.id + '"' + style + '>' + num +
       '<div class="o-toybar" data-tip="' + (toy.on ? 'toy' : 'offline') + '">' +
       '<span class="o-ticon"><img src="assets/demo/' + toy.icon + '.png" alt=""></span><span class="o-dot"></span>' +
       '<span class="o-tname">' + toy.name + '</span><span class="o-tzones"></span><span class="o-tspace"></span>' + right +
@@ -166,7 +168,8 @@
   function homeHTML() {
     return '<div class="o-page on" data-page="Home"><div class="o-home">' +
       '<div class="o-setup" data-tip="setup"><span class="o-ok"></span>Toy on<span class="o-ok"></span>VRChat connected' +
-        '<span class="o-ok"></span>Avatar has SPS<span class="o-setupr">Getting started</span></div>' +
+        '<span class="o-ok"></span>Avatar has SPS<span class="o-ok" data-tip="menu"></span>Avatar menu' +
+        '<span class="o-setupr">Getting started</span></div>' +
       '<div class="o-homehead"><h4>Toys</h4><span class="o-btn js-scan" data-tip="scan">Scan now</span>' +
         '<span class="o-muted js-nextscan"></span><span class="o-tspace"></span>' +
         '<span class="o-btn js-testall" data-tip="test">Test all</span></div>' +
@@ -205,6 +208,14 @@
         '<div class="line" style="padding-left:44px"><span class="o-btn danger" data-tip="delstats">Delete statistics…</span></div>' +
         feat('pishock', 'Shockers — PiShock / OpenShock (USB)') + feat('friends', 'Friends — control each other over the internet') +
         feat('params', 'Avatar Remote — avatar boards friends can use too') + '</div>' +
+      // the avatar's menu: the demo's avatar wears it (its OGP/* parameters
+      // are in My Avatar Remote's list); the buttons are the real downloads
+      '<div class="o-card o-set"><div class="o-sect">VRChat menu</div>' +
+        '<p>OGP’s controls can be in your avatar’s own menu too, so you never leave VRChat: drag one VRCFury prefab onto your avatar — your own controls, the Friends submenu, or both — and upload. Your avatar’s own menu files aren’t touched, and the parameters are unsynced (0 sync bits).</p>' +
+        '<div class="line"><span class="o-tick">✓</span><span><b>Your own controls</b> — Strength, Off, Sleep, Test and the modes · <i>on the avatar you’re wearing</i></span></div>' +
+        '<div class="line"><span class="o-tick">✓</span><span><b>Friends submenu</b> — drives whoever you picked on the Friends page · <i>on the avatar you’re wearing</i></span></div>' +
+        '<div class="line"><a class="o-btn" data-tip="getmenu" target="_blank" rel="noopener" href="https://github.com/Blise518B/OscGoesPurrr/releases/latest/download/OscGoesPurrr-VRCFury.unitypackage">Get the menu prefabs</a>' +
+        '<a class="o-btn" data-tip="howmenu" target="_blank" rel="noopener" href="https://github.com/Blise518B/OscGoesPurrr/blob/main/docs/VRCHAT_MENU.md">How to add it</a></div></div>' +
       '<div class="o-card o-set"><div class="o-sect">Connection Settings</div>' +
         line(1, 'Auto Refresh Devices') + line(1, 'Auto Connect (Intiface)') + line(1, 'Auto Connect (VRChat OSC)') +
         line(1, 'Sound when a toy connects or disconnects') +
@@ -241,7 +252,8 @@
       BUILT.map(function (n) { return '<div class="o-page o-built" data-page="' + n + '"><div class="o-pgscroll o-scroll rpanel"></div></div>'; }).join('') +
       Object.keys(NOTES).map(noteHTML).join('') + '</div>' +
     '<div class="o-status"><span class="o-help">?&nbsp; Show me around</span>' +
-    '<span>OscGoesPurrr <span class="ver-tag"></span> · made by <b>Blise518B</b></span></div>' +
+    '<span><a class="o-dimlink" href="https://github.com/Blise518B/OscGoesPurrr" target="_blank" rel="noopener">OscGoesPurrr</a> <span class="ver-tag"></span> · made by ' +
+    '<a href="https://github.com/Blise518B" target="_blank" rel="noopener"><b>Blise518B</b></a></span></div>' +
     '</div></div>');
   host.classList.add('ogp-stage');
   host.appendChild(frame);
@@ -810,6 +822,9 @@
     shockrow: ['Shockers', 'Your PiShock or OpenShock hub and the shockers on it. Click to open the Shockers page.'],
     shockshare: ['Share with friends', 'On: friends you allow may fire your shockers, within each shocker’s own limits. Off: your friends don’t see your shockers at all.'],
     shockon: ['On / Off', 'Off stops every shocker and keeps them stopped, even after a restart. Sharing stays as it was.'],
+    menu: ['Avatar menu', 'Optional — Strength, Off, Sleep, the modes and a Friends submenu, right in VRChat: drag one VRCFury prefab onto your avatar and upload. Settings → VRChat menu has the prefab and the guide.'],
+    getmenu: ['Get the menu prefabs', 'Downloads OscGoesPurrr-VRCFury.unitypackage from the newest release. Import it into your avatar’s Unity project (it needs VRCFury), drag one of its three prefabs onto your avatar and upload.'],
+    howmenu: ['How to add it', 'The setup guide: the prefabs, a one-click installer for avatars without VRCFury, the manual way, and every parameter.'],
     feature: ['Features', 'Switch a feature off and its page leaves the sidebar and its background work stops. Nothing you set up for it is lost.'],
     interests: ['Choose what you use', 'Asks again what you have and want — toys, a shocker, friends — and switches the features to match.'],
     delstats: ['Delete statistics', 'Deletes everything recorded. Asks first. Works whether statistics are on or off.'],

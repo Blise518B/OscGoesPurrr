@@ -31,7 +31,15 @@ is Avatar Remote's card design -- hub, a card per shocker, behaviour cards
 dragging a shocker card's ⠿ onto them, several per behaviour, none until
 dropped -- with **Touch zones** (several contacts, each its own shockers)
 and its switched-off example. Values are sliders with the number written
-out, never spin boxes (they were cut off).
+out, never spin boxes (they were cut off). **Each shocker has its own On /
+Off (Blise's ask, 2026-10-28: only the ones in use):** an Off card stays
+where it is, greyed out with a grey frame, its switch the one thing lit
+(his call: not folded, not moved). Off is enforced in the engine --
+`set_shockers_off`: stopped at once, every send refused, and
+`shockers()` / `shocker_ids()` leave it out, so behaviours skip it (its
+chips grey), friends and the web remote never see it (their slots are
+numbered among the shockers in use), Home's row leaves it out;
+`all_shockers()` is the page's list. Remembered (`shockers_off`).
 
 **OpenShock joined it (2026-10-07, Blise's ask)**: the same hub link also
 speaks OpenShock firmware (`openshock_serial.py` — PiShock's 2023 / Lite
@@ -381,9 +389,36 @@ that test passes again; change how Home, the chain
 editor, Settings → Appearance or Statistics look → bring the demo back in
 line and compare it with a fresh render of the app.
 
+**The demo has the 0.14 pages too (Blise's ask, 2026-10-28):** Friends,
+Shockers and My Avatar Remote (`docs/assets/demo-friends.js`,
+`demo-shockers.js`, `demo-avatar.js`, loaded by `demo-pages.js`; styles in
+`demo-pages.css`), the sidebar with the app's icons (`demo-icons.js`, written
+by `tools/make_demo_icons.py` from `ui/icons.py` -- rerun it, never edit),
+Home's getting-started strip, Scan now and shocker row, and Settings →
+Features first (a switch hides its page, as in the app). A friend's panel
+there is the web remote's own pieces, and their styles live in one shared
+file, `docs/assets/remote-panel.css`, scoped under `.rpanel` (the site's own
+`.btn` / `.head` / `p` rules would leak in otherwise) -- remote.html links it
+too, so change the panel's look there, once. Your own row ("you") is the
+app's Me: its levels reach the demo's toys through demo.js `setDrive`, the
+app's `_apply_friend_drive` rule (your strength, Off, each toy's band;
+Override replaces); its shockers are the Shockers page's, its board My
+Avatar Remote's. A demo friend has nobody at the other end, and the page
+says so in its intro (only toys, the shocker hub, friends and VRChat are
+simulated). Suits stay out of the demo while they're hidden in the app.
+Change one of these pages in the app → bring its demo page along and
+compare with `tools/app_shots.py --dump <dir> --size 1100x2600`.
+
 **The VRCFury menu prefabs** (`docs/unity/OscGoesPurrr-VRCFury.unitypackage`,
-Option A in `docs/VRCHAT_MENU.md`, linked from the site and the Friends
-page) are built, never edited by hand -- three in one package (Blise's call,
+Option A in `docs/VRCHAT_MENU.md`) are attached to every release under that
+fixed name by `release.bat` (Blise's ask, 2026-10-28: more visible), so
+`releases/latest/download/OscGoesPurrr-VRCFury.unitypackage` is the link
+everything uses -- the README's "Your avatar's menu" section, the release
+notes' Install section, the site, and the app: Settings → VRChat menu (right
+after Features: whether the worn avatar has each part, live), the Friends
+page's tip and an optional fourth step in Home's Getting started (it never
+holds the card open). The links live in `ui/views/avatar_menu.py`. They are
+built, never edited by hand -- three in one package (Blise's call,
 2026-10-23): *OscGoesPurrr Menu* (own controls + Friends ▸), *(Self)* and
 *(Friends)*. Their icons are drawn by `tools/make_menu_icons.py` into
 `docs/unity/icons/` in Blise's "Flat" style (white line art, the app's hues
@@ -402,7 +437,25 @@ prefab at its top and the menus, parameters and icon in `Assets/OGP/Menu`.
 Two things must stay: `OGP/*` in the Full Controller's
 global params (VRCFury renames every other parameter, and OSC reaches one
 by name only), and the pinned GUIDs (with fresh ones, importing a newer
-package duplicates every asset instead of updating it).
+package duplicates every asset instead of updating it). The shocker
+Vibrate buttons are labelled **Shocker vibrate** (Blise's call,
+2026-10-28: "Vibrate" read as the toys'); the parameters keep their names.
+
+**The avatar menu and the app agree, OGP first (Blise's call,
+2026-10-28).** A Friends menu change drives the picked friend through the
+same `set_friend_*` setters as the page (`source="menu"`), so the page
+shows it live; a change on the page -- the picked friend's All their toys
+card (level, auto mode, speed, range, Override) or their strength -- is
+sent to the menu's own parameters (`friends_menu._menu_follow`), never one
+the menu just sent. After an avatar load VRChat's replayed values are
+answered with OGP's (`_menu_send`, also on every OSC (re)connect through
+`_send_ogp_state_out`), as for your own controls.
+
+**Toys keep their place (Blise's ask, 2026-10-28):** connected toys are in
+the order they connected (`intiface_facade.get_connected_toys_in_order`;
+a newcomer goes last), each with its number in its row's corner, and
+friends get them in that order -- so the menu's Which toys 1-4 are Home's
+1-4. Never sort them by name again.
 
 **License:** MIT, like the other 518 repos; keep public mentions of it to
 one line. Everything the exe bundles keeps its own license, listed in

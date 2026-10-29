@@ -154,3 +154,31 @@ def test_building_the_page_never_opens_a_window(qapp):
     finally:
         qapp.removeEventFilter(spy)
     assert opened == []
+
+
+def test_a_shocker_switched_off_stays_on_the_page_greyed_and_its_chips_go_grey(qapp):
+    """Its card's switch: Off greys the card where it is (its switch still
+    lit, to bring it back), says OFF, and a behaviour that names it shows
+    its chip grey -- the behaviour skips it."""
+    from PySide6.QtWidgets import QPushButton
+    ui, _root = page(qapp)
+    ctl, off, base = ui.controller, [], ui.controller.get_pishock_status
+    ctl.set_pishock_shocker_on = lambda sid, on: (off.remove(sid) if on else off.append(sid))
+    ctl.get_pishock_status = lambda: dict(base(), all_shockers=SHOCKERS, shockers_off=list(off),
+                                          shockers=[s for s in SHOCKERS if s["id"] not in off])
+    ctl.rules["triggers"][0]["shockers"] = [24325, 24326]
+    ui.refresh_pishock_status()
+    card = ui._pishock_cards[24326]
+    assert card.use.isChecked() and card.body.isEnabled() and card.body.graphicsEffect() is None
+    card.use.setChecked(False)
+    card = ui._pishock_cards[24326]                       # still on the page
+    assert off == [24326] and not card.use.isChecked()
+    assert not card.body.isEnabled() and card.body.graphicsEffect() is not None
+    assert card.use.isEnabled() and card.use.graphicsEffect() is None
+    assert card.pill.text() == "OFF"
+    headpat = next(w for w in ui._pishock_behaviours if w["kind"] == "triggers")
+    chips = {b.text().split("  ")[0]: b.isChecked() for b in headpat["card"].zone.findChildren(QPushButton)
+             if b.property("role") == "chip"}
+    assert chips == {"Collar": True, "Shocker 24326": False}
+    card.use.setChecked(True)                             # and back
+    assert off == [] and ui._pishock_cards[24326].body.isEnabled()

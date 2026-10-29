@@ -246,14 +246,24 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-gh release create "!TAG!" "!ASSET!" !PRERELEASE! ^
+REM The avatar menu's VRCFury prefabs go along, under a fixed name too
+REM (releases/latest/download/OscGoesPurrr-VRCFury.unitypackage is what the
+REM README, the site and the app link to). The updater never takes it: it
+REM only looks at .exe / .AppImage files.
+set "MENU=docs\unity\OscGoesPurrr-VRCFury.unitypackage"
+if not exist "!MENU!" (
+    echo [ERROR] !MENU! is missing - rebuild it with tools\build_vrcf_prefab.py.
+    pause
+    exit /b 1
+)
+gh release create "!TAG!" "!ASSET!" "!MENU!" !PRERELEASE! ^
     --repo "%PUBLIC_REPO%" ^
     --title "OscGoesPurrr !TAG!" ^
     --notes-file "tools\RELEASE_NOTES.md"
 if errorlevel 1 (
     echo [ERROR] gh release create failed. The tag is pushed; you can retry
     echo         just this step, or create the release from the web UI and
-    echo         attach !ASSET! yourself.
+    echo         attach !ASSET! and !MENU! yourself.
     pause
     exit /b 1
 )

@@ -32,6 +32,20 @@ def friends_qss(mode_name: str, v: Dict[str, str]) -> str:
         f'QLabel#friendsMicro {{ color: {v["dim"]}; font-size: 10px; font-weight: 700;'
         ' letter-spacing: 1px; }\n',
         f'QLabel[low="true"] {{ color: {v["warn"]}; }}\n',      # a toy's battery, low
+        # Add a friend: a header with its +/- box, the fold its child -- one
+        # card while open, the header's frame running on round the fold
+        f'QPushButton[role="addHead"] {{ text-align: left; padding: 0; }}\n',
+        f'QPushButton[role="addHead"][open="true"] {{ border-color: {v["accent"]};'
+        f' background-color: {v["tint"]}; border-bottom-left-radius: 0;'
+        ' border-bottom-right-radius: 0; }\n',
+        f'QLabel#addTitle {{ color: {v["txt"]}; background: transparent; }}\n',
+        f'QLabel#addSign {{ color: {v["accent"]}; border: 1px solid {v["line"]};'
+        f' border-radius: 6px; background-color: {v["well"]};'
+        ' font-size: 16px; font-weight: 700; padding-bottom: 2px; }\n',
+        f'QLabel#addSign[open="true"] {{ border-color: {v["accent"]}; }}\n',
+        f'QFrame#addFold {{ border: 1px solid {v["accent"]}; border-top: none;'
+        f' border-bottom-left-radius: {v["r_btn"]}px;'
+        f' border-bottom-right-radius: {v["r_btn"]}px; background-color: transparent; }}\n',
     ]
     for hue in FRIEND_HUES:
         vib, mid, tint = PALETTE[hue]

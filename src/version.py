@@ -29,7 +29,7 @@
 import re
 import subprocess
 
-VERSION = "0.14.0"
+VERSION = "0.14.1"
 RELEASE_BRANCH = "release/lite"
 # Branches that print a bare version. `release/lite` is where releases are
 # cut; `main` is what a clone of the public repo is on (release.bat

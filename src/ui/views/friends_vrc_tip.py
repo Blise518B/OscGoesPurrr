@@ -8,10 +8,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel
 
 from ui.theme import PALETTE
-
-_PREFAB_URL = ("https://github.com/Blise518B/OscGoesPurrr/raw/main/docs/unity/"
-               "OscGoesPurrr-VRCFury.unitypackage")
-_MENU_GUIDE_URL = "https://github.com/Blise518B/OscGoesPurrr/blob/main/docs/VRCHAT_MENU.md"
+from ui.views.avatar_menu import links_html
 # The avatar menu's Friends part (docs/unity/OGP_MenuInstaller.cs builds
 # it): (name, kind, what it does, children).
 _VRC_FRIENDS_MENU = (
@@ -26,7 +23,7 @@ _VRC_FRIENDS_MENU = (
         ("Stop toys", "button", "level 0, auto mode off", ()),
     )),
     ("Shockers", "menu", "", (
-        ("Shock, Vibrate, Beep, Stop", "buttons", "", ()),
+        ("Shock, Shocker vibrate, Beep, Stop", "buttons", "", ()),
         ("Strength", "radial", "part of their own caps", ()),
         ("Length", "radial", "part of their longest pulse", ()),
         ("Warning", "toggle", "1-3 s of vibration before each shock", ()),
@@ -35,7 +32,7 @@ _VRC_FRIENDS_MENU = (
     ("Both of us", "menu", "the same on them and on you", (
         ("Level, Speed", "radials", "", ()),
         ("Auto mode", "menu", "the same eight", ()),
-        ("Stop, Shock, Vibrate", "buttons", "", ()),
+        ("Stop, Shock, Shocker vibrate", "buttons", "", ()),
         ("Strength, Length", "radials", "part of each one's own caps", ()),
     )),
     ("Their strength", "radial", "their own strength slider", ()),
@@ -73,9 +70,7 @@ class VrchatMenuTip(QLabel):
         if state == self._state:
             return
         self._state = state
-        link = f"color:{PALETTE['cyan'][0]}; text-decoration:none"
-        links = (f'<a style="{link}" href="{_PREFAB_URL}">Get the menu prefabs</a> · '
-                 f'<a style="{link}" href="{_MENU_GUIDE_URL}">How to add it</a>')
+        links = links_html(PALETTE['cyan'][0])
         if state == "on":
             text = ("✓ Your avatar has the OGP Friends menu - control from VRChat is on: "
                     "<b>OscGoesPurrr ▸ Friends</b> acts on the friend or group picked here. "

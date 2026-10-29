@@ -210,3 +210,20 @@ def test_touch_zones_start_with_an_example_that_stays_gone_once_deleted():
                                                          "Contact/ThighR"]
     s.delete_rule("zones", 0)
     assert PiShockSettingsManager().get_rules("zones") == []
+
+
+def test_a_shocker_switched_off_is_remembered_and_junk_is_dropped():
+    s = PiShockSettingsManager()
+    assert s.get_shockers_off() == []                   # every shocker starts in use
+    s.set_shocker_on(24326, False)
+    s.set_shocker_on("24325", False)
+    s.set_shocker_on(24325, True)
+    assert s.get_shockers_off() == [24326]
+    assert PiShockSettingsManager().get_shockers_off() == [24326]   # remembered
+    path = PiShockSettingsManager.FILE_PATH
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    data["shockers_off"] = [24326, "x", -1, 24326, 7]
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh)
+    assert PiShockSettingsManager().get_shockers_off() == [7, 24326]

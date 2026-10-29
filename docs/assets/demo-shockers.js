@@ -15,9 +15,12 @@ const TEST_MS = 500;                    // .. TEST_DURATION_MS
 
 export const SHOCK = {
   shockers: [
-    { name: "Collar", id: 24325, shock: 25, vibrate: 60, pulse: 1.0, out: null, until: 0, restUntil: 0 },
-    { name: "Thigh", id: 24326, shock: 40, vibrate: 80, pulse: 2.0, out: null, until: 0, restUntil: 0 },
+    { name: "Collar", id: 24325, shock: 25, vibrate: 60, pulse: 1.0, on: true, out: null, until: 0, restUntil: 0 },
+    { name: "Thigh", id: 24326, shock: 40, vibrate: 80, pulse: 2.0, on: true, out: null, until: 0, restUntil: 0 },
   ],
+  /** The shockers in use (their card's switch on): what friends, the
+   *  behaviours and Home see -- an Off one gets nothing. */
+  inUse() { return this.shockers.filter((s) => s.on); },
   timing: { rest: 0.5, hold: 10, brk: 2.0 },
   stopped: false,
   listeners: [],
@@ -29,7 +32,7 @@ export const SHOCK = {
 export function fire(i, op, level, ms) {
   const s = SHOCK.shockers[i], st = D.state.shock;
   const now = performance.now();
-  if (!s || !st.on || SHOCK.stopped || now < s.restUntil) return null;
+  if (!s || !s.on || !st.on || SHOCK.stopped || now < s.restUntil) return null;
   if (op === "shock" && !st.armed) op = "vibrate";
   const cap = op === "vibrate" ? s.vibrate : s.shock;
   const lvl = op === "beep" ? 0 : Math.max(1, Math.min(cap, Math.round(level)));
@@ -58,7 +61,19 @@ function stopAll() {
 
 // ---- the page --------------------------------------------------------------
 
-const W = { cards: [], stopBtn: null, armPill: null, armSw: null, behaviours: null };
+const W = { cards: [], stopBtn: null, armPill: null, armSw: null, behaviours: null, chips: [] };
+
+/** A card's switch: off, the shocker is out of use everywhere -- stopped,
+ *  greyed where it is, its chips grey, gone from friends and Home. */
+function setOn(s, on) {
+  s.on = on;
+  if (!on) { s.out = null; s.until = 0; }
+  W.chips.forEach((draw) => draw());
+  const names = SHOCK.inUse().map((x) => x.name);
+  const row = document.querySelector('.o-dev[data-dev="shock"] .o-tzones');
+  if (row) row.textContent = names.length ? `PiShock · ${names.join(", ")}` : "PiShock · no shocker in use";
+  paint();
+}
 
 function hued(node, hue) {
   node.style.setProperty("--hue", `var(--${hue})`);
@@ -100,11 +115,13 @@ function hubCard() {
 function shockerCard(s, i) {
   const pill = el("span.pg-pill.ok", {}, "READY");
   const grip = el("span.pg-grip", { draggable: "true", title: "Drag onto a behaviour to drive it" }, "⠿");
+  const use = toggle("", s.on, (on) => { card.classList.toggle("off", !on); setOn(s, on); },
+    "In use. Off: this shocker gets nothing - behaviours skip it, friends don't see it, Home leaves it out.");
   grip.addEventListener("dragstart", (e) => { e.dataTransfer.setData("text/ogp-shocker", String(i)); e.dataTransfer.effectAllowed = "copy"; });
   const test = (op) => el("button.pg-btn", { type: "button", onclick: () => fire(i, op, TEST_LEVEL, TEST_MS) },
     op[0].toUpperCase() + op.slice(1));
   const card = hued(el("div.pg-scard", {},
-    el("div.pg-shead", {}, grip, el("b", {}, s.name)),
+    el("div.pg-shead", {}, grip, el("b", {}, s.name), el("span.grow"), use),
     el("div.pg-sid", {}, el("span", {}, `ID ${s.id}`), pill),
     valueRow("Max shock", { min: 1, max: 100, value: s.shock, hue: "yellow", fmt: String, onInput: (x) => { s.shock = x; } }),
     valueRow("Max vibrate", { min: 1, max: 100, value: s.vibrate, hue: "pink", fmt: String, onInput: (x) => { s.vibrate = x; } }),
@@ -131,7 +148,9 @@ function chipBox(names) {
   const box = el("div.pg-chips");
   const plus = el("button.pg-plus", { type: "button", title: "Pick the shockers it drives" }, "+");
   const draw = () => {
-    box.replaceChildren(...names.map((n) => el("span.pg-schip", {}, n,
+    const off = new Set(SHOCK.shockers.filter((s) => !s.on).map((s) => s.name));
+    box.replaceChildren(...names.map((n) => el(`span.pg-schip${off.has(n) ? ".off" : ""}`,
+      { title: off.has(n) ? "Switched off on its card - this behaviour skips it" : "" }, n,
       el("button.pg-x", { type: "button", title: `Take ${n} off`, onclick: () => { names.splice(names.indexOf(n), 1); draw(); } }, "×"))), plus);
   };
   const add = (n) => { if (!names.includes(n)) { names.push(n); draw(); } };
@@ -144,6 +163,7 @@ function chipBox(names) {
       if (!menu.contains(e.target)) { menu.remove(); document.removeEventListener("pointerdown", off); }
     }), 0);
   };
+  W.chips.push(() => { if (box.isConnected) draw(); });
   box.addEventListener("dragover", (e) => { if (e.dataTransfer.types.includes("text/ogp-shocker")) { e.preventDefault(); box.classList.add("over"); } });
   box.addEventListener("dragleave", () => box.classList.remove("over"));
   box.addEventListener("drop", (e) => {
@@ -218,7 +238,8 @@ function paint() {
   const st = D.state.shock, now = performance.now();
   for (const { s, pill } of W.cards) {
     let text, tone;
-    if (s.out && now < s.until) { text = `${s.out[0].toUpperCase()}${s.out[1] ? " " + s.out[1] : ""}`; tone = { shock: "shock", vibrate: "live" }[s.out[0]] || "info"; }
+    if (!s.on) { text = "OFF"; tone = "idle"; }
+    else if (s.out && now < s.until) { text = `${s.out[0].toUpperCase()}${s.out[1] ? " " + s.out[1] : ""}`; tone = { shock: "shock", vibrate: "live" }[s.out[0]] || "info"; }
     else if (now < s.restUntil) { text = "BREAK"; tone = "warn"; }
     else if (!st.on || SHOCK.stopped) { text = "STOPPED"; tone = "idle"; }
     else { text = "READY"; tone = "ok"; s.out = null; }

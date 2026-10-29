@@ -1250,9 +1250,17 @@ class DeviceFrameMixin:
         lay = self.unified_devices_layout
         if lay is None:
             return
-        connected_names = self.controller.get_connected_device_names()
+        # connected toys in the order they connected (a newcomer goes last,
+        # so nobody's number or colour moves), then the offline ones by name
+        get_order = getattr(self.controller, "get_connected_toys_in_order", None)
+        got = get_order() if callable(get_order) else None
+        live_order = (list(got) if got is not None
+                      else sorted(self.controller.get_connected_device_names(), key=str.lower))
+        rank = {n: i for i, n in enumerate(live_order)}
+        connected_names = set(live_order)
         all_names = list(self.device_ui_frames.keys())
-        all_names.sort(key=lambda name: (name not in connected_names, name.lower()))
+        all_names.sort(key=lambda name: (name not in connected_names, rank.get(name, 0),
+                                         name.lower()))
         frames = [self.device_ui_frames[n]["frame"] for n in all_names]
         live = sum(1 for n in all_names if n in connected_names)
 
@@ -1303,14 +1311,17 @@ class DeviceFrameMixin:
             if name in connected_names:
                 hue = _theme.toy_hue(live_position)
                 live_position += 1
+                number = live_position          # 1, 2, 3 ... in its corner
             else:
                 hue = _theme.OFFLINE_HUE
+                number = 0
             bar = frame.findChild(QWidget, "toyBar")
             for w in (frame, bar):
                 if w is not None and w.property("hue") != hue:
                     w.setProperty("hue", hue)
                     self._repolish(w)
             frame.set_hue(hue)      # the frame paints itself (ToyFrame)
+            frame.set_number(number)
 
     # ----------------------------------------------------------
     # Programmatic value updates

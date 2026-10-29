@@ -397,3 +397,26 @@ def test_each_shocker_is_capped_by_its_own_limits(rig):
     assert eng.limits_for(111) == {"max_intensity": 10, "max_vibrate": 70, "max_pulse_ms": 400}
     eng.set_shocker_limits({"111": {"max_intensity": 10 ** 9}})   # can't pass the ceiling
     assert eng.limits_for(111)["max_intensity"] == 100
+
+
+def test_a_shocker_switched_off_gets_nothing_and_is_listed_to_nobody(rig):
+    """Its card's Off (not in use): the engine refuses it every send, stops
+    what it was doing, and the lists rules and friends read leave it out --
+    the page's own list still has it, to switch it back on."""
+    eng, link, clock = rig
+    eng.set_armed(True)
+    eng.hold(222, "vibrate", 20)
+    link.sent.clear()
+    eng.set_shockers_off([222, "junk"])
+    assert (222, "end") in link.sent                    # stopped at once
+    link.sent.clear()
+    assert not eng.pulse(222, "shock", 30, 500)
+    eng.hold(222, "vibrate", 20)
+    assert link.sent == []
+    assert eng.shocker_ids() == [111]
+    assert [s["id"] for s in eng.shockers()] == [111]
+    assert [(s["id"], s["off"]) for s in eng.all_shockers()] == [(111, False), (222, True)]
+    assert eng.pulse(111, "shock", 30, 500)             # the other one is untouched
+    eng.set_shockers_off([])
+    clock.t += 5
+    assert eng.pulse(222, "vibrate", 10, 500) and eng.shocker_ids() == [111, 222]

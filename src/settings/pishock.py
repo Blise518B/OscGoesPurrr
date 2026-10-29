@@ -224,6 +224,10 @@ class PiShockSettingsManager(JsonSettingsManager):
         # each shocker's own limits, by id: {"24325": {"max_intensity": 20}};
         # what one doesn't have, the hub-wide values above give it
         "shocker_limits": {},
+        # the shockers switched off on their card, by id (Blise's ask,
+        # 2026-10-28: only show the ones in use) -- the engine sends them
+        # nothing and lists them to nobody; a new one starts on
+        "shockers_off": [],
         # Arm shocks, remembered across launches (Blise's call, 2026-10-28)
         "armed": False,
         # Home's "Share with friends": off, no friend's shock gets through and
@@ -248,6 +252,10 @@ class PiShockSettingsManager(JsonSettingsManager):
         for kind in RULE_KINDS:
             if not isinstance(self.settings.get(kind), list):
                 self.settings[kind] = []
+        raw = self.settings.get("shockers_off")
+        self.settings["shockers_off"] = sorted({
+            sid for sid in (_shocker_id(v) for v in (raw if isinstance(raw, list) else []))
+            if sid is not None})
         raw = self.settings.get("shocker_names")
         self.settings["shocker_names"] = {
             str(k)[:16]: _shocker_name(v) for k, v in (raw.items() if isinstance(raw, dict) else [])
@@ -338,6 +346,21 @@ class PiShockSettingsManager(JsonSettingsManager):
         hub = self.get_limits()
         own = self.get_shocker_limits().get(str(_shocker_id(shocker_id)), {})
         return {key: own.get(key, hub[key]) for key in pishock_limits.PER_SHOCKER}
+
+    # ---- shockers in use ------------------------------------------------
+    def get_shockers_off(self) -> List[int]:
+        """The shockers switched off on their card (ids)."""
+        return list(self.settings.get("shockers_off") or [])
+
+    def set_shocker_on(self, shocker_id, on: bool) -> None:
+        sid = _shocker_id(shocker_id)
+        if sid is None:
+            return
+        off = set(self.get_shockers_off())
+        (off.discard if on else off.add)(sid)
+        if sorted(off) != self.settings.get("shockers_off"):
+            self.settings["shockers_off"] = sorted(off)
+            self._save()
 
     # ---- names for the hub's own shockers ---------------------------------
     def get_shocker_names(self) -> Dict[str, str]:

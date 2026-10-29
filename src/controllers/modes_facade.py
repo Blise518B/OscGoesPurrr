@@ -509,6 +509,10 @@ class ModesFacade:
                                 self.mode_manager.output_off)
         self._send_ogp_bool_out(OGP_SLEEP_PARAMETER,
                                 self.mode_manager.sleep_active)
+        # ... and the Friends menu's radials and toggles (friends_menu)
+        menu_out = getattr(self, "_menu_send", None)
+        if callable(menu_out):
+            menu_out()
 
     def _on_ogp_strength_osc(self, value: Any) -> None:
         """Handle an incoming OGP/Strength float from the expression menu

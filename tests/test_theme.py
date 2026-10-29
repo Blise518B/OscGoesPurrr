@@ -154,9 +154,14 @@ class TestModes:
 class TestTags:
     def test_status_tag_only_accents_the_name(self):
         html = theme.status_tag_html("OscGoesPurrr", "1.2.3")
-        assert html.startswith("OscGoesPurrr v1.2.3 · made by ")
+        assert "OscGoesPurrr</a> v1.2.3 · made by " in html
         assert html.count(T.MODES[C.UI_MODE]["accent"]) == 1
         assert "<b" in html and "Blise518B" in html
+        # the app's name links to the project, his name to his profile
+        assert html.startswith(f'<a href="{theme.GITHUB_URL}"')
+        assert f'<a href="{theme.AUTHOR_URL}"' in html
+        assert theme.GITHUB_URL == "https://github.com/Blise518B/OscGoesPurrr"
+        assert theme.AUTHOR_URL == "https://github.com/Blise518B"
 
     def test_build_number_is_a_commit_count_not_the_version(self):
         # Public releases carry a hand-set VERSION ("0.9.0"), so the

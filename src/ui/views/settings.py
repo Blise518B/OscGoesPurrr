@@ -44,6 +44,7 @@ from ui.icons import (
     icon_cross as _icon_cross,
 )
 from ui import theme as _theme
+from ui.views.avatar_menu import AvatarMenuCard
 from ui.views.settings_appearance import AppearanceMixin
 from ui.widgets import (
     ToggleSwitch,
@@ -148,6 +149,14 @@ class SettingsMixin(AppearanceMixin):
         # feature switched off hides its sidebar entry AND stops its
         # background thread, so the app doesn't pay for what it isn't using.
         parent_layout.addWidget(self._build_features_card())
+
+        # ---- VRChat menu Card ----
+        # Right after Features (Blise's ask, 2026-10-28): the avatar menu's
+        # prefab and whether the avatar you're wearing has it, findable
+        # without opening Friends (ui/views/avatar_menu.py).
+        self._avatar_menu_card = AvatarMenuCard(
+            lambda: self.controller.get_avatar_menu(), self._explain)
+        parent_layout.addWidget(self._avatar_menu_card)
 
         # ---- Modes Card ----
         # The per-avatar memory used to sit on the Dashboard's Modes card.

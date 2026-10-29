@@ -492,12 +492,22 @@ def title_tag(version: str, build) -> str:
     return T.title_tag(version, build)
 
 
+# Where the status bar's two names lead (Blise's call, 2026-10-28): the
+# app's to its repository, his to his GitHub profile
+GITHUB_URL = "https://github.com/Blise518B/OscGoesPurrr"
+AUTHOR_URL = "https://github.com/Blise518B"
+
+
 def status_tag_html(app_name: str, version: str, accent: str = "") -> str:
     """The bottom-right identity tag as rich text: only `Blise518B` is
-    accent-coloured and bold, everything else stays dim."""
+    accent-coloured and bold, everything else stays dim. The app's name
+    links to its repository, `Blise518B` to his profile."""
     accent = accent or CHROME["accent"]
-    return (f"{app_name} v{version} · made by "
-            f'<b style="color:{accent}">Blise518B</b>')
+    dim = CHROME["dim"]
+    return (f'<a href="{GITHUB_URL}" style="color:{dim}; text-decoration:none">{app_name}</a>'
+            f" v{version} · made by "
+            f'<a href="{AUTHOR_URL}" style="color:{accent}; text-decoration:none">'
+            f'<b>Blise518B</b></a>')
 
 
 # ---------------------------------------------------------------------------

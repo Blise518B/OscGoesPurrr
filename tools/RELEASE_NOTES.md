@@ -10,6 +10,12 @@ year). Click **More info → Run anyway**.
 it executable (`chmod +x`, or *Allow executing* in its Properties) and run it.
 It's built by GitHub a few minutes after this release appears.
 
+**Your avatar's menu (optional):** **OscGoesPurrr-VRCFury.unitypackage** below
+puts OGP's controls into your avatar's own menu: strength, Off, Sleep, modes,
+and a Friends submenu to drive whoever you picked in OGP. Import it into your
+avatar's Unity project (it needs VRCFury), drag one of its three prefabs onto
+your avatar and upload. [Setup guide](https://github.com/Blise518B/OscGoesPurrr/blob/main/docs/VRCHAT_MENU.md)
+
 Already running an older version? Don't download anything — it'll offer the
 update itself at launch.
 
@@ -18,60 +24,39 @@ update itself at launch.
 <!-- Replace this section before each release. Keep it short and concrete:
      what changed, and what a user would notice. -->
 
-- **Friends.** Link with other OGP users over the internet: send an invite
-  link in Discord, they click it and you're linked. A friend you allow can
-  drive your toys (by hand, with an auto mode, or overriding what your
-  avatar does), move your strength and fire your shockers, and you theirs.
-  Several friends can drive one person and share one set of toy cards
-  (**Sync with others**). Groups, a big Control mode for VR, everything
-  logged. No account and no server: the two PCs talk directly. Your
-  strength, Off, each toy's maximum and your shocker limits always hold, and
-  **Pause all** stops every friend at once. You're always on your own list,
-  so you can try a friend's panel on your own toys.
-- **Web remote.** For someone without OGP: **Copy web remote link** (right
-  under ＋ Add a friend) and whoever opens it gets a friend's panel in their
-  browser — no install, no account. Toys from the start; your shockers and
-  your avatar's board only once you tick them on its row in your list,
-  where you also see who's on, kick someone or switch it off. Every rule a
-  friend has holds for it too.
-- **Shockers.** A PiShock hub over USB (no cloud), or one running OpenShock
-  firmware. A card per shocker with its own max shock, max vibrate and
-  longest pulse; drag a shocker onto the behaviours that should drive it —
-  continuous, contact and impact rules, and **Touch zones** where each
-  contact drives its own shockers. Shocks stay vibrates until you arm them,
-  and nothing can widen the limits. Friends get PiShock's own panel, with
-  Party Mode. Off until you switch it on.
-- **Avatar Remote.** VRC Parameter Relay's board, built in: toggles, hold
-  buttons, sliders and steppers for your avatar's parameters, in coloured
-  categories, per avatar and preset. Friends you allow can use the board of
-  the avatar you wear, from their Friends page. Boards made in the Relay
-  import with one click. Off until you switch it on.
-- **Pick what you use.** OGP asks once what you have and want and shows
-  those pages; Settings → Features → *Choose what you use…* asks again.
-- **Show me around.** Press F1 on any page (or *Show me around* in the
-  status bar): its steps on top, and whatever you point at explains itself.
-  Clicks change nothing while it's on.
-- **Your avatar's menu.** One VRCFury prefab to drag onto your avatar:
-  strength, mode, Off, Sleep, Test and a Friends submenu — your own
-  controls, the friends' ones, or both.
-- **Stats per person.** Tag who a session was with, or a stretch of it, and
-  see everyone ranked; optionally tagged for you from VRChat's log when you
-  are alone with one other person. Opt-in thrust counters for your avatar.
-- **Colours.** Pick a colour and the colours that mean something (the pink of
-  the live signal, a toy's own colour…) move out of its way; Settings →
-  Appearance → Other colours sets each one yourself.
-- **Smaller things.** The scroll wheel never changes a setting — it scrolls
-  the page, even from VR. Home lists your shocker hub with your toys, with
-  an On / Off switch. Toys are looked for every 5 seconds while none is
-  connected (Scan now on Home). The built-in toy server no longer takes
-  Bluetooth serial gadgets (MeshCore radios, ESP32 boards, some watches) for
-  Lovense toys. Opening OGP twice asks whether to switch to the open window.
-  The window comes back maximized if you left it so.
+A small update to 0.14.0, mostly from the first days of people using it.
 
-**Coming from an alpha?** Since alpha.11: the Shockers page is cards with
-per-shocker limits, behaviours you drag shockers onto, Touch zones, and Arm
-shocks stays as you left it; the web remote gets the whole friend's panel;
-F1 shows you around. The Suits page is gone for now: the bHaptics and OWO
-suits come back in a release of their own, and your suit settings are kept.
+- **Toys keep their place.** A toy that connects joins the end of the list
+  instead of pushing the others down, and every toy shows its number in its
+  corner. Friends see your toys in that order, so the avatar menu's toys 1–4
+  are the same 1–4 on both sides.
+- **Switch a shocker off.** Each shocker card on the Shockers page has its own
+  On / Off. An Off shocker stays where it is, greyed out, and does nothing:
+  it stops at once, behaviours skip it, and friends and the web remote no
+  longer see it. Remembered across launches.
+- **Your avatar menu and OGP agree.** Driving a friend from your avatar's
+  Friends submenu (level, mode, speed, range, Override, strength) shows on
+  the Friends page as you do it, and a change you make in OGP goes back to
+  the menu. When an avatar loads, OGP's values win over the ones VRChat
+  replays.
+- **"Shocker vibrate".** The menu's shocker Vibrate buttons are now called
+  Shocker vibrate, so they don't read as the toys'. Import the new
+  **OscGoesPurrr-VRCFury.unitypackage** below to get it; your parameters
+  don't change.
+- **Find your avatar menu.** Settings → **VRChat menu** shows whether the
+  avatar you wear has OGP's menu and links the prefab and its guide; Home's
+  Getting started has it as an optional step. Every release now carries the
+  prefab.
+- **Friends, tidied.** ＋ Add a friend opens as one card with its own + / −.
+  A friend with a single toy gets that toy's card instead of an extra "All
+  their toys". Sync with others explains itself plainly: you see what the
+  others driving that friend see.
+- **Smaller things.** OscGoesPurrr and Blise518B in the status bar open the
+  project and its author on GitHub. The website's working copy of the app now
+  has the Friends, Shockers and My Avatar Remote pages to click through.
+
+**Coming from 0.13 or older?** 0.14.0 brought Friends, the web remote,
+Shockers, Avatar Remote and more:
+[the 0.14.0 notes](https://github.com/Blise518B/OscGoesPurrr/releases/tag/v0.14.0).
 
 More on the website: https://blise518b.github.io/OscGoesPurrr/

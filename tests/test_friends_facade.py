@@ -992,6 +992,21 @@ class _Shared:
         return self.enabled
 
 
+def test_friends_get_your_toys_in_homes_order():
+    """Connection order, as Home numbers them: the menu's Which toys 1-4 and
+    their panel then mean the toys numbered 1-4 on your Home."""
+    h = Host()
+
+    class _Toys:
+        is_connected = True
+
+        def get_motor_count_map(self):
+            return {"Alpha": 1, "Lush": 1, "Edge": 2}
+    h.haptic_engine = _Toys()
+    h.get_connected_toys_in_order = lambda: ["Lush", "Edge", "Alpha"]
+    assert [n for n, _m in h._build_my_state()["toys"]] == ["Lush", "Edge", "Alpha"]
+
+
 def test_homes_friends_may_use_them_switch_holds_back_every_friends_shock():
     h = Host()
     h.pishock_settings = _Shared(False)
@@ -1493,3 +1508,70 @@ def test_a_new_id_takes_the_web_remote_along():
     h._friends_invite_ok(W, code, "Sam")
     h.friends_reset_id()
     assert h.get_friends_status()["web"] is None and h._web_guests == {}
+
+
+class _OscOut:
+    """What the app sends back to the avatar's menu."""
+    is_connected = True
+
+    def __init__(self):
+        self.sent = []
+
+    def send_parameter(self, address, value, ignore_rate_limit=False, force_type=None, **_k):
+        self.sent.append((address.rsplit("/parameters/", 1)[-1], value, force_type))
+
+    def last(self, param):
+        return next((v for p, v, _t in reversed(self.sent) if p == param), None)
+
+
+def test_the_page_moves_the_menu_for_whoever_is_picked():
+    """Two-way, OGP first (Blise's call, 2026-10-28): moving the picked
+    friend's All their toys card or their strength in the app sets the
+    menu's own radials and toggles, so VRChat shows what OGP does."""
+    import friend_patterns
+    h = Host()
+    h.befriend(A)                       # picked
+    h.befriend(B)
+    h.osc_manager = osc = _OscOut()
+    h.set_friend_level(A, proto.ALL_TOYS, 0.6)
+    assert osc.last("OGP/Friend/Level") == pytest.approx(0.6)
+    h.set_friend_pattern(A, proto.ALL_TOYS, "sine", 2.0, 0.0, 0.8)
+    assert osc.last("OGP/Friend/Mode") == 1 and osc.last("OGP/Friend/Range") == pytest.approx(0.8)
+    assert osc.last("OGP/Friend/Speed") == pytest.approx(friend_patterns.menu_speed("sine", 2.0))
+    assert friend_patterns.menu_period("sine", osc.last("OGP/Friend/Speed")) == pytest.approx(2.0)
+    h.set_friend_override(A, proto.ALL_TOYS, True)
+    assert osc.last("OGP/Friend/Override") is True
+    h.set_friend_strength(A, 0.5)
+    assert osc.last("OGP/Friend/Strength") == pytest.approx(0.5)
+    n = len(osc.sent)
+    h.set_friend_level(B, proto.ALL_TOYS, 0.3)        # not picked: the menu isn't theirs
+    h.set_friend_level(A, "Lush", 0.9)                # one toy's card: not what the menu mirrors
+    assert len(osc.sent) == n
+
+
+def test_the_menu_is_not_sent_its_own_change_back():
+    h = Host()
+    h.befriend(A)
+    h.osc_manager = osc = _OscOut()
+    h._friends_on_osc("OGP/Friend/Level", 0.7)
+    h._friends_on_osc("OGP/Friend/Strength", 0.4)
+    assert osc.sent == []
+    assert h._friends_cmd_for(A)["lvl"] == {proto.ALL_TOYS: 0.7}   # and the page shows it
+
+
+def test_after_an_avatar_load_ogps_values_go_back_on_the_menu():
+    h = Host()
+    h.befriend(A)
+    h.osc_manager = osc = _OscOut()
+    h.set_friend_level(A, proto.ALL_TOYS, 0.6)
+    h.set_friend_strength(A, 0.5)
+    osc.sent.clear()
+    h._ogp_mode_guard_until = time.monotonic() + 5
+    h._friends_on_osc("OGP/Friend/Level", 0.9)                      # VRChat's replay
+    assert h._friends_cmd_for(A)["lvl"] == {proto.ALL_TOYS: 0.6}    # OGP's stays
+    assert osc.sent == [("OGP/Friend/Level", pytest.approx(0.6), "f")]   # and goes back
+    osc.sent.clear()
+    h._menu_send()                                                   # OSC (re)connect
+    sent = {p: v for p, v, _t in osc.sent}
+    assert sent["OGP/Friend/Level"] == pytest.approx(0.6) and sent["OGP/Friend/Strength"] == 0.5
+    assert {"OGP/Friend/Toy1", "OGP/Friend/Shocker4", "OGP/Both/Level"} <= set(sent)

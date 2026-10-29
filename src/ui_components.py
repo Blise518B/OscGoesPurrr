@@ -489,6 +489,11 @@ class OscGoesPurrrUI(
             getattr(_constants, "APP_NAME", "OscGoesPurrr"), _APP_VERSION))
         tag.setObjectName("statusTag")
         tag.setTextFormat(Qt.RichText)
+        tag.setOpenExternalLinks(True)       # the name: OscGoesPurrr on GitHub
+        self._explain(tag, "OscGoesPurrr on GitHub",
+                      "Click OscGoesPurrr for the project on GitHub - every release, the "
+                      "setup guides and where to report a problem - or Blise518B for the "
+                      "maker's GitHub.")
         bar.addPermanentWidget(tag)
         self.window.setStatusBar(bar)
         self.live_theme.add_root(bar)

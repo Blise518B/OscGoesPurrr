@@ -268,24 +268,39 @@ class FriendsPanelMixin(FriendsShockersMixin, FriendsWebPanelMixin):
                 head.addWidget(sync)
                 head.addSpacing(10)
                 w["sync"] = sync
+            # the first sentence is what help mode shows: it has to say it
+            # alone (Blise's ask, 2026-10-29: "you see what the others see")
             self._explain(sync, "Sync with others",
-                          "On: everyone who drives this friend with Sync on shares one "
-                          "set of toy cards. A level, auto mode or Override one of you "
-                          "picks shows up on the others' panels too, and their toys play "
-                          "it once - the newest change wins.<br><br>Off: your cards are "
-                          "your own, and their toys follow whichever of you is higher. "
-                          "Their strength slider is shared either way.")
+                          "On: you see what the others driving this friend see - one "
+                          "set of toy cards for all of you. When one of you moves a "
+                          "level, starts an auto mode or picks Override, it moves on "
+                          "everyone's cards, and their toys play that one change (the "
+                          "newest wins). +1 OTHER above says who else is driving them."
+                          "<br><br>Off: your cards are just yours - you don't see what "
+                          "the others do, and their toys follow whichever of you is "
+                          "higher. Their strength slider is shared either way.")
             w["strength"] = self._strength_inline(head, theirs["strength"], strength_changed)
             cards = []
-            # "All their toys" only while they have one to drive
-            every = [(ALL_TOYS, "All their toys")] if theirs["toys"] else []
-            for key, title in every + [(n, n) for n, _m in theirs["toys"]]:
-                cards.append(ToyCard(
+            # "All their toys" only for two toys or more (Blise's call,
+            # 2026-10-29). With one, that toy's card is the all-toys one
+            # underneath -- its name, battery and meter on top -- so the
+            # avatar menu's Level, which drives all their toys, still shows
+            # on it and follows it. (key, title, the toy it shows)
+            toys = [n for n, _m in theirs["toys"]]
+            if len(toys) == 1:
+                keys = [(ALL_TOYS, toys[0], toys[0])]
+            else:
+                keys = (([(ALL_TOYS, "All their toys", ALL_TOYS)] if toys else [])
+                        + [(n, n, n) for n in toys])
+            for key, title, shows in keys:
+                card = ToyCard(
                     key, title, _TOYS,
                     on_level=lambda v, k=key: c.set_friend_level(fid, k, v),
                     on_override=lambda on, k=key: c.set_friend_override(fid, k, on),
                     on_pattern=lambda wv, pd, lo, hi, k=key: c.set_friend_pattern(fid, k, wv, pd, lo, hi),
-                    meter=key != ALL_TOYS, big=self._friends_big))
+                    meter=shows != ALL_TOYS, big=self._friends_big)
+                card.shows = shows
+                cards.append(card)
             w["toys"] = cards
             lay.addWidget(self._cards_grid(cards))
             if not theirs["toys"]:
@@ -442,15 +457,16 @@ class FriendsPanelMixin(FriendsShockersMixin, FriendsWebPanelMixin):
                     s.value_label.setText(_pct(theirs["strength"]))
             outs = theirs["outputs"]
             for card in w.get("toys") or []:
-                if card.toy == ALL_TOYS:
+                shows = getattr(card, "shows", card.toy)     # the toy its meter is
+                if shows == ALL_TOYS:
                     out = max(outs.values()) if outs else 0.0
                 else:
-                    out = outs.get(card.toy, 0.0)
+                    out = outs.get(shows, 0.0)
                 card.set_state(f["my_levels"].get(card.toy, 0.0),
                                card.toy in f.get("my_override", ()),
                                f.get("my_patterns", {}).get(card.toy), out)
-                if card.toy != ALL_TOYS:
-                    card.set_battery((theirs.get("batteries") or {}).get(card.toy))
+                if shows != ALL_TOYS:
+                    card.set_battery((theirs.get("batteries") or {}).get(shows))
             self._update_friend_shockers(f)
         elif w.get("kind") == "group":
             g = next((x for x in st["groups"] if x["id"] == w["id"]), None)

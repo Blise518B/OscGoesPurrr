@@ -198,22 +198,42 @@ class FriendsListMixin:
                       "and see that you paused. Off (top left) silences friends "
                       "too.")
         lay.addLayout(row)
-        # Add a friend: one button; the invite link, your ID and the box for
-        # theirs fold out under it (open by itself while you have no friends)
+        # Add a friend: a header with its own +/- box at the left, and the
+        # invite link, your ID and the box for theirs in a frame hanging from
+        # it -- one card while open (Blise's ask, 2026-10-29: the fold must
+        # read as that button's child). Open by itself while you have no
+        # friends.
         lay.addSpacing(4)
+        add_card = QWidget()
+        add_lay = _vbox(0, 0)                  # header and fold touch: one card
+        add_card.setLayout(add_lay)
         self._friends_add_toggle = QPushButton()
         self._friends_add_toggle.setMinimumHeight(BTN_HEIGHT_SMALL)
-        self._friends_add_toggle.setProperty("role", "secondary")
+        self._friends_add_toggle.setProperty("role", "addHead")
         self._friends_add_toggle.setCursor(Qt.PointingHandCursor)
         self._friends_add_toggle.clicked.connect(
             lambda _=False: self._set_friends_add_open(not self._friends_add_open))
-        lay.addWidget(self._friends_add_toggle)
+        head = _hbox(0, 10)
+        head.setContentsMargins(6, 4, 12, 4)
+        self._friends_add_sign = QLabel("+")
+        self._friends_add_sign.setObjectName("addSign")
+        self._friends_add_sign.setAlignment(Qt.AlignCenter)
+        self._friends_add_sign.setFixedSize(22, 22)
+        title = QLabel(_ADD_FRIEND)
+        title.setObjectName("addTitle")
+        for w in (self._friends_add_sign, title):
+            w.setAttribute(Qt.WA_TransparentForMouseEvents)   # the header takes the click
+        head.addWidget(self._friends_add_sign)
+        head.addWidget(title, 1)
+        self._friends_add_toggle.setLayout(head)
+        add_lay.addWidget(self._friends_add_toggle)
         self._explain(self._friends_add_toggle, "Add a friend",
                       "For a friend who has OGP too: send an invite link, copy your "
                       "ID, or paste theirs. Folds away again once you have a friend.")
         fold = QFrame()
-        fold.setObjectName("moreSection")
+        fold.setObjectName("addFold")
         fl = _vbox(0, 6)
+        fl.setContentsMargins(12, 10, 12, 12)
         fold.setLayout(fl)
         self._friends_add_fold = fold
         fl.addWidget(self._friends_micro("SEND AN INVITE LINK"))
@@ -282,8 +302,8 @@ class FriendsListMixin:
         fl.addLayout(row)
         self._friends_add_hint = self._muted_label(_ADD_HINT)
         fl.addWidget(self._friends_add_hint)
-        fl.addSpacing(8)                    # the web remote below isn't part of it
-        lay.addWidget(fold)
+        add_lay.addWidget(fold)
+        lay.addWidget(add_card)
         self._friends_add_open = False
         self._set_friends_add_open(False)
         # ... and under it, for someone without OGP: the web remote
@@ -435,7 +455,13 @@ class FriendsListMixin:
     def _set_friends_add_open(self, on: bool) -> None:
         self._friends_add_open = bool(on)
         self._friends_add_fold.setVisible(self._friends_add_open)
-        self._friends_add_toggle.setText(("▾ " if on else "＋ ") + _ADD_FRIEND)
+        self._friends_add_sign.setText("−" if on else "+")
+        # open: the header's bottom corners square off onto the fold's frame
+        state = "true" if on else "false"
+        for w in (self._friends_add_toggle, self._friends_add_sign):
+            if w.property("open") != state:
+                w.setProperty("open", state)
+                self._repolish(w)
 
     def _on_friends_nick_done(self) -> None:
         text = " ".join(self._friends_nick_edit.text().split())

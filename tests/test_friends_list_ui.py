@@ -215,3 +215,19 @@ def test_the_web_remote_link_copies_from_the_add_fold(qapp):
     assert QGuiApplication.clipboard().text() == "web-link"
     assert ui._friends_web_btn.text().startswith("Copied")
     root.hide()
+
+
+def test_add_a_friend_is_a_header_with_its_own_plus_and_its_fold_hangs_from_it(qapp):
+    """Blise's ask, 2026-10-29: the fold reads as the button's child -- a
+    distinct + / − box at the header's left, and while open the header and
+    the fold are one card (the header's bottom corners square off onto the
+    fold's frame)."""
+    ui, root = column(qapp)
+    ui._set_friends_add_open(False)
+    assert ui._friends_add_sign.text() == "+" and ui._friends_add_toggle.property("open") == "false"
+    ui._friends_add_toggle.click()
+    assert ui._friends_add_sign.text() == "−" and ui._friends_add_toggle.property("open") == "true"
+    assert ui._friends_add_fold.objectName() == "addFold"
+    assert ui._friends_add_fold.parentWidget() is ui._friends_add_toggle.parentWidget()
+    assert ui._friends_add_toggle.parentWidget().layout().spacing() == 0     # they touch
+    root.hide()

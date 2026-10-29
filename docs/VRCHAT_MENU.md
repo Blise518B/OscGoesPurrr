@@ -39,7 +39,7 @@ only a vibrate for anyone who hasn't armed shocks this session.
 
 | Parameter                  | Type  | Values | Meaning |
 |----------------------------|-------|--------|---------|
-| `OGP/Friend/Shock`, `Vibrate`, `Beep` | Bool | button | One operation per press on the ticked shockers. |
+| `OGP/Friend/Shock`, `Vibrate`, `Beep` | Bool | button | One operation per press on the ticked shockers (the menu calls Vibrate *Shocker vibrate*). |
 | `OGP/Friend/StopShock`     | Bool  | button | Stops their shockers now, a waiting warned shock included. |
 | `OGP/Friend/ShockStrength` | Float | 0–1    | How strong, as a part of *their* cap: 1 is the strongest they allow (shocks under their shock cap, vibrates under their vibrate cap). |
 | `OGP/Friend/ShockLength`   | Float | 0–1    | How long, as a part of their longest allowed pulse. |
@@ -57,7 +57,7 @@ own shocker page: your caps and arming hold).
 | `OGP/Both/Mode`      | Int   | 0–8    | Auto mode, both of you (same numbers as above). |
 | `OGP/Both/Speed`     | Float | 0–1    | Its speed. |
 | `OGP/Both/Stop`      | Bool  | button | Both of your toys back to 0. |
-| `OGP/Both/Shock`, `Vibrate` | Bool | button | One operation on both of you. |
+| `OGP/Both/Shock`, `Vibrate` | Bool | button | One operation on both of you (*Shock*, *Shocker vibrate*). |
 | `OGP/Both/Strength`, `Length` | Float | 0–1 | As a part of each one's own caps. |
 
 The app sets Level and Mode back on your avatar when it ends an auto mode or

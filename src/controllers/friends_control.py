@@ -177,8 +177,10 @@ class FriendsControlMixin:
     # One friend's cards
     # ------------------------------------------------------------------
 
-    def set_friend_level(self, peer: str, toy: str, value: float) -> None:
-        """Your level for one of the friend's toys, or proto.ALL_TOYS."""
+    def set_friend_level(self, peer: str, toy: str, value: float, source: str = "ui") -> None:
+        """Your level for one of the friend's toys, or proto.ALL_TOYS.
+        `source` "menu": it came from your avatar's menu (the menu then
+        needn't hear it back)."""
         v = unit(value)
         levels = dict(self._my_levels.get(peer, {}))
         was = any(x > 0 for x in levels.values())
@@ -189,12 +191,14 @@ class FriendsControlMixin:
         self._my_levels = {**self._my_levels, peer: levels}
         self._panel_changed(peer)
         self.friends_link.push_cmd(peer)
+        if source != "menu":
+            self._menu_follow(peer, str(toy))
         now = any(x > 0 for x in levels.values())
         if now != was:
             self._friends_note(f"You {'started' if now else 'stopped'} driving "
                                f"{self._friend_nick(peer)}'s toys")
 
-    def set_friend_override(self, peer: str, toy: str, on: bool) -> None:
+    def set_friend_override(self, peer: str, toy: str, on: bool, source: str = "ui") -> None:
         """Override: while you drive this toy (or all of them), your level
         replaces their own output instead of the higher of the two winning.
         Their Off, Pause, strength and the toy's max still hold."""
@@ -203,13 +207,15 @@ class FriendsControlMixin:
         self._my_override = {**self._my_override, peer: toys}
         self._panel_changed(peer)
         self.friends_link.push_cmd(peer)
+        if source != "menu":
+            self._menu_follow(peer, str(toy))
         what = "all their toys" if toy == proto.ALL_TOYS else toy
         self._friends_note(f"You {'override' if on else 'no longer override'} "
                            f"{self._friend_nick(peer)}'s own output on {what}",
                            key=("ovr", peer, toy))
 
     def set_friend_pattern(self, peer: str, toy: str, wave: str, period: float = 2.0,
-                           lo: float = 0.0, hi: float = 1.0) -> None:
+                           lo: float = 0.0, hi: float = 1.0, source: str = "ui") -> None:
         """An auto mode for one toy (or proto.ALL_TOYS) that their OGP plays
         by itself; wave "" switches it off."""
         pats = dict(self._my_patterns.get(peer, {}))
@@ -222,6 +228,8 @@ class FriendsControlMixin:
         self._my_patterns = {**self._my_patterns, peer: pats}
         self._panel_changed(peer)
         self.friends_link.push_cmd(peer)
+        if source != "menu":
+            self._menu_follow(peer, str(toy))
         what = "all their toys" if toy == proto.ALL_TOYS else toy
         if clean is None:
             if was is not None:
@@ -257,11 +265,13 @@ class FriendsControlMixin:
             self._friends_note(f"You stopped {self._friend_nick(peer)}'s shockers",
                                key=("stp", peer))
 
-    def set_friend_strength(self, peer: str, value: float) -> None:
+    def set_friend_strength(self, peer: str, value: float, source: str = "ui") -> None:
         v = unit(value)
         self._my_seq = max(self._my_seq + 1, int(time.time() * 1000))
         self._my_strength = {**self._my_strength, peer: (self._my_seq, v, time.monotonic())}
         self.friends_link.push_cmd(peer)
+        if source != "menu":
+            self._menu_follow_strength(peer, v)
         self._friends_note(f"You set {self._friend_nick(peer)}'s strength to {round(v * 100)} %",
                            key=("str-out", peer))
 

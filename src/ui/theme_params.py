@@ -154,6 +154,9 @@ def params_qss(mode_name: str, v: Dict[str, str]) -> str:
         f'QFrame#paramCard QSpinBox:disabled {{ color: {v["dim"]}; border-color: {v["dim"]}; }}\n'
         f'QFrame#paramCard QSlider::sub-page:horizontal:disabled {{ background: {v["dim"]}; }}\n'
         f'QFrame#paramCard QSlider::handle:horizontal:disabled {{ background: {v["dim"]}; }}\n'
+        # a shocker switched off on its card (not in use): the frame greyed too
+        # (grey's mid in both modes: Vibrant's `dim` is a green)
+        f'QFrame#paramCard[off="true"] {{ border-color: {PALETTE["grey"][1]}; }}\n'
         f'QPushButton[role="seg"][hue="accent"]:checked {{ background-color: {v["ok_tint"]};'
         f' color: {v["accent"]}; border-color: {v["ok_mid"]}; }}\n'
     )

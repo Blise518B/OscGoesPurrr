@@ -32,13 +32,13 @@ const CONTROLS = [
   { id: "particles", cat: "fun", label: "Particles", param: "Particles", ptype: "Int", kind: "int", min: 0, max: 10 },
 ];
 const TYPES = [["Blush", "Float"], ["EarsDown", "Bool"], ["Emote", "Int"], ["FaceShy", "Float"], ["Glasses", "Bool"],
-  ["HueShift", "Float"], ["OGP/Strength", "Float"], ["Outfit", "Int"], ["Particles", "Int"], ["ScaleFactor", "Float"],
+  ["HueShift", "Float"], ["OGP/Friend/Level", "Float"], ["OGP/Strength", "Float"], ["Outfit", "Int"], ["Particles", "Int"], ["ScaleFactor", "Float"],
   ["TailWag", "Bool"], ["TongueOut", "Bool"]];
 
 export const AVATAR = {
   name: "Kitsune",
   id: "avtr_6a1f3c2e-4b7d-4e19-9c55-518c0ffee518",
-  values: { Blush: 0.45, EarsDown: false, Emote: 0, FaceShy: 0, Glasses: true, HueShift: 0.62, Outfit: 2,
+  values: { "OGP/Friend/Level": 0, Blush: 0.45, EarsDown: false, Emote: 0, FaceShy: 0, Glasses: true, HueShift: 0.62, Outfit: 2,
             Particles: 3, ScaleFactor: 1, TailWag: true, TongueOut: false },
   board: { ver: "kitsune-1", name: "Kitsune", avatar: "", categories: CATS, controls: CONTROLS, keys: [], all: null },
   listeners: [],

@@ -57,6 +57,14 @@ def menu_period(wave: str, speed: float) -> float:
     return min(PERIOD_MAX_S, period * (10.0 if wave == "build" else 1.0))
 
 
+def menu_speed(wave: str, period: float) -> float:
+    """menu_period's inverse: a period as the menu's Speed radial (0..1),
+    for showing an auto mode set in the app on the menu."""
+    p = max(1e-6, float(period)) / (10.0 if wave == "build" else 1.0)
+    u = math.log(p / MENU_SLOW_S) / math.log(MENU_FAST_S / MENU_SLOW_S)
+    return max(0.0, min(1.0, u))
+
+
 def shape(wave: str, phase: float, t: float, period: float) -> float:
     """0..1 at `phase` (cycles since the start, any real) -- `t` seconds
     since the start feeds the deterministic random."""

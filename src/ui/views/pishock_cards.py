@@ -17,14 +17,14 @@ from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
 from PySide6.QtCore import QEvent, QMimeData, QPoint, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFrame, QLabel, QLayout, QLineEdit, QPushButton, QSpinBox,
-    QWidget,
+    QApplication, QComboBox, QFrame, QGraphicsOpacityEffect, QLabel, QLayout, QLineEdit,
+    QPushButton, QSpinBox, QWidget,
 )
 
 from ui.layout_helpers import FlowLayout, hbox, vbox
 from ui.views.card_parts import set_quiet, slider
 from ui.views.param_cards import CARD_W
-from ui.widgets import IdentityMark
+from ui.widgets import IdentityMark, ToggleSwitch
 
 MIME_SHOCKER = "application/x-ogp-shocker"      # a shocker card dragged by its ⠿
 SHOCK_HUE = "yellow"
@@ -258,15 +258,18 @@ def name_edit(text: str, placeholder: str, on_done: Callable[[str], None]) -> QL
 # ---- a shocker --------------------------------------------------------------
 
 class ShockerSetupCard(QFrame):
-    """One shocker: its name, what it is doing, its own limits and three
-    test buttons. Dragged by its ⠿ onto a behaviour, it is that behaviour's
-    shocker from then on. An OpenShock shocker carries its model and the
-    transmitter id the collar is paired to as well, and can be deleted."""
+    """One shocker: its name, its On / Off, what it is doing, its own limits
+    and three test buttons. Dragged by its ⠿ onto a behaviour, it is that
+    behaviour's shocker from then on. An OpenShock shocker carries its model
+    and the transmitter id the collar is paired to as well, and can be
+    deleted. Switched off (not in use) the card stays where it is, greyed
+    out, its switch the one thing lit (Blise's call, 2026-10-28)."""
 
     def __init__(self, shocker: Dict[str, Any], limits: Dict[str, int],
                  ranges: Dict[str, Tuple], on_name: Callable[[str], None],
                  on_limit: Callable[[str, float], None], on_test: Callable[[str], None],
-                 openshock: Optional[Dict[str, Any]] = None):
+                 openshock: Optional[Dict[str, Any]] = None,
+                 on_use: Optional[Callable[[bool], None]] = None):
         super().__init__()
         self.shocker_id = int(shocker["id"])
         self.setObjectName("paramCard")
@@ -294,8 +297,21 @@ class ShockerSetupCard(QFrame):
             self.delete.setProperty("role", "chipClose")
             self.delete.setToolTip("Take this shocker off the list")
             top.addWidget(self.delete)
+        self.use = ToggleSwitch("")
+        self.use.setChecked(not shocker.get("off"))
+        self.use.setToolTip("In use. Off: this shocker gets nothing - behaviours skip it, "
+                            "friends and the web remote don't see it, Home leaves it out. "
+                            "Its limits are kept for when you switch it back on.")
+        if on_use is not None:
+            self.use.toggled.connect(lambda on: on_use(bool(on)))
+        top.addWidget(self.use)
         lay.addLayout(top)
 
+        # everything under the title: greyed out while the shocker is off
+        self.body = QWidget()
+        lay.addWidget(self.body)
+        lay = vbox(0, 6)
+        self.body.setLayout(lay)
         row = hbox(0, 6)
         self.id_label = QLabel(f"ID {self.shocker_id}")
         self.id_label.setProperty("muted", "true")
@@ -351,6 +367,29 @@ class ShockerSetupCard(QFrame):
             b.clicked.connect(lambda _=False, o=op: on_test(o))
             tests.addWidget(b, 1)
         lay.addLayout(tests)
+
+        self.set_on(not shocker.get("off"))
+
+    def set_on(self, on: bool) -> None:
+        """In use (on) or not: off, the card dims and its controls rest --
+        all but the switch, which brings it back."""
+        if self.use.isChecked() != on:
+            self.use.blockSignals(True)
+            self.use.setChecked(on)
+            self.use.blockSignals(False)
+        self.body.setEnabled(on)
+        state = "false" if on else "true"         # off: the frame greyed (theme_params)
+        if self.property("off") != state:
+            self.setProperty("off", state)
+            self.style().unpolish(self)
+            self.style().polish(self)
+        for w in (self.body, self.grip, self.name):
+            if on:
+                w.setGraphicsEffect(None)
+            elif w.graphicsEffect() is None:
+                dim = QGraphicsOpacityEffect(w)
+                dim.setOpacity(0.35)
+                w.setGraphicsEffect(dim)
 
     def set_limits(self, limits: Dict[str, int]) -> None:
         for key, s in self.limits.items():
@@ -445,12 +484,13 @@ class ShockerDropZone(QFrame):
     the ＋, which lists them (no drag needed, for a VR pointer)."""
 
     def __init__(self, targets: Targets, names: Sequence[Tuple[int, str]],
-                 on_change: Callable[[Targets], None]):
+                 on_change: Callable[[Targets], None], off: Sequence[int] = ()):
         super().__init__()
         self.setObjectName("dropZone")
         self.setAcceptDrops(True)
         self._targets: Targets = targets if targets == "all" else list(targets)
         self._names = list(names)              # ((id, label), ...) on the page now
+        self._off = set(off)                   # switched off on their card: skipped
         self._on_change = on_change
         self._picking = False
         self._flow = FlowLayout(margin=6, h_spacing=6, v_spacing=6)
@@ -476,9 +516,11 @@ class ShockerDropZone(QFrame):
             chip.setProperty("role", "chip")
             chip.setProperty("hue", SHOCK_HUE)
             chip.setCheckable(True)
-            chip.setChecked(True)
+            off = sid in self._off
+            chip.setChecked(not off)          # unchecked: the grey chip
             chip.setCursor(Qt.PointingHandCursor)
-            chip.setToolTip("Click to take it off")
+            chip.setToolTip("Switched off on its card - this behaviour skips it until it's "
+                            "back on. Click to take it off." if off else "Click to take it off")
             chip.clicked.connect(lambda _=False, s=sid: self._remove(s))
             self._flow.addWidget(chip)
         add = QPushButton("＋" if chosen else "＋  Drop a shocker here")

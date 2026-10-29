@@ -26,7 +26,7 @@ Host attributes assumed (provided by OscGoesPurrrApp):
 import asyncio
 import threading
 import time
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 import debug_log
 from constants import (
@@ -512,6 +512,20 @@ class IntifaceFacade:
         if not self.haptic_engine:
             return set()
         return set(self.haptic_engine.list_connected_device_names())
+
+    def get_connected_toys_in_order(self) -> List[str]:
+        """The connected toys in the order they connected this launch: a
+        newcomer goes after the ones already there, so no toy's place --
+        its number and colour on Home, its number in the friends' Which
+        toys -- moves when another connects (Blise's call, 2026-10-28;
+        Home used to sort them by name). One that drops and comes back
+        goes after the others."""
+        now = (list(self.haptic_engine.list_connected_device_names())
+               if self.haptic_engine else [])
+        order = [n for n in getattr(self, "_toy_order", []) if n in now]
+        order += [n for n in now if n not in order]
+        self._toy_order = order
+        return list(order)
 
     def get_device_motor_counts(self) -> dict:
         """Facade method to get motor counts safely from the hardware engine."""

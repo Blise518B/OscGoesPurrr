@@ -115,6 +115,8 @@
   display: flex; align-items: center; justify-content: flex-end; padding-right: 12px;
 }
 .o-status b { color: var(--accent); font-weight: 600; }
+.o-status a { text-decoration: none; cursor: pointer; }
+.o-status a.o-dimlink { color: var(--dim); }
 .o-status .o-help {                                   /* help mode's button (sideSmall) */
   margin-right: 12px; padding: 1px 6px; border: 1px solid var(--ok-mid); border-radius: 6px;
   color: var(--muted); font-size: 12px;
@@ -156,6 +158,8 @@
 }
 :root[data-theme="midnight"] .o-toy { border-color: var(--hue-mid); }
 .o-toy.offline { background: transparent; border-color: var(--dim); }
+.o-toy { position: relative; }
+.o-tnum { position: absolute; left: 7px; top: 3px; font-size: 10px; font-weight: 700; line-height: 12px; color: var(--hue); pointer-events: none; }
 :root[data-theme="midnight"] .o-toy.offline { border-color: var(--grey-mid); }
 .o-toybar { display: flex; align-items: center; gap: 8px; height: 38px; padding: 5px 8px; border-radius: 9px; cursor: pointer; }
 .o-toybar:hover { background: var(--hover); }
@@ -322,3 +326,5 @@
 /* the pages built in their own files: the page's margins, scrolling */
 .o-page.o-built { padding: 0; }
 .o-pgscroll { position: absolute; inset: 0; padding: 20px 10px 22px 20px; }
+.o-tick { width: 14px; flex: none; color: var(--accent); font-weight: 700; }
+.o-set a.o-btn { text-decoration: none; margin-right: 8px; }

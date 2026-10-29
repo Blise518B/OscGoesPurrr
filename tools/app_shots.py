@@ -596,6 +596,9 @@ class DemoController:
     def get_connected_device_names(self):
         return set(self.connected)
 
+    def get_connected_toys_in_order(self):
+        return [n for n in TOYS if n in self.connected]
+
     def get_device_motor_counts(self):
         return {n: TOYS[n][0] for n in self.connected if n in TOYS}
 

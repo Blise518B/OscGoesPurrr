@@ -94,7 +94,10 @@ function notInDemo(btn, label) {
 // ---- the list ------------------------------------------------------------------
 
 function listCard() {
-  const add = el("button.pg-btn.wide", { type: "button" });
+  // a header with its own +/- box, the fold hanging from it: one card
+  // while open (the app's friends_list.py)
+  const sign = el("span.fr-sign", {}, "+");
+  const add = el("button.fr-addhead", { type: "button" }, sign, el("span", {}, "Add a friend (they need OGP too)"));
   const fold = el("div.fr-fold", { hidden: true },
     el("div.fr-micro", {}, "SEND AN INVITE LINK"),
     segmented(["Once", "1 day", "1 week", "No end"], "accent", () => {}, 0),
@@ -106,7 +109,7 @@ function listCard() {
     el("div.pg-row", {}, el("input.pg-filter.grow", { type: "text", placeholder: "invite link or ID" }),
       el("button.pg-btn.primary", { type: "button" }, "Add")),
     el("p.pg-note", {}, "An invite link links you at once; with a bare ID they click Accept in their OGP."));
-  const showAdd = () => { add.textContent = (fold.hidden ? "＋ " : "▾ ") + "Add a friend (they need OGP too)"; };
+  const showAdd = () => { sign.textContent = fold.hidden ? "+" : "−"; add.classList.toggle("open", !fold.hidden); };
   add.onclick = () => { fold.hidden = !fold.hidden; showAdd(); };
   showAdd();
   const web = notInDemo(el("button.pg-btn.wide", { type: "button" }, "Copy web remote link (no OGP needed)"),
@@ -129,7 +132,7 @@ function listCard() {
   return el("div.o-card.pg-card.fr-list", {},
     el("div.pg-row", {}, el("span.o-in.grow.fr-nick", {}, "Blise"), onlinePill),
     el("div.pg-row", {}, online, el("span.grow"), pause),
-    add, fold, web,
+    el("div.fr-addcard", {}, add, fold), web,
     el("div.pg-row.fr-sect", {}, el("span.fr-micro", {}, "FRIENDS"), el("span.grow"), heads),
     rows,
     el("div.pg-row.fr-sect", {}, el("span.fr-micro", {}, "GROUPS"), el("span.grow"), el("button.pg-link", { type: "button" }, "+ Group")),
@@ -184,8 +187,11 @@ function toysSection(P_, toys, strength) {
   sec.head.append(toggle("Sync with others", true, () => {}),
     el("span.strength-g", {}, el("span.small", {}, "Their strength"), s, val));
   const st = { levels: {}, override: new Set(), patterns: {}, cards: [], s, val, strength };
-  const keys = [[P.ALL, "All their toys"], ...toys.map(([n]) => [n, n])];
-  for (const [key, title] of keys) {
+  // "All their toys" only for two toys or more; one toy's card is the
+  // all-toys one underneath (the app's friends_panel.py)
+  const keys = toys.length === 1 ? [[P.ALL, toys[0][0], toys[0][0]]]
+    : [[P.ALL, "All their toys", P.ALL], ...toys.map(([n]) => [n, n, n])];
+  for (const [key, title, shows] of keys) {
     const card = new ToyCard(key, title, {
       onLevel: (v) => { if (v > 0) st.levels[key] = v; else delete st.levels[key]; P_.onLevel && P_.onLevel(key, v); },
       onOverride: (on) => { if (on) st.override.add(key); else st.override.delete(key); },
@@ -193,8 +199,8 @@ function toysSection(P_, toys, strength) {
         const c = w ? P.cleanPattern(w, pd, lo, hi) : null;
         if (c) st.patterns[key] = c; else delete st.patterns[key];
         P_.onPattern && P_.onPattern(key, c);
-      }, meter: key !== P.ALL });
-    const batt = toys.find(([n]) => n === key);
+      }, meter: shows !== P.ALL });
+    const batt = toys.find(([n]) => n === shows);
     if (batt) card.setBattery(batt[1]);
     st.cards.push(card);
   }
@@ -267,20 +273,26 @@ function mePanel() {
   const tsec = toysSection({
     onLevel: (key, v) => { if (v > 0) log(`You drive your ${key === P.ALL ? "toys" : key} at ${pct(v)}`); },
   }, toys, { get: () => D.state.strength, set: (v) => D.setStrength(v) });
-  const capsNow = () => SHOCK.shockers.map((s) => [s.shock, s.vibrate, Math.round(s.pulse * 1000)]);
-  const shocked = (i, it, len, op, wms) => {
-    const [cap, vcap, top] = capsNow()[i];
+  // your shockers as a friend sees them: the ones in use (their card's
+  // switch on), numbered among themselves -- rebuilt when that changes
+  const used = () => SHOCK.inUse();
+  const at = (slot) => SHOCK.shockers.indexOf(used()[slot]);
+  const capsNow = () => used().map((s) => [s.shock, s.vibrate, Math.round(s.pulse * 1000)]);
+  const shocked = (slot, it, len, op, wms) => {
+    const i = at(slot), name = SHOCK.shockers[i].name;
+    const [cap, vcap, top] = capsNow()[slot];
     const [lvl, ms] = P.shockValues(it, len, op === "vibrate" ? vcap : cap, top);
     const go = () => {
       const got = fire(i, op, lvl, ms);
-      if (got) log(`You → you: ${got[0] === op ? op : `${got[0]} (shocks not armed)`} ${got[1] || ""} · ${(got[2] / 1000).toFixed(1)} s on ${SHOCK.shockers[i].name}`);
-      else log(`Held back: ${SHOCK.shockers[i].name} is resting, stopped or Off`);
+      if (got) log(`You → you: ${got[0] === op ? op : `${got[0]} (shocks not armed)`} ${got[1] || ""} · ${(got[2] / 1000).toFixed(1)} s on ${name}`);
+      else log(`Held back: ${name} is resting, stopped, Off or not in use`);
     };
     if (wms > 0) { log(`You → you: ${(wms / 1000).toFixed(1)} s warning first`); setTimeout(go, wms); } else go();
   };
-  const ssec = shockSection(capsNow, () => SHOCK.timing.hold, (i) => `${i + 1} · ${SHOCK.shockers[i].name}`, shocked,
-    (i, op, it) => { const [cap, vcap] = capsNow()[i]; fire(i, op, Math.max(1, Math.round(it * (op === "vibrate" ? vcap : cap))), SHOCK.timing.hold * 1000); },
-    (i) => release(i), (i) => { release(i); log(`You stopped your ${SHOCK.shockers[i].name}`); });
+  const buildShock = () => shockSection(capsNow, () => SHOCK.timing.hold, (slot) => `${slot + 1} · ${used()[slot].name}`, shocked,
+    (slot, op, it) => { const [cap, vcap] = capsNow()[slot]; fire(at(slot), op, Math.max(1, Math.round(it * (op === "vibrate" ? vcap : cap))), SHOCK.timing.hold * 1000); },
+    (slot) => release(at(slot)), (slot) => { release(at(slot)); log(`You stopped your ${used()[slot].name}`); });
+  let ssec = buildShock(), usedKey = used().map((s) => s.id).join();
   const asec = section("THEIR AVATAR", "green", "params");
   const board = new Board({ onSet: (id, v) => { AVATAR.set(id, v); log(`You set your ${AVATAR.board.controls.find((c) => c.id === id).label}`); },
                             onHold: (id, held) => AVATAR.hold(id, held), onSetAny() {} });
@@ -304,8 +316,15 @@ function mePanel() {
         card.tick();
       }
       if (!st.s.busy) { st.s.setQuiet(Math.round(d.strength * 1000)); st.val.textContent = pct(d.strength); }
-      const sh = d.shock;
-      ssec.sec.box.hidden = !(sh.share && sh.on && d.features.pishock);
+      const sh = d.shock, key = used().map((s) => s.id).join();
+      if (key !== usedKey) {                      // a shocker switched on or off
+        usedKey = key;
+        ssec.cards.forEach((c) => c.release());
+        const fresh = buildShock();
+        ssec.sec.box.replaceWith(fresh.sec.box);
+        ssec = fresh;
+      }
+      ssec.sec.box.hidden = !(sh.share && sh.on && d.features.pishock && used().length);
       showStrip(ssec.strip, S.paused, d.off || !sh.on, sh.armed);
       ssec.cards.forEach((c) => { c.setCaps(capsNow()[ssec.cards.indexOf(c)], SHOCK.timing.hold); c.setBlocked(S.paused || d.off); });
       asec.box.hidden = !d.features.params;

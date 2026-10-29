@@ -42,6 +42,7 @@ from constants import (
 
 from ui import theme as _theme
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
+from ui.views.avatar_menu import has_menu as _has_menu, links_html as _menu_links
 from ui.motor_signal_chain import ChainOverviewPanel as _ChainOverviewPanel
 from ui.views.home_devices import (
     HomeDeviceRow as _HomeDeviceRow, ListDivider as _ListDivider,
@@ -534,6 +535,14 @@ class HomeMixin:
     # The same three in a few words, for the folded line.
     _SETUP_SHORT = (("toy", "Toy on"), ("osc", "VRChat connected"),
                     ("zones", "Avatar has SPS"))
+    # And one step that is optional (Blise's ask, 2026-10-28): OGP's menu in
+    # the avatar (ui/views/avatar_menu.py). It never holds the card open; its
+    # light is the grey ring until the avatar has the menu.
+    _SETUP_MENU_TITLE = "Optional: OGP's menu in your avatar"
+    _SETUP_MENU_DETAIL = (
+        "Strength, Off, Sleep, the modes and a Friends submenu, right in "
+        "VRChat: drag one VRCFury prefab onto your avatar and upload.")
+    _SETUP_MENU_SHORT = ("menu", "Avatar menu")
     # Set by "Don't show again"; the folded line's click clears it.
     _SETUP_COMPACT_KEY = "home_setup_compact"
 
@@ -585,6 +594,24 @@ class HomeMixin:
             row_lay.addLayout(text_col, 1)
             lay.addWidget(row)
             self._setup_step_labels[key] = (mark, title, detail)
+        row = QWidget()
+        row_lay = _hbox(0, 6)
+        row.setLayout(row_lay)
+        mark = QLabel("")
+        mark.setFixedWidth(14)
+        row_lay.addWidget(mark, 0, Qt.AlignTop)
+        text_col = _vbox(0, 1)
+        title = QLabel(self._SETUP_MENU_TITLE)
+        title.setObjectName("setupStepTitle")
+        text_col.addWidget(title)
+        detail = self._muted_label(
+            f"{self._SETUP_MENU_DETAIL} {_menu_links(_theme.PALETTE['cyan'][0])}")
+        detail.setTextFormat(Qt.RichText)
+        detail.setOpenExternalLinks(True)
+        text_col.addWidget(detail)
+        row_lay.addLayout(text_col, 1)
+        lay.addWidget(row)
+        self._setup_menu_row = (mark, title, detail)
         foot = _hbox(0, 12)
         foot.addWidget(self._muted_label(
             "Then press Test all below — every connected toy buzzes for a "
@@ -603,9 +630,11 @@ class HomeMixin:
         lay.addLayout(foot)
         self._setup_hide_btn = hide
 
-        strip = _SetupStrip(self._SETUP_SHORT)
+        strip = _SetupStrip(self._SETUP_SHORT + (self._SETUP_MENU_SHORT,))
         strip.clicked.connect(lambda: self._set_setup_compact(False))
         details = {k: d for k, _t, d in self._SETUP_STEPS}
+        details["menu"] = (f"Optional - {self._SETUP_MENU_DETAIL} Settings → VRChat menu "
+                           "has the prefab and the guide.")
         for key, (dot, name) in strip.lights.items():
             for w in (dot, name):
                 self._explain(w, name.text(), details[key])
@@ -625,6 +654,14 @@ class HomeMixin:
         self._style_root(card)
         self._style_root(strip)
         self._refresh_setup_checklist()
+
+    def _setup_has_menu(self) -> bool:
+        """The avatar you're wearing carries OGP's menu (either part)."""
+        get = getattr(self.controller, "get_avatar_menu", None)
+        try:
+            return bool(_has_menu(get())) if callable(get) else False
+        except Exception:
+            return False
 
     def _set_setup_compact(self, compact: bool) -> None:
         """"Don't show again" (True) / a click on the folded line (False)."""
@@ -646,6 +683,7 @@ class HomeMixin:
             state["compact"] = bool(get(self._SETUP_COMPACT_KEY, False))
         except Exception:
             return
+        state["menu"] = self._setup_has_menu()
         if state == self._setup_state:
             return
         self._setup_state = state
@@ -671,6 +709,19 @@ class HomeMixin:
                     name.setStyleSheet(
                         f"color: {COLOR_TEXT};" if ok
                         else f"color: {COLOR_TEXT_MUTED};")
+            ok = state["menu"]
+            mark, title, detail = self._setup_menu_row
+            mark.setText("✓" if ok else "○")
+            mark.setStyleSheet(f"color: {COLOR_SUCCESS};" if ok
+                               else f"color: {COLOR_TEXT_MUTED};")
+            title.setStyleSheet(f"color: {COLOR_SUCCESS};" if ok
+                                else f"color: {COLOR_TEXT_MUTED};")
+            detail.setVisible(not ok)
+            if strip is not None:
+                dot, name = strip.lights["menu"]
+                self._apply_connect_dot(dot, ok)
+                name.setStyleSheet(f"color: {COLOR_TEXT};" if ok
+                                   else f"color: {COLOR_TEXT_MUTED};")
         except RuntimeError:
             return
         done = all(bool(state.get(k)) for k, _t, _d in self._SETUP_STEPS)

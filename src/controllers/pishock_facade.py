@@ -84,6 +84,7 @@ class PiShockFacade:
         self.pishock_engine.set_limits(**s.get_limits())
         self.pishock_engine.set_shocker_limits(s.get_shocker_limits())
         self.pishock_engine.set_openshock_shockers(s.get_openshock_shockers())
+        self.pishock_engine.set_shockers_off(s.get_shockers_off())
         self.pishock_engine.set_shocker_names(s.get_shocker_names())
 
     # ------------------------------------------------------------------
@@ -103,7 +104,9 @@ class PiShockFacade:
             "hub_kind": eng.hub_kind,
             "firmware": eng.firmware,
             "board": eng.board,
-            "shockers": eng.shockers(),
+            "shockers": eng.shockers(),          # in use: Home, friends
+            "all_shockers": eng.all_shockers(),  # the page: switched-off ones too
+            "shockers_off": s.get_shockers_off(),
             "openshock_shockers": s.get_openshock_shockers(),
             "shocker_names": s.get_shocker_names(),
             "armed": eng.is_armed,
@@ -115,7 +118,8 @@ class PiShockFacade:
             # each shocker's caps as they apply (its own, else the hub's), by
             # id -- the hub's shockers and the OpenShock list alike
             "shocker_limits": {str(sid): s.shocker_limits_for(sid) for sid in
-                               {*eng.shocker_ids(), *(o["id"] for o in s.get_openshock_shockers())}},
+                               {*(x["id"] for x in eng.all_shockers()),
+                                *(o["id"] for o in s.get_openshock_shockers())}},
             "ranges": dict(RANGES),          # every limit's (lowest, highest, default)
             "hub_name": pishock_serial.HUB_NAMES.get(eng.hub_kind, ""),
         }
@@ -178,6 +182,19 @@ class PiShockFacade:
         the rules and for friends (their panel shows it)."""
         self.pishock_settings.set_shocker_name(shocker_id, name)
         self.pishock_engine.set_shocker_names(self.pishock_settings.get_shocker_names())
+
+    def set_pishock_shocker_on(self, shocker_id, on: bool) -> None:
+        """A shocker's own On / Off (its card): off, it is stopped, the
+        engine sends it nothing, and behaviours, friends and Home leave it
+        out -- remembered across launches."""
+        self.pishock_settings.set_shocker_on(shocker_id, on)
+        self.pishock_engine.set_shockers_off(self.pishock_settings.get_shockers_off())
+        name = self.pishock_settings.get_shocker_names().get(str(shocker_id)) or f"Shocker {shocker_id}"
+        self.log_message(f"Shockers: {name} {'in use again' if on else 'switched off - not in use'}")
+        try:
+            self.thread_queue.put(("pishock_state", None))   # the page and Home redraw
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # Safety

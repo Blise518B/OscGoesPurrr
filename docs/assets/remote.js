@@ -571,10 +571,11 @@ function build() {
     toys.body.append(el("p.small", {}, "They haven't allowed you their toys."));
   } else {
     const sync = toggle("Sync with others", S.sync, setSync,
-      "On: everyone who drives them with Sync on shares one set of toy cards - a level, auto mode or "
-      + "Override one of you picks shows up on the others' panels too, and their toys play it once: the "
-      + "newest change wins. Off: your cards are your own, and their toys follow whichever of you is "
-      + "higher. Their strength slider is shared either way.");
+      "On: you see what the others driving them see - one set of toy cards for all of you. When one "
+      + "of you moves a level, starts an auto mode or picks Override, it moves on everyone's cards, and "
+      + "their toys play that one change (the newest wins). Off: your cards are just yours - you don't "
+      + "see what the others do, and their toys follow whichever of you is higher. Their strength "
+      + "slider is shared either way.");
     const val = el("span.val");
     const s = hslider({ max: 1000, hue: "accent", value: Math.round(st.strength * 1000),
                         title: "Their own strength slider, top left in their OGP: it scales everything "
@@ -584,11 +585,16 @@ function build() {
     val.textContent = pct(st.strength);
     W.strength = { s, val };
     toys.head.append(sync, el("span.strength-g", {}, el("span.small", {}, "Their strength"), s, val));
-    const every = st.toys.length ? [[P.ALL, "All their toys"]] : [];
-    for (const [key, title] of [...every, ...st.toys.map(([n]) => [n, n])]) {
+    // "All their toys" only for two toys or more; one toy's card is the
+    // all-toys one underneath (friends_panel.py): [key, title, the toy it shows]
+    const names = st.toys.map(([n]) => n);
+    const list = names.length === 1 ? [[P.ALL, names[0], names[0]]]
+      : [...(names.length ? [[P.ALL, "All their toys", P.ALL]] : []), ...names.map((n) => [n, n, n])];
+    for (const [key, title, shows] of list) {
       const card = new ToyCard(key, title, {
         onLevel: (v) => setLevel(key, v), onOverride: (on) => setOverride(key, on),
-        onPattern: (w, pd, lo, hi) => setPattern(key, w, pd, lo, hi), meter: key !== P.ALL });
+        onPattern: (w, pd, lo, hi) => setPattern(key, w, pd, lo, hi), meter: shows !== P.ALL });
+      card.shows = shows;
       W.toys.push(card);
     }
     toys.body.append(el("div.grid", {}, W.toys.map((c) => c.root)));
@@ -685,9 +691,9 @@ function update() {
   }
   const outs = st.outputs;
   for (const card of W.toys) {
-    const out = card.toy === P.ALL ? Math.max(0, ...Object.values(outs)) : (outs[card.toy] || 0);
+    const out = card.shows === P.ALL ? Math.max(0, ...Object.values(outs)) : (outs[card.shows] || 0);
     card.setState(S.levels[card.toy] || 0, S.override.has(card.toy), S.patterns[card.toy], out);
-    if (card.toy !== P.ALL) card.setBattery(st.batteries[card.toy]);
+    if (card.shows !== P.ALL) card.setBattery(st.batteries[card.shows]);
   }
   const blocked = st.paused || st.off;
   W.shockers.forEach((card, i) => { card.setCaps(capsOf(i), st.maxHoldS); card.setBlocked(blocked); });

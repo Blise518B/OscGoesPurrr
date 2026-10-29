@@ -938,8 +938,12 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
                              int(lim["max_pulse_ms"]))]
             max_int, max_vib, max_ms = (max(c[i] for c in pick) for i in range(3))
         batteries = getattr(self, "_toy_batteries", {}) or {}
+        # your toys in Home's order (connection order): the menu's Which
+        # toys 1-4 and their panel then number them as your Home does
+        get_order = getattr(self, "get_connected_toys_in_order", None)
+        rank = {n: i for i, n in enumerate((get_order() if callable(get_order) else None) or ())}
         return {
-            "toys": sorted(counts.items()),
+            "toys": sorted(counts.items(), key=lambda kv: (rank.get(kv[0], len(rank)), kv[0])),
             "batteries": {n: batteries[n] for n in counts if n in batteries},
             "outputs": outputs,
             "strength": float(self.get_strength()),

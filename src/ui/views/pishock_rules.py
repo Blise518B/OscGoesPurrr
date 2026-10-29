@@ -68,6 +68,8 @@ class PiShockRulesMixin:
 
     # ((id, label), ...) the drop zones name the shockers by
     _pishock_shocker_choices: tuple = ()
+    # the shockers switched off on their card: grey chips, skipped
+    _pishock_shockers_off: frozenset = frozenset()
 
     def _build_pishock_behaviours_frame(self) -> QFrame:
         frame, root, self._pishock_rule_flow, head = category_frame(
@@ -223,7 +225,8 @@ class PiShockRulesMixin:
             self._pishock_zones(lay, rule, w)
         else:
             zone = ShockerDropZone(rule.get("shockers", []), self._pishock_shocker_choices,
-                                   lambda t: (w.__setitem__("shockers", t), w["push"]()))
+                                   lambda t: (w.__setitem__("shockers", t), w["push"]()),
+                                   off=self._pishock_shockers_off)
             card.zone = zone
             lay.addWidget(zone)
         return card, w
@@ -321,7 +324,8 @@ class PiShockRulesMixin:
             row.addWidget(pick)
             entry = {"param": edit, "shockers": zone.get("shockers", [])}
             drop = ShockerDropZone(entry["shockers"], self._pishock_shocker_choices,
-                                   lambda t, e=entry: (e.__setitem__("shockers", t), w["push"]()))
+                                   lambda t, e=entry: (e.__setitem__("shockers", t), w["push"]()),
+                                   off=self._pishock_shockers_off)
             row.addWidget(drop, 1)
             remove = QPushButton("×")
             remove.setProperty("role", "chipClose")

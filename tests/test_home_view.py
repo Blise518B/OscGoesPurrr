@@ -61,6 +61,9 @@ class FakeController:
     def get_feature_enabled(self, key):
         return self.features.get(key, True)
 
+    def get_avatar_menu(self):
+        return getattr(self, "avatar_menu", {})
+
     def get_setup_status(self):
         return {"osc": self.osc_ok, "zones": self.zones_ok,
                 "toy": bool(self.connected)}
@@ -177,6 +180,23 @@ class TestToyList:
         host.update_stored_devices_ui()
         assert host.hue("Alpha") == theme.OFFLINE_HUE
         assert data["test_button"].isHidden()
+
+    def test_a_toy_that_connects_goes_after_the_ones_already_there(self, qapp):
+        """Connection order, not the alphabet (Blise's ask, 2026-10-28): the
+        first toy keeps place 1 -- its colour and the number in its corner
+        -- when another connects."""
+        ctl = FakeController(_toys(), connected={"Charlie"})
+        ctl.live = ["Charlie"]
+        ctl.get_connected_toys_in_order = lambda: [n for n in ctl.live if n in ctl.connected]
+        h = _Host(ctl)
+        assert h.order() == ["Charlie", "Alpha", "Bravo"] and h.hue("Charlie") == theme.toy_hue(0)
+        ctl.connected.add("Alpha")
+        ctl.live.append("Alpha")
+        h.update_stored_devices_ui()
+        assert h.order() == ["Charlie", "Alpha", "Bravo"]
+        assert (h.hue("Charlie"), h.hue("Alpha")) == (theme.toy_hue(0), theme.toy_hue(1))
+        numbers = [h.device_ui_frames[n]["frame"]._number for n in ("Charlie", "Alpha", "Bravo")]
+        assert numbers == [1, 2, 0]                     # an offline toy has none
 
     def test_test_all_reaches_the_controller(self, host):
         host._test_all_button.click()
@@ -307,7 +327,7 @@ class TestGettingStarted:
         assert not fresh._setup_strip.isHidden()
         lights = fresh._setup_strip.lights
         assert [n.text() for _d, n in lights.values()] == [
-            "Toy on", "VRChat connected", "Avatar has SPS"]
+            "Toy on", "VRChat connected", "Avatar has SPS", "Avatar menu"]
 
     def test_the_lights_follow_the_steps_and_stay_when_all_are_green(self, fresh):
         def lit(key):
@@ -344,6 +364,24 @@ class TestGettingStarted:
         assert fresh._setup_strip.isHidden()
         # everything is green, yet the card you asked for stays
         assert not fresh._setup_card.isHidden()
+
+    def test_the_avatar_menu_is_an_optional_step_that_never_holds_the_card(self, fresh):
+        """OGP's menu in the avatar: its own row with the prefab's links and
+        a light on the folded line, ticked once the avatar has either part
+        -- but the card still leaves when the three real steps are done."""
+        from ui.views.avatar_menu import PREFAB_URL, GUIDE_URL
+        mark, title, detail = fresh._setup_menu_row
+        assert title.text().startswith("Optional") and mark.text() == "○"
+        assert PREFAB_URL in detail.text() and GUIDE_URL in detail.text()
+        c = fresh.controller
+        c.connected.add("Alpha")
+        c.osc_ok = c.zones_ok = True
+        fresh._refresh_setup_checklist()
+        assert fresh._setup_card.isHidden()             # the menu isn't required
+        c.avatar_menu = {"known": True, "self": False, "friends": True}
+        fresh._set_setup_compact(True)
+        assert mark.text() == "✓" and detail.isHidden()
+        assert "solid" not in fresh._setup_strip.lights["menu"][0].styleSheet()
 
     def test_with_the_built_in_engine_off_it_says_to_start_intiface(self, fresh):
         fresh.controller.settings["use_integrated_intiface"] = False

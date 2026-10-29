@@ -49,7 +49,7 @@ STEPS = {
         Step("Choose what each may use", "Pause all stops everyone.",
              ("Toys", "Shockers", "Avatar Remote")),
         Step("Drive their toys", "Patterns, sliders, or all of it big.", "Control mode"),
-        Step("Drive together", "Several friends, one set of cards.", "Sync with others"),
+        Step("Drive together", "With Sync on, you see what the others do.", "Sync with others"),
     ),
     "Shockers": (
         Step("Plug in your hub", "PiShock or OpenShock, over USB.", "Connect"),

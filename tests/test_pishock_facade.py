@@ -181,3 +181,18 @@ def test_a_shockers_own_limit_reaches_the_engine():
         assert host.pishock_engine.limits_for(1)["max_intensity"] == 30
     finally:
         host._pishock_shutdown()
+
+
+def test_a_shocker_switched_off_reaches_the_engine_and_the_status():
+    host = Host()
+    host._pishock_init()
+    try:
+        host.set_pishock_shocker_on(24326, False)
+        assert 24326 in host.pishock_engine._off
+        st = host.get_pishock_status()
+        assert st["shockers_off"] == [24326] and "all_shockers" in st
+        assert any("not in use" in m for m in host.logged)
+        host.set_pishock_shocker_on(24326, True)
+        assert host.pishock_engine._off == set()
+    finally:
+        host._pishock_shutdown()

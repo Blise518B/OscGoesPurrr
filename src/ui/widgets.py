@@ -14,6 +14,7 @@ from PySide6.QtCore import QEvent, QObject, QPointF, QRectF, QSize, Qt, QTimer, 
 from PySide6.QtGui import (
     QBrush,
     QColor,
+    QFont,
     QLinearGradient,
     QPainter,
     QPainterPath,
@@ -230,10 +231,19 @@ class ToyFrame(QFrame):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._hue = ""
+        self._number = 0
 
     def set_hue(self, hue: str) -> None:
         if hue != self._hue:
             self._hue = hue
+            self.update()
+
+    def set_number(self, number: int) -> None:
+        """Its place among the connected toys (1, 2, 3 ...), in the top
+        left corner in its hue -- the number friends' Which toys uses
+        (Blise's ask, 2026-10-28). 0: none (an offline toy)."""
+        if number != self._number:
+            self._number = int(number or 0)
             self.update()
 
     def paintEvent(self, _ev) -> None:  # noqa: N802
@@ -246,6 +256,13 @@ class ToyFrame(QFrame):
         p.setPen(QPen(QColor(outline), 1.0))
         p.setBrush(QBrush(QColor(ground)) if ground else Qt.NoBrush)
         p.drawRoundedRect(box, radius, radius)
+        if self._number:
+            f = QFont(self.font())
+            f.setPixelSize(10)
+            f.setBold(True)
+            p.setFont(f)
+            p.setPen(QColor(_theme.hue(self._hue)))
+            p.drawText(QRectF(7.0, 4.0, 16.0, 12.0), Qt.AlignLeft | Qt.AlignTop, str(self._number))
         p.end()
 
 

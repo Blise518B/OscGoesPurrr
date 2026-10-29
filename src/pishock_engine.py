@@ -19,7 +19,10 @@
 #     strength of the hardest one;
 #   * a continuous hold runs at most `max_hold_s`, then the shocker is forced
 #     to rest `hold_rest_s`;
-#   * paused (the page's Stop) ends everything and refuses every send.
+#   * paused (the page's Stop) ends everything and refuses every send;
+#   * a shocker switched off on its card (not in use) is stopped and gets
+#     nothing, and shockers() / shocker_ids() -- what rules and friends see
+#     -- leave it out.
 #
 # Holds ("continuous") are sent as short overlapping chunks: the hub runs each
 # operate for its duration and a new one for the same shocker takes over, so
@@ -109,6 +112,7 @@ class PiShockEngine:
         self._shockers: Dict[int, _Shocker] = {}
         self._os_shockers: List[Dict[str, Any]] = []
         self._names: Dict[str, str] = {}       # your names, by shocker id
+        self._off: set = set()                 # switched off on their card, by id
         self._hub_error_logged_at = _NEG_INF
 
         self._want_connected = False
@@ -171,13 +175,20 @@ class PiShockEngine:
     def is_paused(self) -> bool:
         return self._paused
 
-    def shockers(self) -> List[Dict[str, Any]]:
-        names = self._names
-        return [dict(s, name=names[str(s["id"])]) if str(s.get("id")) in names else dict(s)
+    def all_shockers(self) -> List[Dict[str, Any]]:
+        """Every shocker on the hub, those switched off too (each with
+        "off") -- for the Shockers page, where they are switched back on."""
+        names, off = self._names, self._off
+        return [dict(s, off=s.get("id") in off,
+                     **({"name": names[str(s["id"])]} if str(s.get("id")) in names else {}))
                 for s in self._info.get("shockers", [])]
 
+    def shockers(self) -> List[Dict[str, Any]]:
+        """The shockers in use: what rules, friends and Home see."""
+        return [s for s in self.all_shockers() if not s["off"]]
+
     def shocker_ids(self) -> List[int]:
-        return [s["id"] for s in self._info.get("shockers", [])]
+        return [s["id"] for s in self._info.get("shockers", []) if s["id"] not in self._off]
 
     def limits(self) -> Dict[str, Any]:
         return {
@@ -262,6 +273,27 @@ class PiShockEngine:
         self._cooldown_s = _clamp_float(cooldown_s, *RANGES["cooldown_s"])
         self._max_hold_s = _clamp_float(max_hold_s, *RANGES["max_hold_s"])
         self._hold_rest_s = _clamp_float(hold_rest_s, *RANGES["hold_rest_s"])
+
+    def set_shockers_off(self, ids) -> None:
+        """The shockers switched off on their card. One newly off stops now
+        (a hold or a pulse it was running), under the lock like a Stop."""
+        off = set()
+        for v in ids or ():
+            try:
+                off.add(int(v))
+            except (TypeError, ValueError):
+                continue
+        with self._lock:
+            newly = off - self._off
+            self._off = off
+            link = self._link
+            for sid in newly:
+                st = self._shockers.get(sid)
+                if st is not None:
+                    st.hold_op = st.sent_op = None
+                    st.pulse_until = min(st.pulse_until, self._clock())
+                if link is not None:
+                    link.end(sid)
 
     def set_shocker_limits(self, per_shocker: Dict[Any, Dict[str, Any]]) -> None:
         """Each shocker's own caps, by id ({"24325": {"max_intensity": 20}});
@@ -454,7 +486,7 @@ class PiShockEngine:
         now = self._clock()
         with self._lock:
             link = self._link
-            if link is None or self._paused:
+            if link is None or self._paused or shocker_id in self._off:
                 return False
             op = self._effective_op(op)
             intensity = _clamp_int(intensity, 1, self._cap(op, shocker_id), 1)
@@ -485,7 +517,7 @@ class PiShockEngine:
         now = self._clock()
         with self._lock:
             link = self._link
-            if link is None or self._paused:
+            if link is None or self._paused or shocker_id in self._off:
                 return
             op = self._effective_op(op)
             intensity = _clamp_int(intensity, 1, self._cap(op, shocker_id), 1)

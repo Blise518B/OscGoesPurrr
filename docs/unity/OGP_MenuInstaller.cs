@@ -423,7 +423,9 @@ namespace OscGoesPurrr
             shockers.controls.Clear();
             // Buttons: one operation per press, however long it is held.
             shockers.controls.Add(Button("Shock", FriendShockParam, icon("shock")));
-            shockers.controls.Add(Button("Vibrate", FriendVibrateParam, icon("vibrate")));
+            // "Shocker vibrate", not "Vibrate": in a menu full of toys it reads as
+            // the toys' (Blise's call, 2026-10-28)
+            shockers.controls.Add(Button("Shocker vibrate", FriendVibrateParam, icon("vibrate")));
             shockers.controls.Add(Button("Beep", FriendBeepParam, icon("beep")));
             shockers.controls.Add(Button("Stop", FriendStopShockParam, icon("stop")));
             shockers.controls.Add(Radial("Strength", FriendShockStrengthParam, icon("shock_strength")));
@@ -448,7 +450,7 @@ namespace OscGoesPurrr
             both.controls.Add(Radial("Speed", BothSpeedParam, icon("speed")));
             both.controls.Add(Button("Stop", BothStopParam, icon("stop_toys")));
             both.controls.Add(Button("Shock", BothShockParam, icon("shock")));
-            both.controls.Add(Button("Vibrate", BothVibrateParam, icon("vibrate")));
+            both.controls.Add(Button("Shocker vibrate", BothVibrateParam, icon("vibrate")));
             both.controls.Add(Radial("Strength", BothStrengthParam, icon("shock_strength")));
             both.controls.Add(Radial("Length", BothLengthParam, icon("length")));
             friends.controls.Add(Folder("Both of us", both, icon("both")));
