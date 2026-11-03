@@ -13,7 +13,9 @@
 #   * official bHaptics avatar package: bools  bOSC/v2/<Pos>/<n>/self  and
 #     .../others  (n 0-based), and the Quest prefabs' bOSC/v2m/...;
 #   * older avatars: bHaptics_<Slot>_<N>_bool (HerpDerpinstine bHapticsOSC
-#     v1, N 1-based) and bOSC_v1_<Pos>_<N> floats -- no self/others split;
+#     v1, N 1-based) and bOSC_v1_<Pos>_<n> floats (n 0-based, like v2 --
+#     every avatar VRChat has a file for: VestFront_0.._19, Head_0.._5)
+#     -- no self/others split;
 #   * the OWO avatar package: owo_suit_<Muscle>, bool or float;
 #   * zone routes: an OGB / SPS zone or synthetic source, resolved by
 #     zone_strength.zone_filter_strength, onto a named region.
@@ -171,7 +173,7 @@ def _build_keys() -> Dict[str, Tuple[str, str, int]]:
                 keys[f"{prefix}/{pos}/{i}/self"] = (_SELF, pos, i)
                 keys[f"{prefix}/{pos}/{i}/others"] = (_OTHERS, pos, i)
             keys[f"bHaptics_{_V1_SLOTS[pos]}_{i + 1}_bool"] = (_ANY_BOOL, pos, i)
-            keys[f"bOSC_v1_{pos}_{i + 1}"] = (_ANY_FLOAT, pos, i)
+            keys[f"bOSC_v1_{pos}_{i}"] = (_ANY_FLOAT, pos, i)
     for muscle in MUSCLES:
         keys[f"owo_suit_{muscle}"] = (_OWO, muscle, 0)
     return keys

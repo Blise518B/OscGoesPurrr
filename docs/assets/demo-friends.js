@@ -63,6 +63,36 @@ const COLS = [["toys", "pink"], ["shock", "yellow"], ["params", "accent"]];
 
 const S = { picked: "mika", online: true, paused: false, panels: {}, rows: {}, log: null };
 const byId = (id) => FRIENDS.find((f) => f.id === id) || GROUPS.find((g) => g.id === id);
+const DRAG = "text/x-ogp-friend";   // a friend's row, dragged into a group
+// A group row's count, as the app's (friends_list._members_text)
+function membersText(members) {
+  const n = members.filter((m) => m !== "me").length;
+  const friends = `${n} friend${n === 1 ? "" : "s"}`;
+  if (!members.includes("me")) return friends;
+  return n ? `you + ${friends}` : "just you";
+}
+function joinGroup(g, id) {
+  const f = byId(id);
+  if (!f || f.group || f.web || g.members.includes(id)) return;
+  g.members.push(id);
+  log(`${f.me ? "You (Me)" : f.nick} joins ${g.nick}`);
+  render();
+}
+// A group's row and its members box take a friend's row dropped on them
+function dropTarget(node, g) {
+  node.addEventListener("dragover", (e) => {
+    if (!e.dataTransfer.types.includes(DRAG)) return;
+    e.preventDefault();
+    node.classList.add("drop");
+  });
+  node.addEventListener("dragleave", () => node.classList.remove("drop"));
+  node.addEventListener("drop", (e) => {
+    node.classList.remove("drop");
+    if (!e.dataTransfer.types.includes(DRAG)) return;
+    e.preventDefault();
+    joinGroup(g, e.dataTransfer.getData(DRAG));
+  });
+}
 const hhmmss = () => new Date().toTimeString().slice(0, 8);
 
 function log(line) {
@@ -147,17 +177,26 @@ function friendRow(f) {
     ck.onclick = (e) => { e.stopPropagation(); f.allow[what] = ck.checked; };
     return ck;
   }) : []);
-  const name = el("span.fr-name", {}, f.me ? `${f.nick} (you)` : f.nick,
-    f.group ? el("span.fr-sub", {}, ` ${f.members.length} friends`) : "");
+  const sub = f.group ? el("span.fr-sub", {}, ` ${membersText(f.members)}`) : null;
+  const name = el("span.fr-name", {}, f.me ? `${f.nick} (you)` : f.nick, sub || "");
   const row = hued(el("div.fr-row", { onclick: () => { S.picked = f.id; render(); } }, mark, name, el("span.grow"), meta, boxes),
                    f.hue || "accent");
-  S.rows[f.id] = { row, meta, boxes, f };
+  if (f.group) {
+    row.title = "Drag a friend here to add them; right-click to rename or delete";
+    dropTarget(row, f);
+  } else if (!f.web) {
+    // yours too: a group with you and a friend drives both of you
+    row.draggable = true;
+    row.addEventListener("dragstart", (e) => { e.dataTransfer.setData(DRAG, f.id); e.dataTransfer.effectAllowed = "copy"; });
+  }
+  S.rows[f.id] = { row, meta, boxes, f, sub };
   return row;
 }
 
 function paintRows() {
-  for (const { row, meta, boxes, f } of Object.values(S.rows)) {
+  for (const { row, meta, boxes, f, sub } of Object.values(S.rows)) {
     row.classList.toggle("on", f.id === S.picked);
+    if (sub) sub.textContent = ` ${membersText(f.members)}`;
     let text = "", tone = "";
     if (f.me) { text = "this PC"; tone = "ok"; }
     else if (f.web) { text = `${f.guests.length} on`; tone = "ok"; }
@@ -421,14 +460,32 @@ function webPanel(f) {
 }
 
 function groupPanel(g) {
-  const members = g.members.map(byId);
+  // Only the members, as chips -- never every friend, the list gets long;
+  // more come by dragging a friend's row (yours too) onto the box
+  const count = pill("", "ok");
+  const box = el("div.fr-drop");
+  dropTarget(box, g);
+  const fill = () => {
+    count.textContent = membersText(g.members);
+    box.replaceChildren(...g.members.map(byId).map((m) => {
+      const chip = hued(el("button.fr-chip", { type: "button", title: "Click to take them out of the group" },
+                           `${m.me ? `${m.nick} (you)` : m.nick}  ×`), m.hue);
+      chip.onclick = () => {
+        g.members = g.members.filter((id) => id !== m.id);
+        log(`${m.me ? "You (Me)" : m.nick} leaves ${g.nick}`);
+        render();
+      };
+      return chip;
+    }), el("span.fr-drophint", {}, g.members.length ? "＋  Drag more here" : "＋  Drag a friend here from your list"));
+  };
+  fill();
   const root = el("div.fr-panel", {},
-    el("div.fp-head", {}, hued(el("span.fp-name", {}, g.nick), "accent"), pill(`${members.length} friends`, "ok")),
-    el("div.pg-row", {}, el("span.fr-micro", {}, "MEMBERS"), ...members.map((m) => hued(el("span.fr-chip", {}, m.nick), m.hue))));
+    el("div.fp-head", {}, hued(el("span.fp-name", {}, g.nick), "accent"), count),
+    el("span.fr-micro", {}, "MEMBERS"), box);
   const tsec = toysSection({ onLevel: (key, v) => log(`You set ${g.nick}'s toys to ${pct(v)}`) }, [], { get: () => 1, set() {} });
   tsec.sec.head.querySelector(".strength-g").remove();
   root.append(tsec.sec.box, el("p.pg-note", {}, "One card drives every member's toys at once - each within what they allow you."));
-  return { root, tick() { const c = tsec.st.cards[0]; c.setState(tsec.st.levels[P.ALL] || 0, false, tsec.st.patterns[P.ALL], null); c.tick(); } };
+  return { root, fill, tick() { const c = tsec.st.cards[0]; c.setState(tsec.st.levels[P.ALL] || 0, false, tsec.st.patterns[P.ALL], null); c.tick(); } };
 }
 
 function offlinePanel(f, why) {
@@ -457,6 +514,7 @@ function panelFor(id) {
 function render() {
   paintRows();
   const want = panelFor(S.picked);
+  if (want.fill) want.fill();
   for (const p of Object.values(S.panels)) p.root.hidden = p !== want;
 }
 

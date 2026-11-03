@@ -60,7 +60,7 @@ import link_handoff
 import link_scheme
 import remote_link
 import remote_protocol as proto
-from controllers.friends_common import FEATURE_KEY, ME, SELF, WEB, shocker_label
+from controllers.friends_common import FEATURE_KEY, ME, WEB, shocker_label
 from controllers.friends_control import FriendsControlMixin
 from controllers.friends_me import FriendsMeMixin, MeLink
 from controllers.friends_menu import FriendsMenuMixin, MenuState
@@ -127,9 +127,6 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
                       if os.environ.get(friends_demo.ENV) == "1" else None)
         self._friend_menu = MenuState()      # the avatar menu's Friends part
         self._avatar_has_friends_menu: Optional[bool] = None
-        # Both of us on your own toys: a Drive like a friend's, never stale
-        # -- or None.
-        self._self_drive = None
         self._friends_tick_running = False
         self._invite_lock = threading.Lock()
         self._used_invites: set = set()
@@ -225,7 +222,6 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         if drop is not None:
             for peer in list(self._friend_perms):
                 drop(peer)
-        self._self_drive = None             # Both of us on your own toys ends too
         self._needs_recalculation = True
 
     def _friends_shutdown(self) -> None:
@@ -999,8 +995,6 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         return demo if demo is not None and demo.has(kind, sid) else None
 
     def _friend_nick(self, peer: str) -> str:
-        if peer == SELF:
-            return "You (Both of us)"
         if peer == ME:
             return "You (Me)"
         web = self._web_nick(peer)

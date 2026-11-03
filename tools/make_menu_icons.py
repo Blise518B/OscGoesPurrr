@@ -4,7 +4,7 @@ The style follows Blise's "Flat" avatar icons: white line art with round
 caps on a transparent ground, a few solid shapes, and colour only where it
 means something -- the app's own identity hues (theme_tokens via
 ui.theme.PALETTE): toys pink, shockers yellow, friends cyan, your own
-things green, stop red. The wave icons are drawn from friend_patterns, so
+things green (Avatar Remote's remote too, as in the app), stop red. The wave icons are drawn from friend_patterns, so
 they show exactly what the app plays. VRChat shows menu icons at 256 px at
 most; the prefab builder scales them down.
 
@@ -244,13 +244,6 @@ def toys(p):
     _zigzags(p, 130, 382, 110, 400)
 
 
-def both(p):
-    """You and your friend at once: you green, them cyan, a pink heart."""
-    _person(p, 150, 300, 0.72, GREEN)
-    _person(p, 362, 300, 0.72, CYAN)
-    _heart(p, 256, 120, 1.0, PINK)
-
-
 def shockers(p):
     _collar(p, YELLOW)
     _bolt(p, 256, 236, 0.42, YELLOW, outline=False)
@@ -430,11 +423,58 @@ def warning(p):
     p.drawEllipse(QPointF(256, 360), 20, 20)
 
 
+def _remote(p, s: float = 1.0, dx: float = 0.0, dy: float = 0.0) -> None:
+    """The app's Avatar Remote icon (ui/icons._draw_remote) on this grid:
+    a remote with a dial and four buttons, in the green."""
+    p.save()
+    p.translate(dx, dy)
+    p.scale(s, s)
+    _pen(p)
+    p.drawRoundedRect(QRectF(141, 45, 230, 422), 64, 64)
+    _fill(p, GREEN)
+    p.drawEllipse(QPointF(256, 166), 56, 56)
+    for x, y in ((205, 294), (307, 294), (205, 378), (307, 378)):
+        p.drawEllipse(QPointF(x, y), 27, 27)
+    p.restore()
+
+
+def avatar_remote(p):
+    _remote(p)
+
+
+def _switch(p, x: float, y: float, w: float, on: bool = True) -> None:
+    """A toggle switch, `w` wide, its knob in the green."""
+    h = w * 0.5
+    _pen(p)
+    p.drawRoundedRect(QRectF(x, y, w, h), h / 2, h / 2)
+    _fill(p, GREEN)
+    knob = x + w - h / 2 if on else x + h / 2
+    p.drawEllipse(QPointF(knob, y + h / 2), h * 0.32, h * 0.32)
+
+
+def _dial(p, cx: float, cy: float, r: float) -> None:
+    """A radial: its ring, filled most of the way round in the green."""
+    _pen(p)
+    p.drawEllipse(QPointF(cx, cy), r, r)
+    _pen(p, GREEN, W * 1.2)
+    inner = r - 34
+    p.drawArc(QRectF(cx - inner, cy - inner, 2 * inner, 2 * inner), 90 * 16, -250 * 16)
+
+
+def remote_toggles(p):
+    _switch(p, 76, 110, 360, on=True)
+    _switch(p, 76, 300, 260, on=False)
+
+
+def remote_radials(p):
+    _dial(p, 256, 256, 190)
+
+
 ICONS = {
     # yours
     "me": me, "strength": strength, "off": off, "sleep": sleep, "test": test, "modes": modes,
     # friends
-    "friends": friends, "their_strength": their_strength, "both": both,
+    "friends": friends, "their_strength": their_strength,
     "toys": toys, "level": level, "auto": auto, "speed": speed, "range": range_,
     "override": override, "which_toys": which_toys, "stop_toys": stop_toys,
     "wave_sine": wave_sine, "wave_square": wave_square, "wave_triangle": wave_triangle,
@@ -443,10 +483,18 @@ ICONS = {
     "shockers": shockers, "shock": shock, "vibrate": vibrate, "beep": beep, "stop": stop,
     "shock_strength": lambda p: _gauge(p, YELLOW), "length": length, "warning": warning,
     "which_shockers": which_shockers,
+    # Avatar Remote
+    "avatar_remote": avatar_remote, "remote_toggles": remote_toggles,
+    "remote_radials": remote_radials,
 }
 for _n in range(1, 5):
     ICONS[f"toy{_n}"] = (lambda n: lambda p: _numbered(p, n, PINK, _toy_small))(_n)
     ICONS[f"shocker{_n}"] = (lambda n: lambda p: _numbered(p, n, YELLOW, _collar_small))(_n)
+for _n in range(1, 8):
+    ICONS[f"remote_toggle{_n}"] = (lambda n: lambda p: _numbered(
+        p, n, GREEN, lambda q: _switch(q, 40, 110, 300)))(_n)
+    ICONS[f"remote_radial{_n}"] = (lambda n: lambda p: _numbered(
+        p, n, GREEN, lambda q: _dial(q, 200, 200, 150)))(_n)
 
 
 def render(name: str) -> QImage:

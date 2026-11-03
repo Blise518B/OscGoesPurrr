@@ -552,9 +552,9 @@ class HomeMixin:
         "reaches a toy, and they tick off here as they happen.")
     _SETUP_LEAD_EXTERNAL = (
         "You've switched off the built-in toy server, so start Intiface "
-        "Central yourself first (Settings → Intiface Engine turns the "
-        "built-in one back on). Then three things have to line up, and "
-        "they tick off here as they happen.")
+        "Central yourself first, on this PC or a phone (Settings → "
+        "Intiface Engine turns the built-in one back on). Then three "
+        "things have to line up, and they tick off here as they happen.")
 
     def _build_setup_checklist(self, parent_layout: QVBoxLayout) -> None:
         """What a first-time user needs to know and do, ticked off live:

@@ -43,6 +43,31 @@ class Release(NamedTuple):
 
 
 RELEASES: Tuple[Release, ...] = (
+    # The suits' own release (main.FEATURES_NOT_YET emptied, 2026-11-03),
+    # with what came since 0.14.1. 0.14.1 had no entry (a patch release).
+    Release("0.15.0", (
+        Item("Haptic suits",
+             "A bHaptics suit, sleeves or head straight over Bluetooth - no "
+             "bHaptics Player - and an OWO suit through My OWO, from your "
+             "avatar's contacts, drawn on a body. Off until you switch them "
+             "on in Settings → Features.",
+             "features", icon="suits"),
+        Item("Intiface on your phone",
+             "Toys paired with a phone? Run Intiface Central 3.0 or newer "
+             "there, switch off the built-in engine, and OGP finds it on your "
+             "network or takes its address. The sidebar shows where it is.",
+             "intiface", icon="toys"),
+        Item("Avatar Remote in your menu",
+             "Seven toggles and seven radials in your avatar's menu: hand them "
+             "to controls or whole categories with the circle in their top "
+             "bar. Import the new menu prefab to get them.",
+             icon="params"),
+        Item("Groups by drag and drop",
+             "Drag friends onto a group - yourself too. A group with you in it "
+             "drives you and them at once from the avatar menu, instead of "
+             "the old Both of us.",
+             "friends", icon="friends"),
+    )),
     # The whole of 0.14.0 for someone coming from 0.13.0 (and the testers
     # coming from an alpha). The suits are not in it: they stay hidden
     # until a release of their own (main.FEATURES_NOT_YET).

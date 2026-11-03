@@ -58,6 +58,11 @@ DEFAULT_APP_SETTINGS = {
     # (the original behavior). See intiface_connection.py and the Settings →
     # Intiface Engine toggle.
     "use_integrated_intiface": True,
+    # Where that user-run Intiface is: "" (default) = find it by itself --
+    # announced on the network (mDNS), else this PC -- or a typed
+    # "host:port", e.g. a phone running Intiface Central on the same
+    # Wi-Fi. See intiface_external.py.
+    "intiface_address": "",
     # Show connected toys in SteamVR's device list (icon + battery) through
     # the bundled toy driver. On by default: installs a small SteamVR driver
     # when SteamVR is on the PC; switching it off takes the driver out of

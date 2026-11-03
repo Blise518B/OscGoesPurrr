@@ -42,7 +42,8 @@ following anti-tangling rules:
    engine exclusively via its primitive-only facade and (where
    applicable) via the shared `thread_queue`.
    * `HapticEngine` exposes `update_target()`, `set_linear_config()`,
-     `mark_connected()`, `set_connection_mode()`,
+     `mark_connected()`, `set_connection_mode()`, `set_intiface_address()`,
+     `get_intiface_link_info()`,
      `release_managed_server()`, `list_connected_device_names()`,
      `get_motor_count_map()`, `snapshot_discovered_devices()`,
      `async_start_scan()`, `async_connect()`, `async_disconnect()`,
@@ -164,7 +165,19 @@ is how PiShock and the suits came back.
     `terminate()`, `status_label`); `intiface_connection.py` is the seam
     that picks one via `make_intiface_connection(mode)`:
     * `intiface_external.py` — connect to a user-run Intiface Central
-      (the original behavior; owns no server lifecycle).
+      (the original behavior; owns no server lifecycle), on this PC or on
+      another device on the network — a phone running Intiface Central
+      with the toys paired to it. Where it is comes from the
+      `intiface_address` app setting (`set_intiface_address()`): a typed
+      `host:port`, or empty = found by itself, each attempt dialling the
+      next of what mDNS shows (`intiface_discovery.py`, Intiface's own
+      `_intiface_engine._tcp` announcement) and then 127.0.0.1, the one
+      that last worked first. **Discovery only ever listens:** an Intiface
+      server takes one TCP connection and stops when it isn't a Buttplug
+      handshake (see `intiface_integrated.py`), so no port probe and no
+      sweep of the network — the Buttplug client's connect is the only
+      test of a guess. The mDNS finder runs only in this mode with no
+      address typed, so the built-in engine's users never pay for it.
     * `intiface_integrated.py` — spawn and supervise a bundled
       `intiface-engine` (hidden console, a Windows Job Object or Linux
       parent-death signal so it dies with the app, websocket-readiness
@@ -499,7 +512,12 @@ what to do.
   `PollingThread` the OSC thread also wakes (`notify`), re-submits the
   bHaptics frames every tick (which keeps the engine's timeout from
   expiring a held contact) and hands OWO its muscle levels; strength
-  scales both, Off and a stale signal silence both once.
+  scales both, Off and a stale signal silence both once. Stuck contacts
+  get the toys' anti-stuck (Settings → Toy Safety, the same switch and
+  timers, `motor_router`'s thresholds): `_unstick` times each node of each
+  input layer and each OWO muscle on its own, before they're mixed, so a
+  frozen input is cut (part-way) or fades (held at the top) without
+  silencing a live one under it.
 
 Two shared pieces outlive the backends that used to subclass them, and
 are kept because they are the documented extension point for adding one
@@ -782,14 +800,22 @@ back:
       their shocks through the shocker engine. Outbound: the page's sliders
       and the VRChat menu's `OGP/Friend/*` (handled on the OSC thread, no
       queue hop) become `cmd`/`shk` — the menu's for whatever is picked on
-      the page: one friend, or every member of a group. The menu's *Both
-      of us* (`OGP/Both/*`) sends the same to them and drives you as well:
-      your own toys through `_self_drive` (read by `get_friend_drive` like
-      a friend's, never stale, still there while friends are paused) and
-      your shockers through the same `_friend_shock_in` path under the
-      `_SELF` sender, so your caps and arming hold. Whether the avatar
+      the page: one friend, or every member of a group. A group may hold
+      you (`ME`, the list's Me row, dragged in like a friend), and that is
+      how the menu drives you and a friend at once: you go through the Me
+      row's local loop (`friends_me.py`), so every friend rule holds for
+      you too -- Pause all, your shocker page's switches, arming and caps.
+      (No separate *Both of us* path any more.) Whether the avatar
       wears the menu (`OGP/Strength` / `OGP/Friend/Level` in the
       parameter store) is `get_avatar_menu()`, shown at the page's foot
+    * `controllers/params_menu.py` — the avatar menu's Avatar Remote
+      slots (`OGP/Remote/Toggle1-7`, `Radial1-7`), mixed into
+      `ParamsFacade`: a slot is taken by a control or a category of the
+      board (param_board `slots`, per preset); the OSC thread sends a
+      slot's controls to VRChat from `_slot_map`, a snapshot the GUI
+      thread swaps whole, and the params tick puts the menu where the
+      board is (never VRChat's echo of what OGP set, never under your
+      hand, OGP's values back after an avatar load).
     * `controllers/params_facade.py` — `ParamsFacade` (the Avatar Remote
       page, VRC Parameter Relay's board inside OGP: owns the
       `param_board.BoardBook` and its file, follows the worn avatar and
@@ -1129,6 +1155,9 @@ recalculate.
 * `intiface_connection.py` / `intiface_external.py` /
   `intiface_integrated.py` — the Buttplug-server connection providers and
   their selecting factory (see the haptic_engine entry above).
+  `intiface_discovery.py` is the external provider's mDNS finder for an
+  Intiface Central elsewhere on the network (a zeroconf ServiceBrowser on
+  `_intiface_engine._tcp`; listen-only, never a probe).
 * `router_base.py` / `polling.py` / `zone_strength.py` — the shared base
   layer a level-routing backend builds on: the debounced `PollingRouter`
   poll loop over a daemon `PollingThread`, and the pure OGB / SPS

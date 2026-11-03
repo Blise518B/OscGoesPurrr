@@ -176,6 +176,9 @@ class OscGoesPurrrApp(
             if self.mode_manager.app_settings.get("use_integrated_intiface", True)
             else "external"
         )
+        # And where that external Intiface runs ("" = find it by itself).
+        self.haptic_engine.set_intiface_address(
+            str(self.mode_manager.app_settings.get("intiface_address", "") or ""))
 
         # Initialize standalone OSC routing engine
         self.motor_router = MotorRouter(get_sleep_active=self.is_sleep_active,
@@ -277,10 +280,20 @@ class OscGoesPurrrApp(
         except Exception as e:
             print(f"[friends] init failed: {e}")
 
+        # Usage statistics — lifetime totals + per-session summaries. Needs
+        # the motor router (thrust counter), and comes before the UI, whose
+        # Statistics page and Sessions tab ask for the session list while
+        # they are built (they used to ask before this existed -- a
+        # friend's report, 2026-11-03). Sampling rides the 1 Hz
+        # refresh_device_states heartbeat in run(), and _stats_shutdown()
+        # in quit_app closes the session.
+        self._stats_init()
+
         # Instantiate UI Component (must be after haptic_engine is created).
         # The UI owns its own root window so this controller stays
         # framework-agnostic.
         self.ui = OscGoesPurrrUI(self)
+        self._flush_log_before_ui()
 
         # Push window-chrome settings through the UI facade.
         self.ui.set_title(f"{APP_NAME} v{__version__} · b{build_number()}")
@@ -297,13 +310,8 @@ class OscGoesPurrrApp(
         if hasattr(self, "_params_book"):
             self._params_ui_ready()
 
-        # Usage statistics — lifetime totals + per-session summaries.
-        # Needs the motor router (thrust counter) so it comes last;
-        # sampling rides the 1 Hz refresh_device_states heartbeat in
-        # run(), and _stats_shutdown() in quit_app closes the session.
-        self._stats_init()
         # Who each session was with: the opt-in VRChat-log tagging starts
-        # here when it is switched on.
+        # here when it is switched on (statistics are up since before the UI).
         self._people_init()
 
     # Cap how many queue messages we drain per tick. Under an OSC storm this
@@ -589,12 +597,31 @@ class OscGoesPurrrApp(
             self.log_message(f"[steamvr-toys] sync failed: {e}")
 
     def log_message(self, message: str):
-        """Add a message to the log text box (main thread only)"""
+        """Add a message to the log text box (main thread only).
+
+        Before the window exists -- an init step that logs, like Friends
+        when its network library doesn't load (a friend's report,
+        2026-11-03: that raised and stopped Friends' setup halfway) -- the
+        line goes to the debug log at once and waits for the log box,
+        which _setup_components fills as soon as the UI is built."""
         try:
             debug_log.get_logger().info("%s", message)
         except Exception:
             pass
-        self.ui.log_message(message)
+        ui = getattr(self, "ui", None)
+        if ui is None:
+            early = getattr(self, "_log_before_ui", None)
+            if early is None:
+                early = self._log_before_ui = []
+            early.append(str(message))
+            return
+        ui.log_message(message)
+
+    def _flush_log_before_ui(self) -> None:
+        """The UI exists: show what was logged before it did."""
+        early, self._log_before_ui = getattr(self, "_log_before_ui", None) or [], []
+        for message in early:
+            self.ui.log_message(message)
     
     # ====================
     # Facade Methods
@@ -874,9 +901,10 @@ class OscGoesPurrrApp(
     # Features this build carries but doesn't offer yet: always off whatever
     # was saved, and missing from Settings → Features and "What are you here
     # for?" -- so their pages, Home rows and engines never come up. The suits
-    # wait for a release of their own (Blise's call, 2026-10-28: not with
-    # Friends and Avatar Remote); empty this to bring them back.
-    FEATURES_NOT_YET = frozenset({"feature_bhaptics", "feature_owo"})
+    # waited here for a release of their own (Blise's call, 2026-10-28: not
+    # with Friends and Avatar Remote) and come back in the next one
+    # (2026-11-03, his bHaptics suit confirmed working). Empty for now.
+    FEATURES_NOT_YET: frozenset = frozenset()
 
     def get_feature_enabled(self, key: str) -> bool:
         if key in self.FEATURES_NOT_YET:

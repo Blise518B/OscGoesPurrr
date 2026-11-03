@@ -1,14 +1,15 @@
 """Friends view, the control panel: what is picked in the list -- one
-friend (a card per toy, PiShock's own panel per shocker) or a group (one
-toy card, and PiShock's Party panel over everyone's shockers) -- and
-Control mode, which makes it fill the window, everything big, for VR. The
-shockers are friends_shockers.py. Part of FriendsMixin (friends.py)."""
+friend (a card per toy, PiShock's own panel per shocker) or a group (its
+members, dragged in from the list; one toy card, and PiShock's Party panel
+over everyone's shockers) -- and Control mode, which makes it fill the
+window, everything big, for VR. The shockers are friends_shockers.py. Part
+of FriendsMixin (friends.py)."""
 
 import time
-from typing import Any, Dict, List
+from typing import Any, Callable, Dict, List, Tuple
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtWidgets import QCheckBox, QFrame, QLabel, QLineEdit, QPushButton, QWidget
+from PySide6.QtWidgets import QFrame, QLabel, QLineEdit, QPushButton, QWidget
 
 from remote_protocol import ALL_TOYS, display_name
 from ui.icons import glyph_icon
@@ -18,6 +19,7 @@ from ui.layout_helpers import (
 from ui.theme import (FRIEND_SHOCK_HUE as _SHOCK, FRIEND_TOYS_HUE as _TOYS, FRIENDS_HUE,
                       PALETTE, friend_hue)
 from ui.views.card_parts import CARD_MIN_W, set_quiet
+from ui.views.friends_list import MIME_FRIEND
 from ui.views.friends_shockers import FriendsShockersMixin
 from ui.views.friends_web_panel import FriendsWebPanelMixin
 from ui.views.toy_card import ToyCard
@@ -33,6 +35,84 @@ BIG_CARD_MIN_W = 460  # control mode's cards (VR): two a row only when that fits
 
 def _pct(v: float) -> str:
     return f"{round(v * 100)} %"
+
+
+def _group_members(g: Dict[str, Any], st: Dict[str, Any]) -> List[Tuple[str, str, str]]:
+    """A group's members for its drop zone: (id, name, the row's hue), in
+    the order they joined -- you as "(you)"."""
+    index = {f["id"]: i for i, f in enumerate(st["friends"])}
+    out = []
+    for fid in g["members"]:
+        if fid in index:
+            f = st["friends"][index[fid]]
+            name = display_name(f["nick"], fid) + (" (you)" if f.get("me") else "")
+            out.append((fid, name, friend_hue(index[fid])))
+    return out
+
+
+class MembersDropZone(QFrame):
+    """A group's members, as chips -- a chip's × takes one out. Only the
+    members: the friends list on the left is where the rest are, and a row
+    dragged from it onto here adds that friend (or you, from the top row).
+    Never a list of every friend (Blise's call, 2026-10-29: it gets long)."""
+
+    def __init__(self, on_add: Callable[[str], None], on_remove: Callable[[str], None]):
+        super().__init__()
+        self.setObjectName("dropZone")
+        self.setProperty("kind", "friends")
+        self.setAcceptDrops(True)
+        self._on_add, self._on_remove = on_add, on_remove
+        self._members: List[Tuple[str, str, str]] = []
+        self._flow = _FlowLayout(margin=6, h_spacing=6, v_spacing=6)
+        self._flow.setContentsMargins(6, 4, 6, 4)
+        self.setLayout(self._flow)
+        self._fill()
+
+    def set_members(self, members: List[Tuple[str, str, str]]) -> None:
+        """(id, name, hue) of each member, in the order they joined."""
+        if members != self._members:
+            self._members = list(members)
+            self._fill()
+
+    def _fill(self) -> None:
+        while self._flow.count():
+            item = self._flow.takeAt(0)
+            if item.widget() is not None:
+                item.widget().deleteLater()
+        for fid, name, hue in self._members:
+            chip = QPushButton(f"{name}  ×")
+            chip.setProperty("role", "chip")
+            chip.setProperty("hue", hue)
+            chip.setCheckable(True)
+            chip.setChecked(True)
+            chip.setCursor(Qt.PointingHandCursor)
+            chip.setToolTip("Click to take them out of the group")
+            chip.clicked.connect(lambda _=False, i=fid: self._on_remove(i))
+            self._flow.addWidget(chip)
+        hint = QLabel("＋  Drag a friend here from your list" if not self._members
+                      else "＋  Drag more here")
+        hint.setObjectName("dropHint")
+        self._flow.addWidget(hint)
+
+    # -- a friend's row dropped on it
+    def _set_hover(self, on: bool) -> None:
+        self.setProperty("hover", "true" if on else "false")
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if event.mimeData().hasFormat(MIME_FRIEND):
+            event.acceptProposedAction()
+            self._set_hover(True)
+
+    def dragLeaveEvent(self, event) -> None:  # noqa: N802
+        self._set_hover(False)
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        self._set_hover(False)
+        if event.mimeData().hasFormat(MIME_FRIEND):
+            event.acceptProposedAction()
+            self._on_add(bytes(event.mimeData().data(MIME_FRIEND)).decode(errors="ignore"))
 
 
 class FriendsPanelMixin(FriendsShockersMixin, FriendsWebPanelMixin):
@@ -369,20 +449,16 @@ class FriendsPanelMixin(FriendsShockersMixin, FriendsWebPanelMixin):
         self._panel_lay.addLayout(row)
 
         self._panel_lay.addWidget(self._friends_micro("MEMBERS"))
-        box = QWidget()
-        flow = _FlowLayout(margin=0, h_spacing=14, v_spacing=4)
-        box.setLayout(flow)
-        w["members"] = {}
-        for f in st["friends"]:
-            cb = QCheckBox(display_name(f["nick"], f["id"]))
-            cb.setProperty("hue", friend_hue(st["friends"].index(f)))
-            cb.setChecked(f["id"] in g["members"])
-            cb.toggled.connect(lambda on, i=f["id"]: self.controller.set_group_member(gid, i, bool(on)))
-            flow.addWidget(cb)
-            w["members"][f["id"]] = cb
-        self._panel_lay.addWidget(box)
-        if not st["friends"]:
-            self._panel_lay.addWidget(self._muted_label("Add friends first, then tick them here."))
+        zone = MembersDropZone(lambda fid: self._friend_dropped_on_group(gid, fid),
+                               lambda fid: self._friend_out_of_group(gid, fid))
+        zone.set_members(_group_members(g, st))
+        w["members"] = zone
+        self._panel_lay.addWidget(zone)
+        self._explain(zone, "Members",
+                      "Drag a friend's row from your list on the left onto here - or "
+                      "onto the group's own row. Drag yourself (the top row) in too and "
+                      "the group drives you and them at once, from here and from the "
+                      "avatar menu. Click a name to take them out again.")
         self._panel_lay.addWidget(w["online"])
         self._build_group_controls(w)
         self._panel_foot()
@@ -477,15 +553,9 @@ class FriendsPanelMixin(FriendsShockersMixin, FriendsWebPanelMixin):
             edit = w.get("name_edit")
             if edit is not None and not edit.hasFocus() and edit.text() != g["name"]:
                 edit.setText(g["name"])
-            for fid, cb in (w.get("members") or {}).items():
-                f = next((x for x in st["friends"] if x["id"] == fid), None)
-                label = display_name(f["nick"] if f else "", fid)
-                if cb.text() != label:
-                    cb.setText(label)
-                if cb.isChecked() != (fid in g["members"]):
-                    cb.blockSignals(True)
-                    cb.setChecked(fid in g["members"])
-                    cb.blockSignals(False)
+            zone = w.get("members")
+            if zone is not None:
+                zone.set_members(_group_members(g, st))
             members = [f for f in st["friends"] if f["id"] in g["members"]]
             # what the group's card sent shows on it (every member got the same)
             if members:

@@ -5,7 +5,7 @@
 OscGoesPurrr reads the contacts on your avatar and turns every touch into
 smooth, real-time output on your Bluetooth toys — Lovense, We-Vibe, Kiiroo
 and anything else [Buttplug.io](https://buttplug.io/) supports — and, if
-you have them, on PiShock / OpenShock shockers.
+you have them, on PiShock / OpenShock shockers and bHaptics / OWO suits.
 Friends can drive them over the internet.
 
 <p align="center">
@@ -63,14 +63,18 @@ and the manual way.
 
 - 🔌 **Just works** — finds VRChat and your toys by itself. No IPs, no ports.
   A chime tells you when a toy connects or drops.
+- 📱 **Toys on your phone** — paired your toys with Intiface Central on a
+  phone (or another PC)? Switch off the built-in engine in Settings and OGP
+  finds it on your network, or takes its address. Needs Intiface Central
+  3.0 or newer, with *Listen on all network interfaces* on.
 - 🎚️ **One strength bar** — turn everything up or down without touching
   your tuning.
 - 💤 **Off and Sleep** — instant silence, or only wake for real strokes.
 - 🔀 **Four routing modes** — pick which parts of your avatar drive which
   toy.
 - 🎮 **Control it in-game** — strength, mode, Off and Sleep from your
-  avatar's menu, and your friends' toys and shockers — one or several at
-  once, or both of you together — from its Friends submenu: drag one
+  avatar's menu, and your friends' toys and shockers — one or a group at
+  once, you too when you're in the group — from its Friends submenu: drag one
   VRCFury prefab onto your avatar ([see above](#your-avatars-menu-optional)).
   OGP tells you when your avatar has it.
 - 🤝 **Friends** — link with other OGP users over the internet: paste an
@@ -98,6 +102,8 @@ and the manual way.
   Friends page and can use it — lock a category to make it look-only,
   ⚡ YOLO hands them every parameter, Pause all friends blocks them all. Over the same
   direct link as everything else; nothing is sent until a friend looks.
+  Your avatar's menu gets seven toggles and seven radials you hand out to
+  controls or whole categories from the board (the circle in each top bar).
   Boards made in VRC Parameter Relay import with one click. Off until you
   switch it on in Settings → Features.
 - 🎯 **Feels right** — a signal chain per contact, so each toy feels like
@@ -128,11 +134,16 @@ and the manual way.
   own firmware and with OpenShock (a reflashed PiShock hub or a DIY ESP32
   board with CaiXianlin / Petrainer collars). Off until you switch it on
   in Settings → Features, and shocks stay vibrates until you arm them.
+- 🦺 **Haptic suits** — a bHaptics suit, sleeves or head straight over
+  Bluetooth (no bHaptics Player), and an OWO suit through the My OWO app,
+  from your avatar's bHaptics and OWO contacts. The Suits page draws them on
+  a body and says which contacts the avatar you wear has. OWO is EMS: it
+  connects only when you press Connect and starts capped at 60 %. Each suit
+  is off until you switch it on in Settings → Features.
 
 ## Coming later
 
-bHaptics and OWO suits, SteamVR trackers, DG-Lab Coyote e-stim and The
-Handy are in the works.
+SteamVR trackers, DG-Lab Coyote e-stim and The Handy are in the works.
 See the [roadmap](https://blise518b.github.io/OscGoesPurrr/#roadmap).
 
 ## For developers

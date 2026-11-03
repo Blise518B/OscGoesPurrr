@@ -12,9 +12,9 @@ It's built by GitHub a few minutes after this release appears.
 
 **Your avatar's menu (optional):** **OscGoesPurrr-VRCFury.unitypackage** below
 puts OGP's controls into your avatar's own menu: strength, Off, Sleep, modes,
-and a Friends submenu to drive whoever you picked in OGP. Import it into your
-avatar's Unity project (it needs VRCFury), drag one of its three prefabs onto
-your avatar and upload. [Setup guide](https://github.com/Blise518B/OscGoesPurrr/blob/main/docs/VRCHAT_MENU.md)
+Avatar Remote's toggles and radials, and a Friends submenu to drive whoever you
+picked in OGP. Import it into your avatar's Unity project (it needs VRCFury),
+drag one of its three prefabs onto your avatar and upload. [Setup guide](https://github.com/Blise518B/OscGoesPurrr/blob/main/docs/VRCHAT_MENU.md)
 
 Already running an older version? Don't download anything — it'll offer the
 update itself at launch.
@@ -24,36 +24,38 @@ update itself at launch.
 <!-- Replace this section before each release. Keep it short and concrete:
      what changed, and what a user would notice. -->
 
-A small update to 0.14.0, mostly from the first days of people using it.
+The haptic suits arrive, and Intiface can now run on your phone.
 
-- **Toys keep their place.** A toy that connects joins the end of the list
-  instead of pushing the others down, and every toy shows its number in its
-  corner. Friends see your toys in that order, so the avatar menu's toys 1–4
-  are the same 1–4 on both sides.
-- **Switch a shocker off.** Each shocker card on the Shockers page has its own
-  On / Off. An Off shocker stays where it is, greyed out, and does nothing:
-  it stops at once, behaviours skip it, and friends and the web remote no
-  longer see it. Remembered across launches.
-- **Your avatar menu and OGP agree.** Driving a friend from your avatar's
-  Friends submenu (level, mode, speed, range, Override, strength) shows on
-  the Friends page as you do it, and a change you make in OGP goes back to
-  the menu. When an avatar loads, OGP's values win over the ones VRChat
-  replays.
-- **"Shocker vibrate".** The menu's shocker Vibrate buttons are now called
-  Shocker vibrate, so they don't read as the toys'. Import the new
-  **OscGoesPurrr-VRCFury.unitypackage** below to get it; your parameters
-  don't change.
-- **Find your avatar menu.** Settings → **VRChat menu** shows whether the
-  avatar you wear has OGP's menu and links the prefab and its guide; Home's
-  Getting started has it as an optional step. Every release now carries the
-  prefab.
-- **Friends, tidied.** ＋ Add a friend opens as one card with its own + / −.
-  A friend with a single toy gets that toy's card instead of an extra "All
-  their toys". Sync with others explains itself plainly: you see what the
-  others driving that friend see.
-- **Smaller things.** OscGoesPurrr and Blise518B in the status bar open the
-  project and its author on GitHub. The website's working copy of the app now
-  has the Friends, Shockers and My Avatar Remote pages to click through.
+- **Haptic suits.** A bHaptics suit, sleeves or head straight over
+  Bluetooth — no bHaptics Player (close it: a suit takes one connection) —
+  and an OWO suit through the My OWO app, which keeps your calibration. Both
+  play your avatar's bHaptics and OWO contacts, and the Suits page draws them
+  on a body: click a motor or a muscle for its card, which also says whether
+  the avatar you wear has its contacts. Each suit has its own switch in
+  Settings → Features, off by default. OWO is EMS, so OGP connects to it only
+  when you press Connect and starts it capped at 60 %. Toy Safety's
+  anti-stuck covers the suits too.
+- **Intiface on your phone.** Toys paired with a phone, or Intiface Central
+  on another PC? Switch off Settings → *Use built-in Intiface engine*, and
+  OGP finds an Intiface Central that announces itself on your network or
+  connects to the address you type. On the phone, turn on **Listen on all
+  network interfaces** (and **Broadcast Server Info via mDNS** to be found
+  without an address). The sidebar shows the address and whether Intiface
+  answers there. It needs Intiface Central 3.0 or newer, and OGP says so
+  when it finds an older one.
+- **Avatar Remote in your avatar's menu.** Seven toggles and seven radials
+  you hand out to controls or whole categories of your board: the small
+  circle in a card's or category's top bar.
+- **Friends groups by drag and drop.** Drag friends onto a group, yourself
+  included. A group with you in it drives you and them at once from the
+  avatar menu, so the menu's *Both of us* section is gone. Import the new
+  **OscGoesPurrr-VRCFury.unitypackage** below for the Avatar Remote submenu
+  and the groups.
+- **Fixes.** Your avatar menu no longer logs, or holds back for later,
+  changes to the toys of a friend who doesn't take them right now (their
+  Toys switch off for you, or Pause all friends). Friends no longer stops
+  setting itself up when its network library can't load, and the
+  Statistics page has its session list from the start.
 
 **Coming from 0.13 or older?** 0.14.0 brought Friends, the web remote,
 Shockers, Avatar Remote and more:

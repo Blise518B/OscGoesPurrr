@@ -513,6 +513,10 @@ class ModesFacade:
         menu_out = getattr(self, "_menu_send", None)
         if callable(menu_out):
             menu_out()
+        # ... and its Avatar Remote slots (params_menu)
+        slots_out = getattr(self, "_params_menu_send", None)
+        if callable(slots_out):
+            slots_out()
 
     def _on_ogp_strength_osc(self, value: Any) -> None:
         """Handle an incoming OGP/Strength float from the expression menu

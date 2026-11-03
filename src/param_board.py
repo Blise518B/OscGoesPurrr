@@ -16,6 +16,13 @@ parameter:
 A Bool toggle can be inverted (ON sends the parameter OFF). A locked
 category is look-only for friends.
 
+A preset also has the avatar menu's *slots* (``slots``): Avatar Remote in
+OGP's VRChat menu has seven Toggles and seven Radials, and each one is a
+slot that one control -- or a whole category -- takes. A slot holds one
+thing; one thing can sit in several slots. Toggles take toggles and hold
+buttons, Radials take sliders and steppers; a category's slot drives the
+controls in it that fit.
+
 `BoardBook` is the Relay's AppCore without the network: which avatar is
 worn (`live_avatar_id`), which one is open on the page (`avatar_id` --
 the worn one, or any saved one for editing offline), and every edit. It is
@@ -66,6 +73,13 @@ _RELAY_HUES = {"yellow": "amber"}
 NAME_MAX = 60
 LABEL_MAX = 80
 AVATAR_NAME_MAX = 80
+
+# The avatar menu's slots: Avatar Remote > Toggles 1-7 / Radials 1-7
+# (OGP/Remote/Toggle1-7, Radial1-7) -- which controls each menu takes. A
+# slot is "c:<control id>" or "g:<category id>", or None while free.
+SLOT_COUNT = 7
+SLOT_MENUS = ("toggle", "radial")
+SLOT_KINDS = {"toggle": ("toggle", "button"), "radial": ("slider", "int")}
 
 
 def new_id() -> str:
@@ -203,6 +217,109 @@ def shows_on(control: Dict[str, Any], value: Any) -> bool:
 
 
 # ----------------------------------------------------------------------------
+# The avatar menu's slots
+# ----------------------------------------------------------------------------
+
+def slot_menu(control: Dict[str, Any]) -> str:
+    """Which of the menu's two sets a control can sit in."""
+    return "toggle" if control.get("kind") in SLOT_KINDS["toggle"] else "radial"
+
+
+def no_slots() -> Dict[str, List[Optional[str]]]:
+    return {menu: [None] * SLOT_COUNT for menu in SLOT_MENUS}
+
+
+def slot_controls(board: Dict[str, Any], menu: str, key: Optional[str]) -> List[Dict[str, Any]]:
+    """The controls a slot drives: its control, or the controls of its
+    category that fit the menu (in board order)."""
+    if not key or menu not in SLOT_KINDS:
+        return []
+    kind, _, target = key.partition(":")
+    kinds = SLOT_KINDS[menu]
+    controls = board.get("controls") or []
+    if kind == "c":
+        return [c for c in controls if c["id"] == target and c.get("kind") in kinds]
+    if kind == "g":
+        return [c for c in controls if c.get("cat") == target and c.get("kind") in kinds]
+    return []
+
+
+def _slot_fits(board: Dict[str, Any], menu: str, key: Any) -> bool:
+    if not isinstance(key, str) or menu not in SLOT_KINDS:
+        return False
+    kind, _, target = key.partition(":")
+    if kind == "g":
+        return find_category(board, target) is not None
+    control = find_control(board, target) if kind == "c" else None
+    return control is not None and slot_menu(control) == menu
+
+
+def clean_slots(board: Dict[str, Any]) -> None:
+    """Seven of each, each free or taken by a control / category that is
+    still on the board and fits."""
+    raw = board.get("slots") if isinstance(board.get("slots"), dict) else {}
+    slots = no_slots()
+    for menu in SLOT_MENUS:
+        got = raw.get(menu) if isinstance(raw.get(menu), list) else []
+        for i, key in enumerate(got[:SLOT_COUNT]):
+            if _slot_fits(board, menu, key):
+                slots[menu][i] = key
+    board["slots"] = slots
+
+
+def slots_of(board: Dict[str, Any], key: str) -> List[Tuple[str, int]]:
+    """(menu, index) of every slot `key` takes."""
+    slots = board.get("slots") or {}
+    return [(menu, i) for menu in SLOT_MENUS
+            for i, k in enumerate(slots.get(menu) or []) if k == key]
+
+
+def slot_label(board: Dict[str, Any], key: Optional[str]) -> str:
+    """What sits in a slot, by name ("" while free)."""
+    if not key:
+        return ""
+    kind, _, target = key.partition(":")
+    if kind == "g":
+        cat = find_category(board, target)
+        return cat["name"] if cat else ""
+    control = find_control(board, target)
+    return control["label"] if control else ""
+
+
+def slot_send_value(menu: str, control: Dict[str, Any], value: Any) -> Any:
+    """What the menu's Toggle (on / off) or Radial (0..1, across the
+    control's min..max) sends for one control -- None: nothing."""
+    if menu == "toggle":
+        return send_value(control, bool(value))
+    try:
+        v = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if v != v:                              # NaN
+        return None
+    v = max(0.0, min(1.0, v))
+    lo, hi = float(control.get("min", 0.0)), float(control.get("max", 1.0))
+    return send_value(control, lo + v * (hi - lo))
+
+
+def slot_state(menu: str, controls: List[Dict[str, Any]], values: Dict[str, Any]) -> Any:
+    """What a slot's Toggle / Radial shows for its controls' values: on
+    while any of them is ON; the first one's place between its min and
+    max. None while no value is known."""
+    known = [(c, values.get(c["param"])) for c in controls if values.get(c["param"]) is not None]
+    if not known:
+        return None
+    if menu == "toggle":
+        return any(shows_on(c, v) for c, v in known)
+    c, v = known[0]
+    lo, hi = float(c.get("min", 0.0)), float(c.get("max", 1.0))
+    try:
+        return 0.0 if hi == lo else max(0.0, min(1.0, (float(v) - lo) / (hi - lo)))
+    except (TypeError, ValueError, OverflowError):
+        return None
+
+
+# ----------------------------------------------------------------------------
 # Profiles and presets: cleaned on the way in
 # ----------------------------------------------------------------------------
 
@@ -270,6 +387,7 @@ def normalize_preset(preset: Dict[str, Any]) -> Dict[str, Any]:
             c["cat"] = clean_cats[0]["id"]
         controls.append(c)
     preset["controls"] = controls
+    clean_slots(preset)
     return preset
 
 
@@ -559,6 +677,7 @@ class BoardBook:
             off = changes.get("off", control.get("off"))
             control["on"] = _clamp_int(on, self.next_on_value(control["param"], control_id))
             control["off"] = _clamp_int(off, 0)
+        clean_slots(self.board)              # a toggle turned slider leaves its Toggle slots
         self._save()
         return True
 
@@ -567,6 +686,7 @@ class BoardBook:
         self.board["controls"] = [c for c in self.board["controls"] if c["id"] != control_id]
         if len(self.board["controls"]) == before:
             return False
+        clean_slots(self.board)
         self._save()
         return True
 
@@ -645,6 +765,21 @@ class BoardBook:
         for control in self.board["controls"]:
             if control.get("cat") == cat_id:
                 control["cat"] = cats[0]["id"]
+        clean_slots(self.board)
+        self._save()
+        return True
+
+    # -- the avatar menu's slots -------------------------------------------------------
+
+    def toggle_slot(self, menu: str, index: int, key: str) -> bool:
+        """The slot picker: `key` ("c:<control id>" / "g:<category id>")
+        takes slot `index` of `menu` -- from whatever had it -- or frees it
+        when it is already there."""
+        if not isinstance(index, int) or not 0 <= index < SLOT_COUNT \
+                or not _slot_fits(self.board, menu, key):
+            return False
+        slots = self.board.setdefault("slots", no_slots())
+        slots[menu][index] = None if slots[menu][index] == key else key
         self._save()
         return True
 

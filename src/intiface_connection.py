@@ -22,8 +22,11 @@ from __future__ import annotations
 
 from typing import Callable, Optional, Protocol, runtime_checkable
 
-from intiface_external import ExternalIntifaceConnection
+from intiface_external import ExternalIntifaceConnection, normalize_address
 from intiface_integrated import IntegratedIntifaceConnection
+
+__all__ = ["MODE_INTEGRATED", "MODE_EXTERNAL", "IntifaceConnection",
+           "make_intiface_connection", "normalize_address"]
 
 # Valid mode strings, mirrored by the `use_integrated_intiface` app setting.
 MODE_INTEGRATED = "integrated"
@@ -57,11 +60,12 @@ class IntifaceConnection(Protocol):
 
 
 def make_intiface_connection(
-    mode: str, log: Optional[Callable[[str], None]] = None
+    mode: str, log: Optional[Callable[[str], None]] = None, address: str = ""
 ) -> IntifaceConnection:
     """Build the provider for `mode`. Unknown values fall back to the default
     (integrated) so a malformed setting can never leave the engine without a
-    connection strategy."""
+    connection strategy. `address` is where an external Intiface runs ("" =
+    find it by itself); the integrated engine is always this PC."""
     if mode == MODE_EXTERNAL:
-        return ExternalIntifaceConnection(log=log)
+        return ExternalIntifaceConnection(log=log, address=address)
     return IntegratedIntifaceConnection(log=log)

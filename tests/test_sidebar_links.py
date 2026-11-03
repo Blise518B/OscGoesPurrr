@@ -120,6 +120,23 @@ class TestIntifaceRow:
         ui.update_connection_status(False, "")
         assert ui.scan_toys_button.isHidden()
 
+    def test_looking_for_your_own_intiface_says_searching_with_nothing_to_press(self, ui):
+        """Built-in engine off and OGP trying by itself (Blise's call,
+        2026-11-03): SEARCHING, like VRChat's pill, and no Connect."""
+        status = {"looking": True}
+        ui.controller.get_intiface_link_status = lambda: dict(status)
+        ui.update_connection_status(False, "")
+        assert ui.status_label.text() == "SEARCHING"
+        assert ui.connection_button.isHidden()
+        assert ui._toy_buttons_row.isHidden()
+        # Auto connect switched off: nothing looks any more -> Connect.
+        status["looking"] = False
+        ui._on_intiface_where_changed()
+        assert ui.status_label.text() == "DISCONNECTED"
+        assert not ui.connection_button.isHidden()
+        ui.update_connection_status(True, "Intiface")
+        assert ui.status_label.text() == "CONNECTED"
+
     def test_opening_the_window_asks_for_the_fast_search(self, ui):
         ui._on_window_activated()
         assert ui.controller.search_asks == 1

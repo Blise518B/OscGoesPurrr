@@ -57,7 +57,8 @@ class SuitsFacade:
         self.suits_router = SuitsRouter(
             self.bhaptics_engine, self.owo_engine,
             get_master_scale=self.get_master_scale,
-            get_sps_sources=getattr(self, "_get_sps_source_map", None))
+            get_sps_sources=getattr(self, "_get_sps_source_map", None),
+            get_antistuck=getattr(self, "_get_toy_antistuck", None))
         self._suits_push_config()
         if self.get_feature_enabled(FEATURE_BHAPTICS):
             self.bhaptics_engine.start(self.suits_settings.bhaptics()["auto_connect"])

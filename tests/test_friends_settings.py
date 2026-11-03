@@ -3,7 +3,7 @@
 import json
 import time
 
-from settings.friends import FriendsSettingsManager
+from settings.friends import ME, FriendsSettingsManager
 
 A = "a" * 64
 B = "b" * 64
@@ -111,6 +111,19 @@ def test_groups_and_what_the_selection_stands_for():
     assert s.get_selected() == {"kind": "friend", "id": A}
     assert not s.set_selected("group", "nope")
     assert s.add_group("") is None
+
+
+def test_a_group_can_hold_you():
+    # you and a friend at once is a group with both of you in it
+    s = FriendsSettingsManager()
+    s.add_friend(A, "Alex")
+    gid = s.add_group("Us", [ME, A])
+    assert s.get_group(gid)["members"] == [ME, A]
+    s.set_member(gid, ME, False)
+    s.set_member(gid, ME, True)
+    assert s.get_group(gid)["members"] == [A, ME]
+    assert s.set_selected("group", gid) and s.targets() == [A, ME]
+    assert FriendsSettingsManager().get_group(gid)["members"] == [A, ME]   # kept on reload
 
 
 def test_a_once_invite_works_within_a_day_and_once():

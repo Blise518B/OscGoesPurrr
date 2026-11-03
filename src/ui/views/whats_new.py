@@ -31,6 +31,8 @@ PLACES = {
     # Settings → Features, not the Suits page: the page only exists once a
     # suit is switched on there.
     "features":     ("Settings", "_features_card"),
+    # Also where the sidebar's Intiface address section leads.
+    "intiface":     ("Settings", "_intiface_card"),
 }
 # The card a jump leads to is lit, goes out for a blink, and is lit again
 # -- one beat is enough to pull the eye without being a flashing light.

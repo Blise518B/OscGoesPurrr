@@ -22,6 +22,10 @@ def friends_qss(mode_name: str, v: Dict[str, str]) -> str:
         # a group with a friend dragged over it
         f'QPushButton[role="friendRow"][drop="true"] {{ background-color: {v["tint"]};'
         f' border: 1px solid {v["accent"]}; }}\n',
+        # ... and a group's members in the panel (the shockers' drop zone,
+        # lit in the accent instead of the shockers' yellow)
+        f'QFrame#dropZone[kind="friends"][hover="true"] {{ background-color: {v["tint"]};'
+        f' border-color: {v["accent"]}; }}\n',
         f'QPushButton[role="friendRow"][active="true"] {{ background-color: {v["tint"]};'
         f' border-color: {v["accent"]}; }}\n',
         f'QPushButton[role="friendRow"][active="true"] QLabel#friendName {{'

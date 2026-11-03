@@ -16,7 +16,7 @@ from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import friend_patterns
 import remote_protocol as proto
-from controllers.friends_common import ME, SELF, Drive, op_text, shocker_label
+from controllers.friends_common import ME, Drive, op_text, shocker_label
 
 
 class FriendsReceiveMixin:
@@ -38,8 +38,7 @@ class FriendsReceiveMixin:
         they drive it)."""
         # getattr: the router is built (and may ask) before _friends_init
         drive = getattr(self, "_friend_drive", None) or {}
-        own = getattr(self, "_self_drive", None)
-        if not drive and not own:
+        if not drive:
             return 0.0, False
         now = time.monotonic()
         best, override = 0.0, False
@@ -52,8 +51,6 @@ class FriendsReceiveMixin:
             shared = _sync_playing(drive, now)
             if shared is not None:
                 entries.append(shared)
-        if own:
-            entries.append(own)                         # Both of us, on you: never stale
         for d in entries:
             v = proto.drive_for(d.levels, toy)
             driving = v > 0.0
@@ -70,9 +67,6 @@ class FriendsReceiveMixin:
 
     def friends_need_tick(self) -> bool:
         """An auto mode is playing: the router has to keep ticking for it."""
-        own = getattr(self, "_self_drive", None)
-        if own and own.pat:
-            return True
         drive = getattr(self, "_friend_drive", None)
         if not drive:
             return False
@@ -229,16 +223,15 @@ class FriendsReceiveMixin:
         return s is None or (s.get_friends_may_use() and s.get_enabled())
 
     def _shock_blocked(self, peer: str, eng) -> Optional[str]:
-        if peer != SELF:                   # Both of us on you: your own say-so
-            perms = self._friend_perms.get(peer)
-            if not perms or not perms[1]:
-                return "shocks from them are switched off"
-            if not self._shockers_shared():
-                s = getattr(self, "pishock_settings", None)
-                return ("your shockers are switched off" if s is not None and not s.get_enabled()
-                        else "your shockers aren't shared with friends")
-            if self.friends_settings.get_paused():
-                return "friends are paused"
+        perms = self._friend_perms.get(peer)
+        if not perms or not perms[1]:
+            return "shocks from them are switched off"
+        if not self._shockers_shared():
+            s = getattr(self, "pishock_settings", None)
+            return ("your shockers are switched off" if s is not None and not s.get_enabled()
+                    else "your shockers aren't shared with friends")
+        if self.friends_settings.get_paused():
+            return "friends are paused"
         if self.is_output_off():
             return "Off is on"
         if not self.get_feature_enabled("feature_pishock") or eng is None:

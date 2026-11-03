@@ -34,6 +34,7 @@ from intiface_connection import (
     MODE_EXTERNAL,
     MODE_INTEGRATED,
     make_intiface_connection,
+    normalize_address,
 )
 from send_gate import FeatureSendGate
 
@@ -176,6 +177,10 @@ class HapticEngine:
         # running engine instead of respawning it. See intiface_connection.py.
         self._connection_mode = MODE_INTEGRATED
         self._connection = None
+        # Where an external Intiface runs: "" = find it by itself (this PC
+        # or mDNS on the network), else "host:port" (intiface_external.py).
+        # Set by the controller from the `intiface_address` app setting.
+        self._intiface_address = ""
 
         # Serializes connect attempts so a manual Connect racing the auto-
         # reconnect loop can't both build a ButtplugClient and orphan one
@@ -275,6 +280,27 @@ class HapticEngine:
         self._connection_mode = (
             MODE_EXTERNAL if mode == MODE_EXTERNAL else MODE_INTEGRATED
         )
+
+    def set_intiface_address(self, address: str) -> None:
+        """Primitive facade: where an external Intiface runs -- "" to find it
+        by itself, else an address in intiface_external.normalize_address's
+        form. Takes effect on the next connect, like set_connection_mode().
+        Text that isn't an address means "find it", as the provider reads it
+        -- so the two never disagree and rebuild the provider every try."""
+        self._intiface_address = normalize_address(address) or ""
+
+    def get_intiface_link_info(self) -> Dict[str, object]:
+        """Primitive snapshot of an external Intiface's whereabouts (what is
+        typed, what is dialled, what mDNS shows) for Settings. {} in the
+        built-in mode or before the first connect attempt."""
+        conn = self._connection
+        describe = getattr(conn, "describe", None)
+        if conn is None or getattr(conn, "mode", None) != MODE_EXTERNAL or not callable(describe):
+            return {}
+        try:
+            return dict(describe())
+        except Exception:
+            return {}
 
     def release_managed_server(self) -> None:
         """Best-effort, synchronous teardown of any server this engine spawned
@@ -743,17 +769,23 @@ class HapticEngine:
         websocket connect is identical for both modes.
         """
         # (Re)build the provider only when missing or when the user switched
-        # modes since the last connect. Reusing a live provider lets the
-        # integrated engine survive a transient websocket drop + auto-reconnect.
-        if self._connection is not None and self._connection.mode != self._connection_mode:
+        # modes (or an external Intiface's address) since the last connect.
+        # Reusing a live provider lets the integrated engine survive a
+        # transient websocket drop + auto-reconnect.
+        conn = self._connection
+        if conn is not None and (
+                conn.mode != self._connection_mode
+                or (conn.mode == MODE_EXTERNAL
+                    and getattr(conn, "address", "") != self._intiface_address)):
             try:
-                await self._connection.shutdown()
+                await conn.shutdown()
             except Exception:
                 pass
             self._connection = None
         if self._connection is None:
             self._connection = make_intiface_connection(
-                self._connection_mode, log=self.push_ui_update
+                self._connection_mode, log=self.push_ui_update,
+                address=self._intiface_address,
             )
 
         ws_url = await self._connection.prepare()
@@ -761,6 +793,15 @@ class HapticEngine:
         self.buttplug_client = ButtplugClient(APP_NAME)
 
         await self.buttplug_client.connect(ws_url)
+
+        # An external provider that takes turns between guesses puts the
+        # one that worked first for the next reconnect.
+        note = getattr(self._connection, "note_connected", None)
+        if callable(note):
+            try:
+                note()
+            except Exception:
+                pass
 
         # Register the server-disconnect event hook so we notice the moment Intiface
         # closes the websocket, even when no haptic commands are currently flowing.

@@ -152,3 +152,7 @@ Thumbs.db
 # Linux build workspace (tools/build_linux.sh): venv, PyInstaller output,
 # the AppDir, appimagetool and the Buttplug checkout for the engine.
 /_linux_build/
+
+# A local CMake build of the SteamVR toy driver (its source is
+# src/steamvr_toy_driver/): build folder and output, never source.
+/steamvr_toy_driver/

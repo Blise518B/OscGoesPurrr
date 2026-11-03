@@ -536,6 +536,33 @@ class DemoController:
         if self.ui is not None:
             self.ui.log_message(message)
 
+    # ---- Settings → Intiface Engine (controllers/intiface_facade.py) ------
+    # Off the built-in engine, the demo is connected to a phone on the
+    # network that announced itself.
+    def get_intiface_link_status(self):
+        st = {"built_in": bool(self.settings.get("use_integrated_intiface", True)),
+              "connected": True, "found": [],
+              "address": str(self.settings.get("intiface_address", "") or "")}
+        if not st["built_in"]:
+            phone = {"name": "Intiface Pixel", "host": "192.168.1.50", "port": 12345}
+            st.update(auto=not st["address"], searching=not st["address"],
+                      target=st["address"] or "192.168.1.50:12345",
+                      target_name="" if st["address"] else phone["name"],
+                      target_local=False, found=[phone])
+        return st
+
+    def set_intiface_integrated(self, enabled):
+        self.settings["use_integrated_intiface"] = bool(enabled)
+
+    def set_intiface_address(self, text):
+        from intiface_external import normalize_address
+        address = normalize_address(text)
+        if address is None:
+            return False, ("Not an address. Try 192.168.1.50, or leave it "
+                           "empty.")
+        self.settings["intiface_address"] = address
+        return True, address
+
     def get_whats_new(self):
         return []
 

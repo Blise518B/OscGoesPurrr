@@ -10,8 +10,8 @@ owner side. Nothing goes over the network: `MeLink` hands whatever is sent
 to ME straight back in on this side, and `_me_tick` (the GUI tick) feeds
 the status, the drive and the board's values the link would repeat.
 
-ME is not SELF: SELF is the avatar menu's "Both of us" on your own toys,
-with its own rules; ME is a friend like any other, only local.
+ME can be in a group like any friend: a group with you and a friend in it
+is how the avatar menu drives both of you at once.
 
 Mixed into FriendsFacade; see friends_facade.py for what the host has.
 """

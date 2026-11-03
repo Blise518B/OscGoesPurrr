@@ -5,12 +5,15 @@
 //   Tools → OscGoesPurrr → Install VRChat Menu
 //
 // It adds the OSC control parameters (OGP/Strength Float, OGP/Mode Int 0-3,
-// OGP/Off, OGP/Sleep and OGP/Test Bool, and the OGP/Friend/* and OGP/Both/*
-// sets — all unsynced, i.e. ZERO sync bits) to the avatar's Expression
+// OGP/Off, OGP/Sleep and OGP/Test Bool, the OGP/Remote/* slots and the
+// OGP/Friend/* set — all unsynced, i.e. ZERO sync bits) to the avatar's Expression
 // Parameters, creates an "OscGoesPurrr" submenu asset (a strength radial, the
 // Off / Sleep toggles, a momentary Test button, a Modes submenu with the four
-// routing modes and a Friends submenu -- Toys, Shockers, Both of us -- that
-// drives the friends picked in the app), and links it into the avatar's root
+// routing modes, an Avatar Remote submenu -- seven Toggles and seven
+// Radials, each a slot you give one of your board's controls in the app --
+// and a Friends submenu -- Toys, Shockers, Their strength -- that drives the
+// friend or group picked in the app; you and a friend at once is a group with
+// both of you in it), and links it into the avatar's root
 // expressions menu. (No icons here; the VRCFury prefabs carry them.) Everything is done through
 // the VRC SDK's own API — no hand-rolled asset GUIDs — and re-running is
 // idempotent (updates in place, never duplicates).
@@ -45,6 +48,33 @@ namespace OscGoesPurrr
         private const string OffParam = "OGP/Off";
         private const string SleepParam = "OGP/Sleep";
         private const string TestParam = "OGP/Test";
+        // Avatar Remote: seven Toggles and seven Radials, each a slot a
+        // control (or a whole category) of your avatar's board takes in the
+        // app's Avatar Remote page.
+        private const string RemoteToggle1Param = "OGP/Remote/Toggle1";
+        private const string RemoteToggle2Param = "OGP/Remote/Toggle2";
+        private const string RemoteToggle3Param = "OGP/Remote/Toggle3";
+        private const string RemoteToggle4Param = "OGP/Remote/Toggle4";
+        private const string RemoteToggle5Param = "OGP/Remote/Toggle5";
+        private const string RemoteToggle6Param = "OGP/Remote/Toggle6";
+        private const string RemoteToggle7Param = "OGP/Remote/Toggle7";
+        private const string RemoteRadial1Param = "OGP/Remote/Radial1";
+        private const string RemoteRadial2Param = "OGP/Remote/Radial2";
+        private const string RemoteRadial3Param = "OGP/Remote/Radial3";
+        private const string RemoteRadial4Param = "OGP/Remote/Radial4";
+        private const string RemoteRadial5Param = "OGP/Remote/Radial5";
+        private const string RemoteRadial6Param = "OGP/Remote/Radial6";
+        private const string RemoteRadial7Param = "OGP/Remote/Radial7";
+        private static readonly string[] RemoteToggleParams =
+        {
+            RemoteToggle1Param, RemoteToggle2Param, RemoteToggle3Param, RemoteToggle4Param,
+            RemoteToggle5Param, RemoteToggle6Param, RemoteToggle7Param,
+        };
+        private static readonly string[] RemoteRadialParams =
+        {
+            RemoteRadial1Param, RemoteRadial2Param, RemoteRadial3Param, RemoteRadial4Param,
+            RemoteRadial5Param, RemoteRadial6Param, RemoteRadial7Param,
+        };
         // Friends: they act on the friend or group picked on the app's
         // Friends page. Toys ▸
         private const string FriendLevelParam = "OGP/Friend/Level";
@@ -70,15 +100,6 @@ namespace OscGoesPurrr
         private const string FriendShocker2Param = "OGP/Friend/Shocker2";
         private const string FriendShocker3Param = "OGP/Friend/Shocker3";
         private const string FriendShocker4Param = "OGP/Friend/Shocker4";
-        // Both of us ▸ -- the picked friend and you at once
-        private const string BothLevelParam = "OGP/Both/Level";
-        private const string BothModeParam = "OGP/Both/Mode";
-        private const string BothSpeedParam = "OGP/Both/Speed";
-        private const string BothStopParam = "OGP/Both/Stop";
-        private const string BothShockParam = "OGP/Both/Shock";
-        private const string BothVibrateParam = "OGP/Both/Vibrate";
-        private const string BothStrengthParam = "OGP/Both/Strength";
-        private const string BothLengthParam = "OGP/Both/Length";
         internal const string SubMenuControlName = "OscGoesPurrr";
         internal const string FriendsMenuControlName = "OGP Friends";
 
@@ -98,6 +119,20 @@ namespace OscGoesPurrr
             (OffParam, VRCExpressionParameters.ValueType.Bool, 0f),
             (SleepParam, VRCExpressionParameters.ValueType.Bool, 0f),
             (TestParam, VRCExpressionParameters.ValueType.Bool, 0f),
+            (RemoteToggle1Param, VRCExpressionParameters.ValueType.Bool, 0f),
+            (RemoteToggle2Param, VRCExpressionParameters.ValueType.Bool, 0f),
+            (RemoteToggle3Param, VRCExpressionParameters.ValueType.Bool, 0f),
+            (RemoteToggle4Param, VRCExpressionParameters.ValueType.Bool, 0f),
+            (RemoteToggle5Param, VRCExpressionParameters.ValueType.Bool, 0f),
+            (RemoteToggle6Param, VRCExpressionParameters.ValueType.Bool, 0f),
+            (RemoteToggle7Param, VRCExpressionParameters.ValueType.Bool, 0f),
+            (RemoteRadial1Param, VRCExpressionParameters.ValueType.Float, 0f),
+            (RemoteRadial2Param, VRCExpressionParameters.ValueType.Float, 0f),
+            (RemoteRadial3Param, VRCExpressionParameters.ValueType.Float, 0f),
+            (RemoteRadial4Param, VRCExpressionParameters.ValueType.Float, 0f),
+            (RemoteRadial5Param, VRCExpressionParameters.ValueType.Float, 0f),
+            (RemoteRadial6Param, VRCExpressionParameters.ValueType.Float, 0f),
+            (RemoteRadial7Param, VRCExpressionParameters.ValueType.Float, 0f),
         };
 
         private static readonly (string name,
@@ -128,14 +163,6 @@ namespace OscGoesPurrr
             (FriendShocker2Param, VRCExpressionParameters.ValueType.Bool, 1f),
             (FriendShocker3Param, VRCExpressionParameters.ValueType.Bool, 1f),
             (FriendShocker4Param, VRCExpressionParameters.ValueType.Bool, 1f),
-            (BothLevelParam, VRCExpressionParameters.ValueType.Float, 0f),
-            (BothModeParam, VRCExpressionParameters.ValueType.Int, 0f),
-            (BothSpeedParam, VRCExpressionParameters.ValueType.Float, 0.5f),
-            (BothStopParam, VRCExpressionParameters.ValueType.Bool, 0f),
-            (BothShockParam, VRCExpressionParameters.ValueType.Bool, 0f),
-            (BothVibrateParam, VRCExpressionParameters.ValueType.Bool, 0f),
-            (BothStrengthParam, VRCExpressionParameters.ValueType.Float, 0.25f),
-            (BothLengthParam, VRCExpressionParameters.ValueType.Float, 0.1f),
         };
 
         // The control parameters, all unsynced and unsaved: OSC
@@ -171,7 +198,7 @@ namespace OscGoesPurrr
             ("\U0001F3B2 Custom 2", 3),
         };
 
-        // The auto modes, OGP/Friend/Mode and OGP/Both/Mode 1-8, in the
+        // The auto modes, OGP/Friend/Mode 1-8, in the
         // app's friend_patterns.WAVES order -- the same contract.
         private static readonly (string name, string icon)[] AutoModes =
         {
@@ -354,7 +381,8 @@ namespace OscGoesPurrr
         // `subMenu(key)` hands back the (empty or stale) menu to fill for one
         // nested menu: "Modes", "Friends", "FriendToys", "FriendAuto",
         // "FriendWhichToys", "FriendShockers", "FriendWhichShockers",
-        // "FriendBoth", "BothAuto". `icon(name)` the icon to show (one of
+        // "Remote", "RemoteToggles", "RemoteRadials". `icon(name)` the icon
+        // to show (one of
         // docs/unity/icons/*.png by file name), or null. VRChat caps every
         // menu at 8 controls.
         internal static void AddControls(VRCExpressionsMenu menu, MenuVariant variant,
@@ -386,11 +414,37 @@ namespace OscGoesPurrr
                 FillFriendsMenu(friends, subMenu, icon);
                 menu.controls.Add(Folder("Friends", friends, icon("friends")));
             }
+            menu.controls.Add(Folder("Avatar Remote", RemoteMenu(subMenu, icon),
+                                     icon("avatar_remote")));
+        }
+
+        // Avatar Remote: Toggles 1-7 and Radials 1-7 -- what each drives is
+        // set in the app, per avatar preset, so the names can't be here.
+        private static VRCExpressionsMenu RemoteMenu(Func<string, VRCExpressionsMenu> subMenu,
+                                                     Func<string, Texture2D> icon)
+        {
+            var remote = subMenu("Remote");
+            remote.controls.Clear();
+            var toggles = subMenu("RemoteToggles");
+            toggles.controls.Clear();
+            var radials = subMenu("RemoteRadials");
+            radials.controls.Clear();
+            for (var i = 0; i < RemoteToggleParams.Length; i++)
+            {
+                var n = (i + 1).ToString();
+                toggles.controls.Add(Toggle("Toggle " + n, RemoteToggleParams[i], 1,
+                                            icon("remote_toggle" + n)));
+                radials.controls.Add(Radial("Radial " + n, RemoteRadialParams[i],
+                                            icon("remote_radial" + n)));
+            }
+            remote.controls.Add(Folder("Toggles", toggles, icon("remote_toggles")));
+            remote.controls.Add(Folder("Radials", radials, icon("remote_radials")));
+            return remote;
         }
 
         // Everything here acts on the friend or group picked on the app's
-        // Friends page, each friend within what they allow; Both of us on
-        // you as well (see docs/VRCHAT_MENU.md).
+        // Friends page, each friend within what they allow -- you too, when
+        // you're in the picked group (see docs/VRCHAT_MENU.md).
         private static void FillFriendsMenu(VRCExpressionsMenu friends,
                                             Func<string, VRCExpressionsMenu> subMenu,
                                             Func<string, Texture2D> icon)
@@ -441,19 +495,6 @@ namespace OscGoesPurrr
                 whichShockers.controls.Add(Toggle("Shocker " + n, param, 1, icon("shocker" + n)));
             shockers.controls.Add(Folder("Which shockers", whichShockers, icon("which_shockers")));
             friends.controls.Add(Folder("Shockers", shockers, icon("shockers")));
-
-            var both = subMenu("FriendBoth");
-            both.controls.Clear();
-            both.controls.Add(Radial("Level", BothLevelParam, icon("level")));
-            both.controls.Add(Folder("Auto mode", AutoMenu(subMenu("BothAuto"), BothModeParam, icon),
-                                     icon("auto")));
-            both.controls.Add(Radial("Speed", BothSpeedParam, icon("speed")));
-            both.controls.Add(Button("Stop", BothStopParam, icon("stop_toys")));
-            both.controls.Add(Button("Shock", BothShockParam, icon("shock")));
-            both.controls.Add(Button("Shocker vibrate", BothVibrateParam, icon("vibrate")));
-            both.controls.Add(Radial("Strength", BothStrengthParam, icon("shock_strength")));
-            both.controls.Add(Radial("Length", BothLengthParam, icon("length")));
-            friends.controls.Add(Folder("Both of us", both, icon("both")));
 
             friends.controls.Add(Radial("Their strength", FriendStrengthParam, icon("their_strength")));
         }

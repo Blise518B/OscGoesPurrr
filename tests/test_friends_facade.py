@@ -295,6 +295,8 @@ def test_status_goes_only_to_friends_and_shockers_only_when_allowed():
 def test_my_levels_and_strength_ride_the_cmd():
     h = Host()
     h.befriend(A)
+    h._friend_status = {A: proto.read_status(proto.make_status(
+        [], {}, 1.0, False, False, True, False, [], False, 40, 2000))}
     h.set_friend_level(A, proto.ALL_TOYS, 0.5)
     h.set_friend_strength(A, 0.25)
     out = h._friends_cmd_for(A)
@@ -340,9 +342,9 @@ def test_accepting_a_request_makes_a_friend():
 
 # --- the VRChat menu's Friends submenu: it acts on what is selected ---------
 
-def linked_with_toys(h, peer, allow_shock=True):
+def linked_with_toys(h, peer, allow_shock=True, allow_toys=True, paused=False):
     h._friend_status = {**h._friend_status, peer: proto.read_status(proto.make_status(
-        [("Edge", 2), ("Hush", 1)], {}, 1.0, False, False, True, allow_shock,
+        [("Edge", 2), ("Hush", 1)], {}, 1.0, False, paused, allow_toys, allow_shock,
         ["Collar", "Cuff"], True, 40, 2000))}
 
 
@@ -354,6 +356,43 @@ def test_menu_level_drives_the_selected_friend():
     h._friends_on_osc("OGP/Friend/Level", 0.7)
     assert h._friends_cmd_for(B)["lvl"] == {proto.ALL_TOYS: 0.7}
     assert h._friends_cmd_for(A)["lvl"] == {}
+
+
+@pytest.mark.parametrize("refused", ({"allow_toys": False}, {"paused": True}))
+def test_the_log_says_nothing_of_what_a_friend_doesnt_take(refused):
+    """Their Toys switch off or Pause all friends: the page hides the cards,
+    but the avatar menu still fires. Nothing lands, so nothing is logged."""
+    h = Host()
+    h.befriend(A)
+    linked_with_toys(h, A, **refused)
+    h._friends_on_osc("OGP/Friend/Strength", 0.4)
+    h._friends_on_osc("OGP/Friend/Level", 0.5)
+    h._friends_on_osc("OGP/Friend/Override", True)
+    h._friends_on_osc("OGP/Friend/Mode", 1)
+    h._friends_on_osc("OGP/Friend/StopToys", True)
+    assert "You " not in h.log_text()
+    linked_with_toys(h, A)                  # allowed again: the old change stays gone
+    assert "str" not in h._friends_cmd_for(A)
+    h._friends_on_osc("OGP/Friend/Strength", 0.6)
+    h._friends_on_osc("OGP/Friend/Level", 0.5)
+    assert "You set Alex's strength to 60 %" in h.log_text()
+    assert "You started driving Alex's toys" in h.log_text()
+    assert h._friends_cmd_for(A)["str"][1] == 0.6
+
+
+def test_menu_strength_skips_only_the_group_member_who_refuses():
+    h = Host()
+    h.befriend(A)
+    h.befriend(B)
+    gid = h.friends_add_group("Pair")
+    h.set_group_member(gid, A, True)
+    h.set_group_member(gid, B, True)
+    linked_with_toys(h, A)
+    linked_with_toys(h, B, allow_toys=False)
+    h._friends_on_osc("OGP/Friend/Strength", 0.3)
+    assert h._friends_cmd_for(A)["str"][1] == 0.3
+    assert "str" not in h._friends_cmd_for(B)
+    assert h.log_text().count("strength to 30 %") == 1
 
 
 def test_menu_drives_every_member_of_a_selected_group():
@@ -486,36 +525,61 @@ def test_menu_auto_modes_speed_range_and_stop():
     assert h._friends_cmd_for(A)["lvl"] == {} and "pat" not in h._friends_cmd_for(A)
 
 
-def test_both_of_us_drives_you_and_them():
-    h = Host()
+def us_host():
+    """You and A in one group, picked: the menu's "you and a friend at
+    once" (Blise's call, 2026-10-29 -- no Both of us submenu any more)."""
+    h, me = me_host()
     h.befriend(A, shock=True)
     linked_with_toys(h, A)
-    h._friends_on_osc("OGP/Both/Level", 0.5)
+    gid = h.friends_add_group("Us")                 # a new group is picked
+    h.set_group_member(gid, me, True)
+    h.set_group_member(gid, A, True)
+    return h, me, gid
+
+
+def test_a_group_with_you_in_it_drives_you_and_them():
+    h, me, gid = us_host()
+    assert h.friends_settings.get_group(gid)["members"] == [me, A]
+    h._friends_on_osc("OGP/Friend/Level", 0.5)
     assert h._friends_cmd_for(A)["lvl"] == {proto.ALL_TOYS: 0.5}
-    assert h.get_friend_drive_mode("Your Lush") == (0.5, False)     # your own toys too
-    h.set_friends_paused(True)                                       # pausing friends isn't you
-    assert h.get_friend_drive("Your Lush") == 0.5
+    assert h.get_friend_drive("Edge") == pytest.approx(0.5)          # your own toys too
+    h.set_friends_paused(True)                                       # you're a friend here:
+    assert h.get_friend_drive("Edge") == 0.0                         # Pause all holds
     h.set_friends_paused(False)
-    h._friends_on_osc("OGP/Both/Mode", 1)
+    h._friends_on_osc("OGP/Friend/Mode", 1)
+    h._me_tick()
     assert h.friends_need_tick()
     assert h._friends_cmd_for(A)["pat"][proto.ALL_TOYS][0] == "sine"
-    h._friends_on_osc("OGP/Both/Stop", True)
-    assert h.get_friend_drive("Your Lush") == 0.0 and not h.friends_need_tick()
+    h._friends_on_osc("OGP/Friend/StopToys", True)
+    h._me_tick()
+    assert h.get_friend_drive("Edge") == 0.0 and not h.friends_need_tick()
     assert h._friends_cmd_for(A)["lvl"] == {}
 
 
-def test_both_of_us_shocks_you_and_them():
-    h = Host()
-    h.befriend(A, shock=True)
-    linked_with_toys(h, A)
-    h._friends_on_osc("OGP/Both/Strength", 1.0)
-    h._friends_on_osc("OGP/Both/Shock", True)
-    assert h.friends_link.events[-1][1]["int"] == 1.0                # them
+def test_a_group_with_you_in_it_moves_your_strength_too():
+    h, me, gid = us_host()
+    h._friends_on_osc("OGP/Friend/Strength", 0.4)
+    assert h._friends_cmd_for(A)["str"][1] == 0.4
+    assert h._friends_cmd_for(me)["str"][1] == 0.4
+
+
+def test_a_group_with_you_in_it_shocks_you_and_them():
+    h, me, gid = us_host()
+    h._friends_on_osc("OGP/Friend/ShockStrength", 1.0)
+    h._friends_on_osc("OGP/Friend/Shock", True)
+    assert [peer for peer, _m in h.friends_link.events] == [A]       # them, over the link
     assert h.pishock_engine.pulses[0][:3] == (11, "shock", 40)       # you, within your caps
-    assert "You (Both of us): vibrate 40 (shocks aren't armed)" in h.log_text()
     h._off = True
-    h._friends_on_osc("OGP/Both/Vibrate", True)
-    assert "not on you - Off is on" in h.log_text()
+    h._friends_on_osc("OGP/Friend/Vibrate", True)
+    assert "held back: Off is on" in h.log_text()
+
+
+def test_the_menu_listens_to_no_both_of_us_any_more():
+    h, me, gid = us_host()
+    for param, value in (("OGP/Both/Level", 0.5), ("OGP/Both/Mode", 1), ("OGP/Both/Shock", True)):
+        h._friends_on_osc(param, value)
+    assert h._friends_cmd_for(A)["lvl"] == {} and "pat" not in h._friends_cmd_for(A)
+    assert h.get_friend_drive("Edge") == 0.0 and h.pishock_engine.pulses == []
 
 
 def test_menu_ignores_the_avatar_reload_replay():
@@ -911,12 +975,14 @@ def test_the_app_sees_whether_the_avatar_has_the_menu(monkeypatch):
     fresh = ParameterStore()
     monkeypatch.setattr(ff, "store", fresh)
     h = Host()
-    assert h.get_avatar_menu() == {"known": False, "self": False, "friends": False}
+    assert h.get_avatar_menu() == {"known": False, "self": False, "friends": False,
+                                   "remote": False}
     fresh.rebuild_from_json({"CONTENTS": {"avatar": {"CONTENTS": {"parameters": {"CONTENTS": {
         "OGP": {"CONTENTS": {"Strength": {"VALUE": [1.0]},
-                             "Friend": {"CONTENTS": {"Level": {"VALUE": [0.0]}}}}},
+                             "Friend": {"CONTENTS": {"Level": {"VALUE": [0.0]}}},
+                             "Remote": {"CONTENTS": {"Toggle1": {"VALUE": [False]}}}}},
         "VRCEmote": {"VALUE": [0]}}}}}}})
-    assert h.get_avatar_menu() == {"known": True, "self": True, "friends": True}
+    assert h.get_avatar_menu() == {"known": True, "self": True, "friends": True, "remote": True}
     h._note_avatar_menu()
     assert "Your avatar has the OGP Friends menu" in h.log_text()
     assert h.get_friends_status()["avatar_menu"]["friends"] is True
@@ -926,18 +992,15 @@ def test_the_app_sees_whether_the_avatar_has_the_menu(monkeypatch):
     assert "This avatar has no OGP Friends menu" in h.log_text()
 
 
-def test_friends_off_silences_the_menu_and_both_of_us():
-    h = Host()
-    h.befriend(A, shock=True)
-    linked_with_toys(h, A)
-    h._friends_on_osc("OGP/Both/Level", 0.5)
-    assert h.get_friend_drive("Your Lush") == 0.5
+def test_friends_off_silences_the_menu():
+    h, me, gid = us_host()
+    h._friends_on_osc("OGP/Friend/Level", 0.5)
+    assert h.get_friend_drive("Edge") == pytest.approx(0.5)
     h.set_feature_enabled("feature_friends", False)
-    assert h.get_friend_drive("Your Lush") == 0.0          # what ran stops
-    h._friends_on_osc("OGP/Both/Level", 0.7)               # and the menu does nothing
-    h._friends_on_osc("OGP/Both/Vibrate", True)
-    h._friends_on_osc("OGP/Friend/Level", 0.7)
-    assert h.get_friend_drive("Your Lush") == 0.0
+    assert h.get_friend_drive("Edge") == 0.0               # what ran stops
+    h._friends_on_osc("OGP/Friend/Level", 0.7)             # and the menu does nothing
+    h._friends_on_osc("OGP/Friend/Vibrate", True)
+    assert h.get_friend_drive("Edge") == 0.0
     assert h.pishock_engine.pulses == [] and h._my_levels == {}
 
 
@@ -955,22 +1018,6 @@ def test_switching_a_friends_shockers_off_cancels_their_warning():
     h._pump_friend_holds(t0 + 5)
     assert h.pishock_engine.holds == [(11, "vibrate", 40)]
     assert h.pishock_engine.pulses == []                    # and its shock never comes
-
-
-def test_both_of_us_warns_you_even_while_friends_are_paused():
-    # Pause all is about friends; Both of us on you is your own say-so, so
-    # its shock (which still goes) keeps its warning.
-    h = Host()
-    h.befriend(A, shock=True)
-    linked_with_toys(h, A)
-    h.set_friends_paused(True)
-    h._friends_on_osc("OGP/Friend/Warning", True)
-    h._friends_on_osc("OGP/Both/Shock", True)
-    t0 = time.monotonic()
-    h._pump_friend_holds(t0)
-    assert h.pishock_engine.holds and h.pishock_engine.holds[0][1] == "vibrate"
-    h._pump_friend_holds(t0 + 3.1)
-    assert sorted((p[0], p[1]) for p in h.pishock_engine.pulses) == [(11, "shock"), (22, "shock")]
 
 
 def test_a_pasted_id_given_up_on_is_logged():
@@ -1532,6 +1579,7 @@ def test_the_page_moves_the_menu_for_whoever_is_picked():
     h = Host()
     h.befriend(A)                       # picked
     h.befriend(B)
+    linked_with_toys(h, A)
     h.osc_manager = osc = _OscOut()
     h.set_friend_level(A, proto.ALL_TOYS, 0.6)
     assert osc.last("OGP/Friend/Level") == pytest.approx(0.6)
@@ -1552,6 +1600,7 @@ def test_the_page_moves_the_menu_for_whoever_is_picked():
 def test_the_menu_is_not_sent_its_own_change_back():
     h = Host()
     h.befriend(A)
+    linked_with_toys(h, A)
     h.osc_manager = osc = _OscOut()
     h._friends_on_osc("OGP/Friend/Level", 0.7)
     h._friends_on_osc("OGP/Friend/Strength", 0.4)
@@ -1562,6 +1611,7 @@ def test_the_menu_is_not_sent_its_own_change_back():
 def test_after_an_avatar_load_ogps_values_go_back_on_the_menu():
     h = Host()
     h.befriend(A)
+    linked_with_toys(h, A)
     h.osc_manager = osc = _OscOut()
     h.set_friend_level(A, proto.ALL_TOYS, 0.6)
     h.set_friend_strength(A, 0.5)
@@ -1574,4 +1624,5 @@ def test_after_an_avatar_load_ogps_values_go_back_on_the_menu():
     h._menu_send()                                                   # OSC (re)connect
     sent = {p: v for p, v, _t in osc.sent}
     assert sent["OGP/Friend/Level"] == pytest.approx(0.6) and sent["OGP/Friend/Strength"] == 0.5
-    assert {"OGP/Friend/Toy1", "OGP/Friend/Shocker4", "OGP/Both/Level"} <= set(sent)
+    assert {"OGP/Friend/Toy1", "OGP/Friend/Shocker4"} <= set(sent)
+    assert not any(p.startswith("OGP/Both/") for p in sent)

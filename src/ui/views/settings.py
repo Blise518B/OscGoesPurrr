@@ -45,6 +45,7 @@ from ui.icons import (
 )
 from ui import theme as _theme
 from ui.views.avatar_menu import AvatarMenuCard
+from ui.views.intiface_card import IntifaceEngineCard
 from ui.views.settings_appearance import AppearanceMixin
 from ui.widgets import (
     ToggleSwitch,
@@ -442,34 +443,15 @@ class SettingsMixin(AppearanceMixin):
         # ---- Intiface Engine Card ----
         # How the Buttplug toy server is provided: the built-in engine we
         # bundle and launch ourselves (default — nothing else to run), or an
-        # external Intiface Central the user starts separately.
-        ife_card = _Card()
-        ife_lay = _vbox(20, 6)
-        ife_card.setLayout(ife_lay)
-
-        hdr = QLabel("Intiface Engine")
-        hdr.setObjectName("sectionTitle")
-        ife_lay.addWidget(hdr)
-        ife_lay.addWidget(self._muted_label(
-            "Built-in mode runs a bundled Intiface engine for you, so you don't "
-            "have to launch Intiface Central separately. Turn this off to "
-            "connect to your own running Intiface Central instead. Changing this "
-            "reconnects automatically."
-        ))
-        self.intiface_integrated_toggle = ToggleSwitch("Use built-in Intiface engine")
-        self.intiface_integrated_toggle.setChecked(
-            bool(self.controller.get_app_setting("use_integrated_intiface", True))
-        )
-        self.intiface_integrated_toggle.toggled.connect(
-            lambda checked: self.controller.set_intiface_integrated(bool(checked))
-        )
-        ife_lay.addWidget(self.intiface_integrated_toggle)
-        self._explain(
-            self.intiface_integrated_toggle, "Built-in Intiface engine",
-            "<b>On</b> (recommended): the app runs its own toy server, so "
-            "there is nothing else to install or start. <b>Off</b>: connect "
-            "to an Intiface Central you start yourself instead. Switching "
-            "reconnects on its own.")
+        # Intiface Central the user starts separately, on this PC or on a
+        # phone on the same network (ui/views/intiface_card.py).
+        ife_card = IntifaceEngineCard(
+            lambda: self.controller.get_intiface_link_status(),
+            lambda on: self.controller.set_intiface_integrated(bool(on)),
+            lambda text: self.controller.set_intiface_address(text),
+            self._explain)
+        self.intiface_integrated_toggle = ife_card.toggle
+        self._intiface_card = ife_card
         parent_layout.addWidget(ife_card)
 
         # ---- SteamVR Card ----
@@ -1320,8 +1302,8 @@ OscGoesPurrr is free and open source under the MIT license. It also uses other o
         lay.addWidget(self._muted_label(
             "VRChat only sends a value when it changes. If a contact stops "
             "updating — you swap avatar, your partner leaves, the link "
-            "drops — its last value would keep a toy running. Anti-stuck "
-            "notices a value that has frozen and stops the toy. On by "
+            "drops — its last value would keep a toy or a suit running. "
+            "Anti-stuck notices a value that has frozen and stops it. On by "
             "default."
         ))
 
@@ -1365,7 +1347,7 @@ OscGoesPurrr is free and open source under the MIT license. It also uses other o
             "Safety cutoff for frozen inputs. VRChat only sends OSC on "
             "parameter change — if an SPS input stops updating (avatar "
             "swap, partner leaves, OSC routing loss), the last value "
-            "would drive the toy forever.<br><br>"
+            "would drive the toy — or the suit — forever.<br><br>"
             "A real tracked value between zero and one can never hold "
             "perfectly still — animation and IK jitter it constantly "
             "— so a value frozen <b>part-way</b> is cut quickly (1s by "

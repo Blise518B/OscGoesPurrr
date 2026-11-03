@@ -7,6 +7,8 @@
 #
 # The import is guarded: without bleak the Suits page just says so.
 
+import asyncio
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, List, Optional
 
@@ -20,6 +22,12 @@ except Exception as e:  # noqa: BLE001 -- any import failure means "no Bluetooth
     _BLEAK_ERROR = f"bleak is not installed ({e.__class__.__name__})"
 
 CONNECT_TIMEOUT_S = 15.0
+# Windows reports a link connected before it has agreed the packet size with
+# the suit: until then a write without response carries 20 bytes, and the
+# Pro / Air's 40-byte frame is refused ("The parameter is incorrect") -- seen
+# on Blise's Pro, 2026-11-02. open() waits until a whole frame fits.
+ROOM_WAIT_S = 5.0
+_ROOM_POLL_S = 0.05
 
 
 @dataclass
@@ -85,9 +93,10 @@ class BleakRadio:
         return out
 
     async def open(self, found: Found, on_lost: Callable[[], None],
-                   motor_char: str = MOTOR_CHAR) -> BleakLink:
+                   motor_char: str = MOTOR_CHAR, frame_bytes: int = 0) -> BleakLink:
         """Connect and find the motor characteristic this model is driven
-        through (the Pro / Air have their own, bhaptics_models)."""
+        through (the Pro / Air have their own, bhaptics_models), once one
+        write can carry `frame_bytes`."""
         client = BleakClient(found.handle or found.address,
                              disconnected_callback=lambda _c: on_lost(),
                              timeout=CONNECT_TIMEOUT_S)
@@ -97,7 +106,19 @@ class BleakRadio:
             if motor is None:
                 raise RuntimeError(f"no bHaptics motor characteristic ({motor_char[:8]})")
             battery = client.services.get_characteristic(BATTERY_CHAR)
+            await _wait_for_room(motor, frame_bytes)
         except Exception:
             await client.disconnect()
             raise
         return BleakLink(client, motor, battery, found)
+
+
+async def _wait_for_room(char, frame_bytes: int) -> None:
+    """Until one write without response on `char` carries `frame_bytes`."""
+    deadline = time.monotonic() + ROOM_WAIT_S
+    while char.max_write_without_response_size < frame_bytes:
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"the link still takes {char.max_write_without_response_size} bytes "
+                f"per write after {ROOM_WAIT_S:.0f} s, a frame is {frame_bytes}")
+        await asyncio.sleep(_ROOM_POLL_S)

@@ -30,18 +30,20 @@ class TestChoices:
         public = set(main.OscGoesPurrrApp.FEATURE_KEYS) - SettingsMixin._HIDDEN_FEATURES
         assert set(interests.features()) == public
 
-    def test_a_feature_not_offered_yet_is_off_and_not_asked(self):
-        """FEATURES_NOT_YET (the suits, for now): off whatever was saved,
-        not in the flags Settings and the question are built from, and a
-        switch flipped anyway changes nothing."""
+    def test_a_feature_not_offered_yet_is_off_and_not_asked(self, monkeypatch):
+        """FEATURES_NOT_YET (the suits waited there until 2026-11-03; empty
+        now): off whatever was saved, not in the flags Settings and the
+        question are built from, and a switch flipped anyway changes
+        nothing."""
         import main
+        monkeypatch.setattr(main.OscGoesPurrrApp, "FEATURES_NOT_YET",
+                            frozenset({"feature_bhaptics", "feature_owo"}))
         app = main.OscGoesPurrrApp.__new__(main.OscGoesPurrrApp)
         saved = {"feature_bhaptics": True, "feature_owo": True, "feature_friends": True}
         app.get_app_setting = lambda key, default=None: saved.get(key, default)
         app.set_app_setting = lambda key, value: saved.__setitem__(key, value)
         app.ui = None
         app._apply_feature_state = lambda key, on: pytest.fail(f"{key} applied")
-        assert main.OscGoesPurrrApp.FEATURES_NOT_YET == {"feature_bhaptics", "feature_owo"}
         for key in main.OscGoesPurrrApp.FEATURES_NOT_YET:
             assert app.get_feature_enabled(key) is False
             assert key not in app.get_feature_flags()

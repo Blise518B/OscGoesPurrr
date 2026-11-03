@@ -6,6 +6,9 @@ builds boards of controls for your avatar parameters, per avatar
 (param_board.BoardBook, kept in settings/param_boards.py); a control on the
 worn avatar's board sends to VRChat as you use it.
 
+Your avatar's menu: its Avatar Remote submenu's seven Toggles and seven
+Radials drive whatever controls you gave those slots (params_menu.py).
+
 Friends: everyone whose third switch (AVATAR) is on in the friends list (on
 for a new friend) sees your *worn* avatar's active preset -- whatever you have open
 here -- and may use it, except a locked category. With ⚡ YOLO they get
@@ -39,6 +42,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import param_board as pb
 import remote_params as rp
 import vrchat_avatars
+from controllers.params_menu import ParamsMenuMixin
 from parameter_store import store
 from settings.param_boards import ParamBoardsSettingsManager
 
@@ -61,7 +65,7 @@ _EDITS = frozenset({
     "remove_preset", "switch_preset", "copy_category_to_preset",
 })
 
-_QUIET_EDITS = frozenset({"rename_category", "set_category_locked"})
+_QUIET_EDITS = frozenset({"rename_category", "set_category_locked", "toggle_slot"})
 
 _NO_SHARE = {"ver": "", "msg": None, "controls": {}, "types": {}, "keys": [],
              "n_board": 0, "yolo": False, "avatar": ""}
@@ -88,9 +92,9 @@ def read_relay_boards(folder: Optional[str] = None) -> List[Dict[str, Any]]:
     return out
 
 
-class ParamsFacade:
-    """Mixin: the Avatar Remote page's controller surface, and the owner's
-    half of a friend's board."""
+class ParamsFacade(ParamsMenuMixin):
+    """Mixin: the Avatar Remote page's controller surface, your avatar
+    menu's slots, and the owner's half of a friend's board."""
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -114,6 +118,7 @@ class ParamsFacade:
         # the every-parameter list's values, one snapshot for every friend
         # watching: (board version, when, {name: value}) -- the link's thread
         self._params_rest: Tuple[str, float, Dict[str, Any]] = ("", 0.0, {})
+        self._params_menu_init()
 
     def _params_ui_ready(self) -> None:
         if self._params_tick_running or getattr(self, "ui", None) is None:
@@ -281,6 +286,7 @@ class ParamsFacade:
             book.set_vrchat_name(self._params_vrchat_name(book.live_avatar_id))
             self.params_settings.set_last_avatar(book.avatar_id)
             self._params_release_all()
+            self._params_menu_forget()
             self._params_types_at = 0.0
             self._params_sync_types(force=True)
             self._params_rebuild_share()
@@ -370,6 +376,7 @@ class ParamsFacade:
             }
         old = self._params_share
         self._params_share = share
+        self._params_menu_rebuild(board)
         if share["ver"] and share["ver"] != old.get("ver"):
             with self._params_lock:
                 peers = list(self._params_watchers)
@@ -390,6 +397,7 @@ class ParamsFacade:
     def _params_tick(self) -> None:
         try:
             self._params_sync_types()
+            self._params_menu_follow()
             now = time.monotonic()
             stale = []
             with self._params_lock:

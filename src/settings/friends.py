@@ -17,7 +17,9 @@ friends and what each friend may do to you.
     avatar's board from the Avatar Remote page and may use it -- on for a new
     friend too; a locked category stays look-only).
   * ``groups``    — named sets of friends you control at once: ``id``,
-    ``name``, ``members`` (friend IDs; a friend can be in several groups).
+    ``name``, ``members`` (friend IDs, and ``ME`` for you -- a group with
+    you and a friend in it drives both of you; a friend can be in several
+    groups).
   * ``selected``  — what the Friends page's control panel shows and the
     VRChat menu's Friends submenu acts on: ``{"kind": "friend"|"group",
     "id": ...}``.
@@ -50,6 +52,7 @@ import remote_protocol as proto
 from ._base import JsonSettingsManager
 from ._paths import FRIENDS_SETTINGS_FILE
 
+ME = "__me__"        # you, the Friends list's Me row: a group may hold you too
 MAX_FRIENDS = 32
 MAX_GROUPS = 16
 GROUP_NAME_MAX = 24
@@ -145,7 +148,7 @@ class FriendsSettingsManager(JsonSettingsManager):
                 continue
             gids.add(gid)
             members = [m for m in dict.fromkeys(str(m) for m in g.get("members") or [])
-                       if m in seen]
+                       if m in seen or m == ME]
             groups.append({"id": gid, "name": name, "members": members})
         self.settings["groups"] = groups[:MAX_GROUPS]
         # Older files: "together" (several friends) or "active" (one).
@@ -211,6 +214,10 @@ class FriendsSettingsManager(JsonSettingsManager):
     def friend_ids(self) -> List[str]:
         return [f["id"] for f in self.settings.get("friends") or []]
 
+    def _member_ids(self) -> set:
+        """Who a group can hold: your friends, and you."""
+        return set(self.friend_ids()) | {ME}
+
     def add_friend(self, fid: str, nick: str = "") -> bool:
         """Add (or refresh the nickname of) a friend. A new friend may drive
         your toys and fire your shockers; either switch turns off per
@@ -274,7 +281,7 @@ class FriendsSettingsManager(JsonSettingsManager):
 
     # groups
     def get_groups(self) -> List[Dict[str, Any]]:
-        ids = set(self.friend_ids())
+        ids = self._member_ids()
         return [{"id": g["id"], "name": g["name"],
                  "members": [m for m in g["members"] if m in ids]}
                 for g in self.settings.get("groups") or []]
@@ -294,7 +301,7 @@ class FriendsSettingsManager(JsonSettingsManager):
         groups = self.settings.setdefault("groups", [])
         if not name or len(groups) >= MAX_GROUPS:
             return None
-        ids = set(self.friend_ids())
+        ids = self._member_ids()
         gid = self._new_group_id()
         groups.append({"id": gid, "name": name,
                        "members": [m for m in dict.fromkeys(members or []) if m in ids]})
@@ -315,7 +322,7 @@ class FriendsSettingsManager(JsonSettingsManager):
         self._save()
 
     def set_member(self, gid: str, fid: str, on: bool) -> None:
-        if fid not in self.friend_ids():
+        if fid not in self._member_ids():
             return
         for g in self.settings.get("groups") or []:
             if g["id"] == gid:

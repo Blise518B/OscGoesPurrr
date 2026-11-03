@@ -41,6 +41,8 @@ SELF_PARAMETERS = {
     constants.OGP_OFF_PARAMETER: 2,
     constants.OGP_SLEEP_PARAMETER: 2,
     constants.OGP_TEST_PARAMETER: 2,
+    **{name: 2 for name in constants.OGP_REMOTE_TOGGLE_PARAMETERS},
+    **{name: 1 for name in constants.OGP_REMOTE_RADIAL_PARAMETERS},
 }
 FRIEND_PARAMETERS = {
     constants.OGP_FRIEND_LEVEL_PARAMETER: 1,
@@ -59,14 +61,6 @@ FRIEND_PARAMETERS = {
     constants.OGP_FRIEND_SHOCK_LENGTH_PARAMETER: 1,
     constants.OGP_FRIEND_WARNING_PARAMETER: 2,
     **{name: 2 for name in constants.OGP_FRIEND_SHOCKER_PARAMETERS},
-    constants.OGP_BOTH_LEVEL_PARAMETER: 1,
-    constants.OGP_BOTH_MODE_PARAMETER: 0,
-    constants.OGP_BOTH_SPEED_PARAMETER: 1,
-    constants.OGP_BOTH_STOP_PARAMETER: 2,
-    constants.OGP_BOTH_SHOCK_PARAMETER: 2,
-    constants.OGP_BOTH_VIBRATE_PARAMETER: 2,
-    constants.OGP_BOTH_STRENGTH_PARAMETER: 1,
-    constants.OGP_BOTH_LENGTH_PARAMETER: 1,
 }
 APP_PARAMETERS = {**SELF_PARAMETERS, **FRIEND_PARAMETERS}
 PARAMETERS_OF = {"Both": APP_PARAMETERS, "Self": SELF_PARAMETERS, "Friends": FRIEND_PARAMETERS}
@@ -74,7 +68,8 @@ PARAMETERS_OF = {"Both": APP_PARAMETERS, "Self": SELF_PARAMETERS, "Friends": FRI
 ALL_ON = (*constants.OGP_FRIEND_TOY_PARAMETERS, *constants.OGP_FRIEND_SHOCKER_PARAMETERS)
 # The nested menus, each an asset of its own in Menu/, shared by the prefabs.
 SUBMENUS = ("Modes", "Friends", "FriendToys", "FriendAuto", "FriendWhichToys",
-            "FriendShockers", "FriendWhichShockers", "FriendBoth", "BothAuto")
+            "FriendShockers", "FriendWhichShockers", "Remote", "RemoteToggles",
+            "RemoteRadials")
 
 
 @pytest.fixture(scope="module")
@@ -165,11 +160,10 @@ def test_menu_uses_every_parameter(package):
 
 
 def test_auto_modes_are_the_apps_in_its_order(package):
-    # OGP/Friend/Mode and OGP/Both/Mode n is friend_patterns.WAVES[n - 1].
+    # OGP/Friend/Mode n is friend_patterns.WAVES[n - 1].
     import friend_patterns
-    for key in ("FriendAuto", "BothAuto"):
-        names = re.findall(r"- name: (.+)\n", text(package, f"{DIR}/OGP_VRCF_{key}.asset"))
-        assert names == [friend_patterns.LABELS[w] for w in friend_patterns.WAVES], key
+    names = re.findall(r"- name: (.+)\n", text(package, f"{DIR}/OGP_VRCF_FriendAuto.asset"))
+    assert names == [friend_patterns.LABELS[w] for w in friend_patterns.WAVES]
 
 
 def test_installer_names_the_apps_parameters():

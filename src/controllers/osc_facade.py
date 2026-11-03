@@ -175,6 +175,10 @@ class OscFacade:
         friends = getattr(self, "_friends_on_osc", None)
         if friends is not None:
             friends(address, value)
+        # ... and its Avatar Remote slots to the avatar's own parameters.
+        slots = getattr(self, "_params_menu_on_osc", None)
+        if slots is not None:
+            slots(address, value)
         # VRChat reports the freshly-loaded avatar's ID via /avatar/change.
         # The OSC layer strips the leading slash, so we see "avatar/change".
         if address == "avatar/change":

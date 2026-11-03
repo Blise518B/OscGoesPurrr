@@ -18,7 +18,8 @@ from intiface_connection import (
     MODE_INTEGRATED,
     make_intiface_connection,
 )
-from intiface_external import ExternalIntifaceConnection
+from intiface_discovery import SERVICE_TYPE, IntifaceFinder, _usable_ipv4, instance_label
+from intiface_external import ExternalIntifaceConnection, address_url, normalize_address
 from intiface_integrated import (
     IntegratedIntifaceConnection,
     _build_engine_args,
@@ -32,11 +33,50 @@ def _run(coro):
     return asyncio.run(coro)
 
 
+@pytest.fixture(autouse=True)
+def _short_first_look(monkeypatch):
+    # The first look waits up to 1.2 s for a phone's mDNS answer; the fake
+    # finders below answer at once or never.
+    import intiface_external
+    monkeypatch.setattr(intiface_external, "_FIRST_LOOK_S", 0.0)
+
+
 # ----------------------------------------------------------------- external provider
+
+class _FakeFinder:
+    """Stands in for intiface_discovery.IntifaceFinder: no zeroconf, no
+    sockets. `servers` is what mDNS "shows"."""
+
+    instances = []
+
+    def __init__(self, log=None, servers=None, start_ok=True):
+        self._servers = list(servers or [])
+        self.start_ok = start_ok
+        self.started = self.closed = False
+        _FakeFinder.instances.append(self)
+
+    def start(self):
+        self.started = True
+        return self.start_ok
+
+    def servers(self):
+        return list(self._servers)
+
+    def close(self):
+        self.closed = True
+
+
+def _finder(servers=None, start_ok=True):
+    return lambda log=None: _FakeFinder(log=log, servers=servers, start_ok=start_ok)
+
+
+_PHONE = {"name": "Intiface Ab12Cd", "host": "192.168.1.50", "port": 12345}
+
 
 class TestExternalProvider:
     def test_prepare_returns_ws_url(self):
-        conn = ExternalIntifaceConnection()
+        # Nothing typed, nothing on the network: this PC, as it always was.
+        conn = ExternalIntifaceConnection(finder_factory=_finder())
         assert _run(conn.prepare()) == INTIFACE_WS_URL
 
     def test_status_label_unchanged(self):
@@ -50,6 +90,134 @@ class TestExternalProvider:
         conn = ExternalIntifaceConnection()
         conn.terminate()          # no process ever owned
         _run(conn.shutdown())     # idempotent, no raise
+
+    def test_typed_address_is_dialled_and_no_finder_runs(self):
+        made = []
+        conn = ExternalIntifaceConnection(
+            address="192.168.1.50", finder_factory=lambda log=None: made.append(1))
+        assert _run(conn.prepare()) == "ws://192.168.1.50:12345"
+        assert _run(conn.prepare()) == "ws://192.168.1.50:12345"   # always that one
+        assert made == []
+
+    def test_unparsable_setting_means_find_it(self):
+        conn = ExternalIntifaceConnection(address="not an address",
+                                          finder_factory=_finder())
+        assert conn.address == ""
+        assert _run(conn.prepare()) == INTIFACE_WS_URL
+
+    def test_found_phone_goes_first_then_this_pc_takes_a_turn(self):
+        conn = ExternalIntifaceConnection(finder_factory=_finder([_PHONE]))
+        assert _run(conn.prepare()) == "ws://192.168.1.50:12345"
+        # That attempt failed (no note_connected): the next tries this PC,
+        # so a PC whose Central announces itself but listens only locally
+        # still connects.
+        assert _run(conn.prepare()) == INTIFACE_WS_URL
+        assert _run(conn.prepare()) == "ws://192.168.1.50:12345"
+
+    def test_the_one_that_worked_goes_first_after_a_drop(self):
+        conn = ExternalIntifaceConnection(finder_factory=_finder([_PHONE]))
+        _run(conn.prepare())                      # phone: failed
+        assert _run(conn.prepare()) == INTIFACE_WS_URL
+        conn.note_connected()                     # this PC worked
+        assert _run(conn.prepare()) == INTIFACE_WS_URL
+
+    def test_logs_each_place_once_not_every_retry(self):
+        seen = []
+        conn = ExternalIntifaceConnection(log=seen.append, finder_factory=_finder([_PHONE]))
+        for _ in range(6):
+            _run(conn.prepare())
+        tries = [m for m in seen if m.startswith("Connecting to Intiface")]
+        assert len(tries) == 2
+        assert any("192.168.1.50:12345 (Intiface Ab12Cd" in m for m in tries)
+        assert any("on this PC" in m for m in tries)
+
+    def test_finder_that_cannot_start_leaves_this_pc(self):
+        conn = ExternalIntifaceConnection(finder_factory=_finder(start_ok=False))
+        assert _run(conn.prepare()) == INTIFACE_WS_URL
+        assert conn.describe()["searching"] is False
+
+    def test_describe_reports_target_and_found(self):
+        conn = ExternalIntifaceConnection(finder_factory=_finder([_PHONE]))
+        _run(conn.prepare())
+        d = conn.describe()
+        assert d["auto"] is True and d["address"] == ""
+        assert d["target"] == "192.168.1.50:12345"
+        assert d["target_name"] == "Intiface Ab12Cd"
+        assert d["target_local"] is False
+        assert d["found"] == [_PHONE]
+
+    def test_shutdown_and_terminate_close_the_finder(self):
+        _FakeFinder.instances.clear()
+        conn = ExternalIntifaceConnection(finder_factory=_finder())
+        _run(conn.prepare())
+        _run(conn.shutdown())
+        assert _FakeFinder.instances[-1].closed
+        conn2 = ExternalIntifaceConnection(finder_factory=_finder())
+        _run(conn2.prepare())
+        conn2.terminate()
+        assert _FakeFinder.instances[-1].closed
+
+
+class TestNormalizeAddress:
+    @pytest.mark.parametrize("typed, stored", [
+        ("", ""),
+        ("   ", ""),
+        ("192.168.1.50", "192.168.1.50:12345"),
+        (" 192.168.1.50:12346 ", "192.168.1.50:12346"),
+        ("ws://192.168.1.50:12345/", "192.168.1.50:12345"),
+        ("WS://192.168.1.50", "192.168.1.50:12345"),
+        ("wss://phone.local:1234", "wss://phone.local:1234"),
+        ("pixel-7.local", "pixel-7.local:12345"),
+        ("localhost", "localhost:12345"),
+        ("[fe80::1]:12345", "[fe80::1]:12345"),
+    ])
+    def test_accepted(self, typed, stored):
+        assert normalize_address(typed) == stored
+
+    @pytest.mark.parametrize("typed", [
+        "http://192.168.1.50", "192.168.1.50:99999", "192.168.1.50:0",
+        "192.168 .1.50", "user@192.168.1.50", "192.168.1.50/path",
+        "bad_host!", "192.168.1.50:abc",
+    ])
+    def test_refused(self, typed):
+        assert normalize_address(typed) is None
+
+    def test_url_built_from_stored_form(self):
+        assert address_url("192.168.1.50:12345") == "ws://192.168.1.50:12345"
+        assert address_url("wss://phone.local:1234") == "wss://phone.local:1234"
+
+
+class TestFinder:
+    def test_newest_server_first_one_entry_per_address(self):
+        f = IntifaceFinder()
+        f.add("Intiface Old._intiface_engine._tcp.local.", ["192.168.1.40"], 12345)
+        f.add("Intiface New._intiface_engine._tcp.local.", ["192.168.1.50", "10.0.0.5"], 12345)
+        hosts = [(s["name"], s["host"]) for s in f.servers()]
+        assert hosts[0][0] == "Intiface New"
+        assert ("Intiface Old", "192.168.1.40") in hosts
+        assert len(hosts) == 3
+
+    def test_removed_server_is_dropped(self):
+        f = IntifaceFinder()
+        name = "Intiface X._intiface_engine._tcp.local."
+        f.add(name, ["192.168.1.50"], 12345)
+
+        class _Removed:
+            name = "Removed"
+
+        f._on_change(None, SERVICE_TYPE, name, _Removed())
+        assert f.servers() == []
+
+    def test_only_usable_ipv4_addresses(self):
+        assert _usable_ipv4(["fe80::1", "169.254.3.4", "127.0.0.1",
+                             "192.168.1.50", "junk"]) == ["192.168.1.50"]
+
+    def test_instance_label(self):
+        assert instance_label("Intiface Ab12Cd._intiface_engine._tcp.local.") == "Intiface Ab12Cd"
+        assert instance_label("") == "Intiface"
+
+    def test_close_without_start_is_safe(self):
+        IntifaceFinder().close()
 
 
 # ----------------------------------------------------------------- factory
@@ -75,6 +243,10 @@ class TestFactory:
         conn = make_intiface_connection(MODE_INTEGRATED, log=seen.append)
         conn._log("hi")
         assert seen == ["hi"]
+
+    def test_address_passed_to_external(self):
+        conn = make_intiface_connection(MODE_EXTERNAL, address="192.168.1.50")
+        assert conn.address == "192.168.1.50:12345"
 
 
 # ----------------------------------------------------------------- integrated pure helpers

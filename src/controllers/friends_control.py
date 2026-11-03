@@ -177,6 +177,17 @@ class FriendsControlMixin:
     # One friend's cards
     # ------------------------------------------------------------------
 
+    def _takes_toys(self, peer: str) -> bool:
+        """Their OGP takes your toy cards and strength right now. The page
+        hides those when it doesn't; the avatar menu can still move them."""
+        st = self._status_of(peer)
+        return bool(st.get("allow_toys")) and not st.get("paused")
+
+    def _toys_note(self, peer: str, text: str, key: Any = None) -> None:
+        """A log line about their toys, only if the change reaches them."""
+        if self._takes_toys(peer):
+            self._friends_note(text, key=key)
+
     def set_friend_level(self, peer: str, toy: str, value: float, source: str = "ui") -> None:
         """Your level for one of the friend's toys, or proto.ALL_TOYS.
         `source` "menu": it came from your avatar's menu (the menu then
@@ -195,8 +206,8 @@ class FriendsControlMixin:
             self._menu_follow(peer, str(toy))
         now = any(x > 0 for x in levels.values())
         if now != was:
-            self._friends_note(f"You {'started' if now else 'stopped'} driving "
-                               f"{self._friend_nick(peer)}'s toys")
+            self._toys_note(peer, f"You {'started' if now else 'stopped'} driving "
+                                  f"{self._friend_nick(peer)}'s toys")
 
     def set_friend_override(self, peer: str, toy: str, on: bool, source: str = "ui") -> None:
         """Override: while you drive this toy (or all of them), your level
@@ -210,9 +221,9 @@ class FriendsControlMixin:
         if source != "menu":
             self._menu_follow(peer, str(toy))
         what = "all their toys" if toy == proto.ALL_TOYS else toy
-        self._friends_note(f"You {'override' if on else 'no longer override'} "
-                           f"{self._friend_nick(peer)}'s own output on {what}",
-                           key=("ovr", peer, toy))
+        self._toys_note(peer, f"You {'override' if on else 'no longer override'} "
+                              f"{self._friend_nick(peer)}'s own output on {what}",
+                        key=("ovr", peer, toy))
 
     def set_friend_pattern(self, peer: str, toy: str, wave: str, period: float = 2.0,
                            lo: float = 0.0, hi: float = 1.0, source: str = "ui") -> None:
@@ -233,10 +244,11 @@ class FriendsControlMixin:
         what = "all their toys" if toy == proto.ALL_TOYS else toy
         if clean is None:
             if was is not None:
-                self._friends_note(f"You stopped the auto mode on {self._friend_nick(peer)}'s {what}")
+                self._toys_note(peer, f"You stopped the auto mode on "
+                                      f"{self._friend_nick(peer)}'s {what}")
         elif was is None or was[0] != clean[0]:
-            self._friends_note(f"You started {friend_patterns.LABELS[clean[0]]} on "
-                               f"{self._friend_nick(peer)}'s {what}", key=("pat", peer, toy))
+            self._toys_note(peer, f"You started {friend_patterns.LABELS[clean[0]]} on "
+                                  f"{self._friend_nick(peer)}'s {what}", key=("pat", peer, toy))
 
     def friend_hold(self, peer: str, slots: List[int], op: str, intensity: float) -> None:
         """Hold: those shockers run while you hold the button (within their
@@ -266,6 +278,11 @@ class FriendsControlMixin:
                                key=("stp", peer))
 
     def set_friend_strength(self, peer: str, value: float, source: str = "ui") -> None:
+        """Their strength slider. Unlike a level it is one change, not a
+        state, so one they don't take now is dropped: it mustn't land the
+        moment they switch your Toys back on."""
+        if not self._takes_toys(peer):
+            return
         v = unit(value)
         self._my_seq = max(self._my_seq + 1, int(time.time() * 1000))
         self._my_strength = {**self._my_strength, peer: (self._my_seq, v, time.monotonic())}

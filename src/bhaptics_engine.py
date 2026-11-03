@@ -320,7 +320,8 @@ class BHapticsEngine:
             try:
                 link = await self._radio.open(
                     item, lambda a=item.address: self._call_soon(self._lost, a, "disconnected"),
-                    motor_char=binding.model.motor_char)
+                    motor_char=binding.model.motor_char,
+                    frame_bytes=len(models.zero_frame(binding)))
             except Exception as e:  # noqa: BLE001
                 self._last_error = f"{item.name}: {e}"
                 self._log(f"bHaptics: couldn't connect to {item.name} ({e})")

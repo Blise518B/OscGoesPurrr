@@ -67,6 +67,8 @@ STEPS = {
     "My Avatar Remote": (
         Step("Wear your avatar", "Its board opens by itself.", "Avatar name"),
         Step("Build a board", "Toggles, buttons and sliders.", "Outfit"),
+        Step("Put it in your avatar's menu", "Seven toggles, seven radials.",
+             "Avatar menu slot"),
         Step("Friends can join in", "They see the avatar you wear.", "Friends looking"),
         Step("Bring your Relay boards", "One click import.", "Import"),
     ),

@@ -54,6 +54,14 @@ def params_qss(mode_name: str, v: Dict[str, str]) -> str:
         f'QToolButton#paramMenu {{ border: none; background: transparent; color: {v["muted"]};'
         ' font-size: 16px; padding: 0px 4px; }\n',
         f'QToolButton#paramMenu:hover {{ color: {v["txt"]}; }}\n',
+        # the avatar menu's slot circle (param_slots.py): a plain ring while it sits in
+        # no slot, the Avatar Remote green with its numbers once it does
+        f'QPushButton#slotDot {{ background-color: transparent; color: {v["dim"]};'
+        f' border: 1px solid {v["dim"]}; border-radius: 9px; padding: 0px 4px;'
+        ' font-size: 10px; font-weight: 700; }\n',
+        f'QPushButton#slotDot:hover {{ border-color: {v["txt"]}; color: {v["txt"]}; }}\n',
+        f'QPushButton#slotDot[set="true"] {{ background-color: {v["tint"]}; color: {v["accent"]};'
+        f' border: 1px solid {v["accent"]}; }}\n',
         f'QPushButton[role="paramSwitch"], QPushButton[role="paramHold"] {{'
         f' background-color: transparent; color: {v["muted"]}; border: 1px solid {v["line"]};'
         f' border-radius: {v["r_btn"]}px; font-weight: 700; padding: 2px 8px; }}\n',
@@ -123,6 +131,8 @@ def params_qss(mode_name: str, v: Dict[str, str]) -> str:
             f' QWidget#paramCatHead[hue="{hue}"] QLabel#paramCatTitle {{ color: {text}; }}\n'
             f'QWidget#paramCatHead[hue="{hue}"] QLabel#paramCatGrip,'
             f' QWidget#paramCatHead[hue="{hue}"] QToolButton#paramMenu {{ color: {text}; }}\n'
+            f'QWidget#paramCatHead[hue="{hue}"] QPushButton#slotDot[set="false"] {{'
+            f' color: {text}; border-color: {text}; }}\n'
             f'QLabel#paramCatHint[hue="{hue}"] {{ border-color: {mid}; }}\n'
             f'QFrame#paramCard[hue="{hue}"] {{ border-color: {mid}; }}\n'
             f'QFrame#paramCard[hue="{hue}"] QLabel#paramGrip,'

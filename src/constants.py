@@ -382,8 +382,9 @@ OGP_OFF_PARAMETER = "OGP/Off"      # Bool
 # stroke counter, so a brush against a sleeping partner does nothing.
 OGP_SLEEP_PARAMETER = "OGP/Sleep"  # Bool
 # The menu's Friends submenu: it acts on the friend or group picked on the
-# Friends page (see controllers/friends_facade.py). All unsynced, so 0 sync
-# bits. Toys ▸
+# Friends page (see controllers/friends_facade.py) -- you and a friend at
+# once is a group with both of you in it. All unsynced, so 0 sync bits.
+# Toys ▸
 OGP_FRIEND_LEVEL_PARAMETER = "OGP/Friend/Level"        # Float: drive their toys
 OGP_FRIEND_TOY_PARAMETERS = tuple(f"OGP/Friend/Toy{i}" for i in range(1, 5))  # Bools, all on
 OGP_FRIEND_MODE_PARAMETER = "OGP/Friend/Mode"          # Int: 0 none, 1-8 the auto modes
@@ -401,15 +402,11 @@ OGP_FRIEND_SHOCK_STRENGTH_PARAMETER = "OGP/Friend/ShockStrength"  # Float, of th
 OGP_FRIEND_SHOCK_LENGTH_PARAMETER = "OGP/Friend/ShockLength"      # Float, of their cap
 OGP_FRIEND_WARNING_PARAMETER = "OGP/Friend/Warning"    # Bool: 1-3 s of vibration first
 OGP_FRIEND_SHOCKER_PARAMETERS = tuple(f"OGP/Friend/Shocker{i}" for i in range(1, 5))  # Bools, all on
-# Both of us ▸ -- the picked friend and you at once
-OGP_BOTH_LEVEL_PARAMETER = "OGP/Both/Level"            # Float
-OGP_BOTH_MODE_PARAMETER = "OGP/Both/Mode"              # Int: 0 none, 1-8 the auto modes
-OGP_BOTH_SPEED_PARAMETER = "OGP/Both/Speed"            # Float
-OGP_BOTH_STOP_PARAMETER = "OGP/Both/Stop"              # Bool, a button
-OGP_BOTH_SHOCK_PARAMETER = "OGP/Both/Shock"            # Bool, a button
-OGP_BOTH_VIBRATE_PARAMETER = "OGP/Both/Vibrate"        # Bool, a button
-OGP_BOTH_STRENGTH_PARAMETER = "OGP/Both/Strength"      # Float, of each one's cap
-OGP_BOTH_LENGTH_PARAMETER = "OGP/Both/Length"          # Float, of each one's cap
+# The menu's Avatar Remote submenu: seven Toggles and seven Radials, slots a
+# control (or a category) of the worn avatar's board takes on the Avatar
+# Remote page (param_board SLOT_*, controllers/params_menu.py). Unsynced.
+OGP_REMOTE_TOGGLE_PARAMETERS = tuple(f"OGP/Remote/Toggle{i}" for i in range(1, 8))  # Bools
+OGP_REMOTE_RADIAL_PARAMETERS = tuple(f"OGP/Remote/Radial{i}" for i in range(1, 8))  # Floats 0-1
 # Level the OGP/Test pulse drives every connected motor at — high enough
 # to feel, low enough to be unmistakably a connectivity check.
 OGP_TEST_LEVEL = 0.2

@@ -3,7 +3,8 @@ cards and category boxes in OGP's look: a category is a frame in its
 colour with a filled header bar (drag it by its ⠿ to reorder, 🔒 makes it
 look-only for friends, ⋯ for its colour, copy to another preset, delete),
 a control is a card in it (drag it by its ⠿ to move it, ⋯ to edit or
-remove). Drops show a see-through copy where they will land.
+remove). Drops show a see-through copy where they will land. Both have the
+avatar menu's slot circle in their top bar (param_slots.py).
 
 The same pieces draw a friend's board on the Friends page, with
 `editable=False`: no grips, no menus, nothing to drop -- and a locked
@@ -23,6 +24,7 @@ import param_board as pb
 from ui.layout_helpers import hbox, vbox
 from ui.theme import PALETTE
 from ui.views.card_parts import WheelSafeSlider
+from ui.views.param_slots import SlotDot
 
 CARD_W = 210
 CONTROL_H = 32
@@ -203,6 +205,7 @@ class ParamCard(QFrame):
         self.switch: Optional[QPushButton] = None
         self.slider = None
         self.spin = None
+        self.slot_dot: Optional[SlotDot] = None
 
         root = vbox(0, 6)
         root.setContentsMargins(10, 8, 6, 10)
@@ -233,6 +236,9 @@ class ParamCard(QFrame):
                             f'{"OFF" if toggle else "letting go"} sets it to {off}')
             top.addWidget(mark)
         if editable:
+            # which of the avatar menu's Toggles / Radials it sits in
+            self.slot_dot = SlotDot("c:" + control["id"], (pb.slot_menu(control),))
+            top.addWidget(self.slot_dot)
             menu_btn = QToolButton()
             menu_btn.setObjectName("paramMenu")
             menu_btn.setText("⋯")
@@ -451,6 +457,9 @@ class ParamCategory(QFrame):
             self.name_edit.editingFinished.connect(
                 lambda: self.renamed.emit(self.category["id"], self.name_edit.text()))
             hl.addWidget(self.name_edit, 1)
+            # the whole category in the avatar menu's Toggles and / or Radials
+            self.slot_dot = SlotDot("g:" + category["id"], pb.SLOT_MENUS)
+            hl.addWidget(self.slot_dot)
             self.lock_btn = QToolButton()
             self.lock_btn.setObjectName("paramCatLock")
             self.lock_btn.setCheckable(True)

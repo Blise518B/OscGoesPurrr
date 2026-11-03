@@ -5,8 +5,9 @@ Settings card that says whether the avatar you're wearing has it.
 
 Whether it has it comes from the parameters VRChat lists for the avatar
 (controllers/friends_menu.get_avatar_menu): `self` is your own controls
-(OGP/Strength), `friends` the Friends submenu (OGP/Friend/Level), `known`
-that VRChat told us anything at all."""
+(OGP/Strength), `friends` the Friends submenu (OGP/Friend/Level), `remote`
+the Avatar Remote submenu's slots (OGP/Remote/Toggle1), `known` that VRChat
+told us anything at all."""
 
 from typing import Callable, Dict
 
@@ -27,6 +28,8 @@ _REFRESH_MS = 1000
 _PARTS = (
     ("self", "Your own controls", "Strength, Off, Sleep, Test and the modes"),
     ("friends", "Friends submenu", "drives whoever you picked on the Friends page"),
+    ("remote", "Avatar Remote submenu", "seven toggles and seven radials for the controls "
+                                        "you give its slots on My Avatar Remote"),
 )
 
 
@@ -38,8 +41,8 @@ def links_html(color: str) -> str:
 
 
 def has_menu(menu: Dict[str, bool]) -> bool:
-    """The avatar carries some of OGP's menu (either part)."""
-    return bool(menu.get("known") and (menu.get("self") or menu.get("friends")))
+    """The avatar carries some of OGP's menu (any part)."""
+    return bool(menu.get("known") and any(menu.get(key) for key, _t, _w in _PARTS))
 
 
 class AvatarMenuCard(Card):
@@ -124,7 +127,7 @@ class AvatarMenuCard(Card):
         self.set_state(menu)
 
     def set_state(self, menu: Dict[str, bool]) -> None:
-        state = (bool(menu.get("known")), bool(menu.get("self")), bool(menu.get("friends")))
+        state = (bool(menu.get("known")),) + tuple(bool(menu.get(key)) for key, _t, _w in _PARTS)
         if state == self._state:
             return
         self._state = state

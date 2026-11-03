@@ -12,7 +12,9 @@ Mixin for ui_components.OscGoesPurrrUI, shown while `feature_params` is on
     hold), Import from VRC Parameter Relay, and the parameter list's switch
     (who may use the board: each friend's AVATAR switch, Pause all friends);
   * the board -- categories in two columns (one when narrow), their cards
-    (param_cards.py) -- beside the avatar's parameter list: live values,
+    (param_cards.py), each with the avatar menu's slot circle: Avatar
+    Remote ▸'s seven Toggles and seven Radials, picked on a radial like
+    VRChat's (param_slots.py) -- beside the avatar's parameter list: live values,
     a filter, double-click or drag one into a category to make a control.
     The bar between them drags the list wider for long parameter names
     (kept, app setting `params_dock_w`).
@@ -35,6 +37,7 @@ from ui.views.param_cards import (
     CARD_W, ParamCard, ParamCategory, ParamTree, drag_ghost, fmt_value,
 )
 from ui.views.param_dialogs import ControlDialog
+from ui.views.param_slots import SlotDot, SlotRadial
 from ui.widgets import Card as _Card
 
 VIEW_NAME = "My Avatar Remote"
@@ -154,6 +157,7 @@ class ParamsMixin:
         self._params_boxes: Dict[str, ParamCategory] = {}
         self._params_items: Dict[str, QTreeWidgetItem] = {}
         self._params_cat_ghost: Optional[QLabel] = None
+        self._params_slot_picker: Optional[SlotRadial] = None
         self._params_last_cat: Optional[str] = None
         self._params_live_n = 0
         self._params_rebuild_due = False
@@ -312,6 +316,7 @@ class ParamsMixin:
             self._params_rebuild_due = True
             QTimer.singleShot(0, self._params_rebuild)
         self._params_refresh_header()
+        self._params_refresh_slots()
 
     def refresh_params_live(self) -> None:
         """Values, ten times a second -- only while the page is shown."""
@@ -406,6 +411,8 @@ class ParamsMixin:
         st = c.get_params_status()
         board = st["board"]
         self._params_cat_ghost = None
+        if self._params_slot_picker is not None:
+            self._params_slot_picker.close_picker()      # its circle is about to go
         for col in self._params_cols:
             clear_layout(col)
         self._params_cards, self._params_boxes = {}, {}
@@ -433,6 +440,7 @@ class ParamsMixin:
             box.copy_to_preset.connect(
                 lambda cid, pid: c.params_edit("copy_category_to_preset", cid, pid))
             box.color_changed.connect(lambda cid, hue: c.params_edit("set_category_color", cid, hue))
+            self._params_wire_slot(box.slot_dot, cat["name"] + " (whole category)", board)
             for control in board["controls"]:
                 if control.get("cat") != cat["id"]:
                     continue
@@ -441,6 +449,7 @@ class ParamsMixin:
                 card.hold.connect(c.params_set_control)
                 card.edit_requested.connect(self._params_edit_control)
                 card.remove_requested.connect(lambda k: c.params_edit("remove_control", k))
+                self._params_wire_slot(card.slot_dot, control["label"], board)
                 box.add_card(card)
                 self._params_cards[control["id"]] = card
             box.finalize()
@@ -448,6 +457,48 @@ class ParamsMixin:
             self._params_cols[i % self._params_ncols].addWidget(box)
         # one column: the empty second one must not take half the width
         self._params_board.layout().setStretch(1, 1 if self._params_ncols == 2 else 0)
+
+    # ----------------------------------------------------------
+    # The avatar menu's slots
+    # ----------------------------------------------------------
+
+    def _params_wire_slot(self, dot: Optional[SlotDot], title: str, board: Dict[str, Any]) -> None:
+        if dot is None:
+            return
+        dot.set_slots(pb.slots_of(board, dot.key))
+        dot.clicked.connect(lambda _=False, d=dot, t=title: self._params_open_slots(d, t))
+        self._explain(dot, "Avatar menu slot",
+                      "Puts this in your avatar's own menu: OscGoesPurrr ▸ Avatar Remote "
+                      "has seven toggles and seven radials, and each is a slot you give a "
+                      "control - or a whole category - here. Click, then a number: it takes "
+                      "that slot from whatever had it; a number it already has frees it. "
+                      "Toggles take toggles and hold buttons, radials take sliders and "
+                      "steppers. The menu drives the board of the avatar you're wearing.")
+
+    def _params_open_slots(self, dot: SlotDot, title: str) -> None:
+        picker = self._params_slot_picker
+        if picker is not None and picker.key == dot.key:
+            picker.close_picker()                         # its own circle again: closed
+            return
+        if picker is None or picker.parentWidget() is not dot.window():
+            picker = SlotRadial(dot.window(), self._params_slot_picked)
+            self._params_slot_picker = picker
+        picker.open_for(dot, title, self.controller.get_params_status()["board"])
+
+    def _params_slot_picked(self, menu: str, index: int, key: str) -> None:
+        # saved and on the menu at once; the page's circles follow, no rebuild
+        self.controller.params_edit_quiet("toggle_slot", menu, index, key)
+        self._params_refresh_slots()
+
+    def _params_refresh_slots(self) -> None:
+        board = self.controller.get_params_status()["board"]
+        for holder in list(self._params_cards.values()) + list(self._params_boxes.values()):
+            dot = getattr(holder, "slot_dot", None)
+            if dot is not None:
+                dot.set_slots(pb.slots_of(board, dot.key))
+        picker = self._params_slot_picker
+        if picker is not None and picker.isVisible():
+            picker.set_board(board)
 
     def _params_refresh_list(self) -> None:
         params = self.controller.params_param_list()

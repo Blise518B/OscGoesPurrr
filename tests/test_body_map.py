@@ -27,11 +27,26 @@ def test_legacy_schemas_count_as_any_touch():
     r = bm.read_body({"bHaptics_Vest_Front_1_bool": True,
                       "bHaptics_Arm_Right_6_bool": 1,
                       "bHaptics_Head_2_bool": 0.2,            # truthy only above 0.5
-                      "bOSC_v1_VestBack_20": 0.4})
+                      "bOSC_v1_VestBack_19": 0.4,
+                      "bOSC_v1_Head_0": 0.7})
     assert r.any_touch["VestFront"][0] == 1.0
     assert r.any_touch["ForearmR"][5] == 1.0
     assert r.any_touch["Head"][1] == 0.0
     assert math.isclose(r.any_touch["VestBack"][19], 0.4)
+    assert math.isclose(r.any_touch["Head"][0], 0.7)
+
+
+def test_bosc_v1_contacts_count_from_zero():
+    """bOSC_v1_<Pos>_<n> is 0-based on every avatar VRChat has a file for
+    (VestFront_0.._19): all 20 are found, each on its own node, and there
+    is no _20."""
+    names = [f"bOSC_v1_{pos}_{i}" for pos in ("VestFront", "VestBack") for i in range(20)]
+    contacts = bm.contacts_per_position(names)
+    assert contacts["VestFront"] == tuple(range(20))
+    assert contacts["VestBack"] == tuple(range(20))
+    assert bm.contacts_per_position(["bOSC_v1_VestFront_20"])["VestFront"] == ()
+    r = bm.read_body({"bOSC_v1_VestFront_0": 1.0})
+    assert r.any_touch["VestFront"][:2] == (1.0, 0.0)
 
 
 def test_react_to_filters_self_and_others_but_never_legacy():

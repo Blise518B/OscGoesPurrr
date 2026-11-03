@@ -12,14 +12,38 @@ everything connected?" test pulse. No alt-tabbing out of VR.
 | `OGP/Sleep`    | Bool  | toggle | Makes toys hard to wake: every chain's Wake stage switches to the stroke counter, so nothing plays until three full strokes land within six seconds. Buttplug toys only — no other backend has a Wake stage. |
 | `OGP/Test`     | Bool  | held   | While held, every connected motor runs at a low fixed level (~20%) — enough to confirm the link without being a surprise. |
 
-### Friends (`OGP/Friend/*`, `OGP/Both/*`)
+### Avatar Remote (`OGP/Remote/*`)
+
+Your avatar board's controls in the menu itself: **Avatar Remote ▸** has
+seven **Toggles** and seven **Radials**, and each one is a *slot* you give
+a control — or a whole category — on the app's *My Avatar Remote* page: the
+small circle in a card's (or a category's) top bar opens a radial like
+VRChat's, Back at the top and 1–7 around it. A slot holds one thing; one
+thing can sit in several slots. Toggles take toggles and hold buttons,
+Radials take sliders and steppers; a category's slot drives every control
+in it that fits. The menu drives the board of the avatar you're wearing
+(its active preset), and its toggles and radials follow the board — on
+while any of a slot's controls is ON, a radial where its first control
+is. VRChat can't show the names (they're baked in at upload), so the menu
+says *Toggle 1*–*7* and *Radial 1*–*7*; the page shows what has each.
+
+| Parameter                     | Type  | Values | Meaning |
+|-------------------------------|-------|--------|---------|
+| `OGP/Remote/Toggle1`–`7`      | Bool  | toggle | On / off for the slot's control(s); a hold button is held while it's on. |
+| `OGP/Remote/Radial1`–`7`      | Float | 0–1    | The slot's slider(s) or stepper(s), across each one's own min..max. |
+
+### Friends (`OGP/Friend/*`)
 
 The menu's **Friends** submenu acts on whatever you have picked on the
 app's Friends page: one friend, or a group of friends (make one under
-*Groups*; a friend can be in several) — your first friend starts picked.
-Each friend only gets what they allow you (their toys and shockers boxes
-for you). All unsynced, so 0 sync bits. The Friends page tells you when the
-avatar you're wearing has this menu.
+*Groups* and drag friends from the list into it; a friend can be in
+several) — your first friend starts picked. Each friend only gets what they
+allow you (their toys and shockers boxes for you). To drive **you and a
+friend at once**, drag yourself (the top row of the list) into a group with
+them: you're a member like any friend, so your own toys and shockers follow
+the menu too — through your own shocker page, your caps and arming hold,
+and Pause all friends pauses you as well. All unsynced, so 0 sync bits. The
+Friends page tells you when the avatar you're wearing has this menu.
 
 **Toys ▸**
 
@@ -46,19 +70,10 @@ only a vibrate for anyone who hasn't armed shocks this session.
 | `OGP/Friend/Warning`       | Bool  | toggle | PiShock's Small warning: 1–3 s of vibration before each shock. |
 | `OGP/Friend/Shocker1`–`4`  | Bool  | toggle | *Which shockers*: their shocker 1–4 in the order their card lists them. All on by default. |
 
-**Both of us ▸** — the picked friend and you at once: the same level or
-auto mode on their toys (the *Which toys* ones) and all of yours, the same
-shock or vibrate on their ticked shockers and all of yours (through your
-own shocker page: your caps and arming hold).
-
-| Parameter            | Type  | Values | Meaning |
-|----------------------|-------|--------|---------|
-| `OGP/Both/Level`     | Float | 0–1    | Direct control, both of you. |
-| `OGP/Both/Mode`      | Int   | 0–8    | Auto mode, both of you (same numbers as above). |
-| `OGP/Both/Speed`     | Float | 0–1    | Its speed. |
-| `OGP/Both/Stop`      | Bool  | button | Both of your toys back to 0. |
-| `OGP/Both/Shock`, `Vibrate` | Bool | button | One operation on both of you (*Shock*, *Shocker vibrate*). |
-| `OGP/Both/Strength`, `Length` | Float | 0–1 | As a part of each one's own caps. |
+(The old *Both of us ▸* submenu and its `OGP/Both/*` parameters are gone
+after 0.14.1: a group with you and your friend in it does the same, and the
+app no longer listens to them. An avatar that still has them keeps a dead
+folder until you drag in the newer prefab.)
 
 The app sets Level and Mode back on your avatar when it ends an auto mode or
 stops (so the menu shows what's going on); for ~2 s after an avatar load the
@@ -92,11 +107,12 @@ Companion → Manage Project → add VRCFury).
 2. Drag **one** of the three prefabs from the new `Assets/OGP` folder onto
    your avatar in the Hierarchy — anywhere inside it:
    * **OscGoesPurrr Menu** — both: your own controls (Strength, Off,
-     Sleep, Test, Modes) and the Friends menu, in one *OscGoesPurrr*
-     submenu.
-   * **OscGoesPurrr Menu (Self)** — only your own controls.
+     Sleep, Test, Modes, Avatar Remote) and the Friends menu, in one
+     *OscGoesPurrr* submenu.
+   * **OscGoesPurrr Menu (Self)** — only your own controls (Avatar Remote
+     included).
    * **OscGoesPurrr Menu (Friends)** — only the Friends menu (Toys,
-     Shockers, Both of us, Their strength), as an *OGP Friends* submenu.
+     Shockers, Their strength), as an *OGP Friends* submenu.
 
    (The files they use, icons included, are in `Assets/OGP/Menu`; leave
    them there.)
@@ -166,15 +182,18 @@ animations — you don't need an animator controller at all. Two assets:
    * One **Button** control bound to `OGP/Test` — a Button (not Toggle) is
      momentary: the pulse runs only while you hold it.
 
-For the Friends submenu, add the `OGP/Friend/*` and `OGP/Both/*`
-parameters from the tables at the top the same way (Toy1–4 and
-Shocker1–4 default **on**, Speed `0.5`, Range `1`, Strength `0.85`,
-ShockStrength and Both/Strength `0.25`, ShockLength and Both/Length `0.1`,
-the rest off or 0) and lay them out as the tables do: radials for the
-Floats, Buttons for the buttons, Toggles for the toggles, and for *Auto
-mode* eight Toggles on `OGP/Friend/Mode` (or `OGP/Both/Mode`) with Value
-`1`–`8`. A menu holds 8 controls at most, so Toys, Shockers, Both of us,
-Auto mode, Which toys and Which shockers are submenus of their own.
+For Avatar Remote, add `OGP/Remote/Toggle1`–`7` (Bool) and
+`OGP/Remote/Radial1`–`7` (Float), and a submenu with two submenus of its
+own: seven Toggles (Value `1`) and seven Radial Puppets.
+
+For the Friends submenu, add the `OGP/Friend/*` parameters from the
+tables at the top the same way (Toy1–4 and Shocker1–4 default **on**,
+Speed `0.5`, Range `1`, Strength `0.85`, ShockStrength `0.25`, ShockLength
+`0.1`, the rest off or 0) and lay them out as the tables do: radials for
+the Floats, Buttons for the buttons, Toggles for the toggles, and for *Auto
+mode* eight Toggles on `OGP/Friend/Mode` with Value `1`–`8`. A menu holds 8
+controls at most, so Toys, Shockers, Auto mode, Which toys and Which
+shockers are submenus of their own.
 
 Upload, and you're done. (If you'd rather not click through Unity
 inspectors, use Option A or B above — same result.)

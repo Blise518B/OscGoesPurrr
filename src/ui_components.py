@@ -90,6 +90,7 @@ from ui.views.suits import SuitsMixin
 from ui.views.friends import FriendsMixin
 from ui.views.params import ParamsMixin
 from ui.views.whats_new import WhatsNewMixin
+from ui.views.intiface_card import IntifaceSidebarInfo
 from ui.views.interests import InterestsMixin
 from ui.views.help import HelpMixin
 
@@ -707,6 +708,27 @@ class OscGoesPurrrUI(
             "connects and reconnects by itself."
         ))
 
+        # Off the built-in engine, the line becomes a section (Blise's ask,
+        # 2026-11-03): the address OGP connects to and whether an Intiface
+        # is found there. A click opens Settings → Intiface Engine.
+        self.intiface_where = IntifaceSidebarInfo(
+            lambda: self.controller.get_intiface_link_status(),
+            lambda: self.reveal("intiface"),
+            on_change=self._on_intiface_where_changed,
+            set_address=lambda text: self.controller.set_intiface_address(text))
+        self._explain(
+            self.intiface_where, "Where your Intiface Central is",
+            "The address OGP connects to while the built-in engine is off, "
+            "and whether an Intiface Central is found there. Click to change "
+            "it in Settings → Intiface Engine.")
+        self._explain(
+            self.intiface_where.enter_btn, "Enter address",
+            "Type where your Intiface Central runs, for when OGP can't find "
+            "it by itself — a phone's address, like 192.168.1.50. Enter "
+            "uses it, Esc closes the box; empty means find it by itself "
+            "again.")
+        intiface_lay.addWidget(self.intiface_where)
+
         # One button slot, mostly empty: Connect while the toy server is
         # down (normally a moment at launch; longer with auto connect off
         # or the engine missing); Find toys only with Auto Refresh Devices
@@ -905,7 +927,10 @@ class OscGoesPurrrUI(
             auto = bool(self.controller.get_app_setting("auto_refresh", True))
         except Exception:
             auto = True
-        show_connect, show_find = not connected, connected and not auto
+        # While OGP looks for your own Intiface by itself, the pill says
+        # SEARCHING and there is nothing to press -- as for VRChat.
+        show_connect = not connected and not self._intiface_looking()
+        show_find = connected and not auto
         if self.connection_button is not None:
             self.connection_button.setVisible(show_connect)
         if self.scan_toys_button is not None:
@@ -922,18 +947,40 @@ class OscGoesPurrrUI(
 
         self._toy_server_connected = bool(connected)
         self.refresh_link_buttons()
-
-        if self.status_label is not None:
-            self.status_label.setProperty("role", "pill")
-            if connected:
-                self.status_label.setText("CONNECTED")
-                self.status_label.setProperty("tone", "ok")
-            else:
-                self.status_label.setText("DISCONNECTED")
-                self.status_label.setProperty("tone", "off")
-            self._repolish(self.status_label)
+        self._face_toy_pill()
 
         self.update_stored_devices_ui()
+
+    def _intiface_looking(self) -> bool:
+        """OGP is looking for an Intiface Central it doesn't run, by itself
+        (built-in engine off, auto connect on, not connected yet)."""
+        try:
+            return bool((self.controller.get_intiface_link_status() or {}).get("looking"))
+        except Exception:
+            return False
+
+    def _face_toy_pill(self) -> None:
+        """CONNECTED, SEARCHING (looking for your own Intiface by itself)
+        or DISCONNECTED."""
+        if self.status_label is None:
+            return
+        if getattr(self, "_toy_server_connected", False):
+            text, tone = "CONNECTED", "ok"
+        elif self._intiface_looking():
+            text, tone = "SEARCHING", "off"
+        else:
+            text, tone = "DISCONNECTED", "off"
+        self.status_label.setProperty("role", "pill")
+        self.status_label.setText(text)
+        self.status_label.setProperty("tone", tone)
+        self._repolish(self.status_label)
+
+    def _on_intiface_where_changed(self) -> None:
+        """The sidebar's Intiface section saw a change (switch flipped,
+        found, connected, auto connect toggled): re-face the pill and the
+        buttons, which otherwise change only on connect events."""
+        self.refresh_link_buttons()
+        self._face_toy_pill()
 
     def update_osc_status(self, is_connected: bool, port: int = None):
         """Legacy two-state entry point (connect/disconnect events). A fresh

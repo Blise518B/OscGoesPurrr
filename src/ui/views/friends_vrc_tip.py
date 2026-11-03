@@ -29,12 +29,6 @@ _VRC_FRIENDS_MENU = (
         ("Warning", "toggle", "1-3 s of vibration before each shock", ()),
         ("Which shockers", "menu", "Shocker 1-4, all on", ()),
     )),
-    ("Both of us", "menu", "the same on them and on you", (
-        ("Level, Speed", "radials", "", ()),
-        ("Auto mode", "menu", "the same eight", ()),
-        ("Stop, Shock, Shocker vibrate", "buttons", "", ()),
-        ("Strength, Length", "radials", "part of each one's own caps", ()),
-    )),
     ("Their strength", "radial", "their own strength slider", ()),
 )
 
@@ -48,7 +42,8 @@ def _menu_html() -> str:
         return "<ul style='margin:2px 0 2px -18px'>" + "".join(out) + "</ul>"
     return ("<b>OscGoesPurrr ▸ Friends</b> in your avatar's menu"
             + items(_VRC_FRIENDS_MENU)
-            + "Everything acts on whoever is picked on this page.")
+            + "Everything acts on whoever is picked on this page - for you and a "
+              "friend at once, pick a group with both of you in it.")
 
 
 class VrchatMenuTip(QLabel):

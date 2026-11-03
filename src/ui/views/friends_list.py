@@ -4,7 +4,8 @@ Copy), your ID with its own Copy and a box for their link or ID -- and under
 it Copy web remote link, for someone without OGP; your friends with their
 toys / shocks / avatar boxes (you
 always first, then the Web remote row once you have its link), and groups
-(drag a friend onto one to add them; right-click to rename or delete it).
+(drag a friend -- or yourself -- onto one, or onto its members in the panel,
+to add them; right-click to rename or delete it).
 Part of FriendsMixin (friends.py)."""
 
 from typing import Any, Callable, Dict
@@ -19,7 +20,7 @@ from PySide6.QtWidgets import (
 from constants import *
 from remote_protocol import display_name
 from ui.layout_helpers import clear_layout, vbox as _vbox, hbox as _hbox
-from controllers.friends_common import WEB
+from controllers.friends_common import ME, WEB
 from ui.theme import FRIEND_SHOCK_HUE as _SHOCK, FRIEND_TOYS_HUE as _TOYS, FRIENDS_HUE, friend_hue
 from ui.motor_signal_chain import _ElidedLabel
 from ui.views.card_parts import segmented
@@ -36,7 +37,7 @@ _INVITE_KINDS = (
     ("forever", "No end", "Anyone who clicks it becomes your friend, until you close "
                           "your links (⋯)."),
 )
-MIME_FRIEND = "application/x-ogp-friend"     # a friend's row, dragged onto a group
+MIME_FRIEND = "application/x-ogp-friend"     # a friend's row, dragged into a group
 _COPY_LINK = "Copy invite link"
 # The two ways in, one under the other, each saying who needs OGP
 _ADD_FRIEND = "Add a friend (they need OGP too)"
@@ -58,6 +59,15 @@ _WEB_BOXES = {
 # the header and on every row, each box centred under its label.
 PERM_COL_W = 46
 _ROW_MARGIN = 4               # a row's margin + border + the box's own inset, mirrored by the header
+
+
+def _members_text(members) -> str:
+    """A group row's count: "3 friends", "you + 1 friend", "just you"."""
+    n = sum(1 for m in members if m != ME)
+    friends = f"{n} friend{'s' if n != 1 else ''}"
+    if ME not in members:
+        return friends
+    return f"you + {friends}" if n else "just you"
 
 
 def web_guests_tip(web: Dict[str, Any]) -> str:
@@ -90,8 +100,8 @@ class _ColumnHead(QLabel):
 
 
 class _FriendDrag(QObject):
-    """A friend's row can be dragged (onto a group); a plain click still
-    picks the friend."""
+    """A friend's row -- yours too -- can be dragged into a group (its row,
+    or its members in the panel); a plain click still picks the friend."""
 
     def __init__(self, row: QPushButton, fid: str):
         super().__init__(row)
@@ -570,6 +580,10 @@ class FriendsListMixin:
             self.controller.set_group_member(gid, fid, True)
             self.refresh_friends()
 
+    def _friend_out_of_group(self, gid: str, fid: str) -> None:
+        self.controller.set_group_member(gid, fid, False)
+        self.refresh_friends()
+
     def _confirm_unfriend(self, fid: str, nick: str) -> None:
         box = QMessageBox(
             QMessageBox.Question, "Unfriend",
@@ -708,8 +722,7 @@ class FriendsListMixin:
                 boxes[what] = cb
             h.addWidget(cells)
             self._friends_rows_lay.addWidget(btn)
-            if not me:
-                _FriendDrag(btn, fid)
+            _FriendDrag(btn, fid)
             self._friend_rows[fid] = {"btn": btn, "name": name, "ping": ping,
                                       "driving": driving, "old": old, **boxes}
         if web_due:
@@ -729,7 +742,7 @@ class FriendsListMixin:
             name = QLabel(g["name"])
             name.setObjectName("friendName")
             h.addWidget(name)
-            count = QLabel(f"{len(g['members'])} friend{'s' if len(g['members']) != 1 else ''}")
+            count = QLabel(_members_text(g["members"]))
             count.setProperty("muted", "true")
             h.addWidget(count)
             h.addStretch(1)

@@ -26,11 +26,11 @@
   item up when it lands in a release. When the app's look changes, bring
   the demo back in line with it.
 -->
-<meta name="description" content="All your VRChat haptics, in one app. OscGoesPurrr reads the contacts on your VRChat avatar over OSC and turns them into output for your Bluetooth toys through Intiface / Buttplug.io and PiShock / OpenShock shockers, and friends can drive them over the internet. One file for Windows or Linux, no setup, updates itself.">
+<meta name="description" content="All your VRChat haptics, in one app. OscGoesPurrr reads the contacts on your VRChat avatar over OSC and turns them into output for your Bluetooth toys through Intiface / Buttplug.io, PiShock / OpenShock shockers and bHaptics / OWO suits, and friends can drive them over the internet. One file for Windows or Linux, no setup, updates itself.">
 <meta name="theme-color" content="#0a0c0a">
 <meta property="og:type" content="website">
 <meta property="og:title" content="OscGoesPurrr">
-<meta property="og:description" content="All your VRChat haptics, in one app: your avatar's contacts on your Bluetooth toys and shockers, and friends who can drive them over the internet. One file for Windows or Linux, no setup, updates itself.">
+<meta property="og:description" content="All your VRChat haptics, in one app: your avatar's contacts on your Bluetooth toys, shockers and haptic suits, and friends who can drive them over the internet. One file for Windows or Linux, no setup, updates itself.">
 <meta property="og:url" content="https://blise518b.github.io/OscGoesPurrr/">
 <meta property="og:image" content="https://blise518b.github.io/OscGoesPurrr/assets/og-card.png">
 <meta property="og:image:width" content="1200">
@@ -256,11 +256,11 @@ footer { margin-top: 84px; border-top: 1px solid var(--edge); padding: 44px 0 30
 <!-- ═══ HERO ═══════════════════════════════════════════════════════════════ -->
 <header class="hero wrap">
   <img class="mark" src="assets/ogp-icon.svg" alt="">
-  <span class="eyebrow">VRChat OSC &rarr; toys &amp; shockers</span>
+  <span class="eyebrow">VRChat OSC &rarr; toys, shockers &amp; suits</span>
   <h1>All your VRChat haptics,<br><span>in one app.</span></h1>
   <p class="lede">OscGoesPurrr reads the contacts on your VRChat avatar and turns them into output for your
-    Bluetooth toys, through <b>a signal chain you can watch and tune</b> &mdash; and for shockers, if you
-    have them. One file for Windows or Linux &mdash; the toy server is built in, and it finds
+    Bluetooth toys, through <b>a signal chain you can watch and tune</b> &mdash; and for shockers and haptic
+    suits, if you have them. One file for Windows or Linux &mdash; the toy server is built in, and it finds
     VRChat and your toys by itself.</p>
   <div class="cta">
     <a class="btn btn-primary dl" href="https://github.com/Blise518B/OscGoesPurrr/releases/latest/download/OscGoesPurrr-Windows.exe">
@@ -371,7 +371,8 @@ footer { margin-top: 84px; border-top: 1px solid var(--edge); padding: 44px 0 30
     <div class="groups">
       <div class="group"><h3>Setting up</h3><ul>
         <li><b>One file.</b> No installer, no Python, no separate Intiface Central: the Buttplug server is inside.
-          It can use your own Intiface Central instead.</li>
+          It can use your own Intiface Central instead &mdash; on this PC, or on a phone your toys are paired with,
+          found on your network by itself.</li>
         <li><b>Finds VRChat by itself.</b> No IP or port to type.</li>
         <li><b>Finds your toys by itself</b> and takes them back when they reconnect. A chime tells you in VR when
           one connects or drops.</li>
@@ -390,10 +391,15 @@ footer { margin-top: 84px; border-top: 1px solid var(--edge); padding: 44px 0 30
           OSR2 follow the depth as position.</li>
         <li><b>Sleep</b> wakes only for real strokes. <b>Off</b> is instant silence.</li>
         <li><b>PiShock / OpenShock over USB.</b> Contacts drive the hub straight down the cable, on PiShock's firmware or OpenShock's. Each shocker gets a card with its own limits; drag it onto a behaviour: touch zones (each contact its own shocker), single contacts, continuous and impact rules. Shocks stay vibrates until you arm them. Off until you switch it on in Settings.</li>
+        <li><b>Haptic suits.</b> A bHaptics suit, sleeves or head straight over Bluetooth, no bHaptics Player, and
+          an OWO suit through My OWO, from your avatar's bHaptics and OWO contacts. The Suits page draws them on a
+          body and says which contacts the avatar you wear has. Each suit is off until you switch it on in
+          Settings.</li>
       </ul></div>
       <div class="group"><h3>From inside VRChat</h3><ul>
-        <li><b>Your avatar's menu</b> gets a strength radial plus Mode, Off, Sleep, Test and Friends (toys, shockers,
-          both of you at once) &mdash; drag one of the
+        <li><b>Your avatar's menu</b> gets a strength radial plus Mode, Off, Sleep, Test, Avatar Remote (seven toggles
+          and seven radials, each one you give a control of your board) and Friends (toys and shockers of a
+          friend or a group &mdash; put yourself in the group for both of you at once) &mdash; drag one of the
           <a class="inl" href="unity/OscGoesPurrr-VRCFury.unitypackage">VRCFury prefabs</a> onto your avatar: your
           own controls, the Friends ones, or both. They are unsynced parameters, so they cost 0 sync bits.</li>
         <li><b>Output back to the avatar.</b> Any motor's level can be sent as a parameter, to drive a glow, a
@@ -407,6 +413,9 @@ footer { margin-top: 84px; border-top: 1px solid var(--edge); padding: 44px 0 30
           leaving &mdash; would hold a motor on. A value frozen part-way is cut after a second; one held at 100&nbsp;%
           eases off after ten.</li>
         <li><b>Off</b> stops everything at once, from the app or from your avatar's menu.</li>
+        <li><b>OWO is EMS</b>, so it gets the shockers' care: it connects only when you press Connect, starts
+          capped at 60&nbsp;% of the maximum you calibrated in My OWO, and the caps can't be widened from
+          settings.</li>
         <li><b>Nothing leaves your PC</b> except one question to GitHub at launch &mdash; is there a newer
           version? &mdash; and, once you give yourself a Friends nickname, the link to your friends.</li>
       </ul></div>
@@ -499,7 +508,6 @@ footer { margin-top: 84px; border-top: 1px solid var(--edge); padding: 44px 0 30
         they are ready to hand to anyone. No dates &mdash; the app tells you when an update lands.</p>
     </div>
     <div class="soon">
-      <div><b>bHaptics and OWO suits</b><span>IN DEVELOPMENT</span><p>Both suits from your avatar's contacts, drawn on a body: bHaptics straight over Bluetooth, OWO through My OWO.</p></div>
       <div><b>SteamVR trackers</b><span>IN DEVELOPMENT</span><p>Buzz Vive and Tundra trackers from avatar contacts.</p></div>
       <div><b>DG-Lab Coyote</b><span>IN DEVELOPMENT</span><p>E-stim from contacts, with rests, caps and strength ceilings built in.</p></div>
       <div><b>PS VR2 headset rumble</b><span>IN DEVELOPMENT</span><p>The headset itself, through PSVR2Toolkit.</p></div>
@@ -529,7 +537,10 @@ footer { margin-top: 84px; border-top: 1px solid var(--edge); padding: 44px 0 30
       <details>
         <summary>Do I need Intiface Central?</summary>
         <div class="a">No. OscGoesPurrr carries its own Intiface engine and starts it for you. If you'd rather keep using
-          Intiface Central, switch off <b>Use built-in Intiface engine</b> in Settings and it connects to Central instead.</div>
+          Intiface Central, switch off <b>Use built-in Intiface engine</b> in Settings and it connects to Central instead &mdash;
+          on the same PC, or on a phone on the same network (turn on <b>Listen on all network interfaces</b> in Central;
+          with <b>Broadcast Server Info via mDNS</b> on as well, OscGoesPurrr finds the phone by itself, otherwise type
+          its address).</div>
       </details>
       <details>
         <summary>Which toys work?</summary>

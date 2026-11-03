@@ -90,7 +90,12 @@ by itself while you have no friend). **You're always on your own list**
 do everything, over a local loop instead of the network
 (`controllers/friends_me.py`), with no way to remove it: keep every friend
 rule holding for it (Pause all friends, the shockers' switches, caps), and
-never name it to real friends. The list's toy / bolt / remote column icons
+never name it to real friends. **Groups (Blise's calls, 2026-10-29):** a
+group's panel shows only its members, as chips with an ×, never a list of
+every friend (it gets long) -- members come by dragging a row from the
+list onto the group's row or its members box, Me included; and a group
+with Me in it is how the avatar menu drives you and a friend at once (its
+old Both of us submenu and `OGP/Both/*` are gone). The list's toy / bolt / remote column icons
 set that column for every friend (off first while any has it). **Versions
 (Blise's ask, 2026-10-27):** each hello says the app's `VERSION`; the first
 time in a launch a friend's is newer, you get a window with the way to
@@ -175,7 +180,17 @@ friends; Pause all friends blocks every set and lets go of held buttons
 friend's AVATAR switch and Pause cover it); a held button is let go when the holder's updates stop; nothing
 is sent until a friend has your board open (the board over a stream once
 and on change, then only changed values). Import from VRC Parameter Relay
-reads its `avatars/*.json`, never writes them.
+reads its `avatars/*.json`, never writes them. **Your avatar's menu drives
+the board too (Blise's design, 2026-10-29):** OscGoesPurrr ▸ Avatar Remote
+has seven Toggles and seven Radials (`OGP/Remote/*`, in the Self and Both
+prefabs), each a *slot* a control or a whole category takes -- the small
+circle in a card's or category's top bar opens a radial like VRChat's,
+Back at the top and 1-7 clockwise (`ui/views/param_slots.py`, in the
+window, never a popup). A slot holds one thing, a thing can take several;
+toggles take toggles and hold buttons, radials sliders and steppers; per
+preset (`param_board` `slots`); your own menu ignores locks (they're for
+friends). Menu and board agree OGP first like the Friends menu
+(`controllers/params_menu.py`).
 
 **The bHaptics and OWO suits came back together (2026-10-23, Blise's
 ask)** on one **Suits** page, because they share the avatar's body
@@ -191,7 +206,11 @@ Friends, Avatar Remote and the shockers without them):**
 was saved and out of Settings and "What are you here for?", so the page,
 Home's suit rows and the engines never come up; README and the site list
 them under "Not in this edition yet". Bringing them back = emptying that
-set, plus the README / site / What's new lines, in a release of their own. Contacts are shared both ways by default (Blise's
+set, plus the README / site / What's new lines, in a release of their own
+-- and Settings → Toy Safety's text, which still says toys though its
+anti-stuck covers the suits too since 2026-11-02 (Blise's ask: a contact
+frozen part-way for 1 s is cut, one held at the top fades after 10 s --
+the same switch and timers, `suits_router._unstick`). Contacts are shared both ways by default (Blise's
 call) — each suit's "follows" switch turns that off. **The page is a body
 (Blise's ask, 2026-10-28: "not just a bunch of list"):** a cat girl's
 front and back ("since OGP purrs") with every bHaptics motor an orange dot

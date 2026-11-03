@@ -26,12 +26,13 @@ Host attributes assumed (provided by OscGoesPurrrApp):
 import asyncio
 import threading
 import time
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import debug_log
 from constants import (
     AUTO_REFRESH_RATE_S, TOY_SCAN_SECONDS, TOY_SEARCH_RATE_RANGE, TOY_SEARCH_RATE_S,
 )
+from intiface_external import normalize_address
 
 
 class IntifaceFacade:
@@ -170,6 +171,7 @@ class IntifaceFacade:
         """Attempt to connect to Intiface once. Returns True if successful."""
         try:
             await self.haptic_engine.async_connect()
+            self._intiface_problem = None
             return True
         except FileNotFoundError as e:
             # Permanent until the user acts (missing built-in engine binary):
@@ -186,8 +188,78 @@ class IntifaceFacade:
             self.auto_connect_enabled = False
             return False
         except Exception as e:
-            self.log_message(f"Connection attempt failed: {e}")
+            if self._intiface_too_old(e) and not str(e):
+                why = "no answer to OGP's hello"       # the handshake's timeout
+            else:
+                why = str(e) or type(e).__name__
+            self.log_message(f"Connection attempt failed: {why}")
+            self._intiface_failure_hint(e)
             return False
+
+    @staticmethod
+    def _intiface_too_old(error: Exception) -> bool:
+        """Intiface took the connection but didn't finish OGP's hello: what an
+        Intiface Central older than 3.0 does with the Buttplug v4 handshake
+        OGP speaks. Seen on Blise's iPhone (Central 2.6.7, 2026-11-03): the
+        websocket opened, the hello timed out after 30 s -- a bare timeout,
+        no message -- and the phone's server went to Error and refused
+        connections after that. A websocket that never opens is a
+        ButtplugConnectorError instead, never this. OGP doesn't speak the
+        older protocol (his call, same day: updating the app fixed it)."""
+        if type(error).__name__ == "ButtplugHandshakeError":
+            return True
+        if isinstance(error, (TimeoutError, asyncio.TimeoutError)):
+            return True
+        return "version" in str(error).lower()
+
+    # What to do about a failed connect to an Intiface we don't run, said
+    # once per launch and case (the retry loop fails every 2 s).
+    _HINT_OLD = (
+        "Intiface at {addr} took the connection but didn't answer OGP's "
+        "hello: Intiface Central older than 3.0 does that. Update it (on a "
+        "phone, from its app store), then start its server again.")
+    _HINT_TYPED = (
+        "Nothing answers at {addr}. On the phone, in Intiface Central: "
+        "Settings → Listen on all network interfaces on, then Start "
+        "Server. Keep the app open and the phone on this PC's network.")
+    _HINT_AUTO = (
+        "No Intiface Central found yet. Start it on this PC — or on a "
+        "phone on the same network: Settings → Intiface Engine says how.")
+
+    def _intiface_target(self) -> str:
+        """host:port of the Intiface last dialled ("" if none yet)."""
+        engine = getattr(self, "haptic_engine", None)
+        try:
+            return str((engine.get_intiface_link_info() or {}).get("target") or "")
+        except Exception:
+            return ""
+
+    def _intiface_failure_hint(self, error: Exception) -> None:
+        try:
+            if self.get_app_setting("use_integrated_intiface", True):
+                return
+            address = str(self.get_app_setting("intiface_address", "") or "")
+        except Exception:
+            return
+        target = self._intiface_target() or address
+        if self._intiface_too_old(error):
+            # Kept until a connect works or the address changes: once that
+            # server is known to be too old, its refusals afterwards (it
+            # stops listening after the failed hello) mean the same thing.
+            self._intiface_problem = (target, "old")
+            key, hint = "old:" + target, self._HINT_OLD.format(addr=target or "that address")
+        elif getattr(self, "_intiface_problem", None) and self._intiface_problem[0] == target:
+            return
+        elif address:
+            key, hint = "typed:" + address, self._HINT_TYPED.format(addr=address)
+        else:
+            key, hint = "auto", self._HINT_AUTO
+        said = getattr(self, "_intiface_hints_said", None)
+        if said is None:
+            said = self._intiface_hints_said = set()
+        if key not in said:
+            said.add(key)
+            self.log_message(hint)
 
     async def _async_auto_connect_loop(self):
         """Background task that retries connection every 2 seconds.
@@ -314,18 +386,22 @@ class IntifaceFacade:
                else "External (run Intiface Central yourself)")
         )
 
-        # Apply live only when already connected — otherwise the next connect
-        # picks up the new mode on its own.
+        self._reconnect_intiface("the new engine mode")
+
+    def _reconnect_intiface(self, what: str) -> None:
+        """Bounce a live session so a changed engine mode or address takes
+        effect at once (the running link can't be re-pointed under an open
+        websocket). Not connected: the next connect picks it up by itself."""
         if not (self.haptic_engine and self.haptic_engine.is_connected and self.async_loop):
             return
-        self.log_message("Reconnecting Intiface to apply the new engine mode…")
+        self.log_message(f"Reconnecting Intiface to apply {what}…")
         try:
             future = asyncio.run_coroutine_threadsafe(
                 self.haptic_engine.async_disconnect(), self.async_loop
             )
             future.result(timeout=6)
         except Exception as e:
-            self.log_message(f"Disconnect during Intiface mode switch failed: {e}")
+            self.log_message(f"Disconnect during Intiface switch failed: {e}")
         # update_connection_status restarts the auto-reconnect loop when
         # auto-connect is on; only kick a manual attempt when it isn't, so we
         # never fire two overlapping connects.
@@ -336,7 +412,66 @@ class IntifaceFacade:
                     self._async_attempt_connection(), self.async_loop
                 )
             except Exception as e:
-                self.log_message(f"Reconnect during Intiface mode switch failed: {e}")
+                self.log_message(f"Reconnect during Intiface switch failed: {e}")
+
+    def get_intiface_address(self) -> str:
+        """Where a user-run Intiface is: "" = found by itself."""
+        return str(self.get_app_setting("intiface_address", "") or "")
+
+    def set_intiface_address(self, text: str) -> Tuple[bool, str]:
+        """Facade for Settings → Intiface Engine's address box. Returns
+        (True, stored form) -- "" for "find it by itself" -- or (False,
+        why) and changes nothing. A new address reconnects at once when
+        the user-run Intiface is in use."""
+        address = normalize_address(text)
+        if address is None:
+            return False, ("Not an address. Try 192.168.1.50, or leave it "
+                           "empty.")
+        if address == self.get_intiface_address():
+            return True, address
+        self.set_app_setting("intiface_address", address)
+        if self.haptic_engine:
+            self.haptic_engine.set_intiface_address(address)
+        self._intiface_hints_said = set()
+        self._intiface_problem = None
+        self.log_message(
+            f"Intiface address: {address}" if address
+            else "Intiface address: found by itself (this PC or your network)")
+        if not self.get_app_setting("use_integrated_intiface", True):
+            self._reconnect_intiface("the new address")
+        return True, address
+
+    def get_intiface_link_status(self) -> Dict[str, Any]:
+        """For Settings → Intiface Engine: built-in or not, connected or
+        not, the typed address, and -- for a user-run Intiface -- what is
+        being dialled and what the network shows (primitives only)."""
+        engine = getattr(self, "haptic_engine", None)
+        info: Dict[str, Any] = {}
+        if engine is not None:
+            try:
+                info = dict(engine.get_intiface_link_info() or {})
+            except Exception:
+                info = {}
+        info["built_in"] = bool(self.get_app_setting("use_integrated_intiface", True))
+        info["connected"] = bool(engine is not None and engine.is_connected)
+        info["address"] = self.get_intiface_address()
+        info.setdefault("found", [])
+        # OGP keeps trying by itself: the sidebar's pill says SEARCHING and
+        # offers no Connect (Blise's call, 2026-11-03).
+        try:
+            feature = bool(self.get_feature_enabled("feature_intiface"))
+        except Exception:
+            feature = True
+        info["looking"] = bool(not info["built_in"] and not info["connected"]
+                               and getattr(self, "auto_connect_enabled", False)
+                               and feature)
+        # The Intiface there answered but is older than 3.0 (_intiface_too_old).
+        problem = getattr(self, "_intiface_problem", None)
+        info["too_old"] = bool(
+            not info["built_in"] and not info["connected"] and problem
+            and problem[0] and problem[1] == "old"
+            and problem[0] in (info.get("target"), info["address"]))
+        return info
 
     # ------------------------------------------------------------------
     # Device scanning (one-shot + periodic auto-refresh)

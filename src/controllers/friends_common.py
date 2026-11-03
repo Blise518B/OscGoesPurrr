@@ -2,9 +2,9 @@
 
 from typing import Any, Dict, FrozenSet, Mapping, NamedTuple, Optional
 
+from settings.friends import ME     # you as a friend of yourself, the "Me" row (friends_me.py)
+
 FEATURE_KEY = "feature_friends"
-SELF = "__self__"           # you, for "Both of us": your own toys and shockers
-ME = "__me__"               # you as a friend of yourself, the "Me" row (friends_me.py)
 WEB = "__web__"             # the Web remote row: everyone on your web remote link (friends_web.py)
 
 

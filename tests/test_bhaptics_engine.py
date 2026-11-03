@@ -53,9 +53,10 @@ class FakeRadio:
         self.scans += 1
         return list(self.found)
 
-    async def open(self, found, on_lost, motor_char=models.MOTOR_CHAR):
+    async def open(self, found, on_lost, motor_char=models.MOTOR_CHAR, frame_bytes=0):
         link = FakeLink(found)
         link.motor_char = motor_char
+        link.frame_bytes = frame_bytes
         self.links[found.address] = link
         return link
 
@@ -102,6 +103,7 @@ def test_found_device_is_connected_and_zeroed(rig):
     eng, _radio, link, _clock = rig
     assert link.writes == [ZERO]
     assert link.motor_char == models.GRID_MOTOR_CHAR     # a Pro takes its own frame
+    assert link.frame_bytes == len(ZERO) == 40           # open waits until it fits
     snap = eng.status_snapshot()
     assert snap["devices"][0]["model"] == "pro"
     assert snap["devices"][0]["positions"] == ["VestFront", "VestBack"]

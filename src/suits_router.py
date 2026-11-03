@@ -18,6 +18,16 @@
 # both suits: bHaptics zeroes, OWO gets a stop. The page's bHaptics test
 # holds still play while VRChat is quiet (so the suit can be tried without
 # it), never while Off.
+#
+# Stuck contacts get the toys' rule (Settings → Toy Safety, the same
+# switch and timers -- motor_router._antistuck_factor), on each node of each
+# input layer before they're mixed, so a frozen one can't hide a live one
+# under it. VRChat sends a contact only when it changes, so a frozen sender
+# (an avatar swap, the other person leaving, OSC lost) would otherwise hold
+# its last level until VRChat goes quiet -- on OWO, that's EMS. A level
+# between 0 and 1 that sits exactly still for `active_s` is cut (a real
+# contact always jitters); one at the top -- a bool, "all the way in" --
+# gets `peaked_s`, then fades out. A new value brings it back.
 
 import math
 import threading
@@ -25,6 +35,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import body_map
+from motor_router import MotorRouter
 from parameter_store import ParameterStore, store
 from polling import PollingThread
 from router_base import StaleSignalMonitor
@@ -34,6 +45,30 @@ POLL_S = 1.0 / 60.0
 # Below this a contact is noise, not a touch -- matters most for EMS.
 OWO_DEAD_ZONE = 0.02
 TEST_DOT_LEVEL = 30          # a held test dot, 0..100, unscaled
+
+# The toys' anti-stuck thresholds, so the two never drift apart.
+STUCK_EPSILON = MotorRouter._ANTISTUCK_EPSILON
+STUCK_PEAKED = MotorRouter._ANTISTUCK_SATURATED
+STUCK_RAMP_S = MotorRouter._ANTISTUCK_RAMP_S
+
+
+def _seconds(value: Any, default: float) -> float:
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return default
+    return max(0.0, min(600.0, v)) if math.isfinite(v) else default
+
+
+def stuck_factor(level: float, still_for: float, active_s: float, peaked_s: float) -> float:
+    """How much of a level that has sat exactly still for `still_for`
+    seconds still plays (0..1): a mid-range level is cut after `active_s`,
+    one at the top fades over STUCK_RAMP_S after `peaked_s`."""
+    if level >= STUCK_PEAKED:
+        if still_for < peaked_s:
+            return 1.0
+        return max(0.0, min(1.0, 1.0 - (still_for - peaked_s) / STUCK_RAMP_S))
+    return 0.0 if still_for >= active_s else 1.0
 
 
 def owo_intensity(level: float, muscle_cfg: Dict[str, Any], scale: float) -> int:
@@ -58,12 +93,16 @@ class SuitsRouter(PollingThread):
                  get_sps_sources: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
                  clock: Callable[[], float] = time.monotonic,
                  poll_s: float = POLL_S,
-                 param_store: Optional[ParameterStore] = None):
+                 param_store: Optional[ParameterStore] = None,
+                 get_antistuck: Optional[Callable[[], Optional[Dict[str, Any]]]] = None):
         super().__init__("SuitsRouter")
         self.bhaptics = bhaptics
         self.owo = owo
         self._get_scale = get_master_scale
         self._get_sps = get_sps_sources or (lambda: None)
+        # Toy Safety's {enabled, active_s, peaked_s}; None = never cut.
+        self._get_antistuck = get_antistuck or (lambda: None)
+        self._still: Dict[Tuple[Any, ...], Tuple[float, float]] = {}  # input -> (level, since)
         self._clock = clock
         self._poll_s = poll_s
         self._store = param_store or store
@@ -138,6 +177,42 @@ class SuitsRouter(PollingThread):
                     out.setdefault(pos, [0] * n)[i] = TEST_DOT_LEVEL
         return out
 
+    def _unstick(self, reading: body_map.BodyReading, now: float) -> body_map.BodyReading:
+        """The reading with every stuck input cut or fading (Toy Safety's
+        rule). Each layer's node, and each OWO muscle, has its own timer --
+        compared against what came in, never against what went out, so a
+        cut input stays cut until VRChat sends a new value."""
+        try:
+            cfg = self._get_antistuck() or {}
+        except Exception:  # noqa: BLE001
+            cfg = {}
+        enabled = bool(cfg.get("enabled"))
+        active_s = _seconds(cfg.get("active_s", 1.0), 1.0)
+        peaked_s = _seconds(cfg.get("peaked_s", 10.0), 10.0)
+        seen, fresh = self._still, {}
+
+        def gate(key: Tuple[Any, ...], v: float) -> float:
+            if v <= STUCK_EPSILON:
+                return v                    # off: nothing to hold, timer forgotten
+            last = seen.get(key)
+            if last is None or abs(v - last[0]) > STUCK_EPSILON or not enabled:
+                last = (v, now)             # moved (or switched off): the fuse restarts
+            fresh[key] = last
+            return v * stuck_factor(v, max(0.0, now - last[1]), active_s, peaked_s) if enabled else v
+
+        def frame(layer: str, f: body_map.Frame) -> body_map.Frame:
+            return {pos: tuple(gate((layer, pos, i), v) for i, v in enumerate(vals))
+                    for pos, vals in f.items()}
+
+        out = body_map.BodyReading(
+            self_touch=frame("self", reading.self_touch),
+            others_touch=frame("others", reading.others_touch),
+            any_touch=frame("any", reading.any_touch),
+            owo={m: gate(("owo", m), v) for m, v in reading.owo.items()},
+            routes=frame("route", reading.routes))
+        self._still = fresh
+        return out
+
     def tick(self) -> None:
         cfg = self._config
         bh_on = self._bh_on and self.bhaptics.is_connected
@@ -169,8 +244,10 @@ class SuitsRouter(PollingThread):
                 sps = self._get_sps()
             except Exception:  # noqa: BLE001
                 sps = None
-            reading = body_map.read_body(self._store.get_all_parameters(),
-                                         cfg.get("routes") or (), sps)
+            reading = self._unstick(
+                body_map.read_body(self._store.get_all_parameters(),
+                                   cfg.get("routes") or (), sps),
+                self._clock())
 
         if bh_on:
             bh = cfg.get("bhaptics") or {}

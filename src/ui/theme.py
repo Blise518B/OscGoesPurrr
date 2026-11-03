@@ -645,6 +645,12 @@ QLabel#homeTitle {
     color: %(accent)s;
 }
 QLabel#sidebarLinkTitle { font-size: 12px; font-weight: 600; color: %(txt)s; }
+/* Under a link's row: Intiface's address and what is there, off the
+   built-in engine (ui/views/intiface_card.IntifaceSidebarInfo). */
+QLabel#sidebarLinkAddr { font-size: 12px; color: %(txt)s; }
+QLabel#sidebarLinkSub { font-size: 11px; color: %(muted)s; }
+QLabel#sidebarLinkSub[accent="ok"]   { color: %(ok)s; }
+QLabel#sidebarLinkSub[accent="warn"] { color: %(warn)s; }
 QLabel#setupStepTitle, QLabel#newsTitle, QCheckBox#interestChoice {
     font-size: 13px; font-weight: 600;
 }
