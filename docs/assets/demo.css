@@ -30,10 +30,14 @@
 .ogp b { font-weight: 600; }
 
 /* ---- sidebar ----------------------------------------------------------- */
+/* a column that scrolls when it runs out of room, as the app's sidebar does
+   (ui_components: an as-needed scroll area), the connection rows at its foot */
 .o-side {
   position: absolute; left: 0; top: 0; width: 240px; height: 736px;
   background: var(--panel); border-right: 1px solid var(--line); padding: 12px 10px 0 10px;
+  display: flex; flex-direction: column;
 }
+.o-side > * { flex: none; }
 .o-brand { font: 600 19px/1.2 "Aldrich Site", "Aldrich", "Segoe UI", sans-serif; letter-spacing: 1px; color: var(--accent); cursor: pointer; }
 .o-build { color: var(--dim); font-size: 11px; margin-top: 4px; }
 .o-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 4px; }
@@ -98,7 +102,7 @@
 .o-nav .n.home.on { background: var(--tint); border-color: var(--accent); color: var(--accent); }
 .o-nav .grp { color: var(--dim); font-size: 10px; font-weight: 700; letter-spacing: 1px; padding: 9px 10px 4px 10px; }
 .o-nav .gap { height: 10px; }
-.o-links { position: absolute; left: 10px; right: 10px; bottom: 12px; border-top: 1px solid var(--line); padding-top: 8px; }
+.o-links { margin-top: auto; border-top: 1px solid var(--line); padding: 8px 0 12px; }
 .o-links .l { display: flex; align-items: center; justify-content: space-between; height: 28px; padding-left: 2px; }
 .o-links .l span:first-child { font-size: 12px; font-weight: 600; }
 .o-pill {

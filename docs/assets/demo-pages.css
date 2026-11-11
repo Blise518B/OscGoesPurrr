@@ -1,6 +1,7 @@
 /* ============================================================================
-   The demo window's pages from 0.14 on: Friends, Shockers, My Avatar Remote
-   (demo-friends.js, demo-shockers.js, demo-avatar.js). Built against renders
+   The demo window's pages from 0.14 on: Friends, Shockers, My Avatar Remote,
+   Suits (demo-friends.js, demo-shockers.js, demo-avatar.js, demo-suits.js).
+   Built against renders
    of the real app at 1100 px (tools/app_shots.py), in its pixel sizes; a
    friend's panel brings its own styles (remote-panel.css). Colours are
    tokens, never a new hex.
@@ -245,3 +246,96 @@
 }
 .fr-addhead.open .fr-sign { border-color: var(--accent); }
 .fr-addcard .fr-fold { border: 1px solid var(--accent); border-top: none; border-radius: 0 0 8px 8px; padding: 10px 12px 12px; }
+
+/* Suits: her and the cards beside her (body_view.py, suits_cards.py), each
+   suit's frame, the zone routes (theme_suits / theme_params) */
+.su-page [hidden] { display: none !important; }
+.su-page > .pg-intro { margin-top: 11px; }
+.su-card-body { padding: 20px; display: flex; flex-direction: column; gap: 8px; }
+.su-stage { position: relative; display: flex; gap: 16px; align-items: flex-start; }
+.su-body { flex: 1 1 auto; min-width: 340px; cursor: pointer; }
+.su-svg { display: block; user-select: none; }
+.su-svg text { font: 700 11px "Segoe UI", system-ui, sans-serif; letter-spacing: 2px; text-anchor: middle; dominant-baseline: central; }
+.su-svg .su-cap { fill: var(--muted); }
+.su-svg .su-side { fill: var(--dim); }
+.su-leaders { position: absolute; left: 0; top: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.su-col { width: 250px; flex: none; display: flex; flex-direction: column; gap: 10px; }
+.su-pickhint { width: 250px; }
+.su-card {
+  width: 250px; background: var(--well); border: 1px solid var(--hue-mid); border-radius: 8px;
+  padding: 8px 8px 10px 10px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start;
+}
+.su-card > * { align-self: stretch; }
+.su-card > .pg-pill, .su-card > label.sw, .su-card > .pg-btn { align-self: flex-start; }
+.su-head { display: flex; align-items: flex-start; gap: 6px; }
+.su-title { flex: 1; font-size: 13px; font-weight: 600; color: var(--txt); }
+.su-tag { color: var(--hue); border: 1px solid var(--hue-mid); border-radius: 8px; padding: 0 6px; font-size: 11px; line-height: 16px; }
+.su-hint { color: var(--muted); font-size: 11px; line-height: 15px; margin: 0; }
+.su-page .pg-btn:disabled { color: var(--dim); border-color: var(--dim); cursor: default; }
+.rpanel.su-page .pg-btn.danger { color: var(--err); border-color: var(--err-mid); font-weight: 700; }
+.rpanel.su-page .pg-btn.danger:hover { background: color-mix(in srgb, var(--err) 12%, transparent); color: var(--err); border-color: var(--err); }
+/* ValueSlider: its name and number, 2 px, the slider */
+.su-page .pg-vhead { line-height: 17px; }
+.rpanel.su-page .pg-vrow input.hs { height: 16px; }
+.pg-vrow.off .pg-vhead, .pg-vrow.off .pg-val { color: var(--dim); }
+.su-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.rpanel .su-chip {
+  background: transparent; color: var(--txt); border: 1px solid var(--hue-mid); border-radius: 5px;
+  padding: 2px 4px; min-height: 24px; font: 11px "Segoe UI", system-ui, sans-serif; white-space: pre; cursor: pointer;
+}
+.rpanel .su-chip:hover { background: var(--hover); }
+.rpanel .su-chip.on { background: var(--hue-tint); color: var(--hue); border-color: var(--hue); }
+.su-legend { display: flex; align-items: center; gap: 6px; height: 16px; color: var(--muted); font-size: 12px; }
+.su-legend > span:not(.su-swatch) { margin-right: 8px; white-space: nowrap; }
+.su-swatch { display: inline-flex; width: 16px; height: 16px; flex: none; }
+.su-check { display: flex; flex-direction: column; gap: 4px; }
+.su-check .su-hint { line-height: 14px; }
+.su-now { margin: 0; color: var(--pink); font-size: 13px; line-height: 17px; }
+/* a suit's frame (category_frame): bar, 9 px, the cards, 13 px */
+.su-cat { gap: 9px; padding-bottom: 12px; }
+.su-cat .pg-bar .pg-ic { color: var(--orange); }
+.rpanel.su-page .su-small .pg-btn { height: 31px; }
+/* the bar and frame: orange has no bar pair in the app and wears its mid
+   tone; purple's pair is mixed from the tokens, as the web remote's are */
+:root:not([data-theme="midnight"]) .su-cat.orange { --bar: var(--orange-mid); }
+:root:not([data-theme="midnight"]) .su-cat.purple {
+  --bar: color-mix(in srgb, var(--purple) 60%, var(--bg)); border-color: color-mix(in srgb, var(--purple) 68%, var(--bg));
+}
+@supports (color: oklch(from red l c h)) {
+  :root:not([data-theme="midnight"]) .su-cat.purple {
+    --bar: oklch(from var(--purple) calc(l - 0.26) c h); border-color: oklch(from var(--purple) calc(l - 0.18) calc(c - 0.02) h);
+  }
+}
+/* the cards in columns of the app's CardColumns: 259 px, 10 apart */
+.su-grid {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; align-items: start; padding: 0 3px 0 2px;
+}
+.su-grid > :last-child { grid-column: span 2; }
+.su-stack { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.su-grid > .su-stack.wide { grid-column: span 2; }
+.su-grid > .su-stack.wide + * { grid-column: span 1; }
+.su-stack.wide > :last-child { width: calc(50% - 5px); }
+.su-small {
+  background: var(--well); border: 1px solid var(--hue-mid); border-radius: 8px; padding: 10px 10px 12px 12px;
+  display: flex; flex-direction: column; gap: 8px; min-width: 0; align-items: flex-start;
+}
+.su-small > * { align-self: stretch; }
+.su-small > label.sw { align-self: flex-start; }
+.su-small-t { font-size: 13px; font-weight: 600; line-height: 16px; }
+.su-react { display: flex; flex-direction: column; gap: 4px; align-items: flex-start; }
+.rpanel .su-input {
+  flex: 1; min-width: 0; height: 30px; padding: 0 9px; border: 1px solid var(--line); border-radius: 6px;
+  background: var(--well); color: var(--txt); font: 13px "Segoe UI", system-ui, sans-serif;
+}
+.su-sect { display: flex; align-items: center; gap: 8px; }
+.su-sect .o-sect { flex: 1; }
+.su-routes { display: flex; flex-direction: column; gap: 8px; }
+.su-route {
+  max-width: 820px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px;
+  display: flex; flex-direction: column; gap: 6px;
+}
+.su-route .su-input.zone { flex: 0 0 160px; }
+.o-in.combo.su-type { width: 74px; justify-content: flex-start; cursor: pointer; }
+.o-in.combo.su-region { width: 150px; justify-content: flex-start; }
+.su-gain { width: 190px; flex: none; }
+.su-box { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: var(--txt); }

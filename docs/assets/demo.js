@@ -50,8 +50,8 @@
   }
   var STAGES = ['input', 'depth', 'speed', 'punch', 'combine', 'wake', 'envelope', 'zerocut', 'output'];
   // Pages built in their own files (demo-friends.js, demo-shockers.js,
-  // demo-avatar.js): the window keeps a scrolling frame for each.
-  var BUILT = ['Friends', 'My Avatar Remote', 'Shockers'];
+  // demo-avatar.js, demo-suits.js): the window keeps a scrolling frame for each.
+  var BUILT = ['Friends', 'My Avatar Remote', 'Shockers', 'Suits'];
   var NOTES = {
     'SPS Sources': 'Builds a zone out of your avatar’s own contact receivers, for avatars whose contacts are not standard SPS / OGB sockets and plugs. A source you make here can be picked for any toy on Home.',
     'OSC Inspector': 'A live table of every parameter your avatar sends over OSC, with search — for finding the contact you want, or checking that one moves at all.',
@@ -69,14 +69,19 @@
     drive: {},
     // the shocker hub on Home and the Shockers page (demo-shockers.js)
     shock: { armed: true, share: true, on: true },
-    // Settings -> Features: a switched-off one hides its page
-    features: { intiface: true, inspector: true, statistics: true, pishock: true, friends: true, params: true }
+    // Settings -> Features: a switched-off one hides its page. The demo's PC is
+    // set up as someone with the hardware has it: the shockers, Avatar Remote
+    // and a bHaptics vest switched on (all three start off in a new install);
+    // OWO off, its switch there to try (demo-suits.js)
+    features: { intiface: true, inspector: true, statistics: true, pishock: true, bhaptics: true, owo: false,
+                friends: true, params: true }
   };
   var ICONS = window.OGPDemoIcons || {};
   // The sidebar's pages: name, icon (ui/icons.py), its colour token ('' = the
-  // nav text's), the feature switch that hides it
+  // nav text's), the feature switch that hides it ('a|b': shown while either is on)
   var NAV = [['Friends', 'friends', 'cyan', 'friends'], ['My Avatar Remote', 'params', 'accent', 'params'],
-             ['Shockers', 'shock', 'yellow', 'pishock'], ['Statistics', 'stats', '', 'statistics']];
+             ['Shockers', 'shock', 'yellow', 'pishock'], ['Suits', 'suits', 'orange', 'bhaptics|owo'],
+             ['Statistics', 'stats', '', 'statistics']];
   var NAV_TOOLS = [['SPS Sources', 'sps'], ['OSC Inspector', 'inspector', '', 'inspector'],
                    ['OSC Diagnostics', 'diagnostics'], ['System Log', 'log']];
 
@@ -121,7 +126,7 @@
         '<i class="ic"' + (hue ? ' style="color:var(--' + hue + ')"' : '') + '>' + (ICONS[icon] || '') + '</i>' + name + '</span>';
     }
     function navs(list) { return list.map(function (n) { return nav(n[0], n[1], n[2], n[3]); }).join(''); }
-    return '<div class="o-side">' +
+    return '<div class="o-side o-scroll">' +
       '<div class="o-brand" data-go="Home">OscGoesPurrr</div><div class="o-build"><span class="ver-tag"></span>&nbsp;</div>' +
       '<div class="o-grid o-modes">' + modes + '</div>' +
       '<div class="o-strrow" data-tip="strength"><span>Total output strength</span><b class="js-strval">85%</b></div>' +
@@ -164,6 +169,17 @@
       '<span class="o-sw on js-shockon" data-tip="shockon"></span><span class="o-swl js-shockonl">On</span>' +
       '<span class="o-caret">›</span></div></div>';
   }
+  // A haptic suit, under the shocker hub (home_devices.py bhaptics_row /
+  // owo_row); demo-suits.js says how it stands and runs its two switches
+  function suitRowHTML(dev, name, share) {
+    return '<div class="o-toy o-dev" data-dev="' + dev + '" style="--hue:var(--orange);--hue-mid:var(--orange-mid)">' +
+      '<div class="o-toybar" data-tip="' + dev + 'row"><span class="o-ticon o-devicon">' + (ICONS.suits || '') + '</span>' +
+      '<span class="o-dot"></span><span class="o-tname">' + name + '</span><span class="o-tzones js-sum"></span>' +
+      '<span class="o-tspace"></span><span class="o-pill idle js-pill">OFFLINE</span>' +
+      '<span class="o-sw js-share" data-tip="' + dev + 'share"></span><span class="o-swl js-sharel">' + share + '</span>' +
+      '<span class="o-sw on js-devon" data-tip="' + dev + 'on"></span><span class="o-swl js-devonl">On</span>' +
+      '<span class="o-caret">›</span></div></div>';
+  }
 
   function homeHTML() {
     return '<div class="o-page on" data-page="Home"><div class="o-home">' +
@@ -174,6 +190,8 @@
         '<span class="o-muted js-nextscan"></span><span class="o-tspace"></span>' +
         '<span class="o-btn js-testall" data-tip="test">Test all</span></div>' +
       '<div class="o-toys o-scroll">' + TOYS.filter(function (t) { return t.on; }).map(toyHTML).join('') + shockRowHTML() +
+        suitRowHTML('bhaptics', 'bHaptics', 'Also feel OWO’s contacts') +
+        suitRowHTML('owo', 'OWO', 'Also feel bHaptics’ contacts') +
         TOYS.filter(function (t) { return !t.on; }).map(toyHTML).join('') + '</div>' +
       '<div class="o-toysoff o-muted">Toy communication is off — switch it back on in Settings, under Features.</div>' +
       '<div class="o-tools"><div class="o-toolbar" data-tip="tools"><span class="car">▸</span><b>Tuning tools</b><span class="sum">Simulator · signal graph</span></div>' +
@@ -206,7 +224,8 @@
         feat('intiface', 'Intiface toy communication (Buttplug.io)') + feat('inspector', 'OSC Inspector (debug view)') +
         feat('statistics', 'Usage statistics') +
         '<div class="line" style="padding-left:44px"><span class="o-btn danger" data-tip="delstats">Delete statistics…</span></div>' +
-        feat('pishock', 'Shockers — PiShock / OpenShock (USB)') + feat('friends', 'Friends — control each other over the internet') +
+        feat('pishock', 'Shockers — PiShock / OpenShock (USB)') + feat('bhaptics', 'bHaptics — suit and sleeves over Bluetooth') +
+        feat('owo', 'OWO — EMS suit through the My OWO app') + feat('friends', 'Friends — control each other over the internet') +
         feat('params', 'Avatar Remote — avatar boards friends can use too') + '</div>' +
       // the avatar's menu: the demo's avatar wears it (its OGP/* parameters
       // are in My Avatar Remote's list); the buttons are the real downloads
@@ -398,9 +417,14 @@
   }
   on('shock', refreshShockRow);
   function applyFeatures() {
-    $$('.o-nav [data-feature]').forEach(function (n) { n.style.display = S.features[n.getAttribute('data-feature')] ? '' : 'none'; });
+    $$('.o-nav [data-feature]').forEach(function (n) {
+      var on = n.getAttribute('data-feature').split('|').some(function (k) { return S.features[k]; });
+      n.style.display = on ? '' : 'none';
+    });
     $$('[data-feat]').forEach(function (sw) { sw.classList.toggle('on', !!S.features[sw.getAttribute('data-feat')]); });
     $('.o-dev[data-dev="shock"]').style.display = S.features.pishock ? '' : 'none';
+    $('.o-dev[data-dev="bhaptics"]').style.display = S.features.bhaptics ? '' : 'none';
+    $('.o-dev[data-dev="owo"]').style.display = S.features.owo ? '' : 'none';
     $('.o-toys').style.display = S.features.intiface ? '' : 'none';
     $('.o-toysoff').style.display = S.features.intiface ? 'none' : '';
   }
@@ -461,6 +485,8 @@
     if (t.closest('.js-scan')) { S.scanAt = 30; return; }      // it looks now; with a toy connected the next is 30 s on
     var dev = t.closest('.o-dev');
     if (dev) {
+      // a suit's switches are demo-suits.js's; the rest of its row opens Suits
+      if (dev.getAttribute('data-dev') !== 'shock') { if (!t.closest('.o-sw')) go('Suits'); return; }
       if (t.closest('.js-share')) { S.shock.share = !S.shock.share; emit('shock'); return; }
       if (t.closest('.js-shockon')) { S.shock.on = !S.shock.on; emit('shock'); return; }
       go('Shockers'); return;
@@ -822,6 +848,12 @@
     shockrow: ['Shockers', 'Your PiShock or OpenShock hub and the shockers on it. Click to open the Shockers page.'],
     shockshare: ['Share with friends', 'On: friends you allow may fire your shockers, within each shocker’s own limits. Off: your friends don’t see your shockers at all.'],
     shockon: ['On / Off', 'Off stops every shocker and keeps them stopped, even after a restart. Sharing stays as it was.'],
+    bhapticsrow: ['bHaptics', 'Your bHaptics suit. Click to open the Suits page, where you connect it and set what it feels.'],
+    bhapticsshare: ['Also feel OWO’s contacts', 'The bHaptics suit also plays the touches that reach the OWO suit’s places on the body — the same switch as on the Suits page.'],
+    bhapticson: ['On / Off', 'Your bHaptics suit for everyone. Off sets it to zero now and keeps it there until you switch it on again, even after a restart. It stays connected, and its other settings stay as they are.'],
+    oworow: ['OWO', 'Your OWO suit. Click to open the Suits page, where you connect it and set what it feels.'],
+    owoshare: ['Also feel bHaptics’ contacts', 'The OWO suit also plays the touches that reach the bHaptics suit’s places on the body — the same switch as on the Suits page.'],
+    owoon: ['On / Off', 'Your OWO suit for everyone. Off sets it to zero now and keeps it there until you switch it on again, even after a restart. It stays connected, and its other settings stay as they are.'],
     menu: ['Avatar menu', 'Optional — Strength, Off, Sleep, the modes and a Friends submenu, right in VRChat: drag one VRCFury prefab onto your avatar and upload. Settings → VRChat menu has the prefab and the guide.'],
     getmenu: ['Get the menu prefabs', 'Downloads OscGoesPurrr-VRCFury.unitypackage from the newest release. Import it into your avatar’s Unity project (it needs VRCFury), drag one of its three prefabs onto your avatar and upload.'],
     howmenu: ['How to add it', 'The setup guide: the prefabs, a one-click installer for avatars without VRCFury, the manual way, and every parameter.'],
@@ -896,7 +928,8 @@
     advance: function (seconds) { for (var i = 0; i < seconds / ROUTER_DT; i++) tick(ROUTER_DT); paint(); }
   };
 
-  // #demo=toy | chain | tools | settings | stats : open the window in a state.
+  // #demo=toy | chain | tools | settings | stats : open the window in a state
+  // (#demo=suits is demo-suits.js's: both suits on, their page open).
   var want = (location.hash.match(/demo=([a-z]+)/) || [])[1];
   if (want === 'toy' || want === 'chain') window.OGPDemo.open('lush', want === 'chain' ? 0 : undefined);
   if (want === 'tools') { $('.o-toolbar').click(); $('.js-graphsw').click(); }
