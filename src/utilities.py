@@ -70,10 +70,11 @@ def strip_param_prefix(addr: Any) -> str:
 def _canon_zone_category(category: str):
     """Map an OGB/VFH category segment to the canonical zone type, or
     None when it isn't one. Long and short forms are both accepted
-    (`Orifice`/`Orf`, `Penetrator`/`Pen`, `Touch`)."""
-    if category in ("Orifice", "Orf"):
+    (`Orifice`/`Orf`, `Penetrator`/`Pen`, `Touch`), and SPS 3's
+    `Socket` / `Plug` (VRCFury 1.1443.0, see sps3_zone)."""
+    if category in ("Orifice", "Orf", "Socket"):
         return "Orf"
-    if category in ("Penetrator", "Pen"):
+    if category in ("Penetrator", "Pen", "Plug"):
         return "Pen"
     if category == "Touch":
         return "Touch"

@@ -5,9 +5,9 @@ any other place that wants a live signal plot.
 
 Designed to be data-source-agnostic: callers push samples via
 `push_sample(trace_id, t_s, value)` and the widget owns the per-trace
-ring buffers and the paint. No internal timer — the widget repaints
-on every push, so paint frequency naturally tracks the data source's
-tick rate.
+ring buffers and the paint. No internal timer — a push asks
+`ui.frame_clock` for a repaint, so the graph redraws once per screen
+frame however fast the samples come (the router pushes at 90 Hz).
 
 Pushes are fed by the router's per-(motor, chain) intermediates
 subscribers (see `MotorRouter.subscribe_intermediates`)."""
@@ -20,6 +20,7 @@ from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
 from PySide6.QtWidgets import QWidget
 
 from constants import COLOR_INPUT_BG, COLOR_SUCCESS, COLOR_TEXT
+from ui import frame_clock as _frame_clock
 
 
 # Reasonable cap so a long-lived widget that never gets samples popped
@@ -69,6 +70,8 @@ class TraceGraph(QWidget):
             }
         self._window_s = float(window_s)
         self.setMinimumHeight(36)
+        # paintEvent fills the whole rect first: nothing behind it repaints.
+        self.setAttribute(Qt.WA_OpaquePaintEvent, True)
 
     # ------------------------------------------------------------------
     # Data ingestion
@@ -93,7 +96,7 @@ class TraceGraph(QWidget):
         cutoff = t - self._window_s * 1.5
         while samples and samples[0][0] < cutoff:
             samples.popleft()
-        self.update()
+        _frame_clock.request(self)
 
     def set_trace_visible(self, trace_id: str, visible: bool) -> None:
         trace = self._traces.get(trace_id)

@@ -1,8 +1,9 @@
 """What changed -- told once, to someone who just updated.
 
 After an update the app opens a small "What's new" window at launch: a few
-lines per release, and where a change has a home in the app, a "Take me
-there" button that opens it. This module is the content and the rule for
+lines per release, one release per page (Back / Next when an update
+skipped several, so none of their news is lost), and where a change has a
+home in the app, a "Take me there" button that opens it. This module is the content and the rule for
 when it shows; the window is `ui/views/whats_new.py` and the launch hook
 `controllers/whats_new_facade.py`.
 
@@ -26,8 +27,6 @@ from update_checker import compare_versions
 
 # The app setting that remembers the newest version whose notes were shown.
 SEEN_KEY = "whats_new_seen_version"
-# Someone who skipped several updates gets the newest few, not a scroll.
-MAX_RELEASES_SHOWN = 2
 
 
 class Item(NamedTuple):
@@ -316,21 +315,24 @@ def _is_after(a: str, b: str) -> bool:
 
 
 def releases_for(current: str) -> List[Release]:
-    """The newest releases this build contains, newest first -- what the
-    "What's new" button shows. A build never shows notes for a version
+    """Every release this build contains, newest first -- what the "What's
+    new" button pages through. A build never shows notes for a version
     later than itself, and a final release's notes stand in for its
     pre-releases' (those were for the testers; "0.14.0" tells the whole
     story, so nobody gets "0.14.0-alpha.11" after it)."""
     out = [r for r in RELEASES if not _is_after(r.version, current)]
     finals = {r.version for r in out if "-" not in r.version}
-    out = [r for r in out if "-" not in r.version or r.version.split("-", 1)[0] not in finals]
-    return out[:MAX_RELEASES_SHOWN]
+    return [r for r in out
+            if "-" not in r.version or r.version.split("-", 1)[0] not in finals]
 
 
 def unseen_releases(seen: str, current: str) -> List[Release]:
-    """What to show at launch: the releases later than the last one whose
+    """What to show at launch: every release later than the last one whose
     notes were shown (`seen`, "" for never) and not later than this build,
-    newest first. Empty when there is nothing new to tell."""
+    newest first -- all of them, so someone who skipped a few updates
+    pages through each one's news instead of losing the older ones. A
+    marker that is not a version reads as "seen nothing". Empty when there
+    is nothing new to tell."""
     return [r for r in releases_for(current) if _is_after(r.version, seen)]
 
 

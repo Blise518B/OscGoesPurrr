@@ -623,8 +623,9 @@ class SettingsMixin(AppearanceMixin):
             "Nothing downloads or installs by itself."
         )
         upd_lay.addStretch(1)
-        # The notes of the version in use -- they open by themselves once
-        # after an update; this is how to see them again.
+        # The notes of the version in use and the ones before it -- they
+        # open by themselves once after an update; this is how to see
+        # them again.
         news = getattr(self.controller, "get_whats_new", None)
         if callable(news) and news():
             news_btn = QPushButton("What's new")
@@ -632,8 +633,9 @@ class SettingsMixin(AppearanceMixin):
             news_btn.clicked.connect(lambda _=False: self.open_whats_new())
             self._explain(
                 news_btn, "What's new",
-                "What changed in this version, each with a button that "
-                "takes you to it. Opens by itself once after an update.")
+                "What changed in this version and the ones before it, a "
+                "page each, with a button that takes you to each change. "
+                "Opens by itself once after an update.")
             upd_lay.addWidget(news_btn)
             self.whats_new_button = news_btn
         upd_btn = QPushButton("Check for updates now")

@@ -12,6 +12,10 @@ Two shapes of "zone" are supported transparently:
     ``OGB/<zone_type>/<zone_name>/<filter>``, honoring the per-filter
     ``<filter>Close`` gate (a contact whose Close key is present and false is
     skipped; an absent Close key means "assume open / live").
+  * **SPS 3 zones** (VRCFury 1.1443.0+, see ``sps3_zone``) — the same
+    filter names, read from the new contacts: Touch* and FrotOthers with
+    no Close gate, Pen* / Penetrating* as the depth from ``DepthSelf`` /
+    ``DepthOthers``.
   * **Synthetic SPS sources** — when ``zone_name`` matches a key in the
     supplied ``sps_sources`` map, that source's own evaluation
     (``sps_source.evaluate_sps_source``) is returned directly. Synthetic
@@ -25,6 +29,15 @@ import math
 from typing import Any, Dict, List, Optional
 
 from sps_source import evaluate_sps_source
+import sps3_zone
+
+# An SPS 3 zone's contact behind each filter name.
+_SPS3_FILTERS = {
+    "TouchSelf": "TouchSelf", "TouchOthers": "TouchOthers",
+    "FrotOthers": "FrotOthers",
+    "PenSelf": "DepthSelf", "PenOthers": "DepthOthers",
+    "PenetratingSelf": "DepthSelf", "PenetratingOthers": "DepthOthers",
+}
 
 
 def truthy(value: Any) -> bool:
@@ -110,6 +123,18 @@ def zone_filter_strength(zone_name: Any,
 
     prefix = f"OGB/{zone_type}/{zone_name}"
     best = 0.0
+    if zone_type in ("Orf", "Pen") and sps3_zone.is_sps3_zone(params, prefix):
+        for fname in filters:
+            contact = _SPS3_FILTERS.get(fname)
+            if contact is None:
+                continue
+            if contact.startswith("Depth"):
+                f = sps3_zone.depth(params, prefix, zone_type, contact)
+            else:
+                f = sps3_zone.touch_level(params, f"{prefix}/{contact}")
+            if f > best:
+                best = f
+        return best
     for fname in filters:
         # Per-filter Close gate: present-and-false blocks; absent = assume open.
         close_key = f"{prefix}/{fname}Close"

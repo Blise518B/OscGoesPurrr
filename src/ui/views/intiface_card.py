@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QLabel, QLineEdit, QPushButton, QWidget
 
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
 from ui.widgets import Card, ToggleSwitch
+from ui.frame_clock import when_on_screen
 
 _REFRESH_MS = 1000
 
@@ -192,7 +193,7 @@ class IntifaceSidebarInfo(QWidget):
         self.setVisible(False)
         self._timer = QTimer(self)
         self._timer.setInterval(_REFRESH_MS)
-        self._timer.timeout.connect(self.refresh)
+        self._timer.timeout.connect(when_on_screen(self, self.refresh))
         self._timer.start()
         self.refresh()
 
@@ -359,7 +360,7 @@ class IntifaceEngineCard(Card):
 
         self._timer = QTimer(self)
         self._timer.setInterval(_REFRESH_MS)
-        self._timer.timeout.connect(self.refresh)
+        self._timer.timeout.connect(when_on_screen(self, self.refresh))
         self._timer.start()
         self.refresh(force=True)
 

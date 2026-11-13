@@ -118,10 +118,29 @@ class TestRule:
         assert self._versions(whats_new.releases_for("0.13.0")) == [
             "0.13.0", "0.12.0"]
 
-    def test_several_skipped_updates_show_the_newest_few(self):
+    def test_several_skipped_updates_show_every_one_they_missed(self):
+        """Someone jumping 0.11 -> 0.14 gets 0.13's and 0.12's news too,
+        not only the newest few (the window pages through them)."""
         got = whats_new.unseen_releases("0.11.1", "0.14.0")
+        assert self._versions(got) == ["0.14.0", "0.13.0", "0.12.0"]
+        got = whats_new.unseen_releases("0.12.0", "0.14.0")
         assert self._versions(got) == ["0.14.0", "0.13.0"]
-        assert len(got) == whats_new.MAX_RELEASES_SHOWN
+
+    def test_a_long_list_is_never_cut(self, monkeypatch):
+        item = whats_new.Item("T", "x")
+        many = tuple(whats_new.Release(f"0.{n}.0", (item,))
+                     for n in range(30, 0, -1))
+        monkeypatch.setattr(whats_new, "RELEASES", many)
+        assert len(whats_new.unseen_releases("0.0.9", "0.30.0")) == 30
+        assert len(whats_new.unseen_releases("", "0.30.0")) == 30
+        assert len(whats_new.releases_for("0.30.0")) == 30
+
+    def test_a_bug_fix_update_opens_no_old_news(self):
+        """0.13.0 -> 0.13.1 with no notes of its own (a patch gets none):
+        0.13.0's were shown already. The release after it still shows."""
+        assert whats_new.unseen_releases("0.13.0", "0.13.1") == []
+        assert self._versions(whats_new.unseen_releases(
+            "0.13.1", "0.14.0")) == ["0.14.0"]
 
     def test_build_suffixes_do_not_matter(self):
         got = whats_new.unseen_releases("0.12.0", "0.13.0-test4")
@@ -131,6 +150,9 @@ class TestRule:
     def test_a_junk_marker_counts_as_nothing_seen(self):
         got = whats_new.unseen_releases("not a version", "0.12.0")
         assert self._versions(got) == ["0.12.0"]
+        for junk in ("", "not a version", "v", "1.x", "None"):
+            got = whats_new.unseen_releases(junk, "0.14.0")
+            assert self._versions(got) == ["0.14.0", "0.13.0", "0.12.0"], junk
 
     def test_a_final_release_stands_in_for_its_alphas(self, monkeypatch):
         item = whats_new.Item("T", "x")
@@ -182,11 +204,11 @@ class _Ui:
         self.shown.append(releases)
 
 
-def _app(monkeypatch, version, seen=None, fresh=False):
+def _app(monkeypatch, version, seen=None, fresh=False, releases=None):
     import controllers.whats_new_facade as facade
     monkeypatch.setattr(facade, "__version__", version)
     item = whats_new.Item("T", "x", "home")
-    monkeypatch.setattr(whats_new, "RELEASES", (
+    monkeypatch.setattr(whats_new, "RELEASES", releases or (
         whats_new.Release("0.13.0", (item,)),
         whats_new.Release("0.12.0", (item,)),
     ))
@@ -246,11 +268,74 @@ class TestLaunch:
         app.ui = object()
         assert app.whats_new_on_launch() is False
 
-    def test_the_button_gets_the_newest_notes_as_primitives(self, monkeypatch):
+    def test_the_button_gets_every_release_as_primitives(self, monkeypatch):
         app = _app(monkeypatch, "0.13.0", seen="0.13.0")
         got = app.get_whats_new()
         assert [v for v, _items in got] == ["0.13.0", "0.12.0"]
         assert got[0][1] == [("T", "x", "home", "")]
+        app = _app(monkeypatch, "0.15.0", seen="0.15.0", releases=_FOUR)
+        assert [v for v, _items in app.get_whats_new()] == [
+            "0.15.0", "0.14.0", "0.13.0", "0.12.0"]
+
+
+_ITEM = whats_new.Item("T", "x", "home")
+_FOUR = tuple(whats_new.Release(v, (_ITEM,))
+              for v in ("0.15.0", "0.14.0", "0.13.0", "0.12.0"))
+
+
+class TestLaunchAcrossReleases:
+    """Updates that skip releases, bug-fix updates, and markers that say
+    nothing useful -- against four releases of notes."""
+
+    @staticmethod
+    def _shown(app):
+        return [v for v, _items in app.ui.shown[0]]
+
+    def test_skipping_two_releases_shows_all_three_once(self, monkeypatch):
+        app = _app(monkeypatch, "0.15.0", seen="0.12.0", releases=_FOUR)
+        assert app.whats_new_on_launch() is True
+        assert self._shown(app) == ["0.15.0", "0.14.0", "0.13.0"]
+        assert app.store[whats_new.SEEN_KEY] == "0.15.0"
+        assert app.whats_new_on_launch() is False
+        assert len(app.ui.shown) == 1
+
+    def test_a_bug_fix_update_shows_nothing(self, monkeypatch):
+        """0.15.0 -> 0.15.1 with no notes of its own (Blise's rule for a
+        patch): no window, and the marker stays on 0.15.0."""
+        app = _app(monkeypatch, "0.15.1", seen="0.15.0", releases=_FOUR)
+        assert app.whats_new_on_launch() is False
+        assert app.ui.shown == [] and app.writes == 0
+        assert app.store[whats_new.SEEN_KEY] == "0.15.0"
+
+    def test_a_bug_fix_update_over_skipped_releases_shows_them(
+            self, monkeypatch):
+        app = _app(monkeypatch, "0.15.2", seen="0.13.0", releases=_FOUR)
+        assert app.whats_new_on_launch() is True
+        assert self._shown(app) == ["0.15.0", "0.14.0"]
+        assert app.store[whats_new.SEEN_KEY] == "0.15.0"
+
+    def test_a_fresh_install_shows_nothing_and_starts_up_to_date(
+            self, monkeypatch):
+        app = _app(monkeypatch, "0.15.0", fresh=True, releases=_FOUR)
+        assert app.whats_new_on_launch() is False
+        assert app.ui.shown == []
+        assert app.store[whats_new.SEEN_KEY] == "0.15.0"
+        # the next feature release shows only its own notes
+        app2 = _app(monkeypatch, "0.16.0", seen="0.15.0", releases=(
+            whats_new.Release("0.16.0", (_ITEM,)),) + _FOUR)
+        assert app2.whats_new_on_launch() is True
+        assert self._shown(app2) == ["0.16.0"]
+
+    @pytest.mark.parametrize("seen", [None, "", "garbage", "v", "1.x.0"])
+    def test_no_marker_or_a_garbage_one_shows_everything(
+            self, monkeypatch, seen):
+        """An install from before the window, or a marker nobody can read:
+        every release this build has, then never again."""
+        app = _app(monkeypatch, "0.15.0", seen=seen, releases=_FOUR)
+        assert app.whats_new_on_launch() is True
+        assert self._shown(app) == ["0.15.0", "0.14.0", "0.13.0", "0.12.0"]
+        assert app.store[whats_new.SEEN_KEY] == "0.15.0"
+        assert app.whats_new_on_launch() is False
 
 
 class TestFreshInstallMarker:
@@ -444,6 +529,12 @@ class TestWindow:
         assert host.offers == [("0.13.0", "0.12.0", "url", True)]
         assert host._update_popup_waiting is None
 
+    def test_one_release_has_no_pager(self, host):
+        host.show_whats_new(NOTES)
+        dlg = host._whats_new_dialog
+        assert _buttons(dlg, "Next →") == [] and _buttons(dlg, "← Back") == []
+        dlg.reject()
+
     def test_the_lit_card_has_a_style_in_both_modes(self):
         from ui import theme
         for mode in ("neon", "midnight"):
@@ -462,3 +553,121 @@ class TestUpdateOfferWaits:
         h.show_update_popup("0.13.0", "0.12.0", "url", True)
         assert h._update_popup_waiting == ("0.13.0", "0.12.0", "url", True)
         assert getattr(h, "_update_popup", None) is None
+
+
+# Three releases, the middle one the longest, the oldest with a jump.
+PAGED = [
+    ("0.15.0", [("Haptic suits", "Short.", "", "suits")]),
+    ("0.14.0", [
+        ("Friends", "Link with other OGP users over the internet. " * 4, "friends", "friends"),
+        ("Shockers", "A PiShock or OpenShock hub over USB. " * 4, "", "shock"),
+        ("Avatar Remote", "Buttons and sliders for your avatar. " * 4, "", "params"),
+    ]),
+    ("0.12.0", [("Any colour you like", "Pick a colour.", "appearance", "settings")]),
+]
+
+
+class TestPagedWindow:
+    """An update that skipped releases: one page per release, newest
+    first, Back / Next between them."""
+
+    @staticmethod
+    def _pages(dlg):
+        from PySide6.QtWidgets import QStackedWidget
+        return dlg.findChild(QStackedWidget, "newsPages")
+
+    @staticmethod
+    def _head(dlg):
+        from PySide6.QtWidgets import QLabel
+        page = TestPagedWindow._pages(dlg).currentWidget()
+        return [l.text() for l in page.findChildren(QLabel)
+                if l.objectName() == "sectionTitle"]
+
+    @staticmethod
+    def _count(dlg):
+        from PySide6.QtWidgets import QLabel
+        return dlg.findChild(QLabel, "newsCount").text()
+
+    def test_every_release_gets_a_page_newest_first(self, host):
+        host.show_whats_new(PAGED)
+        dlg = host._whats_new_dialog
+        pages = self._pages(dlg)
+        assert pages.count() == 3 and pages.currentIndex() == 0
+        assert self._head(dlg) == ["What's new in v0.15.0"]
+        assert self._count(dlg) == "1 of 3"
+        dlg.reject()
+
+    def test_next_and_back_turn_the_pages(self, host):
+        host.show_whats_new(PAGED)
+        dlg = host._whats_new_dialog
+        back, nxt = _buttons(dlg, "← Back")[0], _buttons(dlg, "Next →")[0]
+        # nowhere to go back to on the first page
+        assert back.isHidden() and not nxt.isHidden()
+        nxt.click()
+        assert self._head(dlg) == ["Before that, in v0.14.0"]
+        assert self._count(dlg) == "2 of 3"
+        assert not back.isHidden() and not nxt.isHidden()
+        nxt.click()
+        assert self._head(dlg) == ["Before that, in v0.12.0"]
+        assert self._count(dlg) == "3 of 3"
+        assert nxt.isHidden()
+        nxt.click()                                 # past the end: stays
+        assert self._pages(dlg).currentIndex() == 2
+        back.click()
+        back.click()
+        assert self._head(dlg) == ["What's new in v0.15.0"]
+        assert back.isHidden()
+        dlg.reject()
+
+    def test_the_window_and_its_buttons_stay_put_while_paging(self, host):
+        """Every page has the room of the tallest, so Next stays under
+        the pointer and nothing is cut off."""
+        host.show_whats_new(PAGED)
+        dlg = host._whats_new_dialog
+        pages = self._pages(dlg)
+        nxt, back = _buttons(dlg, "Next →")[0], _buttons(dlg, "← Back")[0]
+        size, at = dlg.size(), nxt.mapTo(dlg, nxt.rect().topLeft())
+        for i in range(pages.count()):
+            need = pages.widget(i).layout().totalHeightForWidth(pages.width())
+            assert need <= pages.height(), (i, need, pages.height())
+        nxt.click()
+        assert dlg.size() == size
+        assert nxt.mapTo(dlg, nxt.rect().topLeft()) == at
+        assert not back.isHidden()
+        dlg.reject()
+
+    def test_a_later_page_jumps_and_got_it_closes_from_any_page(self, host):
+        host.show_whats_new(PAGED)
+        dlg = host._whats_new_dialog
+        _buttons(dlg, "Next →")[0].click()
+        _buttons(dlg, "Next →")[0].click()
+        # the jump on the oldest page works like any other
+        page = self._pages(dlg).currentWidget()
+        go = [b for b in _buttons(dlg, "Take me there")
+              if b.parent() is not None and page.isAncestorOf(b)]
+        assert len(go) == 1
+        go[0].click()
+        assert host._whats_new_dialog is None
+        assert host.selected == ["Settings"]
+        host.show_whats_new(PAGED)
+        _buttons(host._whats_new_dialog, "Next →")[0].click()
+        _buttons(host._whats_new_dialog, "Got it")[0].click()
+        assert host._whats_new_dialog is None
+
+    def test_the_settings_button_pages_through_everything(self, host):
+        host.controller.get_whats_new = lambda: PAGED
+        host.open_whats_new()
+        assert self._pages(host._whats_new_dialog).count() == 3
+        host._whats_new_dialog.reject()
+
+    def test_the_real_notes_page_for_an_update_from_0_12(self, host):
+        """The notes this build ships, as someone updating from 0.12.0
+        meets them: 0.13.0's Linux news is no longer cut off."""
+        got = whats_new.as_plain(whats_new.unseen_releases(
+            "0.12.0", whats_new.RELEASES[0].version))
+        assert "0.13.0" in [v for v, _items in got]
+        host.show_whats_new(got)
+        dlg = host._whats_new_dialog
+        assert self._pages(dlg).count() == len(got)
+        assert self._count(dlg) == f"1 of {len(got)}"
+        dlg.reject()

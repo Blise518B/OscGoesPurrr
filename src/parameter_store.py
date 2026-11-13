@@ -1,7 +1,9 @@
 import threading
+import time
 from typing import Dict, Any, List, Set, Tuple
 
 from utilities import classify_ogb_zone
+from sps3_zone import SocketPlugLengths, canon_zone_key
 
 
 # OSCQuery's type tags -> the types the Avatar Remote page speaks
@@ -49,6 +51,11 @@ class ParameterStore:
         # Int, "f" Float) -- the Avatar Remote page's controls need to know
         # what to send. A parameter only ever seen live takes its value's.
         self._declared_types: Dict[str, str] = {}
+        # SPS 3 sockets: the length of the plug in each one, measured from
+        # every packet (an older plug's length can only be read while it
+        # approaches) and written back as `<contact>_PlugLength` -- see
+        # sps3_zone. Touched only under `self.lock`.
+        self._plug_lengths = SocketPlugLengths()
         self.lock = threading.Lock()
 
     # The OSCQuery tree is rooted at avatar/parameters/* for VRChat avatars,
@@ -66,11 +73,15 @@ class ParameterStore:
     # OGB/ prefixes instead of paying a dual-prefix lookup per filter.
     _VFH_ZONE_PREFIX = "VFH/Zone/"
 
+    # SPS 3 (VRCFury 1.1443.0, Nov 2026) renamed the categories: a socket
+    # is `OGB/Socket/<id>/...`, a plug `OGB/Plug/<id>/...`. They are stored
+    # as `Orf` / `Pen` like every older avatar's, so zone lists, pickers and
+    # saved selections need nothing new; sps3_zone reads the new contacts.
     @classmethod
     def _canon_param_key(cls, address: str) -> str:
         if address.startswith(cls._VFH_ZONE_PREFIX):
-            return "OGB/" + address[len(cls._VFH_ZONE_PREFIX):]
-        return address
+            address = "OGB/" + address[len(cls._VFH_ZONE_PREFIX):]
+        return canon_zone_key(address)
 
     def _refresh_zone_lists(self) -> None:
         """Rebuild the public zone name lists from `_zone_tuples`."""
@@ -176,6 +187,7 @@ class ParameterStore:
         with self.lock:
             for key in [k for k in self.all_parameters if k.startswith("OGB/")]:
                 del self.all_parameters[key]
+            self._plug_lengths.clear()
             self._zone_tuples.clear()
             self._refresh_zone_lists()
             self._version += 1
@@ -192,6 +204,9 @@ class ParameterStore:
             self._zone_tuples.clear()
             self._declared_types.clear()
             self._parse_oscquery_node(data)
+            for key, value in self._plug_lengths.refresh_all(
+                    self.all_parameters):
+                self.all_parameters[key] = value
 
             for path in self.all_parameters.keys():
                 zone = classify_ogb_zone(path)
@@ -217,6 +232,11 @@ class ParameterStore:
             if value is True and self.all_parameters.get(address) is not True:
                 self._rises[address] = self._rises.get(address, 0) + 1
             self.all_parameters[address] = value
+            if address.startswith("OGB/Orf/"):
+                for key, length in self._plug_lengths.on_write(
+                        address, value, self.all_parameters,
+                        time.monotonic()):
+                    self.all_parameters[key] = length
             self._version += 1
             self.packets_received += 1
             if is_new_key:

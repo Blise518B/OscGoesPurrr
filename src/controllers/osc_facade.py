@@ -162,6 +162,10 @@ class OscFacade:
         batch rapid updates. Runs on the OSC UDP server thread — anything
         beyond a flag/queue-put belongs on the GUI side of thread_queue."""
         self._needs_recalculation = True
+        # The routing tick sleeps while nothing moves: this packet wakes it
+        # (one attribute read while it is awake).
+        if getattr(self, "_routing_asleep", False):
+            self._wake_routing()
         # A contact the PiShock rules watch goes out on this packet, not
         # on the router's next poll.
         wake = getattr(self, "_pishock_on_osc", None)

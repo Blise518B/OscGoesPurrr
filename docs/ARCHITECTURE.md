@@ -92,6 +92,16 @@ replicated per haptic backend.
   live value is) for the Avatar Remote page, whose controls must send the
   avatar's own type; `get_values(names)` reads a few values under one
   lock.
+* **One key shape per zone:** `VFH/Zone/<cat>/...` is stored as
+  `OGB/<cat>/...`, and SPS 3's renamed categories (VRCFury 1.1443.0,
+  Nov 2026: `OGB/Socket/...`, `OGB/Plug/...`) as `OGB/Orf/...` /
+  `OGB/Pen/...`, so zone lists, pickers and saved selections never see the
+  difference; `sps3_zone.is_sps3_zone` tells the readers which contacts
+  a zone has. An SPS 3 socket's plug length is derived here, on every
+  packet (`sps3_zone.SocketPlugLengths`): an older plug's length can only
+  be measured while it approaches, which a poller would miss. It is
+  written back as `OGB/Orf/<id>/<DepthSelf|DepthOthers>_PlugLength`, so
+  every reader -- and session replay -- just reads it.
 * **Rule:** UDP and OSCQuery snapshot writes lock and mutate it. The UI
   and all routers read from it via `.copy()` semantics (or the atomic
   `snapshot()` getter) to prevent dictionary size-change exceptions.
@@ -535,6 +545,17 @@ back:
 * **`zone_strength.py`** — the pure OGB / SPS zone→strength math, so any
   router resolves a zone — detected OGB or synthetic SPS source —
   identically. Used today by the SPS-sources facade and the stats tracker.
+  SPS 3 zones answer the same filter names from their new contacts
+  (`sps3_zone`).
+* **`sps3_zone.py`** — reading VRCFury's SPS 3 sockets and plugs: depth
+  from `DepthSelf` / `DepthOthers` and the plug's length, touch without
+  `Close` gates, and each touch's own speed, which `motor_router` strikes
+  into the chain's Speed channel (docs/MOTOR_SIGNAL_CHAIN.md § Speed
+  channel). Written from VRCFury's parameter names -- OscGoesBrrr reads
+  the same ones but is GPL-3 since v2.1.34, so nothing is taken from it.
+  `vrchat_osc` sends `OGB/Enabled` next to `OGB_ENABLED` on the 5 s
+  presence beat and right after an avatar loads: an SPS 3 avatar keeps
+  its plug and socket touch receivers off until an app sets it.
 
 ### 5. The Face — `ui_components.py` + the `ui/` package
 
@@ -717,6 +738,22 @@ back:
   router trace subscriptions attach on `showEvent` and detach on
   `hideEvent`, and `select_view` refreshes a page once on arrival so
   it never shows stale data. New views must follow the same pattern.
+  The same holds for the whole window: a page timer is connected through
+  `ui.frame_clock.when_on_screen`, which skips it while the window is
+  minimized or hidden to the tray, and the page catches up when the
+  window comes back (`_on_window_restored`, the arrival refresh).
+* **Rule: what moves with the signal repaints per frame, not per
+  sample.** Meters and graphs get values at the router's rate; they store
+  them at once and ask `ui.frame_clock.request(widget)` for the repaint:
+  60 fps while OGP is focused, 20 fps while it isn't (never zero -- OGP
+  is watched in VR overlays while VRChat has the focus), none while the
+  window is minimized or in the tray. A live widget that fills its whole
+  box sets `WA_OpaquePaintEvent` so its containers don't repaint under
+  it; Home's mini meters paint their rounded corners in the ground
+  behind them (`RainbowMeter.set_ground`, the toy bar's hover tint or the
+  toy frame's fill). Measured 2026-11-05, Home with two toys playing at
+  90 Hz: ~1,540 paint events a second before, ~115 focused / ~50
+  unfocused after; minimized or in the tray, none.
   Signal processing never depends on this: the engines/routers run in
   their own threads, and `motor_router.needs_settling()` keeps the
   routing tick alive while any motor output is non-zero, so smoothing
@@ -876,11 +913,19 @@ an ack adds latency. Keep each stage tight.
 
 * **Buttplug toys** (`motor_router` → `haptic_engine`). The routing tick
   (`ROUTER_POLL_RATE_MS`, ~60 Hz, gated by `_needs_recalculation`)
+  sleeps (`ROUTER_IDLE_MS`, 10 Hz) while nothing moves -- no fresh OSC,
+  every output at zero -- and the packet that ends the quiet wakes it at
+  once (`main._wake_routing`, also called by friends' messages and every
+  `force_recalculate`), so sleeping adds no latency, only fewer wakeups.
+  It publishes "asleep" before its last look at the flag, so a packet
+  landing in between is never missed. It
   dispatches **directly** to the engine via
   `force_recalculate(dispatch_direct=True)` — it does **not** route hot
   updates through `thread_queue` (that queue is the UI pump, drained only
   every `QUEUE_POLL_RATE_MS` = 50 ms, and carries status / device events
-  *only*). The engine loop (`HAPTIC_POLL_RATE`, ~100 Hz) sends
+  *only*). The engine loop (`HAPTIC_POLL_RATE`, ~100 Hz while a toy is
+  connected; `HAPTIC_IDLE_RATE` with no toy server or no toy -- a new toy
+  shows up through its 2 s device poll either way) sends
   **fire-and-forget** (never awaits Intiface's ack), bounded by a
   per-feature cap (`HAPTIC_MAX_SEND_HZ`, ~60 Hz) so a real BLE toy isn't
   flooded. ≈27 ms end-to-end on the bench (was ≈60 ms). The per-feature
@@ -1183,8 +1228,12 @@ recalculate.
 * `whats_new.py` — the "What's new" notes (one entry per release, newest
   first: a title, a sentence or two, and optionally a place in the app)
   and the rule for when they show: once, at the first launch after an
-  update (`whats_new_seen_version` in the app settings), never on a first
-  install. `controllers/whats_new_facade.py` is the launch hook;
+  update (`whats_new_seen_version` in the app settings: the newest notes
+  the running build carries), never on a first install. Every release
+  newer than the marker shows, one page each with Back / Next, so an
+  update that skips releases loses none of their news; a patch release
+  with no entry of its own opens nothing.
+  `controllers/whats_new_facade.py` is the launch hook;
   `ui/views/whats_new.py` draws the window and makes the "Take me there"
   jumps (`PLACES`: the page, and the card to scroll to and light up).
   Add a release's entry in the same change as its features. A test

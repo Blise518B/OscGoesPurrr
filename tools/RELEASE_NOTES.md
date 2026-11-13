@@ -24,41 +24,30 @@ update itself at launch.
 <!-- Replace this section before each release. Keep it short and concrete:
      what changed, and what a user would notice. -->
 
-The haptic suits arrive, and Intiface can now run on your phone.
+A small update to 0.15.0: avatars built with the newest VRCFury work again, and
+OGP sits quieter while nothing happens.
 
-- **Haptic suits.** A bHaptics suit, sleeves or head straight over
-  Bluetooth — no bHaptics Player (close it: a suit takes one connection) —
-  and an OWO suit through the My OWO app, which keeps your calibration. Both
-  play your avatar's bHaptics and OWO contacts, and the Suits page draws them
-  on a body: click a motor or a muscle for its card, which also says whether
-  the avatar you wear has its contacts. Each suit has its own switch in
-  Settings → Features, off by default. OWO is EMS, so OGP connects to it only
-  when you press Connect and starts it capped at 60 %. Toy Safety's
-  anti-stuck covers the suits too.
-- **Intiface on your phone.** Toys paired with a phone, or Intiface Central
-  on another PC? Switch off Settings → *Use built-in Intiface engine*, and
-  OGP finds an Intiface Central that announces itself on your network or
-  connects to the address you type. On the phone, turn on **Listen on all
-  network interfaces** (and **Broadcast Server Info via mDNS** to be found
-  without an address). The sidebar shows the address and whether Intiface
-  answers there. It needs Intiface Central 3.0 or newer, and OGP says so
-  when it finds an older one.
-- **Avatar Remote in your avatar's menu.** Seven toggles and seven radials
-  you hand out to controls or whole categories of your board: the small
-  circle in a card's or category's top bar.
-- **Friends groups by drag and drop.** Drag friends onto a group, yourself
-  included. A group with you in it drives you and them at once from the
-  avatar menu, so the menu's *Both of us* section is gone. Import the new
-  **OscGoesPurrr-VRCFury.unitypackage** below for the Avatar Remote submenu
-  and the groups.
-- **Fixes.** Your avatar menu no longer logs, or holds back for later,
-  changes to the toys of a friend who doesn't take them right now (their
-  Toys switch off for you, or Pause all friends). Friends no longer stops
-  setting itself up when its network library can't load, and the
-  Statistics page has its session list from the start.
+- **SPS 3 avatars.** VRCFury 1.1443.0 (10 November) changed how sockets and
+  plugs report, so OGP found none on an avatar built with it. It reads them
+  again: depth, touch and frot, and it switches the avatar's touch contacts
+  on, which such an avatar now waits for. Touch also brings VRChat's own
+  reading of how fast the hand moves, so a hand sliding along you is felt,
+  not just one coming closer; each toy's Touch chain mixes it in through its
+  Speed and Combine settings. Older avatars feel exactly as before.
+- **Built with haptics off?** The OSC Inspector page says so when the avatar
+  you wear was built with VRCFury's haptics switched off, and where to switch
+  them back on.
+- **Less CPU while idle.** With nothing playing, OGP's routing and its toy
+  engine rest instead of waking about a hundred times a second, and Home's
+  meters repaint once per frame: fewer times while OGP isn't focused, not at
+  all while it's minimized.
+- **VRChat stays connected.** A crashed VRChat can leave its network
+  announcement behind for hours, and OGP kept dropping the working connection
+  for it every 15 seconds or so. It now sticks with the VRChat that answers.
+- **What's new, page by page.** Updating over several releases shows every
+  release's notes, one page each, instead of only the newest two.
 
-**Coming from 0.13 or older?** 0.14.0 brought Friends, the web remote,
-Shockers, Avatar Remote and more:
-[the 0.14.0 notes](https://github.com/Blise518B/OscGoesPurrr/releases/tag/v0.14.0).
+**Coming from 0.14 or older?** 0.15.0 brought the haptic suits and Intiface on
+your phone: [the 0.15.0 notes](https://github.com/Blise518B/OscGoesPurrr/releases/tag/v0.15.0).
 
 More on the website: https://blise518b.github.io/OscGoesPurrr/

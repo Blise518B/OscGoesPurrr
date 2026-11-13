@@ -33,6 +33,7 @@ from ui.widgets import (
     Card as _Card,
     install_rainbow_scrollbars as _install_rainbow_scrollbars,
 )
+from ui.frame_clock import when_on_screen
 
 
 class SpsSourcesMixin:
@@ -84,7 +85,7 @@ class SpsSourcesMixin:
         # Live readout pump — only does work while this view is visible.
         self._sps_values_timer = QTimer()
         self._sps_values_timer.setInterval(150)
-        self._sps_values_timer.timeout.connect(self._refresh_sps_source_values)
+        self._sps_values_timer.timeout.connect(when_on_screen(self, self._refresh_sps_source_values))
         self._sps_values_timer.start()
 
         self._rebuild_sps_sources_entries()

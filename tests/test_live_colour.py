@@ -471,6 +471,21 @@ class TestLiveTheme:
         assert app.second.cached == [blue["line"], "#123456"]
         assert not app.live.busy()
 
+    def test_opaque_widgets_repaint_themselves(self, app):
+        """The live meters and graphs are opaque: a parent's repaint leaves
+        them out, so one standing still would keep the old colours unless
+        the sweep tells it itself -- in a section or loose."""
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QWidget
+        calls = []
+        inside, loose = QWidget(app.first), QWidget(app.window)
+        for w, name in ((inside, "inside"), (loose, "loose")):
+            w.setAttribute(Qt.WA_OpaquePaintEvent, True)
+            w.update = lambda *a, n=name: calls.append(n)
+        app.live.set_hue(263.0)
+        app.live.finish()
+        assert "inside" in calls and "loose" in calls
+
     def test_a_widget_marked_noretint_keeps_what_it_shows(self, app):
         app.live.set_hue(263.0)
         app.live.finish()

@@ -9,6 +9,7 @@ from mixer import (
     apply_curve, combine, smooth, activity_meter, activity_gate, merge_chains,
 )
 from sps_source import evaluate_sps_source
+import sps3_zone
 
 _GLOB_CHARS = frozenset("*?[")
 
@@ -634,6 +635,25 @@ class MotorRouter:
         """Compute the haptic contribution from a single OGB zone, honouring the
         same `*Close` proximity gates and new-pen depth model as OscGoesBrrr.
         """
+        return self._zone_level_and_speed(
+            zone_type, zone_name, config, motor_idx, all_params, filters)[0]
+
+    def _zone_level_and_speed(
+        self,
+        zone_type: str,
+        zone_name: str,
+        config: Dict[str, Any],
+        motor_idx: int,
+        all_params: Dict[str, Any],
+        filters=None,
+    ) -> Tuple[float, float]:
+        """`(level, speed)` of one zone, both 0..1.
+
+        `level` is what `_zone_contribution` returns. `speed` is how fast the
+        hand (or plug) touching it moves, as VRChat measures it -- only SPS 3
+        avatars (VRCFury 1.1443.0+) report it, on their touch and frot
+        contacts, never on depth; older avatars give 0 and the chain works
+        speed out from the level alone (see `_derive_speed_signal`)."""
         if filters is None:
             allow_touch = config.get(f"motor_{motor_idx}_touch", True)
             allow_pen = config.get(f"motor_{motor_idx}_pen", True)
@@ -651,18 +671,46 @@ class MotorRouter:
         # (GameDevice maps ownHands→Self, otherHands→Others), so the pen
         # filter never contributes here. Both wire forms are read; max wins.
         if zone_type == "Touch":
+            speed = 0.0
             for p in (prefix, f"VFH/Zone/Touch/{zone_name}"):
-                if allow_touch and allow_self:
-                    v = self._get_param(all_params, f"{p}/Self")
+                for on, contact in ((allow_self, "Self"),
+                                    (allow_others, "Others")):
+                    if not (allow_touch and on):
+                        continue
+                    v = self._get_param(all_params, f"{p}/{contact}")
                     if v is not None:
                         contributions.append(v)
-                if allow_touch and allow_others:
-                    v = self._get_param(all_params, f"{p}/Others")
-                    if v is not None:
-                        contributions.append(v)
+                        speed = max(speed, sps3_zone.touch_speed(
+                            all_params, f"{p}/{contact}"))
             if not contributions:
-                return 0.0
-            return max(normalize_osc_value(v) for v in contributions)
+                return 0.0, 0.0
+            return max(normalize_osc_value(v) for v in contributions), speed
+
+        # --- SPS 3 sockets and plugs (VRCFury 1.1443.0+, see sps3_zone) --------
+        # Touch and frot have no Close gates and report their sender's
+        # speed; depth comes from DepthSelf / DepthOthers and the plug's
+        # length. Same filters as below: touch = TouchSelf / TouchOthers,
+        # pen = depth, plus FrotOthers with "others".
+        if zone_type in ("Orf", "Pen") and sps3_zone.is_sps3_zone(
+                all_params, prefix):
+            level = speed = 0.0
+            if allow_touch:
+                for on, contact in ((allow_self, "TouchSelf"),
+                                    (allow_others, "TouchOthers")):
+                    if on:
+                        key = f"{prefix}/{contact}"
+                        level = max(level, sps3_zone.touch_level(all_params, key))
+                        speed = max(speed, sps3_zone.touch_speed(all_params, key))
+            if allow_pen and allow_self:
+                level = max(level, sps3_zone.depth(
+                    all_params, prefix, zone_type, "DepthSelf"))
+            if allow_pen and allow_others:
+                level = max(level, sps3_zone.depth(
+                    all_params, prefix, zone_type, "DepthOthers"))
+                key = f"{prefix}/FrotOthers"
+                level = max(level, sps3_zone.touch_level(all_params, key))
+                speed = max(speed, sps3_zone.touch_speed(all_params, key))
+            return level, speed
 
         # --- Touch (gated by TouchSelfClose / TouchOthersClose) ----------------
         if allow_touch and allow_self:
@@ -734,8 +782,8 @@ class MotorRouter:
                         contributions.append(v)
 
         if not contributions:
-            return 0.0
-        return max(normalize_osc_value(v) for v in contributions)
+            return 0.0, 0.0
+        return max(normalize_osc_value(v) for v in contributions), 0.0
 
     @staticmethod
     def chain_routing_key(motor_idx: int, chain_idx: int, suffix: str) -> str:
@@ -957,7 +1005,8 @@ class MotorRouter:
     def _derive_speed_signal(self, chain_state: Dict[str, Any],
                              position: float,
                              dt: float,
-                             decay_tau_s: Optional[float] = None
+                             decay_tau_s: Optional[float] = None,
+                             sender_speed: float = 0.0,
                              ) -> Tuple[float, float]:
         """Compute the per-chain speed as a DIRECTIONAL pair, `(in, out)`.
 
@@ -990,7 +1039,15 @@ class MotorRouter:
         Per-chain — each chain in a multi-chain motor maintains its
         own speed history because the simulator's Drive mask can feed
         different `d_raw` streams to different chains on the same
-        tick (docs/CHAIN_INLINED_TUNING.md § "Per-chain speed state")."""
+        tick (docs/CHAIN_INLINED_TUNING.md § "Per-chain speed state").
+
+        `sender_speed` (0..1) is VRChat's own measure of how fast the
+        touching hand moves -- SPS 3 avatars report it (sps3_zone). It
+        strikes BOTH rings, max-wins with the worked-out speed: it carries
+        no direction, and it catches what a change of position cannot --
+        a hand sliding along at the same distance. Same decay and cutoff,
+        so a chain's Speed card shapes it like any speed. At 0 (every
+        older avatar) the result is exactly what it was before."""
         last_pos = chain_state["last_position"]
         prev_in = chain_state.get("smoothed_speed_in", 0.0)
         prev_out = chain_state.get("smoothed_speed_out", 0.0)
@@ -1001,9 +1058,14 @@ class MotorRouter:
                               float(decay_tau_s)))
         cutoff = self._SPEED_OUTPUT_CUTOFF
 
+        if sender_speed > 0.0:
+            sender_speed = min(float(sender_speed), 1.0)
+        else:
+            sender_speed = 0.0
         if dt <= 0.0:
             # First sample or clock didn't move — reuse last values.
-            sm_in, sm_out = prev_in, prev_out
+            sm_in = max(prev_in, sender_speed)
+            sm_out = max(prev_out, sender_speed)
         else:
             delta = position - last_pos
             magnitude = abs(delta)
@@ -1015,8 +1077,10 @@ class MotorRouter:
             decay = math.exp(-dt / decay_tau)
             # Only the direction actually travelled receives the strike;
             # the other one just rings down.
-            sm_in = max(signal if delta > 0.0 else 0.0, prev_in * decay)
-            sm_out = max(signal if delta < 0.0 else 0.0, prev_out * decay)
+            sm_in = max(signal if delta > 0.0 else 0.0, sender_speed,
+                        prev_in * decay)
+            sm_out = max(signal if delta < 0.0 else 0.0, sender_speed,
+                         prev_out * decay)
 
         chain_state["smoothed_speed_in"] = sm_in
         chain_state["smoothed_speed_out"] = sm_out
@@ -1565,7 +1629,26 @@ class MotorRouter:
         sps_sources: Optional[Dict[str, Any]] = None,
         filters=None,
     ) -> float:
-        """Max-wins combine of every input the motor listens to:
+        """The level half of `_compute_inputs`."""
+        return self._compute_inputs(compiled, all_params, config, motor_idx,
+                                    zones, sps_sources, filters)[0]
+
+    def _compute_inputs(
+        self,
+        compiled: Dict[str, Any],
+        all_params: Dict[str, Any],
+        config: Dict[str, Any],
+        motor_idx: int,
+        zones: Set[Tuple[str, str]],
+        sps_sources: Optional[Dict[str, Any]] = None,
+        filters=None,
+    ) -> Tuple[float, float]:
+        """`(d_raw, sender_speed)`. `sender_speed` is the fastest touch
+        VRChat reports on the selected SPS zones (0..1, SPS 3 avatars
+        only; see `_zone_level_and_speed`) -- custom addresses and
+        synthetic sources carry none.
+
+        `d_raw` is the max-wins combine of every input the motor listens to:
         - Literal custom OSC addresses (O(1) dict lookups)
         - Custom OSC address globs (fnmatch sweep)
         - SPS zone contributions (when the motor's zone filter is set)
@@ -1616,18 +1699,21 @@ class MotorRouter:
                 if cand > d_raw:
                     d_raw = cand
 
+        sender_speed = 0.0
         if compiled["has_zone_filter"]:
             is_all_sps = compiled["is_all_sps"]
             allowed_zone_set = compiled["allowed_zones"]
             best = d_raw
             for zone_type, zone_name in zones:
                 if is_all_sps or zone_name in allowed_zone_set:
-                    contribution = self._zone_contribution(
+                    contribution, speed = self._zone_level_and_speed(
                         zone_type, zone_name, config, motor_idx, all_params,
                         filters,
                     )
                     if contribution > best:
                         best = contribution
+                    if speed > sender_speed:
+                        sender_speed = speed
             d_raw = best
 
         # Synthetic SPS sources — resolved by explicit name only (never
@@ -1645,7 +1731,7 @@ class MotorRouter:
                 if val > best:
                     best = val
             d_raw = best
-        return d_raw
+        return d_raw, sender_speed
 
     # ------------------------------------------------------------------ public
     def _calculate_motor_target(
@@ -1701,16 +1787,22 @@ class MotorRouter:
         # Resolve every chain's input before the loop, so `live_d_raw` (the
         # motor-level max) is known to the stages that need it.
         chain_inputs: List[float] = []
+        # VRChat's own touch speed per chain (SPS 3 avatars; 0 otherwise),
+        # struck into the chain's Speed channel next to the speed worked
+        # out from the level -- see _derive_speed_signal.
+        chain_speeds: List[float] = []
         for chain_idx, chain in enumerate(chains_cfg):
             chain_cfg = chain if isinstance(chain, dict) else {}
             chain_type = str(chain_cfg.get("type", CHAIN_TYPE_CUSTOM))
             compiled = self._compile_motor_config(
                 routing_profile, device_name, motor_idx, config, chain_idx,
             )
-            chain_inputs.append(self._compute_d_raw_from_inputs(
+            level, speed = self._compute_inputs(
                 compiled, all_params, config, motor_idx, zones, sps_sources,
                 self._chain_filters(config, motor_idx, chain_idx, chain_type),
-            ))
+            )
+            chain_inputs.append(level)
+            chain_speeds.append(speed)
         live_d_raw = max(chain_inputs) if chain_inputs else 0.0
         # Sidechain source for the Touch chain's optional duck: the
         # loudest PENETRATION input on this motor. Taken pre-provider
@@ -1776,11 +1868,16 @@ class MotorRouter:
             )
             chain_d_raw = (chain_inputs[chain_idx]
                            if chain_idx < len(chain_inputs) else live_d_raw)
+            sender_speed = (chain_speeds[chain_idx]
+                            if chain_idx < len(chain_speeds) else 0.0)
             if chain_provider is not None:
                 try:
                     v = chain_provider()
                     if v is not None:
                         chain_d_raw = max(0.0, min(1.0, float(v)))
+                        # A simulated input replaces the live one whole --
+                        # VRChat's speed belongs to the contact it replaced.
+                        sender_speed = 0.0
                 except Exception:
                     pass
 
@@ -1796,7 +1893,7 @@ class MotorRouter:
                 self._SPEED_DECAY_MS_MIN, self._SPEED_DECAY_MS_MAX,
             ) / 1000.0
             s_in_raw, s_out_raw = self._derive_speed_signal(
-                chain_state, chain_d_raw, dt, speed_decay_s
+                chain_state, chain_d_raw, dt, speed_decay_s, sender_speed
             )
             # Combined speed, for everything that wants "how fast is this
             # moving" without caring which way: the Wake meter's source,

@@ -19,6 +19,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from buttplug import ButtplugClient, DeviceOutputCommand, OutputType
 from constants import (
     APP_NAME,
+    HAPTIC_IDLE_RATE,
     HAPTIC_MAX_SEND_HZ,
     HAPTIC_POLL_RATE,
     LINEAR_DURATION_OVERLAP,
@@ -938,16 +939,17 @@ class HapticEngine:
         # surface in real time. Buttplug protocol uses DeviceAdded / DeviceRemoved
         # messages, but the Python client v1.0.0 doesn't process them -- only the
         # bulk DeviceList. Polling every ~2s drives _handle_device_list ourselves.
-        # Expressed in ticks so it tracks HAPTIC_POLL_RATE automatically.
-        device_poll_tick_count = int(2.0 / max(HAPTIC_POLL_RATE, 0.001))
-        ticks_since_device_poll = 0
+        # Clock time, not ticks: the loop's pace changes (HAPTIC_IDLE_RATE).
+        device_poll_s = 2.0
+        next_device_poll = time.monotonic() + device_poll_s
 
-        # Poll battery every ~30s. Start at max so first read fires immediately.
-        battery_poll_tick_count = int(30.0 / max(HAPTIC_POLL_RATE, 0.001))
-        ticks_since_battery_poll = battery_poll_tick_count
+        # Poll battery every ~30s; the first read fires at once.
+        battery_poll_s = 30.0
+        next_battery_poll = 0.0
 
         # Main async loop - Golden Loop
         while True:
+            pace = HAPTIC_IDLE_RATE         # nothing to send to: no fast ticks
             if self.is_connected and self.buttplug_client:
                 # Defensive health check: catch WS drops the on_server_disconnect
                 # hook never surfaced (older buttplug versions, edge timing).
@@ -960,9 +962,8 @@ class HapticEngine:
                     pass
 
                 # Drive device add/remove callbacks via periodic re-request.
-                ticks_since_device_poll += 1
-                if ticks_since_device_poll >= device_poll_tick_count:
-                    ticks_since_device_poll = 0
+                if time.monotonic() >= next_device_poll:
+                    next_device_poll = time.monotonic() + device_poll_s
                     # Fire-and-forget so dispatch never blocks on Intiface latency.
                     try:
                         asyncio.create_task(self._poll_device_list())
@@ -970,9 +971,8 @@ class HapticEngine:
                         pass
 
                 # Refresh battery levels on a slow cadence.
-                ticks_since_battery_poll += 1
-                if ticks_since_battery_poll >= battery_poll_tick_count:
-                    ticks_since_battery_poll = 0
+                if time.monotonic() >= next_battery_poll:
+                    next_battery_poll = time.monotonic() + battery_poll_s
                     try:
                         asyncio.create_task(self._poll_device_batteries())
                     except Exception:
@@ -980,8 +980,11 @@ class HapticEngine:
 
                 connection_dropped = False
                 now_ms = time.monotonic() * 1000.0
+                devices = list(self.buttplug_client.devices.values())
+                if devices:
+                    pace = HAPTIC_POLL_RATE     # a toy to drive: the full rate
 
-                for device in list(self.buttplug_client.devices.values()):
+                for device in devices:
                     if connection_dropped:
                         break
                     device_name = device.name
@@ -1067,7 +1070,10 @@ class HapticEngine:
                                 feature.run_output(DeviceOutputCommand(output_type, target)),
                             )
 
-            await asyncio.sleep(HAPTIC_POLL_RATE)  # engine tick (HAPTIC_POLL_RATE)
+            # Engine tick: HAPTIC_POLL_RATE while a toy is connected, the idle
+            # pace while there is none (a new one shows up through the device
+            # poll above, which keeps its 2 s either way).
+            await asyncio.sleep(pace)
 
     def _handle_feature_error(self, device_name: str, motor_idx: int, e: Exception) -> bool:
         """Log a feature command error. Return True if the connection appears to have

@@ -30,6 +30,7 @@ from vrchat_osc import VRChatOSCManager
 from osc_router_518 import ROUTER_HOST, ROUTER_PORT, Router518Fallback
 from motor_router import MotorRouter
 from parameter_store import store
+import sps3_zone
 from motor_param_out import resolve_param_out
 from queue_drain import drain_and_coalesce
 from constants import *
@@ -140,6 +141,11 @@ class OscGoesPurrrApp(
         
         # Dirty flag to debounce rapid OSC bundles
         self._needs_recalculation = False
+        # The routing tick sleeps (ROUTER_IDLE_MS) while nothing moves and
+        # wakes at once when something does (_wake_routing). A wake starts
+        # a new chain of ticks; `_routing_gen` retires the sleeping one.
+        self._routing_asleep = False
+        self._routing_gen = 0
 
         # Update state. `_pending_update` is the last check's result,
         # kept so the Install button doesn't re-query GitHub; the thread
@@ -984,6 +990,36 @@ class OscGoesPurrrApp(
         """Update a config value for a device in current profile using mode_manager"""
         self.mode_manager.update_device_config(device_name, key, value)
 
+    def _wake_routing(self) -> None:
+        """Something changed that the router must see: run the routing tick
+        now if it is asleep. Safe from any thread (the OSC server's, a
+        friend link's) -- the flag flip is atomic under the GIL and the tick
+        itself runs on the UI thread. While awake this is one attribute
+        read, so the hot path can call it on every packet."""
+        if self._routing_asleep:
+            self._routing_asleep = False
+            self.ui.schedule_callback(0, self._routing_wake_now)
+
+    def _routing_next_delay(self, needs_tick: bool, interval: int) -> int:
+        """The routing tick's next delay. Busy: the full rate. Nothing moved
+        and every output rests at zero: sleep ROUTER_IDLE_MS instead of
+        polling -- saying so BEFORE the last look at the flag, so a packet
+        that lands in between still wakes the tick (_wake_routing). No added
+        latency, only fewer wakeups (ARCHITECTURE.md, "Latency budget")."""
+        if needs_tick:
+            return interval
+        self._routing_asleep = True
+        if self._needs_recalculation:
+            self._routing_asleep = False
+            return interval
+        return ROUTER_IDLE_MS
+
+    def _routing_wake_now(self) -> None:
+        tick = getattr(self, "_routing_tick", None)
+        if tick is not None:
+            self._routing_gen += 1          # the sleeping chain's callback retires
+            tick()
+
     def force_recalculate(self, dispatch_direct: bool = False):
         """Forces the router to recalculate output based on current state and new UI configs.
 
@@ -1036,6 +1072,11 @@ class OscGoesPurrrApp(
                 self.motor_router.consume_contact_updates():
             self._send_motor_param_out(active.get(device_name),
                                        motor_idx, contact_val)
+        # A recalc from outside the routing tick (a config edit, the strength
+        # slider, a replay frame) may have started output while the tick
+        # sleeps: wake it, so the smoothing tails and the anti-stuck cutoff
+        # run at the full rate. From the tick itself it is awake: a no-op.
+        self._wake_routing()
 
     def _send_motor_param_out(self, device_config, motor_idx: int, value: float) -> None:
         """Mirror a motor's computed 0..1 output to a VRChat avatar parameter
@@ -1105,10 +1146,16 @@ class OscGoesPurrrApp(
             orifices = fresh_zones.get("Orifices", [])
             penetrators = fresh_zones.get("Penetrators", [])
             touch = fresh_zones.get("Touch", [])
+            # Built with VRCFury's haptics switched off: plugs and sockets
+            # without contacts, so nothing here could ever react.
+            haptics_off = sps3_zone.haptics_disabled(
+                store.get_values((sps3_zone.HAPTICS_DISABLED_PARAM,))
+                .get(sps3_zone.HAPTICS_DISABLED_PARAM))
 
             # Change tracker — per-bucket tuples, not a flat concatenation,
             # so a name moving between zone types still registers as a change.
-            current_state = (tuple(orifices), tuple(penetrators), tuple(touch))
+            current_state = (tuple(orifices), tuple(penetrators), tuple(touch),
+                             haptics_off)
 
             # Only update UI if the zones have actually changed to avoid flickering
             if not hasattr(self, '_last_detected_zones') or self._last_detected_zones != current_state:
@@ -1121,6 +1168,12 @@ class OscGoesPurrrApp(
                 )
                 if touch:
                     sps_text += f"\n\nTouch zones: {', '.join(touch)}"
+                if haptics_off:
+                    sps_text = (
+                        "This avatar was built with VRCFury's haptics "
+                        "switched off, so it sends no contacts. In Unity, "
+                        "tick Tools > VRCFury > Settings > Enable SPS "
+                        "Haptics and upload it again.\n\n" + sps_text)
                 self.ui.update_sps_status(sps_text)
 
         if getattr(self, 'is_debugging_osc', False) and hasattr(self, 'osc_manager'):
@@ -1485,6 +1538,7 @@ class OscGoesPurrrApp(
             # fresh routing, it disables the needs_settling / anti-stuck
             # HARDWARE-SAFETY ticks while the engine keeps commanding the
             # last non-zero targets.
+            needs_tick = True           # an exception below keeps the full rate
             try:
                 needs_tick = getattr(self, '_needs_recalculation', False)
                 if not needs_tick and hasattr(self, 'motor_router'):
@@ -1544,7 +1598,11 @@ class OscGoesPurrrApp(
                     interval = max(1, int(round(1000.0 / hz)))
                 except Exception:
                     interval = ROUTER_POLL_RATE_MS
-                self.ui.schedule_callback(interval, routing_tick)
+                delay = self._routing_next_delay(needs_tick, interval)
+                self._routing_gen += 1
+                gen = self._routing_gen
+                self.ui.schedule_callback(
+                    delay, lambda: gen == self._routing_gen and routing_tick())
 
         # Periodically check for UI updates from async thread. Same rule as
         # routing_tick: the reschedule always runs — this pump carries every
@@ -1590,6 +1648,7 @@ class OscGoesPurrrApp(
         self.ui.schedule_callback(UI_REFRESH_RATE_MS, check_queue)
 
         # Start the routing tick loop
+        self._routing_tick = routing_tick
         self.ui.schedule_callback(ROUTER_POLL_RATE_MS, routing_tick)
 
         # Start the device-state heartbeat (1 Hz).

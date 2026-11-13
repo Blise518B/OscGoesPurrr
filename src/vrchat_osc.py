@@ -134,6 +134,13 @@ class OSCQueryHandler(BaseHTTPRequestHandler):
 # from the health-check loop, which already ticks at the same 5 s
 # cadence OGB uses (OscConnection.OGB_ENABLED_INTERVAL_MS).
 OGB_ENABLED_ADDRESS = "/avatar/parameters/OGB_ENABLED"
+# The SPS 3 name of the same thing (VRCFury 1.1443.0+, see sps3_zone). It is
+# more than a light: such an avatar keeps its plug and socket touch
+# receivers switched OFF until an app sets it true, so without it touch
+# and frot never arrive. Sent on the same beat, and once right after an
+# avatar loads (it starts false). An avatar without it just ignores it.
+OGB_ENABLED_SPS3_ADDRESS = "/avatar/parameters/OGB/Enabled"
+OGB_PRESENCE_ADDRESSES = (OGB_ENABLED_ADDRESS, OGB_ENABLED_SPS3_ADDRESS)
 
 
 def coerce_outgoing_value(value: Any, expected_type: Optional[str]) -> Any:
@@ -302,6 +309,9 @@ class VRChatOSCManager:
         self.vrc_ip = "127.0.0.1"
         self.vrc_osc_port = VRC_DEFAULT_PORT
         self.http_port = None
+        # The VRChat mDNS record we're connected to (None while not), so a
+        # second record -- or its Removed -- can be told apart from ours.
+        self._vrchat_name: Optional[str] = None
         self.local_listen_port = local_listen_port # If 0, OS picks a free port
         self.is_connected = False
         # True from start() until stop(): the manager is up and either
@@ -681,8 +691,27 @@ class VRChatOSCManager:
             if info and "VRChat" in name:
                 self._log(f"VRChat OSCQuery service discovered: name={name} port={info.port} "
                           f"addresses={[socket.inet_ntoa(a) for a in (info.addresses or []) if len(a) == 4]}")
-                self.http_port = info.port
                 self.vrc_ip = "127.0.0.1" # Force localhost to prevent timeouts
+                if self.is_connected and (name != self._vrchat_name
+                                          or info.port != self.http_port):
+                    # A second VRChat record while connected. A crashed
+                    # VRChat's record can linger for hours (2026-11-08: a dead
+                    # VRChat-Client-305E19 next to the live game for 1.7 h;
+                    # taking its port dropped the working connection 125
+                    # times). Switch only when the new one answers and ours
+                    # no longer does -- VRChat crashed and came back before
+                    # the health check noticed.
+                    current = self.http_port
+                    if not self._vrchat_answers(info.port):
+                        self._log(f"ignoring {name}: its OSCQuery server doesn't answer "
+                                  f"(a record left over from an earlier VRChat?)")
+                        return
+                    if current and self._vrchat_answers(current):
+                        self._log(f"ignoring {name}: still connected to "
+                                  f"{self._vrchat_name}, which answers")
+                        return
+                    self._handle_disconnect(f"VRChat was restarted ({name})",
+                                            only_port=current)
                 # First-time VRChat discovery this session: run the VRCFT
                 # FirstClientDiscovered sequence (bind UDP, start HTTP,
                 # advertise mDNS, then fetch ports). Re-discoveries reuse
@@ -700,7 +729,7 @@ class VRChatOSCManager:
                         with self._discovery_lock:
                             self._vrchat_first_discovered_done = False
                         return
-                self._fetch_osc_ports()
+                self._fetch_osc_ports(info.port, name)
             elif info is not None:
                 # Some other OSC app advertised itself. Log it so the user
                 # can correlate failures with other OSC clients coming and going.
@@ -717,7 +746,7 @@ class VRChatOSCManager:
             # browser, so we just need to flip our state to disconnected.
             if "VRChat" in name:
                 self._log(f"VRChat mDNS Removed: {name}")
-                self._handle_disconnect("VRChat mDNS service removed")
+                self._handle_disconnect("VRChat mDNS service removed", only_name=name)
             else:
                 with self._other_clients_lock:
                     if name in self._other_clients:
@@ -758,14 +787,26 @@ class VRChatOSCManager:
         # _setup_osc already calls _start_phonebook_server + _advertise_service
         # in our current factoring, so nothing else to do here.
 
-    def _handle_disconnect(self, reason: str) -> None:
+    def _handle_disconnect(self, reason: str, *, only_name: Optional[str] = None,
+                           only_port: Optional[int] = None) -> None:
         """Mark the manager disconnected and notify the controller.
 
         Idempotent: a second call after we've already disconnected is a no-op.
         Safe to invoke from any thread (mDNS callback thread, health-check thread,
         etc.) since it only does flag updates and a queue/callback dispatch.
+        `only_name` / `only_port` make it apply only to the VRChat record /
+        HTTP port the caller saw, so news about another (a leftover record's
+        Removed, a health miss on a port we since left) can't drop ours.
         """
         if not self.is_connected:
+            return
+        if only_name is not None and only_name != self._vrchat_name:
+            self._log(f"keeping the connection to {self._vrchat_name}: "
+                      f"{reason} was about {only_name}")
+            return
+        if only_port is not None and only_port != self.http_port:
+            self._log(f"keeping the connection on HTTP port {self.http_port}: "
+                      f"{reason} was about port {only_port}")
             return
         # Log a session summary so the user can correlate failures with
         # packet flow over the lifetime of the connection.
@@ -784,12 +825,13 @@ class VRChatOSCManager:
         except Exception:
             pass
         self.is_connected = False
+        self._vrchat_name = None
         self._connected_since = None
         self._silent_warning_logged = False
         self._last_silent_reprobe = None
-        # Don't blank http_port -- the mDNS Added handler will overwrite it on
-        # reconnect anyway, and keeping the old value lets the health-check
-        # thread describe what it was last polling.
+        # Don't blank http_port -- _fetch_osc_ports overwrites it on the next
+        # successful connect anyway, and keeping the old value lets the
+        # health-check thread describe what it was last polling.
         if self.global_osc_callback:
             try:
                 self.global_osc_callback("SYS/OSCQuery_Status", f"VRChat disconnected ({reason}). Waiting...")
@@ -818,19 +860,15 @@ class VRChatOSCManager:
                 if self.is_connected:
                     # OGB-parity presence heartbeat (see OGB_ENABLED_ADDRESS).
                     # Rides this loop's 5 s cadence — same interval OGB uses —
-                    # instead of owning a thread. Fire-and-forget UDP; a send
-                    # error must never break the health check.
-                    try:
-                        self.send_parameter(OGB_ENABLED_ADDRESS, True,
-                                            ignore_rate_limit=True)
-                    except Exception:
-                        pass
-                if not self.is_connected or not self.http_port:
+                    # instead of owning a thread.
+                    self._send_ogb_presence()
+                port = self.http_port
+                if not self.is_connected or not port:
                     consecutive_failures = 0
                     continue
                 try:
                     response = requests.get(
-                        f"http://127.0.0.1:{self.http_port}/",
+                        f"http://127.0.0.1:{port}/",
                         timeout=1.5,
                     )
                     if response.status_code == 200:
@@ -859,7 +897,10 @@ class VRChatOSCManager:
                 # Two strikes before declaring dead -- one stray timeout on a busy
                 # system shouldn't kick us into the disconnect path.
                 if consecutive_failures >= 2:
-                    self._handle_disconnect(f"OSCQuery HTTP unreachable ({last_failure_kind})")
+                    # only_port: if we switched to a restarted VRChat while
+                    # this poll was out, the miss isn't about the new one.
+                    self._handle_disconnect(f"OSCQuery HTTP unreachable ({last_failure_kind})",
+                                            only_port=port)
                     consecutive_failures = 0
 
         self._health_thread = threading.Thread(target=loop, daemon=True, name="OSC-HealthCheck")
@@ -1001,7 +1042,19 @@ class VRChatOSCManager:
         except Exception as e:
             self._log(f"silent-reprobe failed: {type(e).__name__}: {e}")
 
-    def _fetch_osc_ports(self):
+    @staticmethod
+    def _vrchat_answers(http_port: int) -> bool:
+        """Does the VRChat behind this OSCQuery HTTP port answer right now?"""
+        try:
+            return requests.get(f"http://127.0.0.1:{http_port}/",
+                                timeout=1.5).status_code == 200
+        except Exception:
+            return False
+
+    def _fetch_osc_ports(self, http_port: int, name: str):
+        # `http_port` / `name` are the VRChat record being tried. They become
+        # the connection's only once its OSCQuery root answers: a dead
+        # leftover record must never leave the health check polling its port.
         try:
             # Snapshot the server: this runs on a zeroconf callback thread
             # and can race stop() (which closes and Nones the server). Bail
@@ -1011,10 +1064,12 @@ class VRChatOSCManager:
             server = self.osc_server
             if server is None or self._shutdown.is_set():
                 return
-            self._log(f"fetching OSCQuery root from http://{self.vrc_ip}:{self.http_port}/")
-            response = requests.get(f"http://{self.vrc_ip}:{self.http_port}/", timeout=2)
+            self._log(f"fetching OSCQuery root from http://{self.vrc_ip}:{http_port}/")
+            response = requests.get(f"http://{self.vrc_ip}:{http_port}/", timeout=2)
             if response.status_code == 200:
                 data = response.json()
+                self.http_port = http_port
+                self._vrchat_name = name
                 self.vrc_osc_port = data.get('OSC Port', VRC_DEFAULT_PORT)
                 self._log(f"VRChat OSC port resolved: {self.vrc_osc_port} "
                           f"(our listen port: {self.local_listen_port})")
@@ -1421,7 +1476,10 @@ class VRChatOSCManager:
             
             # Rebuild the master cache in the Central Store
             num_params = store.rebuild_from_json(data)
-            
+            # A freshly loaded SPS 3 avatar starts with OGB/Enabled false:
+            # turn its touch receivers on now, not at the next 5 s beat.
+            self._send_ogb_presence()
+
             if hasattr(self, 'global_osc_callback') and self.global_osc_callback:
                 self.global_osc_callback("SYS/OSCQuery_Status", f"Loaded {num_params} total parameters")
 
@@ -1441,6 +1499,15 @@ class VRChatOSCManager:
             for child in node["CONTENTS"].values():
                 results.update(self._flatten_oscquery_node(child))
         return results
+
+    def _send_ogb_presence(self) -> None:
+        """Tell the avatar a haptics app is listening (OGB_PRESENCE_ADDRESSES).
+        Fire-and-forget UDP; a send error must never break its caller."""
+        for address in OGB_PRESENCE_ADDRESSES:
+            try:
+                self.send_parameter(address, True, ignore_rate_limit=True)
+            except Exception:
+                pass
 
     def send_parameter(self, address: str, value: Any,
                        ignore_rate_limit: bool = False,

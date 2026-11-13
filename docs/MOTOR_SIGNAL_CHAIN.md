@@ -263,6 +263,19 @@ Two rings rather than one because a shared accumulator would let the
 out-stroke stomp the in-stroke's decay tail at a direction change —
 precisely when an asymmetric tuning is supposed to be audible.
 
+**VRChat's own touch speed (SPS 3 avatars, 2026-11).** VRCFury 1.1443.0
+and later give every touch and frot contact a `<contact>_SenderVelocityMagnitude`:
+how fast the touching hand or plug moves, in m/s. The router passes it in
+as `sender_speed` (1 m/s = full, `sps3_zone.SPEED_FULL_MPS`), and it
+strikes **both** rings, max-wins with the speed worked out from `d/dt`: it
+has no direction, and it catches what `d/dt` cannot — a hand sliding along
+at the same distance, where the level stays flat. Same fall-off, cutoff,
+gains and curve, so Combine decides the mix as for any speed: Max / Add
+keep a still hand felt, Multiply makes touch respond only while the hand
+moves. Depth contacts never feed it (penetration keeps its in/out speed
+from `d/dt`), and a simulator-driven chain gets none. Older avatars report
+none, so nothing changes for them.
+
 **Removed from current Speed:** `enabled` flag, `mode`,
 `input_deadband`, `output_cutoff`, `decay_tau`. The first two of
 those become invisible constants inside the speed detector (see

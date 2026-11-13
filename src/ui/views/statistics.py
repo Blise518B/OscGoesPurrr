@@ -40,6 +40,7 @@ from ui.text_helpers import fmt_when
 from ui.widgets import Card as _Card
 from ui.views.statistics_people import StatisticsPeopleMixin
 from ui.views.statistics_session import StatisticsSessionMixin
+from ui.frame_clock import when_on_screen
 
 
 _REFRESH_MS = 1000
@@ -120,7 +121,7 @@ class StatisticsMixin(StatisticsPeopleMixin, StatisticsSessionMixin):
         if getattr(self, "_stats_refresh_timer", None) is None:
             t = QTimer(self.window)
             t.setInterval(_REFRESH_MS)
-            t.timeout.connect(self._stats_tick)
+            t.timeout.connect(when_on_screen(self, self._stats_tick))
             t.start()
             self._stats_refresh_timer = t
 

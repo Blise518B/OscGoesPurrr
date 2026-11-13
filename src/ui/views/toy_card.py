@@ -33,6 +33,7 @@ from ui.views.card_parts import (
     bigger, fmt_period, hue_color, period_to_slider, segmented, set_quiet, slider,
     slider_to_period, small_label,
 )
+from ui import frame_clock as _frame_clock
 from ui.widgets import RainbowMeter
 
 _DEFAULT_PERIOD = {"sine": 2.0, "square": 1.0, "triangle": 2.0, "saw": 2.0,
@@ -70,7 +71,7 @@ class _Graph(QWidget):
         self._hist.append((now, self._sample()))
         while self._hist and now - self._hist[0][0] > _GRAPH_S:
             self._hist.popleft()
-        self.update()
+        _frame_clock.request(self)      # 20 fps while OGP isn't focused
 
     def paintEvent(self, _event) -> None:
         p = QPainter(self)

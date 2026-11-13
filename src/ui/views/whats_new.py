@@ -1,7 +1,9 @@
 """The "What's new" window, and the jumps its buttons make.
 
 Opens once at launch after an update (controllers/whats_new_facade.py
-decides) and from Settings → Quality of Life → What's new. Each change is
+decides) and from Settings → Quality of Life → What's new. One release
+per page, newest first, with Back / Next when there are several (after an
+update that skipped some, and always from Settings). Each change is
 a title and a sentence or two; a change that lives somewhere in the app
 gets a "Take me there" button, which closes the window, opens that page,
 scrolls to the card and lights it up for a moment so the eye lands on it.
@@ -13,7 +15,7 @@ from __future__ import annotations
 import shiboken6
 from PySide6.QtCore import QPoint, Qt, QTimer
 from PySide6.QtWidgets import (
-    QDialog, QLabel, QPushButton, QSizePolicy, QWidget,
+    QDialog, QLabel, QPushButton, QSizePolicy, QStackedWidget, QWidget,
 )
 
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
@@ -59,7 +61,7 @@ class WhatsNewMixin:
     `select_view`, `_repolish` and `controller`."""
 
     def open_whats_new(self) -> None:
-        """The newest notes this build carries, on request."""
+        """Every release's notes this build carries, on request."""
         getter = getattr(self.controller, "get_whats_new", None)
         self.show_whats_new(getter() if callable(getter) else [])
 
@@ -87,17 +89,29 @@ class WhatsNewMixin:
         # The icon column only when there is an icon to show
         icons = any(item[3] for _v, items in releases for item in items)
 
+        # One release per page, newest first: someone who skipped a few
+        # updates pages back through each one's news.
+        pages = QStackedWidget()
+        pages.setObjectName("newsPages")
         for index, (version, items) in enumerate(releases):
+            page = QWidget()
+            page_lay = _vbox(0, 14)
+            page.setLayout(page_lay)
             head = QLabel(
                 f"What's new in v{_html_escape(str(version))}" if index == 0
                 else f"Before that, in v{_html_escape(str(version))}")
             head.setObjectName("sectionTitle")
             head.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-            lay.addWidget(head)
+            page_lay.addWidget(head)
             for title, text, target, icon in items:
-                lay.addWidget(self._whats_new_row(
+                page_lay.addWidget(self._whats_new_row(
                     dlg, title, text, target, jumped,
                     icon if icons else None))
+            page_lay.addStretch(1)
+            pages.addWidget(page)
+        lay.addWidget(pages)
+        if pages.count() > 1:
+            lay.addLayout(self._whats_new_pager(pages))
 
         lay.addSpacing(4)
         foot = _hbox(0, 12)
@@ -126,7 +140,15 @@ class WhatsNewMixin:
         # The texts wrap, so the height depends on the width: fix the
         # width and take the height the layout needs at it. (Left to its
         # size hint, a dialog of wrapped labels comes out too tall and
-        # spreads the slack between the rows.)
+        # spreads the slack between the rows.) Every page gets the room
+        # of the tallest, so the window and its buttons stay put while
+        # paging.
+        dlg.ensurePolished()
+        margins = lay.contentsMargins()
+        inner = _WIDTH_PX - margins.left() - margins.right()
+        pages.setFixedHeight(max(
+            pages.widget(i).layout().totalHeightForWidth(inner)
+            for i in range(pages.count())))
         lay.activate()
         dlg.setFixedSize(_WIDTH_PX, lay.totalHeightForWidth(_WIDTH_PX))
 
@@ -134,6 +156,38 @@ class WhatsNewMixin:
         # open(), not exec(): this is called from the controller's launch
         # callback, and a nested event loop would hold that up.
         dlg.open()
+
+    def _whats_new_pager(self, pages: QStackedWidget):
+        """Back / "2 of 3" / Next under the pages. A button that has
+        nowhere to go is hidden but keeps its room, so the other one stays
+        where the pointer is."""
+        nav = _hbox(0, 12)
+        back = QPushButton("← Back")
+        nxt = QPushButton("Next →")
+        count = QLabel()
+        count.setObjectName("newsCount")
+        count.setProperty("muted", "true")
+        count.setAlignment(Qt.AlignCenter)
+        for button in (back, nxt):
+            button.setProperty("role", "secondary")
+            button.setCursor(Qt.PointingHandCursor)
+            policy = button.sizePolicy()
+            policy.setRetainSizeWhenHidden(True)
+            button.setSizePolicy(policy)
+        nav.addWidget(back)
+        nav.addWidget(count, 1)
+        nav.addWidget(nxt)
+
+        def _turn(step: int) -> None:
+            at = max(0, min(pages.count() - 1, pages.currentIndex() + step))
+            pages.setCurrentIndex(at)
+            back.setVisible(at > 0)
+            nxt.setVisible(at < pages.count() - 1)
+            count.setText(f"{at + 1} of {pages.count()}")
+        back.clicked.connect(lambda _=False: _turn(-1))
+        nxt.clicked.connect(lambda _=False: _turn(1))
+        _turn(0)
+        return nav
 
     def _whats_new_row(self, dlg: QDialog, title: str, text: str,
                        target: str, jumped: list, icon=None) -> QWidget:

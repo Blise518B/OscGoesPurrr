@@ -53,6 +53,7 @@ from ui.widgets import (
     Card as _Card,
     install_rainbow_scrollbars as _install_rainbow_scrollbars,
 )
+from ui.frame_clock import when_on_screen
 
 
 # Refresh cadence for the checklist and the toy summaries. 2 Hz reads as
@@ -218,7 +219,7 @@ class HomeMixin:
         thl.addStretch(1)
         self._toy_scan_timer = QTimer(toys_hdr_row)
         self._toy_scan_timer.setInterval(500)
-        self._toy_scan_timer.timeout.connect(self._refresh_toy_scan)
+        self._toy_scan_timer.timeout.connect(when_on_screen(self, self._refresh_toy_scan))
         self._toy_scan_timer.start()
         test_all = QPushButton("Test all")
         test_all.setProperty("role", "secondary")
@@ -265,7 +266,7 @@ class HomeMixin:
         if getattr(self, "_home_refresh_timer", None) is None:
             t = QTimer(self.window)
             t.setInterval(_HOME_REFRESH_MS)
-            t.timeout.connect(self._refresh_home_dynamic)
+            t.timeout.connect(when_on_screen(self, self._refresh_home_dynamic))
             t.start()
             self._home_refresh_timer = t
 

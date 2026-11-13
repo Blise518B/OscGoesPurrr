@@ -48,6 +48,7 @@ class WhatsNewFacade:
         return True
 
     def get_whats_new(self) -> list:
-        """The newest release notes this build carries, for the "What's
-        new" button: `[(version, [(title, text, target), ...]), ...]`."""
+        """Every release's notes this build carries, newest first, for the
+        "What's new" button to page through:
+        `[(version, [(title, text, target, icon), ...]), ...]`."""
         return whats_new.as_plain(whats_new.releases_for(__version__))

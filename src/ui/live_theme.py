@@ -29,7 +29,7 @@ from __future__ import annotations
 from typing import Callable, Dict, List, Optional
 
 import shiboken6
-from PySide6.QtCore import QElapsedTimer, QObject, QPoint, QTimer
+from PySide6.QtCore import QElapsedTimer, QObject, QPoint, Qt, QTimer
 from PySide6.QtWidgets import QLabel, QWidget
 
 import retint
@@ -261,4 +261,9 @@ class LiveTheme(QObject):
         for w in self._window.findChildren(QWidget):
             if not in_section(w):
                 self._retint_widget(w, mapping, seen)
+            if w.testAttribute(Qt.WA_OpaquePaintEvent):
+                # An opaque widget (the live meters and graphs) is left out
+                # when its parent repaints, and one standing still would
+                # keep the old colours: tell it itself.
+                w.update()
         self._window.update()

@@ -441,15 +441,19 @@
     };
   }
 
-  /** MotorRouter._derive_speed_signal -> [in, out] */
-  function deriveSpeedSignal(cs, position, dt, decayTauS) {
+  /** MotorRouter._derive_speed_signal -> [in, out]. `senderSpeed` (0..1,
+   *  optional) is VRChat's own touch speed on SPS 3 avatars; it strikes both
+   *  rings. The demo's avatar reports none, so it stays 0 here. */
+  function deriveSpeedSignal(cs, position, dt, decayTauS, senderSpeed) {
     var prevIn = cs.smoothed_speed_in;
     var prevOut = cs.smoothed_speed_out;
     var decayTau = Math.max(SPEED_DECAY_MS_MIN / 1000.0, decayTauS);
     var cutoff = SPEED_OUTPUT_CUTOFF;
+    var sender = senderSpeed > 0.0 ? Math.min(senderSpeed, 1.0) : 0.0;
     var smIn, smOut;
     if (dt <= 0.0) {
-      smIn = prevIn; smOut = prevOut;       // first sample: reuse
+      smIn = Math.max(prevIn, sender);       // first sample: reuse
+      smOut = Math.max(prevOut, sender);
     } else {
       var delta = position - cs.last_position;
       var magnitude = Math.abs(delta);
@@ -462,8 +466,8 @@
       }
       var decay = Math.exp(-dt / decayTau);
       // only the direction actually travelled is struck; the other rings down
-      smIn = Math.max(delta > 0.0 ? signal : 0.0, prevIn * decay);
-      smOut = Math.max(delta < 0.0 ? signal : 0.0, prevOut * decay);
+      smIn = Math.max(delta > 0.0 ? signal : 0.0, sender, prevIn * decay);
+      smOut = Math.max(delta < 0.0 ? signal : 0.0, sender, prevOut * decay);
     }
     cs.smoothed_speed_in = smIn;
     cs.smoothed_speed_out = smOut;

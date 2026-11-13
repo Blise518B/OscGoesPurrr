@@ -223,6 +223,9 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
             for peer in list(self._friend_perms):
                 drop(peer)
         self._needs_recalculation = True
+        wake = getattr(self, "_wake_routing", None)   # the routing tick may sleep
+        if wake is not None:
+            wake()
 
     def _friends_shutdown(self) -> None:
         listener = getattr(self, "_links_listener", None)
@@ -583,6 +586,9 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
     def set_friends_paused(self, paused: bool) -> None:
         self.friends_settings.set_paused(paused)
         self._needs_recalculation = True
+        wake = getattr(self, "_wake_routing", None)   # the routing tick may sleep
+        if wake is not None:
+            wake()
         release = getattr(self, "_params_release_all", None)
         if paused and release is not None:
             release()                       # avatar buttons they hold let go

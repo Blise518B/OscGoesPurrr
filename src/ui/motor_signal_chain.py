@@ -51,8 +51,10 @@ from constants import (
 )
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
 from ui import theme as _theme
+from ui import frame_clock as _frame_clock
 from ui.widgets import ToggleSwitch, RainbowMeter as _RainbowMeter, ProgressProxy as _ProgressProxy
 from ui.trace_graph import TraceGraph as _TraceGraph
+from ui.frame_clock import when_on_screen
 
 
 # ----------------------------------------------------------
@@ -882,12 +884,15 @@ class ActivityMeter(QFrame):
         self.setMinimumHeight(14)
         self.setMaximumHeight(14)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        # Fills its whole box: nothing behind it repaints with it.
+        self.setAttribute(Qt.WA_OpaquePaintEvent, True)
 
     def set_value(self, value: float) -> None:
+        # Arrives at the router's rate: repaint with the next frame.
         v = max(0.0, min(1.0, float(value)))
         if v != self._value:
             self._value = v
-            self.update()
+            _frame_clock.request(self)
 
     def set_threshold(self, threshold: float) -> None:
         t = max(0.0, min(1.0, float(threshold)))
@@ -899,7 +904,7 @@ class ActivityMeter(QFrame):
         b = bool(is_open)
         if b != self._open:
             self._open = b
-            self.update()
+            _frame_clock.request(self)
 
     def paintEvent(self, _ev) -> None:
         p = QPainter(self)
@@ -1982,7 +1987,7 @@ class MotorSignalChainWidget(QFrame):
         # slow (500ms); subtitles are at-a-glance text, not live data.
         self._subtitle_timer = QTimer(self)
         self._subtitle_timer.setInterval(_STAGE_SUBTITLE_REFRESH_MS)
-        self._subtitle_timer.timeout.connect(self._refresh_stage_subtitles)
+        self._subtitle_timer.timeout.connect(when_on_screen(self, self._refresh_stage_subtitles))
         self._subtitle_timer.start()
 
         # Per-(motor, chain) intermediates feed the mini-graphs, the
@@ -5088,7 +5093,7 @@ class _ChainFoldBar(QFrame):
         # config dict at tick rate.
         self._refresh_timer = QTimer(self)
         self._refresh_timer.setInterval(1000)
-        self._refresh_timer.timeout.connect(self._refresh_static)
+        self._refresh_timer.timeout.connect(when_on_screen(self, self._refresh_static_tick))
         self._refresh_static()
 
     # ---- live path ----
@@ -5103,6 +5108,12 @@ class _ChainFoldBar(QFrame):
                 self._out_label.setText(f"{out:.2f}")
         except RuntimeError:
             pass
+
+    def _refresh_static_tick(self) -> None:
+        """Timer slot: only while the folded face is shown (hidden pages
+        do no background work); direct calls stay ungated."""
+        if self.isVisible():
+            self._refresh_static()
 
     def _refresh_static(self) -> None:
         try:

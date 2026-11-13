@@ -52,6 +52,7 @@ from ui.views.suits_cards import (
     INSPECTOR_W, CheckRow, ChipRow, MuscleCard, PartCard, Stage, Swatch, TrackerCard,
 )
 from ui.widgets import Card as _Card, ToggleSwitch
+from ui.frame_clock import when_on_screen
 
 VIEW_NAME = "Suits"
 COLUMN_TOP = 24          # the inspector column starts level with her, under FRONT / BACK
@@ -106,7 +107,7 @@ class SuitsMixin:
 
         self._suits_live_timer = QTimer()
         self._suits_live_timer.setInterval(150)
-        self._suits_live_timer.timeout.connect(self._refresh_suits_live)
+        self._suits_live_timer.timeout.connect(when_on_screen(self, self._refresh_suits_live))
         self._suits_live_timer.start()
 
         self._rebuild_suit_routes()

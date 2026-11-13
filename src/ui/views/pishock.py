@@ -36,6 +36,7 @@ from ui.views.pishock_cards import (
 )
 from ui.views.pishock_rules import PiShockRulesMixin
 from ui.widgets import ToggleSwitch, Card as _Card
+from ui.frame_clock import when_on_screen
 
 VIEW_NAME = "Shockers"
 
@@ -67,7 +68,7 @@ class PiShockMixin(PiShockRulesMixin):
 
         self._pishock_live_timer = QTimer()
         self._pishock_live_timer.setInterval(150)
-        self._pishock_live_timer.timeout.connect(self._refresh_pishock_live)
+        self._pishock_live_timer.timeout.connect(when_on_screen(self, self._refresh_pishock_live))
         self._pishock_live_timer.start()
 
         self.refresh_pishock_status()

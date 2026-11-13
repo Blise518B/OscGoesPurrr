@@ -23,6 +23,7 @@ from ui.widgets import (
     ToggleSwitch,
     install_rainbow_scrollbars as _install_rainbow_scrollbars,
 )
+from ui.frame_clock import when_on_screen
 
 
 class SessionsMixin:
@@ -185,7 +186,7 @@ class SessionsMixin:
         self._refresh_sessions_view(force_list_rebuild=True)
         self._sessions_refresh_timer = QTimer(self.window)
         self._sessions_refresh_timer.setInterval(1000)
-        self._sessions_refresh_timer.timeout.connect(self._sessions_tick)
+        self._sessions_refresh_timer.timeout.connect(when_on_screen(self, self._sessions_tick))
         self._sessions_refresh_timer.start()
 
     def _sessions_tick(self) -> None:
@@ -527,7 +528,7 @@ class SessionsMixin:
         self._repopulate_replay_sessions()
         self._replay_refresh_timer = QTimer(self.window)
         self._replay_refresh_timer.setInterval(500)
-        self._replay_refresh_timer.timeout.connect(self._replay_tick)
+        self._replay_refresh_timer.timeout.connect(when_on_screen(self, self._replay_tick))
         self._replay_refresh_timer.start()
 
     def _format_replay_label(self, s: Dict[str, Any]) -> str:

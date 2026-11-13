@@ -17,6 +17,7 @@ from PySide6.QtWidgets import QLabel, QPushButton
 
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
 from ui.widgets import Card
+from ui.frame_clock import when_on_screen
 
 # releases/latest/download/<fixed name>: always the newest release's copy
 PREFAB_URL = ("https://github.com/Blise518B/OscGoesPurrr/releases/latest/download/"
@@ -108,7 +109,7 @@ class AvatarMenuCard(Card):
                     "without VRCFury, the manual way, and every parameter.")
         self._timer = QTimer(self)
         self._timer.setInterval(_REFRESH_MS)
-        self._timer.timeout.connect(self.refresh)
+        self._timer.timeout.connect(when_on_screen(self, self.refresh))
         self._timer.start()
         self.refresh(force=True)
 

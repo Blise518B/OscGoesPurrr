@@ -204,6 +204,7 @@ class OscGoesPurrrUI(
         self.window.setMinimumSize(SIDEBAR_WIDTH + 200, 360)
         self.window.resize(1100, 700)
         self.window.set_activate_handler(self._on_window_activated)
+        self.window.set_restore_handler(self._on_window_restored)
         # The colour picker's engine: the app-level stylesheet above is set
         # once and never again; a colour change is swept through the
         # sections registered with this, a slice per event-loop turn.
@@ -824,6 +825,21 @@ class OscGoesPurrrUI(
         # handlers early-out on isVisible) — run the page's refresher(s)
         # once on arrival so it never shows data older than one tick.
         # Now that setCurrentWidget has run, the visibility checks pass.
+        self._refresh_page_on_arrival(view_name)
+
+    def _current_view_name(self) -> Optional[str]:
+        current = self.main_stack.currentWidget() if self.main_stack is not None else None
+        return next((n for n, w in self.views.items() if w is current), None)
+
+    def _on_window_restored(self) -> None:
+        """Back from minimized or the tray: the page timers skipped their
+        work meanwhile (frame_clock.when_on_screen), so catch the page up
+        at once, as on arrival."""
+        name = self._current_view_name()
+        if name:
+            self._refresh_page_on_arrival(name)
+
+    def _refresh_page_on_arrival(self, view_name: str) -> None:
         arrival_refreshers = {
             "Home": ("_refresh_home_dynamic",),
             "Statistics": ("_refresh_statistics_view",),

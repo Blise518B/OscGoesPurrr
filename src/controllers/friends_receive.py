@@ -110,6 +110,9 @@ class FriendsReceiveMixin:
         if peer in self._friend_drive:
             self._friend_drive = {k: v for k, v in self._friend_drive.items() if k != peer}
             self._needs_recalculation = True
+            wake = getattr(self, "_wake_routing", None)   # the routing tick may sleep
+            if wake is not None:
+                wake()
 
     # ------------------------------------------------------------------
     # Their cmds, shocks and Stops -- the link's thread
@@ -139,6 +142,9 @@ class FriendsReceiveMixin:
         if (old is None or old.levels != levels or old.ovr != override or old.syn != syn
                 or {k: v["p"] for k, v in old_pat.items()} != patterns):
             self._needs_recalculation = True
+            wake = getattr(self, "_wake_routing", None)   # the routing tick may sleep
+            if wake is not None:
+                wake()
         if holds or peer in self._friend_holds:
             with self._friend_lock:
                 self._friend_holds = {**self._friend_holds, peer: (holds, now)}

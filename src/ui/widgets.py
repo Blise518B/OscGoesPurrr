@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 import constants as _C
+from ui import frame_clock
 from constants import (
     COLOR_BG,
     COLOR_BUTTON,
@@ -175,6 +176,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._close_handler: Optional[Callable] = None
         self._activate_handler: Optional[Callable] = None
+        self._restore_handler: Optional[Callable] = None
         self._allow_close = False
 
     def set_close_handler(self, cb: Callable) -> None:
@@ -184,6 +186,19 @@ class MainWindow(QMainWindow):
         """Call `cb` whenever the user brings this window to the front."""
         self._activate_handler = cb
 
+    def set_restore_handler(self, cb: Callable) -> None:
+        """Call `cb` when the window is back on screen after being minimized
+        or hidden to the tray (the pages skip their refreshes meanwhile)."""
+        self._restore_handler = cb
+
+    def _restored(self) -> None:
+        frame_clock.wake()          # the live meters paint again at once
+        if self._restore_handler is not None:
+            try:
+                self._restore_handler()
+            except Exception:
+                pass      # a catch-up refresh; never worth breaking the window
+
     def changeEvent(self, event):
         super().changeEvent(event)
         if (event.type() == QEvent.ActivationChange and self.isActiveWindow()
@@ -192,6 +207,14 @@ class MainWindow(QMainWindow):
                 self._activate_handler()
             except Exception:
                 pass      # a notification; never worth breaking the window
+        elif (event.type() == QEvent.WindowStateChange
+              and event.oldState() & Qt.WindowMinimized and not self.isMinimized()):
+            self._restored()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not event.spontaneous():      # shown again from the tray
+            self._restored()
 
     def allow_close(self) -> None:
         self._allow_close = True
@@ -237,6 +260,12 @@ class ToyFrame(QFrame):
         if hue != self._hue:
             self._hue = hue
             self.update()
+
+    def ground(self) -> Optional[str]:
+        """The fill it paints inside its outline right now (None: none,
+        the page shows through)."""
+        from ui import theme as _theme
+        return _theme.toy_frame_colors(self._hue)[1]
 
     def set_number(self, number: int) -> None:
         """Its place among the connected toys (1, 2, 3 ...), in the top
@@ -338,6 +367,22 @@ class ProgressProxy:
         return self._bar.value() / 1000.0
 
 
+class _RepaintOnHover(QObject):
+    """Repaints `target` when the pointer enters or leaves `watched` -- for
+    an opaque widget that paints `watched`'s hover tint as its own ground.
+    Lives as long as `target`."""
+
+    def __init__(self, watched: QWidget, target: QWidget) -> None:
+        super().__init__(target)
+        self._target = target
+        watched.installEventFilter(self)
+
+    def eventFilter(self, _obj, ev) -> bool:  # noqa: N802
+        if ev.type() in (QEvent.Enter, QEvent.Leave):
+            self._target.update()
+        return False
+
+
 class RainbowMeter(QWidget):
     """Read-only intensity meter painted with a static brand-rainbow track.
 
@@ -348,13 +393,39 @@ class RainbowMeter(QWidget):
 
     API mirrors QProgressBar.setValue/value so ProgressProxy works
     unchanged.
+
+    A new value repaints with the next frame of `ui.frame_clock` (it
+    arrives at the router's rate; the screen needs far fewer). A meter
+    given a ground (`set_ground`) paints its whole box, the ground in its
+    rounded corners included, so whatever lies behind it no longer
+    repaints with every frame -- the toy rows on Home, where that was
+    most of the cost.
     """
 
     def __init__(self, parent: Optional[QWidget] = None, maximum: int = 1000):
         super().__init__(parent)
         self._max = max(1, int(maximum))
         self._value = 0
+        self._ground: Optional[Callable[[], str]] = None
         self.setFixedHeight(8)
+
+    def set_ground(self, ground: Optional[Callable[[], str]],
+                   hover_of: Optional[QWidget] = None) -> None:
+        """`ground()` -> the colour behind the meter right now (read at every
+        paint, so it can follow hover and the colour picker); None: paint
+        only the pill and let the parent show through.
+
+        An opaque widget is left out when its parent repaints (that is the
+        point), so a meter standing still must be told when its ground
+        changes: `hover_of` is the widget whose hover tint lies behind it
+        (the pointer entering or leaving it repaints the meter), and the
+        colour picker's sweep repaints every opaque widget at its end
+        (ui/live_theme.py)."""
+        self._ground = ground
+        self.setAttribute(Qt.WA_OpaquePaintEvent, ground is not None)
+        if hover_of is not None:
+            _RepaintOnHover(hover_of, self)
+        self.update()
 
     # -- QProgressBar-compatible API -----------------------------------
     def setRange(self, minimum: int, maximum: int) -> None:
@@ -366,7 +437,7 @@ class RainbowMeter(QWidget):
         v = max(0, min(self._max, int(v)))
         if v != self._value:
             self._value = v
-            self.update()
+            frame_clock.request(self)
 
     def value(self) -> int:
         return self._value
@@ -384,6 +455,8 @@ class RainbowMeter(QWidget):
         w = self.width()
         h = self.height()
         radius = h / 2.0
+        if self._ground is not None:
+            p.fillRect(self.rect(), QColor(self._ground()))
 
         # Track: the well inside a 1px frame line (inset half a pen so
         # the outline is not clipped by the widget edge).

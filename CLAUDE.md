@@ -423,8 +423,22 @@ app's Me: its levels reach the demo's toys through demo.js `setDrive`, the
 app's `_apply_friend_drive` rule (your strength, Off, each toy's band;
 Override replaces); its shockers are the Shockers page's, its board My
 Avatar Remote's. A demo friend has nobody at the other end, and the page
-says so in its intro (only toys, the shocker hub, friends and VRChat are
-simulated). Suits stay out of the demo while they're hidden in the app.
+says so in its intro (only toys, the shocker hub, the suits, friends and
+VRChat are simulated). **Suits joined it (2026-11-11, Blise's ask: a
+bHaptics vest as the example):** `docs/assets/demo-suits.js`, its sidebar
+entry shown while Settings → Features has a suit on. The demo's PC has a
+TactSuit Pro vest connected with bHaptics switched on -- like the shockers
+and Avatar Remote, on in the demo though a new install starts them off --
+and OWO switched off, My OWO connected for whoever switches it on
+(`#demo=suits` switches both on). Each suit switched on has its Home row
+under the shocker hub (home_devices.py's words, On / Off and the sharing
+switch). Her drawings are copied from `src/Images/suits` into
+`docs/assets/demo/suit-*.png` and tinted with the accent, every dot and
+patch at `body_view.PLACES` (ported, so new drawings or dots mean
+re-porting). The avatar has the vest, head and four front OWO contacts;
+nothing on it touches the suits, so only a held dot and a part's Feel it
+reach Right now. The demo's sidebar scrolls when it runs out of room, as
+the app's does.
 Change one of these pages in the app → bring its demo page along and
 compare with `tools/app_shots.py --dump <dir> --size 1100x2600`.
 
@@ -469,6 +483,18 @@ sent to the menu's own parameters (`friends_menu._menu_follow`), never one
 the menu just sent. After an avatar load VRChat's replayed values are
 answered with OGP's (`_menu_send`, also on every OSC (re)connect through
 `_send_ogp_state_out`), as for your own controls.
+
+**SPS 3 (2026-11-13, after OscGoesBrrr v2.1.31-34):** VRCFury 1.1443.0
+renamed the zones to `OGB/Socket/...` / `OGB/Plug/...` and measures depth
+with VRChat's contact-receiver extras; `parameter_store` stores them as
+`Orf` / `Pen` and `sps3_zone.py` reads the new contacts (ARCHITECTURE.md §
+Brain). Keep these true: `OGB/Enabled` rides the presence beat next to
+`OGB_ENABLED` (without it such an avatar's plug and socket touch receivers
+stay off); touch on an SPS 3 avatar is its closeness in the Depth channel
+**plus** VRChat's hand speed struck into the Speed channel, mixed by the
+chain's Combine (Blise's call: both, not OGB's speed-only); older avatars
+behave exactly as before. OscGoesBrrr is GPL-3 since v2.1.34: learn from
+it, never copy its code.
 
 **Toys keep their place (Blise's ask, 2026-10-28):** connected toys are in
 the order they connected (`intiface_facade.get_connected_toys_in_order`;

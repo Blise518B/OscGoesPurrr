@@ -49,6 +49,7 @@ from ui.views.friends_panel import PANEL_MAX_W, FriendsPanelMixin
 from ui.views.friends_update import FriendsUpdateMixin
 from ui.views.friends_vrc_tip import VrchatMenuTip
 from ui.widgets import Card as _Card
+from ui.frame_clock import when_on_screen
 
 VIEW_NAME = "Friends"
 
@@ -117,7 +118,7 @@ class FriendsMixin(FriendsListMixin, FriendsPanelMixin, FriendsBoardMixin, Frien
         self._friend_rows, self._group_rows, self._panel_w = {}, {}, {}
         self._friends_live_timer = QTimer()
         self._friends_live_timer.setInterval(150)
-        self._friends_live_timer.timeout.connect(self._refresh_friends_live)
+        self._friends_live_timer.timeout.connect(when_on_screen(self, self._refresh_friends_live))
         self._friends_live_timer.start()
         self.refresh_friends()
 

@@ -307,6 +307,10 @@ BTN_HEIGHT_SMALL = 30
 # rate sets end-to-end *latency*; the per-feature command rate to real hardware
 # is capped separately by HAPTIC_MAX_SEND_HZ below, so a fast loop is safe.
 HAPTIC_POLL_RATE = 0.01
+# The engine worker's pace while there is nothing to send to: no toy server
+# connected, or connected with no toy. It finds a new toy by polling the
+# device list every 2 s anyway, so this costs no reaction time.
+HAPTIC_IDLE_RATE = 0.1
 # Per-feature send-rate cap (Hz). The engine loop runs fast for low latency, but
 # actual commands to any single motor are throttled to this rate so a real
 # Bluetooth toy is never flooded on a continuously-changing signal. The cap only
@@ -349,6 +353,10 @@ LINEAR_MAX_SEND_INTERVAL_MS = 100.0
 LINEAR_MIN_POSITION_DELTA = 1e-4
 
 ROUTER_POLL_RATE_MS = 16
+# The routing tick's pace while nothing moves (no fresh OSC, every output at
+# zero): it sleeps this long between looks instead of polling at the full
+# rate, and anything that needs it wakes it at once (main._wake_routing).
+ROUTER_IDLE_MS = 100
 QUEUE_POLL_RATE_MS = 50
 UI_REFRESH_RATE_MS = 250
 OSC_BOOT_DELAY_MS = 500

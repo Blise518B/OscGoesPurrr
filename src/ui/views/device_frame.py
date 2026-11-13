@@ -72,6 +72,16 @@ _METER_PX = 56
 _METER_GAP_PX = 3
 
 
+def _toy_bar_ground(bar: QWidget, card) -> str:
+    """What lies behind a toy bar's mini meter right now: the bar's hover
+    tint while the pointer is on it (theme.py, QWidget#toyBar:hover), else
+    the toy frame's fill, else -- an offline toy's frame has none -- the
+    window's ground."""
+    if bar.underMouse():
+        return _theme.CHROME["hover"]
+    return card.ground() or _theme.CHROME["bg"]
+
+
 class DeviceFrameMixin:
 
     # ----------------------------------------------------------
@@ -249,6 +259,10 @@ class DeviceFrameMixin:
         for _ in range(motor_count):
             mb = _RainbowMeter(maximum=1000)
             mb.setFixedHeight(10)
+            # These tick at the router's rate whenever the toy plays: each
+            # paints its own ground (the bar's hover tint, else the toy
+            # frame's), so the frame and the page behind it stay put.
+            mb.set_ground(lambda b=bar, c=card: _toy_bar_ground(b, c), hover_of=bar)
             mini_strip_lay.addWidget(mb)
             mini_bars.append(_ProgressProxy(mb))
         bar_lay.addWidget(mini_bar_strip)
