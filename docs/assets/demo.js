@@ -43,46 +43,73 @@
   ];
   var CONTACT_ZONE = 'Pussy';
   function zonesOf(toyId) { return MODES[S.mode].zones[toyId]; }
-  function hears(toyId) { var z = zonesOf(toyId); return z === 'All SPS' || z.split(', ').indexOf(CONTACT_ZONE) >= 0; }
+  // Who a toy hears, per mode: Touch / Penetration x Self / Others
+  // (contact_filters.py: off / on / off / on by default). The demo's contact
+  // is a partner's penetration, so Penetration · Others is the one it needs.
+  var PAIRS = [['ts', 'Touch', 'Self', 'Touch from yourself', 'your own hands and body touching your avatar’s zones'],
+               ['to', 'Touch', 'Others', 'Touch from others', 'other players’ hands and bodies touching your avatar’s zones'],
+               ['ps', 'Penetration', 'Self', 'Penetration from yourself', 'your own plug in your own sockets'],
+               ['po', 'Penetration', 'Others', 'Penetration from others', 'other players penetrating you, or you them']];
+  var heard = {};
+  function hearOf(toyId) {
+    var k = S.mode + ':' + toyId;
+    return heard[k] || (heard[k] = { ts: false, to: true, ps: false, po: true });
+  }
+  function hears(toyId) {
+    var z = zonesOf(toyId);
+    return (z === 'All SPS' || z.split(', ').indexOf(CONTACT_ZONE) >= 0) && hearOf(toyId).po;
+  }
   function zoneLabel(toyId) {
     var z = zonesOf(toyId), n = z ? z.split(', ').length : 0;
     return z === 'All SPS' ? z : n === 0 ? 'No zones' : n === 1 ? z : n + ' zones';
   }
   var STAGES = ['input', 'depth', 'speed', 'punch', 'combine', 'wake', 'envelope', 'zerocut', 'output'];
   // Pages built in their own files (demo-friends.js, demo-shockers.js,
-  // demo-avatar.js, demo-suits.js): the window keeps a scrolling frame for each.
-  var BUILT = ['Friends', 'My Avatar Remote', 'Shockers', 'Suits'];
+  // demo-avatar.js, demo-suits.js, demo-log.js): the window keeps a scrolling
+  // frame for each.
+  var BUILT = ['Friends', 'My Avatar Remote', 'Shockers', 'Suits', 'Log'];
+  var SPS_NOTE = 'Builds a zone out of your avatar’s own contact receivers, for avatars whose contacts are not standard SPS / OGB sockets and plugs. A source you make here can be picked for any toy, under its Input.';
   var NOTES = {
-    'SPS Sources': 'Builds a zone out of your avatar’s own contact receivers, for avatars whose contacts are not standard SPS / OGB sockets and plugs. A source you make here can be picked for any toy on Home.',
+    'PSVR2': 'Your PlayStation VR2 headset’s rumble motor, from a contact on your avatar, through PSVR2Toolkit (its experimental build, on a jailbroken headset; Windows only): connect it, set its rumble band and test it.',
     'OSC Inspector': 'A live table of every parameter your avatar sends over OSC, with search — for finding the contact you want, or checking that one moves at all.',
     'OSC Diagnostics': 'Shows whether VRChat is reaching the app: the port in use, packets per second, when the last one arrived, and buttons to reconnect by hand.',
     'System Log': 'What the app did and when: toys connecting and dropping, the link to VRChat, updates, errors.',
-    'Help': 'The app’s own manual: what each page is for and how the signal chain works. Every control also explains itself when you rest the pointer on it.'
+    'Help': 'The app’s own manual: what each page is for and how the signal chain works. <b>Take the tour</b> walks you through the app one real step at a time — your toy, its zones, the chips, Test and strength, then what you use — and never changes a setting by itself. Every control also explains itself when you rest the pointer on it.'
   };
 
   var S = {
     mode: 0, strength: 0.85, off: false, sleep: false, page: 'Home',
+    // each toy's own Sleep and Anti-stuck (its bar's chips; toy id -> bool,
+    // anti-stuck on unless false) and the toys' anti-stuck (the Toys page)
+    toySleep: {}, toyAs: {}, as: { enabled: true, active_s: 1, peaked_s: 10 },
     sim: { on: true, hz: 1.0, amp: 1.0, shape: 0 }, manual: null, manualUntil: 0,
     graph: false, graphToy: 'lush', graphMotor: 0, graphChain: 0,
     testUntil: 0, t: 0, scanAt: 24,
     // a friend driving these toys: toy id -> [level 0..1, override]
     drive: {},
-    // the shocker hub on Home and the Shockers page (demo-shockers.js)
-    shock: { armed: true, share: true, on: true },
+    // the shocker hub on Home and the Shockers page (demo-shockers.js);
+    // asking: Arm shocks' question is up (until when)
+    shock: { armed: true, share: true, on: true, asking: 0 },
+    // the PSVR2 headset's row on Home (shown while its feature is on)
+    psvr2: { on: true },
     // Settings -> Features: a switched-off one hides its page. The demo's PC is
     // set up as someone with the hardware has it: the shockers, Avatar Remote
     // and a bHaptics vest switched on (all three start off in a new install);
-    // OWO off, its switch there to try (demo-suits.js)
+    // OWO, the trackers and the headset off, their switches there to try
+    // (demo-suits.js)
     features: { intiface: true, inspector: true, statistics: true, pishock: true, bhaptics: true, owo: false,
-                friends: true, params: true }
+                trackers: false, psvr2: false, friends: true, params: true }
   };
   var ICONS = window.OGPDemoIcons || {};
   // The sidebar's pages: name, icon (ui/icons.py), its colour token ('' = the
   // nav text's), the feature switch that hides it ('a|b': shown while either is on)
-  var NAV = [['Friends', 'friends', 'cyan', 'friends'], ['My Avatar Remote', 'params', 'accent', 'params'],
-             ['Shockers', 'shock', 'yellow', 'pishock'], ['Suits', 'suits', 'orange', 'bhaptics|owo'],
-             ['Statistics', 'stats', '', 'statistics']];
-  var NAV_TOOLS = [['SPS Sources', 'sps'], ['OSC Inspector', 'inspector', '', 'inspector'],
+  // (the app's order: Home, Friends, then the devices as Home lists them)
+  var NAV = [['Friends', 'friends', 'cyan', 'friends'], ['Toys', 'toys', 'pink', 'intiface'],
+             ['Shockers', 'shock', 'yellow', 'pishock'], ['Suits', 'suits', 'orange', 'bhaptics|owo|trackers'],
+             ['PSVR2', 'psvr2', 'blue', 'psvr2'],
+             ['My Avatar Remote', 'params', 'accent', 'params'],
+             ['Statistics', 'stats', '', 'statistics'], ['Log', 'activity', '', 'friends|pishock']];
+  var NAV_TOOLS = [['OSC Inspector', 'inspector', '', 'inspector'],
                    ['OSC Diagnostics', 'diagnostics'], ['System Log', 'log']];
 
   // ── the engine: one real chain object per motor ──────────────────────────
@@ -142,7 +169,29 @@
       '</div>';
   }
 
-  function toyHTML(toy) {
+  // Who a toy hears, after its zones: Touch [Self][Others] Penetration [Self][Others]
+  function chipsHTML() {
+    var out = '', cap = '';
+    PAIRS.forEach(function (p) {
+      if (p[1] !== cap) { cap = p[1]; out += '<span class="o-ccap">' + cap + '</span>'; }
+      out += '<span class="o-cchip" data-pair="' + p[0] + '" data-tip="chip-' + p[0] + '">' + p[2] + '</span>';
+    });
+    return out;
+  }
+  // A toy's own Sleep over its Anti-stuck, beside the contact chips
+  // (device_frame._build_safety_chips); refreshSafety paints them
+  function safetyHTML() {
+    return '<span class="o-cchip" data-safe="sleep" data-tip="toysleep">Sleep</span>' +
+      '<span class="o-cchip on" data-safe="as" data-tip="toyas">Anti-stuck</span>';
+  }
+  // One toy, in two places (device_frame._build_toy_bar): its row on Home,
+  // which opens its card on the Toys page, and that card, open on its
+  // motors' folded chains. At this width the bar is one line, all of it
+  // centred on it: the name and zones, the chips as two rows -- Touch above
+  // Penetration, the captions in a column -- with Sleep over Anti-stuck
+  // beside them, then the battery, meters, Mute and Test (the app drops to
+  // two lines only in a narrower window).
+  function toyHTML(toy, where) {
     var style = toy.hue ? ' style="--hue:var(--' + toy.hue + ');--hue-mid:var(--' + toy.hue + '-mid)"' : '';
     // its place among the connected toys, in its corner (the app's ToyFrame)
     var num = toy.on ? '<span class="o-tnum">' + (TOYS.filter(function (t) { return t.on; }).indexOf(toy) + 1) + '</span>' : '';
@@ -152,21 +201,46 @@
       ? '<span class="o-batt">' + BATT_SVG + toy.batt + '%</span><span class="o-meters">' + meters + '</span>' +
         '<span class="o-btn small" data-act="mute" data-tip="mute">Mute</span><span class="o-btn small" data-act="test" data-tip="testone">Test</span>'
       : '<span class="o-pill idle">OFFLINE</span>';
-    return '<div class="o-toy' + (toy.on ? '' : ' offline') + '" data-toy="' + toy.id + '"' + style + '>' + num +
-      '<div class="o-toybar" data-tip="' + (toy.on ? 'toy' : 'offline') + '">' +
-      '<span class="o-ticon"><img src="assets/demo/' + toy.icon + '.png" alt=""></span><span class="o-dot"></span>' +
-      '<span class="o-tname">' + toy.name + '</span><span class="o-tzones"></span><span class="o-tspace"></span>' + right +
-      '<span class="o-caret">▸</span></div><div class="o-toybody"></div></div>';
+    var caret = '<span class="o-caret">' + (where === 'home' ? '›' : '▸') + '</span>';
+    var head = '<span class="o-ticon"><img src="assets/demo/' + toy.icon + '.png" alt=""></span><span class="o-dot"></span>' +
+      '<span class="o-tname">' + toy.name + '</span>';
+    var sub = '<span class="o-tzones"></span><span class="o-chips">' + chipsHTML() + '</span>' +
+      '<span class="o-schips">' + safetyHTML() + '</span>';
+    var tip = toy.on ? (where === 'home' ? 'toyrow' : 'toy') : 'offline';
+    var bar = '<div class="o-toybar wide" data-tip="' + tip + '">' + head + sub +
+      '<span class="o-tspace"></span>' + right + caret + '</div>';
+    return '<div class="o-toy' + (toy.on ? '' : ' offline') + '" data-toy="' + toy.id + '" data-where="' + where + '"' + style + '>' + num +
+      bar + (where === 'home' ? '' : '<div class="o-toybody"></div>') + '</div>';
   }
 
-  // The shocker hub, in the toy list under the connected toys (home_devices.py)
+  // The shocker hub, in the device list under the connected toys
+  // (home_devices.py): Arm shocks (it asks first, in its own place) with the
+  // red words that say which it is, Share with friends, On
   function shockRowHTML() {
     return '<div class="o-toy o-dev" data-dev="shock" style="--hue:var(--yellow);--hue-mid:var(--yellow-mid)">' +
       '<div class="o-toybar" data-tip="shockrow"><span class="o-ticon o-devicon">' + (ICONS.shock || '') + '</span>' +
-      '<span class="o-dot"></span><span class="o-tname">Shockers</span><span class="o-tzones">PiShock · Collar, Thigh</span>' +
-      '<span class="o-tspace"></span><span class="o-pill err js-armed">ARMED</span>' +
+      '<span class="o-dot"></span><span class="o-tname">Shockers</span><span class="o-tzones js-sum">PiShock · Collar, Thigh</span>' +
+      '<span class="o-tspace"></span>' + armHTML() +
       '<span class="o-sw on js-share" data-tip="shockshare"></span><span class="o-swl">Share with friends</span>' +
       '<span class="o-sw on js-shockon" data-tip="shockon"></span><span class="o-swl js-shockonl">On</span>' +
+      '<span class="o-caret">›</span></div></div>';
+  }
+  // Arm shocks (shocker_switches.ArmSwitch): the switch, or "Arm shocks? Yes /
+  // No" in its place for five seconds; the red words from the setting
+  function armHTML() {
+    return '<span class="o-arm js-arm"><span class="o-armsw"><span class="o-sw js-armsw" data-tip="arm"></span>' +
+      '<span class="o-swl">Arm shocks</span></span>' +
+      '<span class="o-armask" data-tip="armask"><span class="o-swl">Arm shocks?</span><span class="o-btn small danger" data-arm="yes">Yes</span>' +
+      '<span class="o-btn small" data-arm="no">No</span></span>' +
+      '<b class="o-armw js-armw" data-tip="armw">Shocks armed</b></span>';
+  }
+  // The PSVR2 headset (home_devices.psvr2_row), while its feature is on
+  function psvr2RowHTML() {
+    return '<div class="o-toy o-dev" data-dev="psvr2" style="--hue:var(--blue);--hue-mid:var(--blue-mid)">' +
+      '<div class="o-toybar" data-tip="psvr2row"><span class="o-ticon o-devicon">' + (ICONS.psvr2 || '') + '</span>' +
+      '<span class="o-dot"></span><span class="o-tname">PSVR2</span><span class="o-tzones">Connected through PSVR2Toolkit</span>' +
+      '<span class="o-tspace"></span>' +
+      '<span class="o-sw on js-devon" data-tip="psvr2on"></span><span class="o-swl js-devonl">On</span>' +
       '<span class="o-caret">›</span></div></div>';
   }
   // A haptic suit, under the shocker hub (home_devices.py bhaptics_row /
@@ -181,20 +255,53 @@
       '<span class="o-caret">›</span></div></div>';
   }
 
+  function rows(where, on) {
+    return TOYS.filter(function (t) { return t.on === on; }).map(function (t) { return toyHTML(t, where); }).join('');
+  }
+  // Home: everything at a glance, each row opening its own page (home.py)
   function homeHTML() {
     return '<div class="o-page on" data-page="Home"><div class="o-home">' +
       '<div class="o-setup" data-tip="setup"><span class="o-ok"></span>Toy on<span class="o-ok"></span>VRChat connected' +
         '<span class="o-ok"></span>Avatar has SPS<span class="o-ok" data-tip="menu"></span>Avatar menu' +
         '<span class="o-setupr">Getting started</span></div>' +
-      '<div class="o-homehead"><h4>Toys</h4><span class="o-btn js-scan" data-tip="scan">Scan now</span>' +
-        '<span class="o-muted js-nextscan"></span><span class="o-tspace"></span>' +
+      '<div class="o-homehead"><h4 data-tip="devices">Devices</h4><span class="o-tspace"></span>' +
         '<span class="o-btn js-testall" data-tip="test">Test all</span></div>' +
-      '<div class="o-toys o-scroll">' + TOYS.filter(function (t) { return t.on; }).map(toyHTML).join('') + shockRowHTML() +
-        suitRowHTML('bhaptics', 'bHaptics', 'Also feel OWO’s contacts') +
-        suitRowHTML('owo', 'OWO', 'Also feel bHaptics’ contacts') +
-        TOYS.filter(function (t) { return !t.on; }).map(toyHTML).join('') + '</div>' +
       '<div class="o-toysoff o-muted">Toy communication is off — switch it back on in Settings, under Features.</div>' +
-      '<div class="o-tools"><div class="o-toolbar" data-tip="tools"><span class="car">▸</span><b>Tuning tools</b><span class="sum">Simulator · signal graph</span></div>' +
+      '<div class="o-toys o-scroll">' + rows('home', true) + shockRowHTML() +
+        suitRowHTML('bhaptics', 'bHaptics', 'Also feel OWO’s contacts') +
+        suitRowHTML('owo', 'OWO', 'Also feel bHaptics’ contacts') + psvr2RowHTML() +
+        rows('home', false) + '</div>' +
+      '</div></div>';
+  }
+
+  // The toys' anti-stuck timers: the app's ValueSlider, logarithmic
+  var AS_MAX = 600, AS_STEPS = 1000;
+  function asX(s) { return Math.round(AS_STEPS * Math.log(Math.max(1, s)) / Math.log(AS_MAX)); }
+  function asS(x) { return clamp(Math.round(Math.exp(x / AS_STEPS * Math.log(AS_MAX))), 1, AS_MAX); }
+  function secText(s) { return s < 60 ? s + ' s' : Math.floor(s / 60) + ' min' + (s % 60 ? ' ' + (s % 60) + ' s' : ''); }
+  function asSlider(key, label) {
+    return '<div class="o-asrow"><div class="h"><span>' + label + '</span><b class="js-asv" data-as="' + key + '"></b></div>' +
+      '<input type="range" class="js-asr" data-as="' + key + '" min="0" max="' + AS_STEPS + '" tabindex="-1"></div>';
+  }
+  // Toys: each toy's card with its chains, the toy server, SPS Sources and
+  // the tuning tools (toys.py)
+  function toysHTML() {
+    return '<div class="o-page" data-page="Toys"><div class="o-home">' +
+      '<div class="o-homehead"><h4 data-tip="toyspage">Toys</h4><span class="o-btn js-scan" data-tip="scan">Scan now</span>' +
+        '<span class="o-muted js-nextscan"></span></div>' +
+      '<div class="o-server" data-tip="server"><b>Toy server</b><span class="o-pill ok">CONNECTED</span>' +
+        '<span class="o-srvok">✓ Built in, on this PC</span><span class="o-tspace"></span>' +
+        '<span class="o-btn" data-go="Settings" data-tip="intisettings">Intiface settings</span></div>' +
+      // the toys' anti-stuck (toys.py _build_toys_antistuck_card): the switch,
+      // then its two times while it is on, on a log scale from 1 s to 10 min
+      '<div class="o-asbox" data-tip="toysas"><div class="line"><span class="o-sw on js-tas"></span><span>Anti-stuck</span></div>' +
+        '<div class="o-astimes js-astimes">' + asSlider('active_s', 'Frozen part-way: stop after') +
+          asSlider('peaked_s', 'Held at 100%: ease off after') + '</div></div>' +
+      '<div class="o-toys o-cards o-scroll">' + rows('card', true) + rows('card', false) + '</div>' +
+      '<div class="o-tools o-sps"><div class="o-toolbar" data-tip="sps"><span class="car">▸</span><b>SPS Sources</b><span class="sum">Your own zones from any contact</span></div>' +
+      '<div class="o-toolbody"><div class="o-card o-simcard"><p class="o-muted" style="margin:0 0 4px">' + SPS_NOTE + '</p>' +
+        '<p class="o-muted" style="margin:0;color:var(--dim)">This part is not rebuilt in the website’s demo.</p></div></div></div>' +
+      '<div class="o-tools o-tune"><div class="o-toolbar" data-tip="tools"><span class="car">▸</span><b>Tuning tools</b><span class="sum">Simulator · signal graph</span></div>' +
       '<div class="o-toolbody">' +
         '<div class="o-card o-simcard">' +
           '<div class="o-simrow"><span>Sim</span>' +
@@ -212,8 +319,10 @@
 
   function settingsHTML() {
     function line(on, text) { return '<div class="line"><span class="o-sw' + (on ? ' on' : '') + '" data-flip="1"></span><span>' + text + '</span></div>'; }
-    function feat(key, text) {
-      return '<div class="line"><span class="o-sw on" data-feat="' + key + '" data-tip="feature"></span><span>' + text + '</span></div>';
+    // each with its page's icon, as "What are you here for?" (interests.FEATURE_ICONS)
+    function feat(key, text, icon, hue) {
+      return '<div class="line"><i class="o-fic"' + (hue ? ' style="color:var(--' + hue + ')"' : '') + '>' + (ICONS[icon] || '') + '</i>' +
+        '<span class="o-sw on" data-feat="' + key + '" data-tip="feature"></span><span>' + text + '</span></div>';
     }
     return '<div class="o-page" data-page="Settings"><div class="o-viewtitle">Application Settings</div>' +
       '<div class="o-tabs"><span class="on">General</span><span>Sessions</span></div>' +
@@ -221,18 +330,24 @@
       '<div class="o-card o-set"><div class="o-sect">Features</div>' +
         '<p>Turn off features you don’t need. Disabled features hide their sidebar entry and stop their background threads to save resources.</p>' +
         '<div class="line"><span class="o-btn" data-tip="interests">Choose what you use…</span></div>' +
-        feat('intiface', 'Intiface toy communication (Buttplug.io)') + feat('inspector', 'OSC Inspector (debug view)') +
-        feat('statistics', 'Usage statistics') +
-        '<div class="line" style="padding-left:44px"><span class="o-btn danger" data-tip="delstats">Delete statistics…</span></div>' +
-        feat('pishock', 'Shockers — PiShock / OpenShock (USB)') + feat('bhaptics', 'bHaptics — suit and sleeves over Bluetooth') +
-        feat('owo', 'OWO — EMS suit through the My OWO app') + feat('friends', 'Friends — control each other over the internet') +
-        feat('params', 'Avatar Remote — avatar boards friends can use too') + '</div>' +
+        feat('intiface', 'Intiface toy communication (Buttplug.io)', 'toys', 'pink') +
+        feat('inspector', 'OSC Inspector (debug view)', 'inspector') +
+        feat('statistics', 'Usage statistics', 'stats') +
+        '<div class="line" style="padding-left:68px"><span class="o-btn danger" data-tip="delstats">Delete statistics…</span></div>' +
+        feat('pishock', 'Shockers — PiShock / OpenShock (USB)', 'shock', 'yellow') +
+        feat('bhaptics', 'bHaptics — suit and sleeves over Bluetooth', 'suits', 'orange') +
+        feat('owo', 'OWO — EMS suit through the My OWO app', 'suits', 'orange') +
+        feat('trackers', 'Trackers — vibrating trackers through SteamVR', 'suits', 'orange') +
+        feat('psvr2', 'PSVR2 — the headset’s rumble, through PSVR2Toolkit', 'psvr2', 'blue') +
+        feat('friends', 'Friends — control each other over the internet', 'friends', 'cyan') +
+        feat('params', 'Avatar Remote — avatar boards friends can use too', 'params', 'accent') + '</div>' +
       // the avatar's menu: the demo's avatar wears it (its OGP/* parameters
       // are in My Avatar Remote's list); the buttons are the real downloads
       '<div class="o-card o-set"><div class="o-sect">VRChat menu</div>' +
         '<p>OGP’s controls can be in your avatar’s own menu too, so you never leave VRChat: drag one VRCFury prefab onto your avatar — your own controls, the Friends submenu, or both — and upload. Your avatar’s own menu files aren’t touched, and the parameters are unsynced (0 sync bits).</p>' +
         '<div class="line"><span class="o-tick">✓</span><span><b>Your own controls</b> — Strength, Off, Sleep, Test and the modes · <i>on the avatar you’re wearing</i></span></div>' +
         '<div class="line"><span class="o-tick">✓</span><span><b>Friends submenu</b> — drives whoever you picked on the Friends page · <i>on the avatar you’re wearing</i></span></div>' +
+        '<div class="line"><span class="o-tick">✓</span><span><b>Avatar Remote submenu</b> — seven toggles and seven radials for the controls you give its slots on My Avatar Remote · <i>on the avatar you’re wearing</i></span></div>' +
         '<div class="line"><a class="o-btn" data-tip="getmenu" target="_blank" rel="noopener" href="https://github.com/Blise518B/OscGoesPurrr/releases/latest/download/OscGoesPurrr-VRCFury.unitypackage">Get the menu prefabs</a>' +
         '<a class="o-btn" data-tip="howmenu" target="_blank" rel="noopener" href="https://github.com/Blise518B/OscGoesPurrr/blob/main/docs/VRCHAT_MENU.md">How to add it</a></div></div>' +
       '<div class="o-card o-set"><div class="o-sect">Connection Settings</div>' +
@@ -240,11 +355,18 @@
         line(1, 'Sound when a toy connects or disconnects') +
         '<div class="line"><span class="o-sw on" data-flip="1"></span><span>Tell VRChat while any toy is connected</span><span class="o-in" style="flex:1">OGP/ToyConnected</span><span class="o-btn">Pick...</span></div>' +
         line(0, 'Send thrust counters to VRChat') + '</div>' +
-      '<div class="o-card o-set"><div class="o-sect">Toy Safety</div>' +
-        '<p>VRChat only sends a value when it changes. If a contact stops updating — you swap avatar, your partner leaves, the link drops — its last value would keep a toy running. Anti-stuck notices a value that has frozen and stops the toy. On by default.</p>' +
-        line(1, 'Anti-stuck') +
-        '<div class="line" style="padding-left:44px"><span>Frozen part-way: stop after</span><span class="o-in spin" style="width:86px">1s<span class="ar"><i>▲</i><i>▼</i></span></span>' +
-        '<span style="margin-left:14px">Held at 100%: ease off after</span><span class="o-in spin" style="width:86px">10s<span class="ar"><i>▲</i><i>▼</i></span></span></div></div>' +
+      // Safety (Toy Safety until 2026-11-17): where each anti-stuck lives now
+      '<div class="o-card o-set"><div class="o-sect">Safety</div>' +
+        '<div class="line" data-tip="aswhere"><p style="flex:1;margin:0">Anti-stuck, which stops a toy, a suit or the headset when a contact freezes, has its own switch and timers on each device’s page:</p>' +
+          '<span class="o-btn" data-go="Toys">Toys</span><span class="o-btn" data-go="Suits">Suits</span><span class="o-btn" data-go="PSVR2">PSVR2</span></div>' +
+        // Off while you're away (away_facade): a held Off, never your own switch
+        '<p style="margin-top:10px">While VRChat says you’re AFK, everything is off — toys, shockers, suits, trackers and friends’ drives — and it all comes back by itself when you’re back. Your own Off switch isn’t touched. On by default.</p>' +
+        '<div class="line"><span class="o-sw on" data-flip="1" data-tip="away"></span><span>Off while you’re away</span></div>' +
+        '<div class="line" style="padding-left:44px"><span class="o-sw on" data-flip="1" data-tip="afk"></span><span>VRChat’s AFK</span></div>' +
+        '<div class="line" style="padding-left:44px"><span class="o-sw on" data-flip="1" data-tip="goafk"></span><span>GoGo Loco’s AFK button</span></div>' +
+        '<div class="line" style="padding-left:44px"><span>Also off while</span></div>' +
+        '<p style="padding-left:44px;color:var(--dim)">None yet.</p>' +
+        '<div class="line" style="padding-left:44px"><span class="o-btn" data-tip="awayparam">+ Add parameter…</span></div></div>' +
       '<div class="o-card o-set js-appearance"><div class="o-sect">Appearance</div>' +
         '<div class="line"><span class="o-lbl">Mode:</span><span class="o-btn seg js-uimode on" data-uimode="neon" data-tip="uimode">Vibrant</span><span class="o-btn seg js-uimode" data-uimode="midnight" data-tip="uimode">Darker</span></div>' +
         '<div class="line"><span class="o-lbl">Colour:</span><span class="js-presets" style="display:flex;gap:8px"></span></div>' +
@@ -266,12 +388,16 @@
     '<div class="ogp-title"><img src="assets/ogp-icon.svg" alt=""><span>OscGoesPurrr <span class="ver-tag"></span></span>' +
     '<span class="wc"><span>–</span><span>□</span><span>✕</span></span></div>' +
     '<div class="ogp">' + sideHTML() +
-    '<div class="o-main">' + homeHTML() +
+    '<div class="o-main">' + homeHTML() + toysHTML() +
       '<div class="o-page" data-page="Statistics"></div>' + settingsHTML() +
       BUILT.map(function (n) { return '<div class="o-page o-built" data-page="' + n + '"><div class="o-pgscroll o-scroll rpanel"></div></div>'; }).join('') +
       Object.keys(NOTES).map(noteHTML).join('') + '</div>' +
-    '<div class="o-status"><span class="o-help">?&nbsp; Show me around</span>' +
-    '<span><a class="o-dimlink" href="https://github.com/Blise518B/OscGoesPurrr" target="_blank" rel="noopener">OscGoesPurrr</a> <span class="ver-tag"></span> · made by ' +
+    // the name and the version link to the repository, Blise518B to his
+    // profile (theme.status_tag_html)
+    '<div class="o-status"><span><a class="o-help" href="guide/" target="_blank" rel="noopener">Guide&nbsp;↗</a> ' +
+    '<span class="o-help">?&nbsp; Show me around</span></span>' +
+    '<span><a class="o-dimlink" href="https://github.com/Blise518B/OscGoesPurrr" target="_blank" rel="noopener">OscGoesPurrr</a> ' +
+    '<a class="o-dimlink" href="https://github.com/Blise518B/OscGoesPurrr" target="_blank" rel="noopener"><span class="ver-tag"></span></a> · made by ' +
     '<a href="https://github.com/Blise518B" target="_blank" rel="noopener"><b>Blise518B</b></a></span></div>' +
     '</div></div>');
   host.classList.add('ogp-stage');
@@ -357,7 +483,29 @@
         ['Add', 'Max', 'Multiply'].map(function (n) { return '<span class="o-btn seg" data-mergeop="' + n.toLowerCase() + '">' + n + '</span>'; }).join('') + '</div>' +
         chainHTML(toy, mi, 1);
     }
-    return out;
+    return out + footHTML(toy);
+  }
+  // A card's last line, after every motor's chains (device_frame._build_toy_foot):
+  // Avatar parameters folded, saying how many are on, and Delete device as
+  // words at its end
+  function footHTML(toy) {
+    function row(on, label, name) {
+      return '<div class="o-trow"><span class="o-sw' + (on ? ' on' : '') + '" data-flip="1" data-tip="avparams"></span>' +
+        '<span class="o-trowl">' + label + '</span><span class="o-in o-tname-in">' +
+        (name || '<i>Avatar parameter name (e.g. TailW…</i>') + '</span><span class="o-btn small">Pick…</span></div>';
+    }
+    var rows = '';
+    for (var mi = 0; mi < toy.motors; mi++)
+      rows += row(false, toy.motors > 1 ? 'Mirror motor ' + mi + ' to VRChat parameter' : 'Mirror to VRChat parameter', '');
+    rows += row(true, 'Tell VRChat while this toy is connected', 'OGP/' + toy.name.replace(/[^A-Za-z0-9]/g, '') + 'Connected');
+    return '<div class="o-tfoot"><span class="o-btn ghost small js-pfold" data-tip="avparams">▸&nbsp; Avatar parameters</span>' +
+      '<span class="o-muted js-pcount"></span><span class="o-tspace"></span>' +
+      '<span class="o-dangertext" data-tip="deltoy">Delete device</span></div>' +
+      '<div class="o-tparams">' + rows + '</div>';
+  }
+  function countParams(toyEl) {
+    var n = $$('.o-tparams .o-sw.on', toyEl).length;
+    $('.js-pcount', toyEl).textContent = n ? n + ' on' : 'none on';
   }
 
   // ── binding the stage cards to the real settings ─────────────────────────
@@ -383,10 +531,20 @@
     $$('[data-sub]', block).forEach(function (h) { h.textContent = Chain.stageSummary(h.getAttribute('data-sub'), cc); });
     $('.js-src', block).textContent = S.sim.on ? 'sim' : 'avatar';
     $('.o-act u', block).style.left = Chain.readControl(cc, 'wake.wake_threshold') * 100 + '%';
-    $('.sum', fold).textContent = Chain.summaryLine(cc, { zones: zonesOf(toyId) || 'none', self: false, others: true, params: [], sim: false });
+    var h = hearOf(toyId), pen = CH[ci].name === 'Penetration';      // a typed chain hears its own kind
+    $('.sum', fold).textContent = Chain.summaryLine(cc, { zones: zonesOf(toyId) || 'none', self: pen ? h.ps : h.ts,
+                                                          others: pen ? h.po : h.to, params: [], sim: false });
     var merge = $('.o-merge[data-merge="' + mi + '"]', toyEl), op = motors[toyId][mi].cfg.merge;
     $$('.o-fold[data-fold^="' + mi + '."] .mrg', toyEl).forEach(function (m) { m.textContent = '⋁ ' + op; });
     $$('[data-mergeop]', merge).forEach(function (b) { b.classList.toggle('on', b.getAttribute('data-mergeop') === op); });
+  }
+  // The merge picker shows only beside an open chain; folded, the chains'
+  // bars carry its tag (MotorChainListWidget._rebuild)
+  function syncMerge(toyEl) {
+    $$('.o-merge', toyEl).forEach(function (m) {
+      var mi = m.getAttribute('data-merge');
+      m.style.display = $('.o-chain.open[data-chain^="' + mi + '."]', toyEl) ? '' : 'none';
+    });
   }
   function openToy(toyEl, open) {
     var id = toyEl.getAttribute('data-toy'), toy = TOYS.filter(function (t) { return t.id === id; })[0];
@@ -395,9 +553,23 @@
     if (open && !body.firstChild) {
       body.innerHTML = bodyHTML(toy);
       for (var mi = 0; mi < toy.motors; mi++) { refreshChain(toyEl, id, mi, 0); refreshChain(toyEl, id, mi, 1); }
+      syncMerge(toyEl);
+      countParams(toyEl);
     }
     toyEl.classList.toggle('open', open);
     $('.o-caret', toyEl).textContent = open ? '▾' : '▸';
+  }
+  function cardOf(toyId) { return $('.o-toy[data-toy="' + toyId + '"][data-where="card"]'); }
+  // A toy's row on Home: the Toys page, its card open at the top of the list
+  // (toys.open_toy_card)
+  function openCard(toyId) {
+    go('Toys');
+    openToy(cardOf(toyId), true);
+    scrollToCard(toyId);
+  }
+  function scrollToCard(toyId) {
+    var card = cardOf(toyId), list = $('.o-cards');
+    list.scrollTop = card.offsetTop - list.offsetTop;
   }
 
   // ── interactions ──────────────────────────────────────────────────────────
@@ -407,15 +579,45 @@
   function on(name, fn) { (handlers[name] = handlers[name] || []).push(fn); }
   function emit(name) { (handlers[name] || []).forEach(function (fn) { fn(S); }); }
 
+  // Arm shocks, wherever it shows (Home's row, the Shockers page's hub): one
+  // setting; the question stands in the switch's place until answered or
+  // ARM_ASK_S runs out
+  var ARM_ASK_S = 5;
+  function refreshArm() {
+    var st = S.shock, asking = st.asking > 0;
+    $$('.js-arm').forEach(function (a) {
+      a.classList.toggle('asking', asking);
+      $('.js-armsw', a).classList.toggle('on', st.armed);
+      var w = $('.js-armw', a), text = st.armed ? 'Shocks armed' : 'Shocks not armed';
+      if (w.textContent !== text) { w.textContent = text; w.classList.toggle('not', !st.armed); }
+    });
+  }
+  // what: "flip" (the switch), "yes" or "no" (its question)
+  function arm(what) {
+    var st = S.shock;
+    if (what !== 'flip') { if (what === 'yes') st.armed = true; st.asking = 0; }
+    else if (st.armed) st.armed = false;          // switching off never asks
+    else {
+      var ask = st.asking = performance.now();
+      setTimeout(function () { if (st.asking === ask) { st.asking = 0; emit('shock'); } }, ARM_ASK_S * 1000);
+    }
+    emit('shock');
+  }
   function refreshShockRow() {
     var row = $('.o-dev[data-dev="shock"]'), up = S.shock.on;
-    $('.js-armed', row).style.display = S.shock.armed && up ? '' : 'none';
     $('.js-share', row).classList.toggle('on', S.shock.share);
     $('.js-shockon', row).classList.toggle('on', up);
     $('.js-shockonl', row).textContent = up ? 'On' : 'Off';
     row.classList.toggle('down', !up);
+    refreshArm();
   }
   on('shock', refreshShockRow);
+  function refreshPsvr2Row() {
+    var row = $('.o-dev[data-dev="psvr2"]'), up = S.psvr2.on;
+    $('.js-devon', row).classList.toggle('on', up);
+    $('.js-devonl', row).textContent = up ? 'On' : 'Off';
+    row.classList.toggle('down', !up);
+  }
   function applyFeatures() {
     $$('.o-nav [data-feature]').forEach(function (n) {
       var on = n.getAttribute('data-feature').split('|').some(function (k) { return S.features[k]; });
@@ -425,8 +627,12 @@
     $('.o-dev[data-dev="shock"]').style.display = S.features.pishock ? '' : 'none';
     $('.o-dev[data-dev="bhaptics"]').style.display = S.features.bhaptics ? '' : 'none';
     $('.o-dev[data-dev="owo"]').style.display = S.features.owo ? '' : 'none';
-    $('.o-toys').style.display = S.features.intiface ? '' : 'none';
+    $('.o-dev[data-dev="psvr2"]').style.display = S.features.psvr2 ? '' : 'none';
+    // toy communication off: Home keeps its other devices, the toys go
+    // (and with them the Toys page)
+    $$('.o-page[data-page="Home"] .o-toy[data-toy]').forEach(function (t) { t.style.display = S.features.intiface ? '' : 'none'; });
     $('.o-toysoff').style.display = S.features.intiface ? 'none' : '';
+    if (!S.features.intiface && S.page === 'Toys') go('Home');
   }
   function setFeature(key, value) { S.features[key] = value; applyFeatures(); emit('features'); }
   function setStrength(v) {
@@ -452,8 +658,36 @@
     }
     emit('page');
   }
+  // Each toy's Sleep and Anti-stuck chips, both bars, and the Toys page's
+  // anti-stuck: Sleep lit while it sleeps, lit and greyed ("held") while the
+  // sidebar's Sleep has every toy asleep; Anti-stuck greyed while the toys'
+  // anti-stuck is off (device_frame._safety_looks)
+  function refreshSafety() {
+    $$('.o-toy[data-toy]').forEach(function (t) {
+      var id = t.getAttribute('data-toy'), sl = $('[data-safe="sleep"]', t), as = $('[data-safe="as"]', t);
+      if (!sl) return;
+      sl.classList.toggle('held', S.sleep);
+      sl.classList.toggle('on', !S.sleep && !!S.toySleep[id]);
+      as.classList.toggle('dis', !S.as.enabled);
+      as.classList.toggle('on', S.as.enabled && S.toyAs[id] !== false);
+    });
+    var sw = $('.js-tas');
+    if (!sw) return;
+    sw.classList.toggle('on', S.as.enabled);
+    $('.js-astimes').hidden = !S.as.enabled;
+    $$('.js-asr').forEach(function (r) {
+      var k = r.getAttribute('data-as');
+      if (document.activeElement !== r) r.value = asX(S.as[k]);
+      setRange(r);
+    });
+    $$('.js-asv').forEach(function (v) { v.textContent = secText(S.as[v.getAttribute('data-as')]); });
+  }
   function refreshZones() {
-    $$('.o-toy[data-toy]').forEach(function (t) { $('.o-tzones', t).textContent = zoneLabel(t.getAttribute('data-toy')); });
+    $$('.o-toy[data-toy]').forEach(function (t) {
+      var id = t.getAttribute('data-toy'), h = hearOf(id);
+      $('.o-tzones', t).textContent = zoneLabel(id);
+      $$('.o-cchip', t).forEach(function (c) { c.classList.toggle('on', h[c.getAttribute('data-pair')]); });
+    });
     $$('.o-toy.open').forEach(function (t) {
       var id = t.getAttribute('data-toy');
       motors[id].forEach(function (_m, mi) { refreshChain(t, id, mi, 0); refreshChain(t, id, mi, 1); });
@@ -478,18 +712,40 @@
       refreshZones(); return;
     }
     if (t.closest('.js-off')) { S.off = !S.off; $('.js-off').classList.toggle('on', S.off); return; }
-    if (t.closest('.js-sleep')) { S.sleep = !S.sleep; $('.js-sleep').classList.toggle('on', S.sleep); return; }
+    if (t.closest('.js-sleep')) { S.sleep = !S.sleep; $('.js-sleep').classList.toggle('on', S.sleep); refreshSafety(); return; }
+    if (t.closest('.js-tas')) { S.as.enabled = !S.as.enabled; refreshSafety(); return; }
     if (t.closest('.js-testall')) { S.testUntil = S.t + 1.0; return; }
+    if ((x = t.closest('.js-pfold'))) {
+      var tf = x.closest('.o-toy'), pOpen = !tf.classList.contains('params');
+      tf.classList.toggle('params', pOpen); x.innerHTML = (pOpen ? '▾' : '▸') + '&nbsp; Avatar parameters'; return;
+    }
+    if ((x = t.closest('.o-tparams [data-flip]'))) { x.classList.toggle('on'); countParams(x.closest('.o-toy')); return; }
+    if (t.closest('.o-dangertext')) return;               // the demo keeps its toys
     if ((x = t.closest('[data-flip]'))) { x.classList.toggle('on'); return; }
     if ((x = t.closest('[data-feat]'))) { setFeature(x.getAttribute('data-feat'), !x.classList.contains('on')); return; }
     if (t.closest('.js-scan')) { S.scanAt = 30; return; }      // it looks now; with a toy connected the next is 30 s on
+    if ((x = t.closest('.js-armsw, [data-arm]'))) { arm(x.getAttribute('data-arm') || 'flip'); return; }
+    if (t.closest('.js-arm')) return;                          // the question's own space, never the row's
     var dev = t.closest('.o-dev');
     if (dev) {
+      var kind = dev.getAttribute('data-dev');
+      if (kind === 'psvr2') {
+        if (t.closest('.js-devon')) { S.psvr2.on = !S.psvr2.on; refreshPsvr2Row(); return; }
+        go('PSVR2'); return;
+      }
       // a suit's switches are demo-suits.js's; the rest of its row opens Suits
-      if (dev.getAttribute('data-dev') !== 'shock') { if (!t.closest('.o-sw')) go('Suits'); return; }
+      if (kind !== 'shock') { if (!t.closest('.o-sw')) go('Suits'); return; }
       if (t.closest('.js-share')) { S.shock.share = !S.shock.share; emit('shock'); return; }
       if (t.closest('.js-shockon')) { S.shock.on = !S.shock.on; emit('shock'); return; }
       go('Shockers'); return;
+    }
+    if (t.closest('.o-tools')) {
+      var tools = t.closest('.o-tools');
+      if (t.closest('.o-toolbar')) {
+        tools.classList.toggle('open');
+        $('.o-toolbar .car', tools).textContent = tools.classList.contains('open') ? '▾' : '▸';
+        sizeGraph(); return;
+      }
     }
     if ((x = t.closest('.js-uimode'))) { setMode(x.getAttribute('data-uimode')); return; }
     if ((x = t.closest('.o-swatch'))) { setHue(x.hasAttribute('data-hue') ? +x.getAttribute('data-hue') : null); return; }
@@ -498,11 +754,6 @@
       body.style.display = open ? '' : 'none'; x.textContent = open ? 'Other colours ▾' : 'Other colours ▸'; return;
     }
     if ((x = t.closest('.js-idauto'))) { delete chosenHues[x.closest('.o-idrow').getAttribute('data-id')]; applyColour(); return; }
-    if (t.closest('.o-toolbar')) {
-      var tools = $('.o-tools'); tools.classList.toggle('open');
-      $('.o-toolbar .car').textContent = tools.classList.contains('open') ? '▾' : '▸';
-      sizeGraph(); return;
-    }
     if (t.closest('.js-play')) { S.sim.on = !S.sim.on; refreshSim(); return; }
     if (t.closest('.js-shape')) { S.sim.shape = (S.sim.shape + 1) % SHAPES.length; rebuildSim(); refreshSim(); return; }
     if ((x = t.closest('[data-spin] i'))) {
@@ -514,7 +765,7 @@
     if (t.closest('.js-graphsw')) {
       S.graph = !S.graph; $('.js-graphsw').classList.toggle('on', S.graph);
       $('.o-graph').style.display = S.graph ? '' : 'none';
-      $('.o-toolbar .sum').textContent = S.graph ? 'Signal graph on' : 'Simulator · signal graph';
+      $('.o-tune .o-toolbar .sum').textContent = S.graph ? 'Signal graph on' : 'Simulator · signal graph';
       sizeGraph(); return;
     }
     if (t.closest('.js-gtarget')) {
@@ -528,11 +779,31 @@
     var toyEl = t.closest('.o-toy');
     if (!toyEl) return;
     var id = toyEl.getAttribute('data-toy');
+    if ((x = t.closest('[data-safe]'))) {
+      // the toy's own Sleep or Anti-stuck, the same on Home's row and the card
+      if (x.classList.contains('held') || x.classList.contains('dis')) return;
+      if (x.getAttribute('data-safe') === 'sleep') S.toySleep[id] = !S.toySleep[id];
+      else S.toyAs[id] = S.toyAs[id] === false;
+      refreshSafety(); return;
+    }
+    if ((x = t.closest('.o-cchip'))) {
+      // its pair on every chain of the toy that hears that kind, in the
+      // active mode -- the same on Home's row and the card
+      var hr = hearOf(id), pair = x.getAttribute('data-pair');
+      hr[pair] = !hr[pair]; refreshZones(); return;
+    }
     if ((x = t.closest('[data-act="mute"]'))) {
       var mu = !motors[id][0].muted; motors[id].forEach(function (m) { m.muted = mu; });
-      x.classList.toggle('on', mu); x.classList.toggle('seg', mu); x.textContent = mu ? 'Unmute' : 'Mute'; return;
+      $$('.o-toy[data-toy="' + id + '"] [data-act="mute"]').forEach(function (b) {
+        b.classList.toggle('on', mu); b.classList.toggle('seg', mu); b.textContent = mu ? 'Unmute' : 'Mute';
+      });
+      return;
     }
     if (t.closest('[data-act="test"]')) { motors[id].forEach(function (m) { m.testUntil = S.t + 1.0; }); return; }
+    if (toyEl.getAttribute('data-where') === 'home') {
+      if (t.closest('.o-toybar')) openCard(id);
+      return;
+    }
     if (t.closest('.o-toybar')) { openToy(toyEl, !toyEl.classList.contains('open')); return; }
     if ((x = t.closest('[data-mergeop]'))) {
       var mi0 = +x.closest('[data-merge]').getAttribute('data-merge');
@@ -543,6 +814,7 @@
     if (fold) {
       var k = fold.getAttribute('data-fold'), blk = $('.o-chain[data-chain="' + k + '"]', toyEl);
       blk.classList.toggle('open'); $('.car', fold).textContent = blk.classList.contains('open') ? '▾' : '▸';
+      syncMerge(toyEl);
       return;
     }
     if (!block) return;
@@ -562,6 +834,7 @@
     var inp = e.target;
     if (inp.classList.contains('js-strength')) { setStrength(inp.value / 100); return; }
     if (inp.classList.contains('js-hue')) { setHue(+inp.value, true); return; }
+    if (inp.classList.contains('js-asr')) { S.as[inp.getAttribute('data-as')] = asS(+inp.value); refreshSafety(); return; }
     if (inp.classList.contains('js-idhue')) { chosenHues[inp.closest('.o-idrow').getAttribute('data-id')] = +inp.value; applyColour(); return; }
     var key = inp.getAttribute('data-key');
     if (!key || !CONTROLS[key]) return;
@@ -693,7 +966,9 @@
       if (!toy.on) return;
       var heard = hears(toy.id) ? pen : 0, drive = S.drive[toy.id];
       motors[toy.id].forEach(function (mo, mi) {
-        var res = mo.m.step(dt, { pen: heard, touch: 0 }, { strength: S.strength, off: S.off, sleep: S.sleep });
+        var res = mo.m.step(dt, { pen: heard, touch: 0 }, {
+          strength: S.strength, off: S.off, sleep: S.sleep || !!S.toySleep[toy.id],
+          antistuck: (S.as.enabled && S.toyAs[toy.id] !== false) ? S.as : null });
         var out = res.out;
         // A friend's level joins at the end, as in the app (motor_router
         // _apply_friend_drive): scaled by your strength (none while Off),
@@ -754,7 +1029,7 @@
         });
       });
     });
-    if (S.graph && S.page === 'Home') drawGraph($('.o-graph canvas'), TRACES, true);
+    if (S.graph && S.page === 'Toys') drawGraph($('.o-graph canvas'), TRACES, true);
     pageCanvases.forEach(function (cv) { drawSpark(cv); });
   }
 
@@ -810,6 +1085,12 @@
   }
 
   // ── hover explanations: the app's own words, after the app's 0.7 s rest ──
+  // How the shocker switches stack: the same paragraph under each of them
+  // (shocker_switches.STACK)
+  var STACK = '<br><br><b>How the shocker switches stack</b>, from everyone to one friend:<br><b>On</b> (the hub) → ' +
+    '<b>Arm shocks</b> (real shocks) → <b>Share with friends</b> (friends at all) → each friend’s own <b>Shockers</b> ' +
+    'switch on the Friends page (and the web remote’s).<br>Off stops everything, whatever the rest say. Unarmed, every shock - ' +
+    'yours or a friend’s - is a vibrate. Not shared, no friend sees your shockers. Home’s shocker row and the Shockers page show the same switches.';
   var TIPS = {
     mode: ['Modes', 'A mode is a <b>routing</b> \u2014 which parts of your avatar drive which toys. Click to make this one live. Your tuning, your toys and the strength stay the same whichever mode is on.<br><br><b>Right-click</b> to rename it or change its icon.'],
     strength: ['Total output strength', 'One multiplier on everything your toys receive \u2014 the knob for \u201Ca bit softer tonight\u201D. It never touches your tuning, so turning it back up restores exactly the feel you had.<br><br>From inside VRChat: the <b>OGP/Strength</b> radial.'],
@@ -817,8 +1098,29 @@
     sleep: ['Sleep', 'Makes your toys hard to wake: nothing plays until three full strokes land within six seconds, so a brush against a sleeping partner does nothing.<br><br>From inside VRChat: <b>OGP/Sleep</b>.'],
     test: ['Test all', 'Buzzes every connected toy at a low level for a moment, so you know they\u2019re all wired up.'],
     testone: ['Test', 'Buzzes this toy at a low level for a moment.'],
+    toysleep: ['Sleep (this toy)', 'Puts just this toy to sleep: nothing from your avatar’s contacts plays on it until three full strokes land within six seconds, so a brush against a sleeping partner does nothing. After 45 seconds without a stroke it sleeps again.<br><br><b>Lit</b> while it sleeps. <b>Lit and greyed</b> while the sidebar’s <b>Sleep</b> has every toy asleep. Not remembered when you restart OGP, like Mute. Friends’ drives still reach it.'],
+    toyas: ['Anti-stuck (this toy)', 'Whether anti-stuck watches this toy. On by default: a contact that freezes (you swap avatar, your partner leaves, the link drops) stops it instead of keeping it going. Switch it off for a toy that should keep playing a value that sits still.<br><br><b>Greyed</b> while anti-stuck is off for every toy (on the Toys page, under Toy server, with its timers). Remembered, the same in every mode.'],
+    toysas: ['Toys’ anti-stuck', 'VRChat only sends a value when it changes. If a contact stops updating - you swap avatar, your partner leaves, the link drops - its last value would keep a toy going. Anti-stuck notices a value that has frozen and stops it.<br><br>A value frozen <b>part-way</b> is cut quickly (1 s by default); one held at <b>100%</b> gets the longer wait, then eases off over 3 s. A new value brings it back at once. Each kind of device has its own: the toys here, each suit and the trackers on the Suits page, the headset on its page. Each toy’s bar has an <b>Anti-stuck</b> of its own too, to leave one toy out.'],
+    aswhere: ['Anti-stuck', 'Each kind of device has its own anti-stuck, with its own timers: the toys on the Toys page (and each toy on its bar), the bHaptics suit, the OWO suit and the haptic trackers on the Suits page, the headset on the PSVR2 page.'],
     mute: ['Mute', 'Silences this toy only. Everything else keeps playing, and its setup is untouched.'],
-    toy: ['Your toys', 'Every connected toy with its live output and battery. Click one to open it right there and choose which zones drive it and how each motor responds.'],
+    toy: ['Toys', 'Every toy you have connected, plus the ones you’ve used before that are switched off right now (grey). The bar shows what drives the toy in the active mode, who it hears, its battery and a live meter per motor - the same as its row on Home.<br><br>Under it, each motor’s <b>signal chains</b>, folded - click one to set it up (Input → Depth/Speed/Punch → Combine → Wake → Envelope → Zero cut → Output). A click on the bar folds the toy away. <b>Mute</b> silences the toy without touching its setup; <b>Test</b> gives it a short buzz.'],
+    avparams: ['Avatar parameters', 'What this toy tells your avatar - for a light, an icon or a meter on it. <b>Mirror to VRChat parameter</b> sends each motor’s level as a Float; <b>Tell VRChat while this toy is connected</b> sends a Bool. Says how many are on; click to open or close.'],
+    deltoy: ['Delete device', 'Forgets this toy and everything set up for it, in every mode. If you switch it on again later it comes back as a new toy with default settings. (The demo keeps its toys.)'],
+    toyspage: ['Toys', 'Every toy you have connected, plus the ones you’ve used before that are switched off right now (grey). Each card is open on its motors’ signal chains, folded: click one to set it up.'],
+    toyrow: ['Devices', 'Everything you have, at a glance. <b>Click a row</b> to open it on its own page - a toy opens at its card on the Toys page, where its signal chains are. The switches on a row work right here: a toy’s Touch / Penetration chips, Mute and Test; the shockers’ Arm shocks, Share with friends and On / Off.'],
+    devices: ['Devices', 'Everything you have, at a glance: every toy you have connected (the ones you’ve used before stay listed, grey while they’re off), and your shocker hub, suits and headset while they’re switched on in Settings → Features.<br><br><b>Click a row</b> to open it on its own page - a toy opens at its card on the Toys page, where its signal chains are. The switches on a row work right here: a toy’s Touch / Penetration chips, Mute and Test; the shockers’ Arm shocks, Share with friends and On / Off.'],
+    server: ['Toy server', 'The Buttplug.io server that talks to your Bluetooth toys. OGP runs its own copy, so there is nothing else to start, and it connects and reconnects by itself. With the built-in engine switched off, this says where your own Intiface Central is - on this PC or a phone - and whether it was found.'],
+    intisettings: ['Intiface settings', 'Opens Settings → Intiface Engine: the built-in toy server, or your own Intiface Central, on this PC or on a phone on the same network.'],
+    sps: ['SPS Sources', 'Your own zones, built from raw VRChat contact receivers - for spots the standard SPS zones don’t cover, or an avatar without them. Each source becomes a zone you can pick in any toy’s Input stage, like the ones your avatar’s SPS provides. Click to open or close.'],
+    arm: ['Arm shocks', 'Until this is on, every shock - a behaviour’s, a friend’s, a test - goes out as a vibrate instead. Switching it on here asks first, in the switch’s place: Yes arms. The red words beside it say which it is now: Shocks armed or Shocks not armed. It stays as you leave it, across restarts too.' + STACK],
+    armask: ['Arm shocks?', 'Yes arms your shocks: from then on every shock is real - your behaviours’, your avatar menu’s, and your friends’ where you share your shockers with them. No, or a few seconds without an answer, leaves them unarmed. Armed, they stay armed until you switch it off, even after a restart.'],
+    armw: ['Shocks armed or not', 'Whether your shocks are real right now: Shocks armed, or Shocks not armed - then every shock goes out as a vibrate. It follows the one Arm shocks setting, so Home’s shocker row and the Shockers page always say the same.'],
+    psvr2row: ['PSVR2', 'Your PlayStation VR2 headset’s rumble motor, through PSVR2Toolkit. Click the bar to open the page where you connect it, set its rumble band and test it.'],
+    psvr2on: ['On / Off', 'Your headset’s motor for everyone. Off stops it now and keeps it still until you switch it on again, even after a restart. It stays connected, and its other settings stay as they are.'],
+    away: ['Off while you’re away', 'Holds everything off while you’re AFK in VRChat: your toys, shockers, suits and haptic trackers, and every friend’s drive (their shocks are held back and logged). It’s the same Off as the sidebar’s Off button and <b>OGP/Off</b>, held for you — that switch isn’t pressed, so when you’re back everything is exactly as it was. Closing VRChat lets go too: it only holds while VRChat is running and says you’re away.<br><br>The status bar says why while it holds (“AFK: everything off”). Pick below what counts as away.'],
+    afk: ['VRChat’s AFK', 'Off while VRChat’s own AFK parameter is on. VRChat sets it when you take the headset off, or press End on desktop, and clears it when you’re back. Every avatar has it.'],
+    goafk: ['GoGo Loco’s AFK button', 'Off while GoGo Loco’s AFK pose is on. GoGo Loco’s Locomotion menu has an AFK button that sets <b>VRCEmote</b> to 101, so OGP reads that. Avatars without GoGo Loco never send it.'],
+    awayparam: ['Also off while', 'Parameters of your choosing that switch everything off while they’re on — a Bool that is true, or a number above zero. Put a toggle of your own in your avatar’s menu and pick it here, and it’s your own Off switch; any one of them is enough.'],
     offline: ['Offline', 'Switched off or out of range. Everything you set up for it is kept, and it comes back to life the moment it reconnects.'],
     tools: ['Tuning tools', 'For when you are shaping how a toy responds: an input simulator to tune against without a partner, and a live graph of the signal. Folded away until you want them.'],
     vrc: ['VRChat OSC', 'The link to VRChat\u2019s OSC bus \u2014 where every avatar contact signal comes from. The app finds VRChat by itself and reconnects by itself.'],
@@ -844,10 +1146,10 @@
     uimode: ['Vibrant / Darker', '<b>Vibrant</b> draws every card, button and chip with an outline in your colour. <b>Darker</b> turns those outlines down to a faint hairline and deepens the blacks, so only what matters lights up. Same layout in both.<br><br>Switches as you click \u2014 nothing restarts.'],
     colour: ['Colour', 'Turns everything that is green \u2014 frames, buttons, highlights, even the faint tint of the background \u2014 to the colour you pick, as you pick it. Brightness and contrast stay as they are.<br><br>The colours that <i>mean</i> something keep theirs \u2014 each toy\u2019s own colour, pink for the live signal, amber for warnings, red for errors \u2014 unless your colour lands right on one of them: that one then moves out of its way (pick Pink, and the pink turns green). <b>Other colours</b> below shows them all and lets you set any of them yourself.'],
     setup: ['Getting started', 'The three things that have to be true for your toys to feel your avatar: a toy connected, VRChat talking to the app over OSC, and an avatar with SPS / OGB contacts. Click to open the steps again.'],
-    scan: ['Scan now', 'Looks for toys right away. While none is connected the app looks every few seconds by itself; with one connected, every 30 seconds, so the link stays fast.'],
-    shockrow: ['Shockers', 'Your PiShock or OpenShock hub and the shockers on it. Click to open the Shockers page.'],
-    shockshare: ['Share with friends', 'On: friends you allow may fire your shockers, within each shocker’s own limits. Off: your friends don’t see your shockers at all.'],
-    shockon: ['On / Off', 'Off stops every shocker and keeps them stopped, even after a restart. Sharing stays as it was.'],
+    scan: ['Scan now', 'Look for toys right now - for a toy you just switched on. The app also looks by itself: every few seconds while no toy is connected (Settings → Connection Settings sets how often), every 30 seconds while one is.'],
+    shockrow: ['Shockers', 'Your shocker hub and the shockers it reports. Click the bar to open the Shockers page, where you connect and set the limits. The red words say whether shocks are armed; unarmed, they go out as vibrates.'],
+    shockshare: ['Share with friends', 'Sharing only, for all your friends at once: off, your friends don’t see your shockers at all and nothing they send reaches them, whatever their own Shockers switch on the Friends page says. Your own rules and the Shockers page still work.' + STACK],
+    shockon: ['On / Off', 'Your shockers, all of it. Off ends whatever they are doing now and keeps them quiet - your rules, friends, tests - until you switch them on again, even after a restart; friends don’t see them meanwhile. The hub stays connected, and who may use them stays as you set it. The same as Stop all / Resume on the Shockers page.' + STACK],
     bhapticsrow: ['bHaptics', 'Your bHaptics suit. Click to open the Suits page, where you connect it and set what it feels.'],
     bhapticsshare: ['Also feel OWO’s contacts', 'The bHaptics suit also plays the touches that reach the OWO suit’s places on the body — the same switch as on the Suits page.'],
     bhapticson: ['On / Off', 'Your bHaptics suit for everyone. Off sets it to zero now and keeps it there until you switch it on again, even after a restart. It stays connected, and its other settings stay as they are.'],
@@ -862,6 +1164,12 @@
     delstats: ['Delete statistics', 'Deletes everything recorded. Asks first. Works whether statistics are on or off.'],
     idcolours: ['Other colours', 'The colours that <i>mean</i> something: the live signal, errors, warnings, shockers, each toy\u2019s own colour.<br><br><b>Auto</b> (the default): a colour keeps its own hue \u2014 unless your colour above lands too close to it, then it moves out of its way, to where it stands out most.<br><b>Drag a slider</b> to set that colour yourself; it then stays where you put it, whatever your colour. <b>Auto</b> hands it back.']
   };
+  PAIRS.forEach(function (p) {
+    TIPS['chip-' + p[0]] = [p[3], 'Whether this toy feels ' + p[4] + '. One click sets it on every ' +
+      (p[1] === 'Touch' ? 'Touch and Custom' : 'Penetration and Custom') + ' chain of the toy, in the active mode.<br><br>' +
+      '<b>Half lit</b> while those chains disagree; a click then turns it on for all of them. <b>Greyed</b> when no chain of ' +
+      'the toy hears this kind of contact. Each chain has the same four switches in its <b>Input</b> stage.'];
+  });
   var tip = el('<div class="tip" role="tooltip"></div>'), tipTimer = null, tipFor = null;
   document.body.appendChild(tip);
   function tipShow(target) {
@@ -884,7 +1192,7 @@
   window.addEventListener('scroll', function () { if (tipFor) tipHide(); }, { passive: true });
 
   // ── start ─────────────────────────────────────────────────────────────────
-  refreshZones(); refreshSim();
+  refreshZones(); refreshSim(); refreshSafety();
   if (Accent) applyColour();
   var prev, visible = true;
   function frameFn(ts) {
@@ -901,7 +1209,9 @@
     visible = !document.hidden; if (visible) { prev = undefined; requestAnimationFrame(frameFn); }
   });
 
-  applyFeatures(); refreshShockRow();
+  applyFeatures(); refreshShockRow(); refreshPsvr2Row();
+  // the Toys page's cards start open, on their motors' folded chains
+  TOYS.forEach(function (t) { if (t.on) openToy(cardOf(t.id), true); });
   window.OGPDemo = {
     state: S, go: go, contact: contactNow, on: on, emit: emit, icons: ICONS,
     // the pages in their own files: their frame, and what they drive
@@ -919,20 +1229,25 @@
     // The visitor as the contact: a depth 0..1, held for a moment after the last call.
     setManual: function (v) { S.manual = v === null ? null : clamp(+v, 0, 1); S.manualUntil = S.t + 1.2; },
     onTick: function (fn) { listeners.push(fn); },
+    // a toy's card on the Toys page, opened (and one of its chains)
     open: function (toyId, chain) {
-      var toyEl = $('.o-toy[data-toy="' + toyId + '"]'); openToy(toyEl, true);
-      if (chain !== undefined) { var b = $('.o-chain[data-chain="0.' + chain + '"]', toyEl); b.classList.add('open'); $('.o-fold[data-fold="0.' + chain + '"] .car', toyEl).textContent = '▾'; }
+      openCard(toyId);
+      var toyEl = cardOf(toyId);
+      if (chain !== undefined) { var b = $('.o-chain[data-chain="0.' + chain + '"]', toyEl); b.classList.add('open'); $('.o-fold[data-fold="0.' + chain + '"] .car', toyEl).textContent = '▾'; syncMerge(toyEl); scrollToCard(toyId); }
     },
+    // Arm shocks for the Shockers page's hub card: the same switch, words and question
+    arm: arm,
     setHue: setHue, setMode: setMode,
     // Run the engine ahead without the clock (screenshots, reduced motion).
     advance: function (seconds) { for (var i = 0; i < seconds / ROUTER_DT; i++) tick(ROUTER_DT); paint(); }
   };
 
-  // #demo=toy | chain | tools | settings | stats : open the window in a state
-  // (#demo=suits is demo-suits.js's: both suits on, their page open).
+  // #demo=toy | chain | toys | tools | settings | stats : open the window in a
+  // state (#demo=suits is demo-suits.js's: both suits on, their page open).
   var want = (location.hash.match(/demo=([a-z]+)/) || [])[1];
   if (want === 'toy' || want === 'chain') window.OGPDemo.open('lush', want === 'chain' ? 0 : undefined);
-  if (want === 'tools') { $('.o-toolbar').click(); $('.js-graphsw').click(); }
+  if (want === 'toys') go('Toys');
+  if (want === 'tools') { go('Toys'); $('.o-tune .o-toolbar').click(); $('.js-graphsw').click(); }
   if (want === 'settings') go('Settings');
   if (want === 'stats') go('Statistics');
   var wantMode = (location.hash.match(/mode=(midnight|neon)/) || [])[1], wantHue = (location.hash.match(/hue=(\d+)/) || [])[1];

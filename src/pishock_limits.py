@@ -22,6 +22,9 @@ WHOLE = frozenset({"max_intensity", "max_vibrate", "max_pulse_ms"})   # ints, th
 # without its own takes the hub-wide value); the timing rules are shared.
 PER_SHOCKER = ("max_intensity", "max_vibrate", "max_pulse_ms")
 SHARED = ("cooldown_s", "max_hold_s", "hold_rest_s")
+# Separate limits for friends (Blise's calls, 2026-11-17): friends' own
+# caps -- which only ever lower each shocker's own for them -- and timing
+FRIEND_KEYS = PER_SHOCKER + SHARED
 
 
 def default(key: str):

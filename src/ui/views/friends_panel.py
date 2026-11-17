@@ -2,8 +2,12 @@
 friend (a card per toy, PiShock's own panel per shocker) or a group (its
 members, dragged in from the list; one toy card, and PiShock's Party panel
 over everyone's shockers) -- and Control mode, which makes it fill the
-window, everything big, for VR. The shockers are friends_shockers.py. Part
-of FriendsMixin (friends.py)."""
+window, everything big, for VR; or Pop out, the same big panel in a window
+of its own (friends_window.py). The shockers are friends_shockers.py. The
+panel is about the friend: what they may do with YOUR shockers is each
+shocker's own limits and switches, on the Shockers page (the per-friend
+share was removed, Blise's call 2026-11-17). Part of FriendsMixin
+(friends.py)."""
 
 import time
 from typing import Any, Callable, Dict, List, Tuple
@@ -22,8 +26,9 @@ from ui.views.card_parts import CARD_MIN_W, set_quiet
 from ui.views.friends_list import MIME_FRIEND
 from ui.views.friends_shockers import FriendsShockersMixin
 from ui.views.friends_web_panel import FriendsWebPanelMixin
+from ui.views.friends_window import FriendsWindowMixin
 from ui.views.toy_card import ToyCard
-from ui.widgets import IdentityMark, ToggleSwitch
+from ui.widgets import IdentityMark
 
 # a section in this hue carries this icon (ui/icons.identity_icon)
 _SECTION_ICONS = {_TOYS: "toys", _SHOCK: "shock", "accent": "params"}
@@ -115,11 +120,22 @@ class MembersDropZone(QFrame):
             self._on_add(bytes(event.mimeData().data(MIME_FRIEND)).decode(errors="ignore"))
 
 
-class FriendsPanelMixin(FriendsShockersMixin, FriendsWebPanelMixin):
+class FriendsPanelMixin(FriendsShockersMixin, FriendsWebPanelMixin, FriendsWindowMixin):
 
     _panel_w: Dict[str, Any] = {}
 
     # ---- control mode: one friend or group, big (VR) -----------
+
+    def _panel_mode_buttons(self, row) -> None:
+        """Control mode and Pop out, at the end of the panel's header. None
+        in the popped-out window: its own bar has Back into the page."""
+        if self._friends_popped:
+            return
+        w = self._panel_w
+        w["control"] = self._control_mode_button()
+        row.addWidget(w["control"])
+        w["popout"] = self._pop_out_button()
+        row.addWidget(w["popout"])
 
     def _control_mode_button(self) -> QPushButton:
         on = self._friends_big
@@ -148,28 +164,38 @@ class FriendsPanelMixin(FriendsShockersMixin, FriendsWebPanelMixin):
                 card.recolour()
             except RuntimeError:
                 pass                      # rebuilt meanwhile
-        button = w.get("control")
-        if button is not None:
-            try:
-                on = self._friends_big
-                button.setIcon(glyph_icon("collapse" if on else "expand", PALETTE["cyan"][0], 16))
-            except RuntimeError:
-                pass
+        for key, glyph in (("control", "collapse" if self._friends_big else "expand"),
+                           ("popout", "popout")):
+            button = w.get(key)
+            if button is not None:
+                try:
+                    button.setIcon(glyph_icon(glyph, PALETTE["cyan"][0], 16))
+                except RuntimeError:
+                    pass
+        self._friends_window_recolour()
 
     def _set_friends_control(self, on: bool) -> None:
         on = bool(on)
+        if self._friends_popped:
+            return      # in its own window it stays big; its bar puts it back
         if on == self._friends_big:
             return
         self._friends_big = on
+        self._friends_page_chrome(not on)
+        self._friends_panel_key = None
+        self.refresh_friends()
+
+    def _friends_page_chrome(self, shown: bool) -> None:
+        """Everything on the page around the panel -- the sidebar, the
+        title, your list, the log -- steps aside for control mode (`shown`
+        False) or comes back."""
         for w in (getattr(self, "sidebar_scroll", None), self._friends_title,
                   self._friends_intro, self._friends_list_card, self._friends_log_card):
             if w is not None:
-                w.setVisible(not on)
-        self._friends_right.setMaximumWidth(16777215 if on else PANEL_MAX_W)
-        self._panel_card.setProperty("big", "true" if on else "false")
+                w.setVisible(shown)
+        self._friends_right.setMaximumWidth(PANEL_MAX_W if shown else 16777215)
+        self._panel_card.setProperty("big", "false" if shown else "true")
         self._repolish(self._panel_card)
-        self._friends_panel_key = None
-        self.refresh_friends()
 
     # ---- what is picked ----------------------------------------
 
@@ -183,18 +209,25 @@ class FriendsPanelMixin(FriendsShockersMixin, FriendsWebPanelMixin):
             t = f["theirs"]
             return ("friend", f["id"], f["nick"], f["linked"], friend_hue(st["friends"].index(f)),
                     None if t is None else (tuple(n for n, _ in t["toys"]), t["allow_toys"],
-                                            t["allow_shock"], tuple(t["shockers"])))
+                                            t["allow_shock"], tuple(t["shockers"])),
+                    bool(st.get("shockers_on")), st.get("shocker_layout"))
         if sel.get("kind") == "group":
             g = next((x for x in st["groups"] if x["id"] == sel["id"]), None)
             if g is None:
                 return ("none",)
-            return ("group", g["id"], tuple(f["id"] for f in st["friends"]))
+            return ("group", g["id"], tuple(f["id"] for f in st["friends"]),
+                    bool(st.get("shockers_on")), st.get("shocker_layout"))
         if sel.get("kind") == "web" and st.get("web"):
-            return ("web", tuple((g["id"], g["nick"]) for g in st["web"]["guests"]))
+            return ("web", tuple((g["id"], g["nick"]) for g in st["web"]["guests"]),
+                    bool(st.get("shockers_on")))
         return ("none",)
 
     def _rebuild_panel(self, st: Dict[str, Any]) -> None:
         self._keep_shockers()
+        # whose shocker buttons it is built with: PiShock's or OpenShock's
+        # (friends_shockers.py, shocker_layout.py) -- after the old cards
+        # were kept in the layout they had
+        self._shocker_layout = st.get("shocker_layout")
         clear_layout(self._panel_lay)
         self._panel_w = {"strength_t": 0.0}
         sel = st["selected"]
@@ -224,6 +257,8 @@ class FriendsPanelMixin(FriendsShockersMixin, FriendsWebPanelMixin):
             return
         self._panel_header("Control")
         self._panel_lay.addWidget(self._muted_label(
+            "Pick a friend or a group in your list on the Friends page to control "
+            "them here." if self._friends_popped else
             "Add a friend on the left, then pick them - or a group - to control "
             "them here."))
 
@@ -298,6 +333,19 @@ class FriendsPanelMixin(FriendsShockersMixin, FriendsWebPanelMixin):
 
     # ---- one friend --------------------------------------------
 
+    def _friend_synced_pill(self, pill, f: Dict[str, Any], others: bool) -> None:
+        """SYNCED / SEPARATE in THEIR TOYS' header, while others drive them
+        too: how they have Sync with others (``sep`` in their ``st`` -- an
+        OGP from before it was theirs to choose says nothing: synced)."""
+        if pill is None:
+            return
+        theirs = f.get("theirs")
+        show = others and theirs is not None and bool(theirs.get("allow_toys"))
+        pill.setVisible(show)
+        if show:
+            self._friends_set_pill(pill, "SEPARATE" if theirs.get("separate") else "SYNCED",
+                                   "idle")
+
     def _build_friend_panel(self, f: Dict[str, Any]) -> None:
         fid, w = f["id"], self._panel_w
         w["kind"], w["id"] = "friend", fid
@@ -313,15 +361,16 @@ class FriendsPanelMixin(FriendsShockersMixin, FriendsWebPanelMixin):
         w["others"] = self._friends_pill("", "info")
         w["others"].setVisible(False)
         row.addWidget(w["others"])
-        w["control"] = self._control_mode_button()
-        row.addWidget(w["control"])
+        self._panel_mode_buttons(row)
         title = w["title"]
-        title.setContextMenuPolicy(Qt.CustomContextMenu)
-        title.customContextMenuRequested.connect(
-            lambda pos: self._friend_row_menu(fid, nick, title, pos, me))
-        title.setToolTip("Right-click to take yourself off the list" if me
-                         else "Right-click to unfriend")
+        if not self._friends_popped:        # a menu is a popup: never in its own window
+            title.setContextMenuPolicy(Qt.CustomContextMenu)
+            title.customContextMenuRequested.connect(
+                lambda pos: self._friend_row_menu(fid, nick, title, pos, me))
+            title.setToolTip("Right-click to take yourself off the list" if me
+                             else "Right-click to unfriend")
         w["foot"] = (fid, nick, me)
+        self._build_friend_vrchat(f)           # VRChat account (friends_account.py)
 
         theirs = f["theirs"]
         if not f["linked"] or theirs is None:
@@ -339,26 +388,22 @@ class FriendsPanelMixin(FriendsShockersMixin, FriendsWebPanelMixin):
                 w["strength_t"] = time.monotonic()
                 c.set_friend_strength(fid, v)
 
-            sync = ToggleSwitch("Sync with others")
-            sync.setChecked(bool(f.get("sync", True)))
-            sync.toggled.connect(lambda on: c.set_friend_sync(fid, bool(on)))
-            if self._friends_big:
-                sync.setProperty("big", "true")
-            if not me:                          # you on yourself: nobody to sync with
-                head.addWidget(sync)
-                head.addSpacing(10)
-                w["sync"] = sync
-            # the first sentence is what help mode shows: it has to say it
-            # alone (Blise's ask, 2026-10-29: "you see what the others see")
-            self._explain(sync, "Sync with others",
-                          "On: you see what the others driving this friend see - one "
-                          "set of toy cards for all of you. When one of you moves a "
-                          "level, starts an auto mode or picks Override, it moves on "
-                          "everyone's cards, and their toys play that one change (the "
-                          "newest wins). +1 OTHER above says who else is driving them."
-                          "<br><br>Off: your cards are just yours - you don't see what "
-                          "the others do, and their toys follow whichever of you is "
-                          "higher. Their strength slider is shared either way.")
+            # read-only, while others drive them too: whether they share one
+            # set of toy cards among you -- their call (Blise's, 2026-11-17),
+            # never yours. Here, not beside +1 OTHER: the header would
+            # outgrow a narrow window.
+            synced = self._friends_pill("", "idle")
+            synced.setVisible(False)
+            head.addWidget(synced)
+            head.addSpacing(10)
+            w["synced"] = synced
+            self._explain(synced, "Synced or separate",
+                          "Whether everyone driving them shares one set of toy cards - "
+                          "their choice, not yours.<br><br>SYNCED: a level, an auto mode "
+                          "or Override one of you sets moves on everyone's cards, and "
+                          "their toys play that one change (the newest wins). SEPARATE: "
+                          "your cards are just yours, and their toys follow whichever of "
+                          "you is higher. Their strength slider is shared either way.")
             w["strength"] = self._strength_inline(head, theirs["strength"], strength_changed)
             cards = []
             # "All their toys" only for two toys or more (Blise's call,
@@ -427,8 +472,7 @@ class FriendsPanelMixin(FriendsShockersMixin, FriendsWebPanelMixin):
         first = next((f for f in st["friends"] if f["id"] in g["members"] and f["theirs"]), None)
         w["strength0"] = first["theirs"]["strength"] if first is not None else 1.0
         row, w["title"] = self._panel_header(g["name"])
-        w["control"] = self._control_mode_button()
-        row.addWidget(w["control"])
+        self._panel_mode_buttons(row)
         w["online"] = QLabel("")
         w["online"].setProperty("muted", "true")
         if self._friends_big:
@@ -495,13 +539,13 @@ class FriendsPanelMixin(FriendsShockersMixin, FriendsWebPanelMixin):
     def _update_panel(self, st: Dict[str, Any]) -> None:
         w = self._panel_w
         self._update_friend_board()
-        page = self.views.get("Friends") if hasattr(self, "views") else None
-        seen = page is not None and page.isVisible()
+        seen = self._friends_panel_seen()      # on the page, or in its own window
         self._friends_levels_watch(w["id"] if seen and w.get("kind") == "friend" else "")
         if w.get("kind") == "friend":
             f = next((x for x in st["friends"] if x["id"] == w["id"]), None)
             if f is None:
                 return
+            self._update_friend_vrchat(f, st)
             if f["linked"]:
                 rtt = f" · {f['rtt']:.0f} ms" if f["rtt"] is not None else ""
                 self._friends_set_pill(w["pill"], f"ONLINE · {f['path']}{rtt}", "ok")
@@ -517,11 +561,7 @@ class FriendsPanelMixin(FriendsShockersMixin, FriendsWebPanelMixin):
                 tip = "Also driving their toys right now: " + ", ".join(names)
                 if pill.toolTip() != tip:
                     pill.setToolTip(tip)
-            sync = w.get("sync")
-            if sync is not None and sync.isChecked() != bool(f.get("sync", True)):
-                sync.blockSignals(True)
-                sync.setChecked(bool(f.get("sync", True)))
-                sync.blockSignals(False)
+            self._friend_synced_pill(w.get("synced"), f, bool(names))
             theirs = f["theirs"]
             if theirs is None:
                 return

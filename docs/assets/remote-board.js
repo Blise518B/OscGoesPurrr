@@ -1,15 +1,19 @@
 // Their avatar on the web remote: the board they built on their Avatar
 // Remote page for the avatar they wear -- src/ui/views/friends_board.py and
 // param_cards.py, ported. Their categories and cards as they have them; a
-// locked category is look-only; with their ⚡ YOLO on, a list of every
-// parameter follows, filterable. The page tells their OGP it is watching
-// (only then does it send the board and its values).
+// locked category is look-only; their Height box follows while its switch
+// is on on their side (src/ui/views/param_height.py: their height now, one
+// slider between their lowest and highest, Grow / Right away / Reset); with
+// their ⚡ YOLO on, a list of every parameter follows, filterable. The page
+// tells their OGP it is watching (only then does it send the board and its
+// values).
 
 import { el, hslider } from "./remote-ui.js";
 
 const P = window.OGPRemoteProto;
 const YOLO_ROWS = 60;
 const SLIDER_STEPS = 1000;
+const HANDS_OFF_MS = 4000;    // the height slider isn't moved for you this long after you moved it
 
 function hued(node, hue) {
   node.style.setProperty("--hue", `var(--${hue})`);
@@ -99,14 +103,84 @@ class ParamCard {
   }
 }
 
+/** Their Height box (param_height.py, a friend's copy): their height now,
+ *  one slider between their lowest and highest (a log scale: equal steps
+ *  are equal factors), Grow / Right away / Reset. */
+class HeightBox {
+  constructor(box, onHeight) {
+    this.lo = box.lo;
+    this.hi = box.hi;
+    this.chosen = null;
+    this.last = null;
+    this.handsAt = -1e9;
+    this.now = el("span.hnow", { title: "Their eye height, live from VRChat." }, "–");
+    this.state = el("span.pval");
+    this.target = el("span.pval.htarget", {}, "–");
+    this.slider = hslider({ max: SLIDER_STEPS, hue: "green",
+      title: "The height Grow or Right away takes them to, inside the range they chose.",
+      onInput: (x) => {
+        this.chosen = P.sliderToHeight(x / SLIDER_STEPS, this.lo, this.hi);
+        this.handsAt = performance.now();
+        this.target.textContent = P.fmtHeight(this.chosen);
+      } });
+    const go = (mode) => () => { if (this.chosen !== null) onHeight(mode, this.chosen); };
+    this.grow = el("button.btn.secondary", { type: "button", onclick: go("grow"),
+      title: "Glides them to the slider's height, at the speed they chose." }, "Grow");
+    this.jump = el("button.btn.secondary", { type: "button", onclick: go("now"),
+      title: "Jumps them straight to the slider's height." }, "Right away");
+    this.reset = el("button.btn.secondary", { type: "button", onclick: () => onHeight("reset", null),
+      title: "Back to their own height: what VRChat reported before anyone changed it." }, "Reset");
+    this.lock = el("span.cat-lock", { title: "Locked - for looking only" }, "🔒 look only");
+    this.note = el("p.small");
+    this.note.hidden = true;
+    this.body = el("div.hbody", {},
+      el("div.row", {}, this.now, this.state),
+      el("div.row", {}, this.slider, this.target),
+      el("div.row", {}, this.grow, this.jump, this.reset));
+    this.root = hued(el("div.cat.green.hbox", { title: "Their height in VRChat, from their "
+      + "Avatar Remote page's Height box. It stays where you put it, inside the range they chose." },
+      el("div.cat-head", {}, el("span.cat-name", {}, "Height"), this.lock), this.body, this.note), "green");
+  }
+  put(h) {
+    const x = P.heightToSlider(h, this.lo, this.hi);
+    if (x !== null) this.slider.setQuiet(Math.round(x * SLIDER_STEPS));
+    this.target.textContent = P.fmtHeight(h);
+  }
+  /** box (the board's height), height (theirs now, null unknown), stopped (their Pause all),
+   *  notHere (stopped because you aren't in their VRChat instance) */
+  update(box, height, stopped, notHere = false) {
+    this.now.textContent = P.fmtHeight(height);
+    this.state.textContent = height !== null ? "eye height" : "";
+    const mine = this.slider.busy || performance.now() - this.handsAt < HANDS_OFF_MS;
+    if (height !== null && (height !== this.last || this.chosen === null) && !mine) {
+      this.chosen = Math.max(this.lo, Math.min(this.hi, height));
+      this.put(this.chosen);
+    }
+    this.last = height;
+    const usable = box.allowed && !box.locked && !stopped;
+    this.lock.hidden = !box.locked;
+    this.root.classList.toggle("locked", box.locked);
+    for (const b of [this.grow, this.jump]) b.disabled = !usable || this.chosen === null;
+    this.reset.disabled = !usable;
+    this.slider.disabled = !usable;
+    const note = !box.allowed ? "Their world doesn't allow changing height."
+      : stopped && notHere ? "Not here - they only let people in their VRChat instance change it."
+      : stopped ? "Paused - they paused all friends." : "";
+    this.note.textContent = note;
+    this.note.hidden = !note;
+  }
+}
+
 export class Board {
-  /** cb: onSet(controlId, value), onHold(controlId, held), onSetAny(name, value) */
+  /** cb: onSet(controlId, value), onHold(controlId, held), onSetAny(name, value),
+   *  onHeight(mode, metres) -- mode grow / now / reset */
   constructor(cb) {
     this.cb = cb;
     this.key = null;
     this.cards = {};
     this.cats = {};
     this.yoloRows = {};
+    this.height = null;
     this.yoloOpen = false;
     this.yoloFilter = "";
     this.yoloAll = false;
@@ -115,10 +189,13 @@ export class Board {
     this.root = el("div", {}, this.body);
   }
 
-  /** prm (their st.prm), board (null until it came), values {param: v} */
-  update(prm, board, values) {
+  /** prm (their st.prm), board (null until it came), values {param: v},
+   *  notHere: paused because you aren't in their VRChat instance,
+   *  height (their height now, null unknown) */
+  update(prm, board, values, notHere = false, height = null) {
+    const hb = board ? board.height : null;
     const shape = board ? JSON.stringify([board.categories.map((c) => [c.id, c.color]),
-                                          board.controls, board.all]) : null;
+                                          board.controls, board.all, hb ? [hb.lo, hb.hi] : null]) : null;
     const key = JSON.stringify([Boolean(prm.ver), prm.stop, prm.yolo, shape, this.yoloOpen]);
     if (key !== this.key) {
       this.key = key;
@@ -130,11 +207,15 @@ export class Board {
       }
     }
     let note = board && board.name ? board.name : "";
-    if (prm.stop) note = (note ? `${note} · ` : "") + "paused - they paused all friends";
+    if (prm.stop) {
+      note = (note ? `${note} · ` : "") + (notHere ? "not here - they only let people in their VRChat instance use it"
+        : "paused - they paused all friends");
+    }
     this.note.textContent = note;
     for (const card of Object.values(this.cards)) {
       if (card.c.param in values) card.update(values[card.c.param]);
     }
+    if (this.height && hb) this.height.update(hb, height, prm.stop, notHere);
     for (const [name, show] of Object.entries(this.yoloRows)) {
       if (name in values && values[name] !== null) show(values[name]);
     }
@@ -145,13 +226,14 @@ export class Board {
     this.cards = {};
     this.cats = {};
     this.yoloRows = {};
+    this.height = null;
     const muted = (t) => el("p.small", {}, t);
     if (!prm.ver) {
       this.body.append(muted("They aren't wearing an avatar right now (VRChat isn't running on their side)."));
       return;
     }
     if (!board) { this.body.append(muted("Getting their board…")); return; }
-    if (!board.controls.length && board.all === null) {
+    if (!board.controls.length && board.all === null && !board.height) {
       this.body.append(muted("Nothing on this avatar's board yet - they add controls on their Avatar Remote page."));
     }
     for (const cat of board.categories) {
@@ -178,6 +260,10 @@ export class Board {
       box.setState(cat.name, cat.locked, prm.stop);
       this.cats[cat.id] = box;
       this.body.append(box);
+    }
+    if (board.height) {
+      this.height = new HeightBox(board.height, (mode, v) => this.cb.onHeight && this.cb.onHeight(mode, v));
+      this.body.append(this.height.root);
     }
     if (board.all !== null) this.yolo(board, values, prm.stop);
   }

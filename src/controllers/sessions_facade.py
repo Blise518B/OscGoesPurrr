@@ -16,6 +16,7 @@ Wiring contract (see docs/SESSION_LOGGING.md):
 * `quit_app()` calls `stop_session_logging()` so the footer lands.
 """
 
+import time
 from typing import Any, Dict, List, Optional
 
 from parameter_store import store
@@ -28,6 +29,11 @@ from settings import SESSIONS_DIR, SessionSettingsManager
 # always-on OGB consumers, so logging this prefix gives us full
 # coverage of every input the router or the mirror could care about.
 _OGB_PREFIX = "OGB/"
+
+# Record raw contacts (debug): which packets, by VRChat's own name, the
+# recording keeps -- every OGB / SPS / SPS 3 zone and app parameter
+# (OGB/..., OGB_ENABLED), VRCFury Haptics' VFH/..., TPS, and avatar loads.
+_RAW_PREFIXES = ("OGB", "VFH/", "TPS_Internal/", "avatar/change")
 
 
 class SessionsFacade:
@@ -107,8 +113,22 @@ class SessionsFacade:
                 self.motor_router.set_session_broadcast(self._session_on_motor)
         except Exception as e:
             self.log_message(f"Session logger: failed to hook motor_router: {e}")
+        self._session_raw_sync()
         self.log_message(f"Session logging started → {sid}")
         return sid
+
+    def start_debug_recording(self) -> Optional[str]:
+        """The OSC Inspector's Debug recording button: a session with every
+        contact packet in it, starting now. Switches session logging and
+        Record raw contacts on (remembered); a session already recording
+        just gains the contacts from here on. Returns the session id, or
+        None when it can't start (a replay is running)."""
+        self._session_settings.set_enabled(True)
+        self._session_settings.set_raw_contacts(True)
+        if self.is_session_logging_active():
+            self._session_raw_sync()
+            return (self._session_logger.current_session or {}).get("id")
+        return self.start_session_logging()
 
     def stop_session_logging(self) -> None:
         """Stop the current session (idempotent). Unhooks the
@@ -119,6 +139,8 @@ class SessionsFacade:
                 self.motor_router.set_session_broadcast(None)
         except Exception:
             pass
+        store.clear_contact_tap()
+        self._session_raw_on = False
         if not self._session_logger.is_running:
             return
         sid = (self._session_logger.current_session or {}).get("id", "?")
@@ -177,7 +199,8 @@ class SessionsFacade:
 
     def set_session_settings(self, enabled: Optional[bool] = None,
                              auto_start: Optional[bool] = None,
-                             retention: Optional[int] = None) -> None:
+                             retention: Optional[int] = None,
+                             raw_contacts: Optional[bool] = None) -> None:
         """Update one or more fields. Passing None for a field leaves
         it untouched. Cheap — the settings manager persists each
         write so the UI doesn't need a separate save call."""
@@ -187,6 +210,53 @@ class SessionsFacade:
             self._session_settings.set_auto_start(bool(auto_start))
         if retention is not None:
             self._session_settings.set_retention(int(retention))
+        if raw_contacts is not None:
+            self._session_settings.set_raw_contacts(bool(raw_contacts))
+            self._session_raw_sync()   # takes effect in a running session
+
+    # ------------------------------------------------------------------
+    # Raw contact recording (debug)
+    # ------------------------------------------------------------------
+
+    _session_raw_on = False
+
+    def _session_raw_sync(self) -> None:
+        """Hand live contact packets to the logger while a session records
+        with Record raw contacts on, and stop otherwise. Starting mid-avatar
+        first writes what the store already has, so a replay knows the
+        avatar's constants (DepthRadius, LengthMult2 ...) that never come
+        as packets."""
+        want = (self.is_session_logging_active()
+                and self._session_settings.get_raw_contacts())
+        if not want:
+            store.clear_contact_tap()
+            self._session_raw_on = False
+            return
+        if self._session_raw_on:
+            return
+        try:
+            values, types = store.contact_snapshot(_RAW_PREFIXES)
+            self._session_logger.log_raw_snapshot(
+                self._session_t_ms(), values, types, "store")
+        except Exception:
+            pass
+        store.set_contact_tap(self._session_on_raw_packet,
+                              self._session_on_raw_snapshot, _RAW_PREFIXES)
+        self._session_raw_on = True
+
+    def _session_t_ms(self) -> float:
+        started = self._session_started_at_unix
+        return (time.time() - started) * 1000.0 if started else 0.0
+
+    def _session_on_raw_packet(self, address: str, value: Any) -> None:
+        """Store tap, on the OSC thread: queue only."""
+        self._session_logger.log_raw(self._session_t_ms(), address, value)
+
+    def _session_on_raw_snapshot(self, values: Dict[str, Any],
+                                 types: Dict[str, str]) -> None:
+        """Store tap after an avatar load (OSCQuery): queue only."""
+        self._session_logger.log_raw_snapshot(
+            self._session_t_ms(), values, types, "oscquery")
 
     # ------------------------------------------------------------------
     # Routing-thread adapters (private)
@@ -199,9 +269,11 @@ class SessionsFacade:
         logger.log_motor. Runs on the routing thread (UI thread)."""
         if not self.is_session_logging_active():
             return
-        t_unix = float(intermediates.get("t_unix", 0.0))
-        started = self._session_started_at_unix or t_unix
-        t_ms = (t_unix - started) * 1000.0
+        # Stamped here, on the session's own clock: the broadcast runs
+        # inside the routing tick, and its "t_unix" is the router's clock
+        # -- time.monotonic, not wall time -- which once put every motor
+        # line about -1.8e12 ms before its session started.
+        t_ms = self._session_t_ms()
         try:
             self._session_logger.log_motor(
                 t_ms, device_name, motor_idx,
@@ -277,6 +349,18 @@ class SessionsFacade:
         except Exception:
             hz = 90
         meta["router_hz"] = max(10, min(240, hz))
+
+        # Which build recorded it, and whether raw contacts are in it.
+        try:
+            from version import __version__
+            meta["app_version"] = str(__version__)
+        except Exception:
+            meta["app_version"] = None
+        try:
+            meta["raw_contacts"] = bool(
+                self._session_settings.get_raw_contacts())
+        except Exception:
+            meta["raw_contacts"] = False
 
         # Connected toys (name + motor_count)
         toys: List[Dict[str, Any]] = []

@@ -21,7 +21,9 @@ OGP's VRChat menu has seven Toggles and seven Radials, and each one is a
 slot that one control -- or a whole category -- takes. A slot holds one
 thing; one thing can sit in several slots. Toggles take toggles and hold
 buttons, Radials take sliders and steppers; a category's slot drives the
-controls in it that fit.
+controls in it that fit. A Radial can also take the page's Height box
+(``h:height``, avatar_height.py): your height between its lowest and
+highest.
 
 `BoardBook` is the Relay's AppCore without the network: which avatar is
 worn (`live_avatar_id`), which one is open on the page (`avatar_id` --
@@ -76,10 +78,13 @@ AVATAR_NAME_MAX = 80
 
 # The avatar menu's slots: Avatar Remote > Toggles 1-7 / Radials 1-7
 # (OGP/Remote/Toggle1-7, Radial1-7) -- which controls each menu takes. A
-# slot is "c:<control id>" or "g:<category id>", or None while free.
+# slot is "c:<control id>" or "g:<category id>" -- or the Height box,
+# HEIGHT_SLOT (a Radial only) -- or None while free.
 SLOT_COUNT = 7
 SLOT_MENUS = ("toggle", "radial")
 SLOT_KINDS = {"toggle": ("toggle", "button"), "radial": ("slider", "int")}
+HEIGHT_SLOT = "h:height"
+HEIGHT_LABEL = "Height"
 
 
 def new_id() -> str:
@@ -247,6 +252,8 @@ def slot_controls(board: Dict[str, Any], menu: str, key: Optional[str]) -> List[
 def _slot_fits(board: Dict[str, Any], menu: str, key: Any) -> bool:
     if not isinstance(key, str) or menu not in SLOT_KINDS:
         return False
+    if key == HEIGHT_SLOT:
+        return menu == "radial"
     kind, _, target = key.partition(":")
     if kind == "g":
         return find_category(board, target) is not None
@@ -278,6 +285,8 @@ def slot_label(board: Dict[str, Any], key: Optional[str]) -> str:
     """What sits in a slot, by name ("" while free)."""
     if not key:
         return ""
+    if key == HEIGHT_SLOT:
+        return HEIGHT_LABEL
     kind, _, target = key.partition(":")
     if kind == "g":
         cat = find_category(board, target)
@@ -345,7 +354,7 @@ def _clean_control(raw: Any) -> Optional[Dict[str, Any]]:
         for key, dflt in (("min", 0.0), ("max", 1.0 if c["ptype"] == "Float" else float(INT_MAX))):
             try:
                 c[key] = float(c.get(key, dflt))
-            except (TypeError, ValueError):
+            except (TypeError, ValueError, OverflowError):
                 c[key] = dflt
             if c[key] != c[key]:
                 c[key] = dflt
@@ -527,6 +536,17 @@ class BoardBook:
         if self.avatar_id and self.avatar_id not in ids:
             out.append({"avatar_id": self.avatar_id, "name": self.avatar_name, "named": False})
         return out
+
+    def reload(self) -> None:
+        """The store changed under the book (Ctrl+Z wrote old values back
+        into it): the open and the worn profile, and the open board, read
+        from it again."""
+        if self.avatar_id:
+            stored = self.store.load(self.avatar_id)
+            if stored is not None:
+                self.profile = stored
+        self._live_profile = None
+        self.board = active_preset(self.profile)
 
     def open_avatar(self, avatar_id: str) -> bool:
         """Open an avatar on the page (a saved one, or the worn one)."""
@@ -766,6 +786,90 @@ class BoardBook:
             if control.get("cat") == cat_id:
                 control["cat"] = cats[0]["id"]
         clean_slots(self.board)
+        self._save()
+        return True
+
+    # -- dragged back to the parameter list: off the board, and Undo ------------------
+
+    def take_control(self, control_id: str) -> Optional[Dict[str, Any]]:
+        """A control dragged back to the parameter list: off the board, out
+        of every menu slot it had. Returns what `put_back` needs to undo it
+        exactly (None when it isn't there)."""
+        control = find_control(self.board, control_id)
+        return self._take([control]) if control is not None else None
+
+    def take_category(self, cat_id: str) -> Optional[Dict[str, Any]]:
+        """A whole category dragged back to the list: it and every control
+        in it. A board keeps one category, so the last one is emptied
+        instead (None when that leaves nothing to do)."""
+        cat = find_category(self.board, cat_id)
+        if cat is None:
+            return None
+        controls = [c for c in self.board["controls"] if c.get("cat") == cat_id]
+        last = len(self.board["categories"]) <= 1
+        if last and not controls:
+            return None
+        return self._take(controls, None if last else cat)
+
+    def _take(self, controls: List[Dict[str, Any]],
+              cat: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        board = self.board
+        ids = {c["id"] for c in controls}
+        keys = {"c:" + i for i in ids}
+        if cat is not None:
+            keys.add("g:" + cat["id"])
+        slots = board.get("slots") or {}
+        snap = {
+            "avatar_id": self.avatar_id, "preset": board["id"],
+            # (place on the board, the control): put back in this order,
+            # each lands where it was
+            "controls": [(i, copy.deepcopy(c)) for i, c in enumerate(board["controls"])
+                         if c["id"] in ids],
+            "category": None,
+            "slots": [(menu, i, k) for menu in SLOT_MENUS
+                      for i, k in enumerate(slots.get(menu) or []) if k in keys],
+        }
+        board["controls"] = [c for c in board["controls"] if c["id"] not in ids]
+        if cat is not None:
+            at = next(i for i, c in enumerate(board["categories"]) if c["id"] == cat["id"])
+            snap["category"] = (at, copy.deepcopy(cat))
+            board["categories"].pop(at)
+        clean_slots(board)
+        self._save()
+        return snap
+
+    def put_back(self, snap: Any) -> bool:
+        """Undo a take: the category and controls back where they were, and
+        into the menu slots they had -- each one nothing else took since.
+        Only onto the board they came off (the same avatar and preset)."""
+        if (not isinstance(snap, dict) or not self.avatar_id
+                or snap.get("avatar_id") != self.avatar_id
+                or snap.get("preset") != self.board.get("id")):
+            return False
+        board = self.board
+        changed = False
+        if snap.get("category") is not None:
+            at, cat = snap["category"]
+            if find_category(board, cat["id"]) is None:
+                board["categories"].insert(min(at, len(board["categories"])), copy.deepcopy(cat))
+                changed = True
+        cat_ids = {c["id"] for c in board["categories"]}
+        have = {c["id"] for c in board["controls"]}
+        for at, control in snap.get("controls") or []:
+            if control["id"] in have:
+                continue
+            control = copy.deepcopy(control)
+            if control.get("cat") not in cat_ids:         # its category went since
+                control["cat"] = board["categories"][0]["id"]
+            board["controls"].insert(min(at, len(board["controls"])), control)
+            changed = True
+        if not changed:
+            return False
+        slots = board.setdefault("slots", no_slots())
+        for menu, i, key in snap.get("slots") or []:
+            if menu in slots and 0 <= i < len(slots[menu]) and slots[menu][i] is None:
+                slots[menu][i] = key
+        clean_slots(board)
         self._save()
         return True
 

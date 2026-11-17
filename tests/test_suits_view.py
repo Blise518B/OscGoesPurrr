@@ -12,7 +12,7 @@ import pytest
 
 from PySide6.QtCore import QPoint, QPointF, Qt
 from PySide6.QtGui import QImage, QMouseEvent, QWheelEvent
-from PySide6.QtWidgets import QApplication, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QPushButton, QVBoxLayout, QWidget
 
 import body_map
 from settings.suits import _clean_bhaptics, _clean_owo
@@ -62,6 +62,9 @@ class FakeController:
 
     def get_sps_source_names_flat(self):
         return []
+
+    def get_device_connected_param(self, slot):
+        return (True, f"Default/{slot}")
 
     def __getattr__(self, name):
         if name.startswith("__"):
@@ -319,7 +322,8 @@ def test_zone_routes_offer_the_parts_you_have(qapp):
 # ---- cards that open with a line to her --------------------------------------
 
 def _laid_out(h):
-    h.window.resize(1200, 1800)
+    # as the page's scroll area lays it out: never squeezed below its height
+    h.window.resize(1200, max(1800, h.window.sizeHint().height()))
     h.window.show()
     QApplication.processEvents()
     return h
@@ -361,28 +365,76 @@ def test_a_line_runs_from_each_picked_thing_to_its_card(qapp):
 
 # ---- trackers ------------------------------------------------------------------
 
+def _tracker(serial, role="", placed_by="steamvr", spot=None, battery=80):
+    return {"serial": serial, "model": "VIVE Tracker 3.0 MV", "kind": "vive",
+            "battery": battery, "role": role, "role_spot": None,
+            "spot": spot, "placed_by": placed_by if spot else None}
+
+
 def test_trackers_show_on_her_only_when_there_are_some(qapp):
     c = FakeController()
-    c.trackers = {"feature": True, "spots": {
-        "hip": {"enabled": True, "intensity": 70, "contacts": [1, 1]},
-        "ankle_l": {"enabled": False, "intensity": 100, "contacts": [0, 2]}}}
+    hips = _tracker("LHR-0000HIPS", "TrackerRole_Waist", spot="hips")
+    c.trackers = {"feature": True, "available": True, "alive": True,
+                  "devices": [hips, _tracker("LHR-00000FOOT", spot="foot_l", placed_by="you")],
+                  "spots": {
+                      "hips": {"enabled": True, "intensity": 70, "max": 80,
+                               "params": ["HapticHips"], "contacts": [1, 1], "trackers": [hips]},
+                      "foot_l": {"enabled": False, "intensity": 100, "max": 80,
+                                 "params": ["HapticFootLeft"], "contacts": [0, 1],
+                                 "trackers": []}}}
     h = _laid_out(_Host(c))
     chips = h._suits_tracker_chips.chips
-    assert not chips["hip"].isHidden() and chips["chest"].isHidden()
-    assert chips["hip"].text().endswith("70 %") and chips["ankle_l"].text().endswith("off")
+    assert not chips["hips"].isHidden() and chips["chest"].isHidden()
+    assert chips["hips"].text().endswith("70 %") and chips["foot_l"].text().endswith("off")
     body = h._suits_body
-    _press(body, body.tracker_center("hip"))
+    _press(body, body.tracker_center("hips"))
     card = h._suits_tracker_card
     assert not card.isHidden()
-    assert card.title.text() == "Hip tracker"
+    assert card.title.text() == "Hips tracker"
     assert card.check.text() == "On your avatar: its contact"
+    assert "SteamVR role Waist" in card.who.text()
+    assert card.params.text() == "HapticHips"
     assert [hue for hue, _s, _e in h._suits_leader_lines()] == ["blue"]
     card.test.click()
     card.strength.slider.setValue(card.strength._to_slider(40))
     card.strength.flush()
-    assert ("tracker_test", ("hip",), {}) in c.calls
-    assert ("set_tracker", ("hip",), {"intensity": 40}) in c.calls
-    assert "ankle_l" in body._missing_trackers
+    card.params.setText("HapticHips, HipsExtra")
+    card.params.editingFinished.emit()
+    assert ("tracker_test", ("hips",), {}) in c.calls
+    assert ("set_tracker", ("hips",), {"intensity": 40}) in c.calls
+    assert ("set_tracker", ("hips",), {"params": "HapticHips, HipsExtra"}) in c.calls
+    assert "foot_l" in body._missing_trackers
+    h.window.hide()
+
+
+def test_a_tracker_without_a_spot_is_placed_by_a_click_on_her(qapp):
+    c = FakeController()
+    c.trackers = {"feature": True, "available": True, "alive": True,
+                  "devices": [_tracker("LHR-781FC61B")], "spots": {}}
+    h = _laid_out(_Host(c))
+    assert h._suits_trk_note.text() == "Not on her yet:"
+    assert not h._suits_unplaced.isHidden()
+    buttons = {b.text(): b for b in h._suits_unplaced.findChildren(QPushButton)}
+    buttons["Buzz"].click()
+    assert ("tracker_identify", ("LHR-781FC61B",), {}) in c.calls
+    buttons["Place on her"].click()
+    body = h._suits_body
+    # every spot shows while placing, the empty ones dim
+    assert set(body._trackers_shown) == {k for k, _n, _xy in body_view.TRACKERS}
+    assert "Now click the spot" in h._suits_trk_note.text()
+    _press(body, body.tracker_center("knee_l"))
+    assert ("place_tracker", ("LHR-781FC61B", "knee_l"), {}) in c.calls
+    assert h._suits_placing is None
+    h.window.hide()
+
+
+def test_trackers_say_when_steamvr_isnt_running(qapp):
+    c = FakeController()
+    c.trackers = {"feature": True, "available": True, "alive": False,
+                  "devices": [], "spots": {}}
+    h = _laid_out(_Host(c))
+    assert h._suits_trk_note.text().startswith("Start SteamVR")
+    assert h._suits_tracker_chips.isHidden()
     h.window.hide()
 
 
@@ -425,3 +477,45 @@ def test_no_avatar_yet_checks_nothing_and_says_how(qapp):
     assert h._suits_body._missing_dots == {}
     h._on_suits_part_chip("VestFront")
     assert h._suits_part_card.check.isHidden()
+
+
+# ---- "connected" avatar parameters (presence_facade) ---------------------------
+
+def _switch(h, text):
+    from ui.widgets import ToggleSwitch
+    found = [t for t in h.window.findChildren(ToggleSwitch) if t.text() == text]
+    assert len(found) == 1, text
+    return found[0]
+
+
+def test_each_suit_has_a_tell_vrchat_card_with_a_row_per_part_you_have(qapp):
+    c = FakeController()
+    c.bs["have"] = ["vest", "head"]
+    h = _Host(c)
+    rows = h._bh_presence_rows
+    assert set(rows) == {key for key, _n, _p in body_map.PART_GROUPS}
+    shown = {g for g, row in rows.items() if not row.isHidden()}
+    assert shown == {"vest", "head"}
+    assert _switch(h, "Any part").isChecked()
+    assert _switch(h, "OWO suit").isChecked()
+
+
+def test_a_part_that_connects_gets_its_row_even_if_not_in_you_have(qapp):
+    c = FakeController()
+    c.bs["have"] = ["vest"]
+    c.devices = [{"label": "Tactosy for arms", "positions": ["ForearmL"], "verified": True}]
+    h = _Host(c)
+    assert not h._bh_presence_rows["arms"].isHidden()
+    assert h._bh_presence_rows["feet"].isHidden()
+
+
+def test_the_rows_reach_the_controller_by_slot(qapp):
+    c = FakeController()
+    h = _Host(c)
+    _switch(h, "Any part").setChecked(False)
+    _switch(h, "Sleeves").setChecked(False)
+    _switch(h, "OWO suit").setChecked(False)
+    sets = [a for name, a, _k in c.calls if name == "set_device_connected_param"]
+    assert sets == [("bhaptics", False, "Default/bhaptics"),
+                    ("bhaptics:arms", False, "Default/bhaptics:arms"),
+                    ("owo", False, "Default/owo")]

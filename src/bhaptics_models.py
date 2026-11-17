@@ -19,7 +19,9 @@
 # The X40 dot -> slot tables below are the community-reported layout, never
 # checked on a real X40. Which side of the Pro / Air grid is the wearer's
 # left is the one thing the Player's logs can't say: pressing a dot on the
-# Suits page settles it (then set `verified`).
+# Suits page settles it (then set `verified`). The Pro's was settled that
+# way on a real TactSuit Pro (2026-11-07); the Air shares its tables but
+# hasn't been pressed through yet.
 
 from dataclasses import dataclass
 from typing import Dict, Mapping, Optional, Sequence, Tuple
@@ -114,7 +116,7 @@ _VEST_MODELS = (
     ("TactSuitX40", Model("x40", "TactSuit X40", True)),
     ("TactSuitX16", Model("x16", "TactSuit X16", True)),
     ("TactSuitAir", Model("air", "TactSuit Air", True, grid=True)),
-    ("TactSuitPro", Model("pro", "TactSuit Pro", True, grid=True)),
+    ("TactSuitPro", Model("pro", "TactSuit Pro", True, verified=True, grid=True)),
     ("TactSuit", Model("vest", "TactSuit", True)),
     ("Tactot", Model("tactot", "Tactot", True)),
 )

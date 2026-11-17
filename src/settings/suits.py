@@ -1,8 +1,9 @@
 """Suits page state: the bHaptics suit (the parts you have, per-position
 on/strength, who it reacts to, whether it follows OWO's contacts), the OWO
 suit (My OWO's address, frequency, per-muscle top and the overall ceiling
--- EMS, so it never connects on its own unless asked) and the zone routes
-both share.
+-- EMS, so it never connects on its own unless asked), the zone routes
+both share, and the haptic trackers (each spot's on / strength / top and
+the avatar parameters it follows; where you placed a tracker by hand).
 
 Every value is cleaned on the way in and out: this file feeds the last gate
 before EMS reaches a person, and a hand-edited value must never widen it.
@@ -12,12 +13,19 @@ import json
 import math
 from typing import Any, Dict, List
 
+import antistuck
 import body_map
+import tracker_spots
 from ._base import JsonSettingsManager
 from ._paths import SUITS_SETTINGS_FILE
 
 OWO_ABSOLUTE_MAX = 100          # 100 % = the user's calibrated max in My OWO
 OWO_DEFAULT_GLOBAL_MAX = 60
+TRACKER_DEFAULT_MAX = 80       # a plain motor on a Vive Tracker's pin: not full
+MAX_PLACED = 64
+# The kinds here with an anti-stuck of their own (antistuck.py): each one's
+# block sits in its own section.
+ANTISTUCK_KINDS = ("bhaptics", "owo", "trackers")
 FILTERS = ("TouchSelf", "TouchOthers", "PenSelf", "PenOthers")
 ZONE_TYPES = ("Orf", "Pen", "Touch")
 
@@ -95,6 +103,7 @@ def _clean_bhaptics(b: Any) -> Dict[str, Any]:
         "follow_owo": bool(b.get("follow_owo", True)),
         "have": _have(b.get("have")),                # only these show on the page
         "devices": {pos: clean_device(devices.get(pos)) for pos in body_map.NODE_COUNTS},
+        "antistuck": antistuck.clean(b.get("antistuck")),
     }
 
 
@@ -112,23 +121,115 @@ def _clean_owo(o: Any) -> Dict[str, Any]:
         "global_max": _int(o.get("global_max", OWO_DEFAULT_GLOBAL_MAX), 0,
                            OWO_ABSOLUTE_MAX, OWO_DEFAULT_GLOBAL_MAX),
         "muscles": {m: clean_muscle(muscles.get(m)) for m in body_map.MUSCLES},
+        "antistuck": antistuck.clean(o.get("antistuck")),
     }
 
 
+def clean_tracker_spot(d: Any, spot: str) -> Dict[str, Any]:
+    d = d if isinstance(d, dict) else {}
+    return {"enabled": bool(d.get("enabled", True)),
+            "intensity": _int(d.get("intensity", 100), 0, 100, 100),
+            "max": _int(d.get("max", TRACKER_DEFAULT_MAX), 0, 100, TRACKER_DEFAULT_MAX),
+            "params": tracker_spots.clean_params(d.get("params"), spot)}
+
+
+def _clean_trackers(t: Any) -> Dict[str, Any]:
+    """Spots by key; "placed" = serial -> spot for trackers placed by hand
+    (the rest go where their SteamVR role says)."""
+    t = t if isinstance(t, dict) else {}
+    spots = t.get("spots") if isinstance(t.get("spots"), dict) else {}
+    placed = t.get("placed") if isinstance(t.get("placed"), dict) else {}
+    clean_placed: Dict[str, str] = {}
+    for serial, spot in placed.items():
+        serial = str(serial or "").strip()[:64]
+        if serial and spot in tracker_spots.SPOT_NAMES and len(clean_placed) < MAX_PLACED:
+            clean_placed[serial] = spot
+    return {"spots": {k: clean_tracker_spot(spots.get(k), k) for k in tracker_spots.SPOT_KEYS},
+            "placed": clean_placed,
+            "antistuck": antistuck.clean(t.get("antistuck"))}
+
+
+def history_asks(current: Dict[str, Any], target: Dict[str, Any]) -> list:
+    """What an undo or redo from `current` to `target` must ask first
+    (settings_history.py): the OWO suit (EMS) switched back on after its
+    Stop all, and a ceiling raised -- OWO's overall one or a muscle's, a
+    haptic tracker spot's Top -- and a kind's anti-stuck switched off or
+    made to wait longer."""
+    from settings_history import Ask, raised, turned_on
+    asks = []
+    for kind, words in (("bhaptics", "bHaptics anti-stuck"), ("owo", "OWO anti-stuck"),
+                        ("trackers", "Trackers' anti-stuck")):
+        for what in antistuck.loosens((current.get(kind) or {}).get("antistuck"),
+                                      (target.get(kind) or {}).get("antistuck")):
+            asks.append(Ask("confirm", f"{words}: {what}"))
+    if turned_on(current, target, ("owo", "enabled"), True):
+        asks.append(Ask("confirm", "switches the OWO suit back on"))
+    if raised(current, target, ("owo", "global_max"), OWO_DEFAULT_GLOBAL_MAX):
+        asks.append(Ask("confirm", f"raises OWO's overall ceiling to "
+                        f"{target['owo']['global_max']} %"))
+    for m in (target.get("owo") or {}).get("muscles") or {}:
+        if raised(current, target, ("owo", "muscles", m, "max"), 100):
+            asks.append(Ask("confirm", f"raises the OWO {m} ceiling"))
+    for spot in (target.get("trackers") or {}).get("spots") or {}:
+        if raised(current, target, ("trackers", "spots", spot, "max"), TRACKER_DEFAULT_MAX):
+            asks.append(Ask("confirm", f"raises the {spot} tracker's Top"))
+    return asks
+
+
 class SuitsSettingsManager(JsonSettingsManager):
+    HISTORY_KEY = "suits"
+    HISTORY_LABEL = "Suits"
+
+    @staticmethod
+    def history_asks(current: Dict[str, Any], target: Dict[str, Any]) -> list:
+        return history_asks(current, target)
+
     FILE_PATH = SUITS_SETTINGS_FILE
 
     DEFAULTS: Dict[str, Any] = {
         "bhaptics": _clean_bhaptics({}),
         "owo": _clean_owo({}),
         "routes": [],
+        "trackers": _clean_trackers({}),
     }
 
+    # The kinds whose anti-stuck this file didn't have yet: seed_antistuck
+    # copies the toys' values into them once (all of them for a new file).
+    _antistuck_unseeded = ANTISTUCK_KINDS
+
     def _post_load(self, loaded: Dict[str, Any]) -> None:
+        self._antistuck_unseeded = tuple(
+            k for k in ANTISTUCK_KINDS
+            if not isinstance((loaded.get(k) if isinstance(loaded.get(k), dict) else {})
+                              .get("antistuck"), dict))
         self.settings["bhaptics"] = _clean_bhaptics(self.settings.get("bhaptics"))
         self.settings["owo"] = _clean_owo(self.settings.get("owo"))
+        self.settings["trackers"] = _clean_trackers(self.settings.get("trackers"))
         routes = self.settings.get("routes")
         self.settings["routes"] = [clean_route(r) for r in routes] if isinstance(routes, list) else []
+
+    # ---- anti-stuck, one per kind (antistuck.py) --------------------------
+    def seed_antistuck(self, values: Dict[str, Any]) -> None:
+        """Before 2026-11-17 the suits and the trackers followed the toys'
+        anti-stuck: a kind this file had no block for yet starts as a copy of
+        the toys' `values`, so nothing anyone had set changes. Once."""
+        kinds, self._antistuck_unseeded = self._antistuck_unseeded, ()
+        for kind in kinds:
+            self.settings[kind]["antistuck"] = antistuck.clean(values)
+        if kinds:
+            self._save()
+
+    def antistuck(self, kind: str) -> Dict[str, Any]:
+        """`{enabled, active_s, peaked_s}` of "bhaptics", "owo" or "trackers"."""
+        return dict((self.settings.get(kind) or {}).get("antistuck") or antistuck.DEFAULTS)
+
+    def set_antistuck(self, kind: str, **changes) -> None:
+        if kind not in ANTISTUCK_KINDS:
+            return
+        new = antistuck.changed(self.antistuck(kind), **changes)
+        if new != self.antistuck(kind):
+            self.settings[kind]["antistuck"] = new
+            self._save()
 
     # ---- whole snapshot (what the router gets) -------------------------
     def snapshot(self) -> Dict[str, Any]:
@@ -230,3 +331,31 @@ class SuitsSettingsManager(JsonSettingsManager):
         if 0 <= index < len(routes):
             del routes[index]
             self._save()
+
+    # ---- haptic trackers --------------------------------------------------
+    def trackers(self) -> Dict[str, Any]:
+        return json.loads(json.dumps(self.settings["trackers"]))
+
+    def set_tracker_spot(self, spot: str, **changes) -> None:
+        if spot not in tracker_spots.SPOT_NAMES:
+            return
+        t = self.settings["trackers"]
+        d = dict(t["spots"].get(spot) or {})
+        d.update({k: v for k, v in changes.items()
+                  if k in ("enabled", "intensity", "max", "params")})
+        t["spots"][spot] = clean_tracker_spot(d, spot)
+        self._save()
+
+    def place_tracker(self, serial: str, spot) -> None:
+        """Put a tracker on a spot by hand; None hands it back to its
+        SteamVR role."""
+        placed = dict(self.settings["trackers"]["placed"])
+        if spot is None:
+            placed.pop(str(serial), None)
+        elif spot in tracker_spots.SPOT_NAMES:
+            placed[str(serial)] = spot
+        else:
+            return
+        self.settings["trackers"] = _clean_trackers(
+            {**self.settings["trackers"], "placed": placed})
+        self._save()

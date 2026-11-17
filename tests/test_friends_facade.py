@@ -64,19 +64,35 @@ class FakeLink:
     def drop(self, peer, reason=b"nolink"):
         self.dropped = getattr(self, "dropped", []) + [(peer, reason)]
 
+    def check_now(self, peers):
+        self.checked = getattr(self, "checked", []) + [list(peers)]
+        return list(peers)
+
+    def check_state(self):
+        return getattr(self, "checks", {})
+
 
 class FakeShockers:
     def __init__(self):
         self.is_connected, self.is_armed = True, False
         self.pulses, self.holds, self.released, self.ended = [], [], [], []
+        self.sources = []           # (call, sid, source) of every hold and release
+        self.rules = []             # the keywords of every pulse (run_cap_ms)
 
     own = {}                    # a shocker's own caps, by id
+    switched = {}               # a shocker's ops switched off on its card, by id
+
+    def op_allowed(self, sid, op):
+        return op not in self.switched.get(sid, ())
+
+    def ops_off(self):              # PiShockEngine.ops_off(): what each card has off
+        return {sid: sorted(ops) for sid, ops in self.switched.items()}
 
     def limits(self):
         return {"max_intensity": 40, "max_pulse_ms": 2000, "cooldown_s": 1.0,
                 "max_hold_s": 5.0, "hold_rest_s": 1.0}
 
-    def limits_for(self, sid):
+    def limits_for(self, sid, group="avatar"):
         lim = self.limits()
         return {"max_intensity": lim["max_intensity"],
                 "max_vibrate": lim.get("max_vibrate", lim["max_intensity"]),
@@ -88,15 +104,24 @@ class FakeShockers:
     def shockers(self):
         return [{"id": 11, "name": "Collar"}, {"id": 22}]
 
-    def pulse(self, sid, op, intensity, ms):
+    def pulse(self, sid, op, intensity, ms, **rules):     # run_cap_ms
         self.pulses.append((sid, op, intensity, ms))
+        self.rules.append(rules)
         return True
 
-    def hold(self, sid, op, intensity):
-        self.holds.append((sid, op, intensity))
+    def hold_free_in(self, sid, group="avatar"):     # no pulse running, no rest
+        return 0.0
 
-    def release(self, sid):
+    def is_resting(self, sid, group="avatar"):
+        return False
+
+    def hold(self, sid, op, intensity, source="", group="avatar"):
+        self.holds.append((sid, op, intensity))
+        self.sources.append(("hold", sid, source))
+
+    def release(self, sid, source=""):
         self.released.append(sid)
+        self.sources.append(("release", sid, source))
 
     def end(self, sid):
         self.ended.append(sid)
@@ -176,15 +201,27 @@ def test_strangers_and_friends_without_the_toys_switch_drive_nothing():
     assert h.get_friend_drive("Edge") == 0.0
 
 
-def test_every_allowed_friend_at_once_the_highest_wins():
+def test_with_sync_off_every_allowed_friend_at_once_the_highest_wins():
     h = Host()
     h.befriend(A)
     h.befriend(B)
+    h.set_friends_sync(False)
     h._friends_on_event("message", A, cmd({"Edge": 0.3}))
     h._friends_on_event("message", B, cmd({proto.ALL_TOYS: 0.6}))
     assert h.get_friend_drive("Edge") == 0.6
     h._friends_on_event("message", B, cmd({}))
     assert h.get_friend_drive("Edge") == 0.3
+
+
+def test_synced_by_default_the_newest_change_plays_even_a_lower_one():
+    h = Host()
+    h.befriend(A)
+    h.befriend(B)
+    h._friends_on_event("message", A, cmd({"Edge": 0.6}))
+    h._friends_on_event("message", B, cmd({proto.ALL_TOYS: 0.3}))
+    assert h.get_friend_drive("Edge") == 0.3
+    h._friends_on_event("message", B, cmd({}))
+    assert h.get_friend_drive("Edge") == 0.0              # their stop is the newest
 
 
 def test_a_silent_friend_drives_nothing():
@@ -901,6 +938,162 @@ def test_a_held_shocker_runs_while_held_and_lets_go(monkeypatch):
     assert h.pishock_engine.holds == [(11, "vibrate", 40)]
 
 
+class _HubLink:
+    """A fake USB hub link under the real PiShockEngine."""
+
+    def __init__(self):
+        self.sent, self.port, self.is_open, self.kind = [], "COM9", True, "pishock"
+
+    def set_openshock_shockers(self, _shockers):
+        pass
+
+    def open(self, _port, handshake_timeout_s=6.0):
+        return {"version": "3.1", "type": 3,
+                "shockers": [{"id": 11, "paused": False}, {"id": 22, "paused": False}]}
+
+    def operate(self, sid, op, intensity, ms):
+        self.sent.append((sid, op, intensity, ms))
+        return True
+
+    def end(self, sid):
+        self.sent.append((sid, "end"))
+        return True
+
+    def close(self):
+        self.is_open = False
+
+
+def real_shocker_host():
+    """A Host whose shockers are the real engine (its own clock) on a fake hub."""
+    from pishock_engine import PiShockEngine
+    h = Host()
+    clock, link = {"t": 100.0}, _HubLink()
+    eng = PiShockEngine(link_factory=lambda **_k: link, clock=lambda: clock["t"])
+    eng.set_port("COM9")
+    eng._want_connected = True
+    eng._try_connect()
+    eng.set_limits(max_intensity=40, max_pulse_ms=2000, cooldown_s=1.0,
+                   max_hold_s=10.0, hold_rest_s=2.0)
+    h.pishock_engine = eng
+    return h, eng, link, clock
+
+
+def _held_levels(link, sid=11):
+    return [s[2] for s in link.sent if s[0] == sid and s[1] != "end"]
+
+
+def test_two_friends_holding_one_shocker_get_the_stronger_steadily():
+    h, _eng, link, clock = real_shocker_host()
+    h.befriend(A, shock=True)
+    h.befriend(B, shock=True)
+    h._friends_on_event("message", A, proto.make_cmd({}, None, holds={0: ("vibrate", 0.25)}))
+    h._friends_on_event("message", B, proto.make_cmd({}, None, holds={0: ("vibrate", 0.75)}))
+    for _ in range(20):
+        h._pump_friend_holds(time.monotonic())
+        clock["t"] += 0.1
+    levels = _held_levels(link)
+    weak, strong = levels[0], max(levels)
+    assert weak < strong                         # Alex came first, Sam is stronger ...
+    assert set(levels[1:]) == {strong}           # ... and from then on Sam's, steadily
+    assert (11, "end") not in link.sent
+    # Sam lets go: Alex's hold carries on at once -- no cut, no wait
+    link.sent.clear()
+    h._friends_on_event("message", B, proto.make_cmd({}, None))
+    h._pump_friend_holds(time.monotonic())
+    assert link.sent == [(11, "vibrate", weak, 300)]
+    clock["t"] += 0.3
+    h._pump_friend_holds(time.monotonic())
+    assert (11, "end") not in link.sent and _held_levels(link)[-1] == weak
+    h._friends_on_event("message", A, proto.make_cmd({}, None))
+    h._pump_friend_holds(time.monotonic())
+    assert link.sent[-1] == (11, "end")          # the last one let go
+
+
+def test_a_warning_ending_leaves_a_friends_hold_running():
+    h, _eng, link, clock = real_shocker_host()
+    h.befriend(A, shock=True)
+    h.befriend(B, shock=True)
+    h._friends_on_event("message", A, proto.make_cmd({}, None, holds={0: ("vibrate", 0.5)}))
+    h._friends_on_event("message", B, proto.make_shock(
+        "w5", [0], 0.1, 0.0, op="vibrate", warn="vibrate", warn_intensity=1.0, warn_ms=1000))
+    t0 = time.monotonic()
+
+    def tick(k):                                 # Alex keeps holding: a cmd every tick
+        h._friend_holds = {**h._friend_holds, A: (h._friend_holds[A][0], t0 + 0.1 * k)}
+        h._pump_friend_holds(t0 + 0.1 * k)
+        clock["t"] += 0.1
+
+    for k in range(3):
+        tick(k)
+    assert _held_levels(link) == [40]            # Sam's warning, the stronger
+    for k in range(3, 11):                       # the warning ends at 1 s ...
+        tick(k)
+    assert (11, "end") not in link.sent          # ... and Alex's hold was never cut
+    assert link.sent[-1][:3] == (11, "vibrate", 5)   # Sam's vibrate (0.1 of 40) goes
+    for k in range(11, 21):                      # Sam's pulse, then its rest (1 s)
+        tick(k)
+    assert link.sent[-1][:3] == (11, "vibrate", 5)
+    for k in range(21, 25):
+        tick(k)
+    assert link.sent[-1] == (11, "vibrate", 20, 300)  # rest over: Alex's hold resumes
+
+
+def test_each_friend_and_each_warning_holds_as_a_source_of_its_own():
+    from controllers.friends_receive import hold_source, warning_source
+    h = Host()
+    h.befriend(A, shock=True)
+    h.befriend(B, shock=True)
+    h._friends_on_event("message", A, proto.make_cmd({}, None, holds={0: ("vibrate", 0.5)}))
+    h._friends_on_event("message", B, proto.make_cmd({}, None, holds={0: ("vibrate", 0.5)}))
+    h._friends_on_event("message", B, proto.make_shock(
+        "w6", [0], 1.0, 0.0, warn="vibrate", warn_intensity=1.0, warn_ms=3000))
+    h._pump_friend_holds(time.monotonic())
+    assert set(h.pishock_engine.sources) == {
+        ("hold", 11, hold_source(A, 0)), ("hold", 11, hold_source(B, 0)),
+        ("hold", 11, warning_source(B, 0))}
+    h.pishock_engine.sources.clear()
+    h._drop_shocks(B)                            # Sam is gone: only Sam's let go
+    assert set(h.pishock_engine.sources) == {
+        ("release", 11, hold_source(B, 0)), ("release", 11, warning_source(B, 0))}
+
+
+def test_one_friend_dropped_never_cuts_anothers_hold():
+    h, _eng, link, clock = real_shocker_host()
+    h.befriend(A, shock=True)
+    h.befriend(B, shock=True)
+    h._friends_on_event("message", A, proto.make_cmd({}, None, holds={0: ("vibrate", 0.25)}))
+    h._friends_on_event("message", B, proto.make_cmd({}, None, holds={0: ("vibrate", 0.75)}))
+    for _ in range(3):
+        h._pump_friend_holds(time.monotonic())
+        clock["t"] += 0.1
+    weak = _held_levels(link)[0]
+    link.sent.clear()
+    h.set_friend_permission(B, "shock", False)   # Sam's shockers switch goes off
+    assert link.sent == [(11, "vibrate", weak, 300)]   # Alex's carries on, no cut
+    for _ in range(3):
+        h._pump_friend_holds(time.monotonic())
+        clock["t"] += 0.1
+    assert (11, "end") not in link.sent and set(_held_levels(link)) == {weak}
+
+
+def test_a_friends_hold_on_a_shocker_that_moved_slot_is_let_go():
+    from controllers.friends_receive import hold_source
+    h = Host()
+    h.befriend(A, shock=True)
+    h._friends_on_event("message", A, proto.make_cmd({}, None, holds={1: ("vibrate", 0.5)}))
+    h._pump_friend_holds(time.monotonic())
+    assert h.pishock_engine.sources == [("hold", 22, hold_source(A, 1))]
+    h.pishock_engine.shockers = lambda: [{"id": 11}, {"id": 33}]   # 22 went, 33 took its place
+    h.pishock_engine.sources.clear()
+    h._pump_friend_holds(time.monotonic())
+    assert h.pishock_engine.sources == [("release", 22, hold_source(A, 1)),
+                                        ("hold", 33, hold_source(A, 1))]
+    h.pishock_engine.shockers = lambda: [{"id": 11}]               # and that slot is gone
+    h.pishock_engine.sources.clear()
+    h._pump_friend_holds(time.monotonic())
+    assert h.pishock_engine.sources == [("release", 33, hold_source(A, 1))]
+
+
 def test_holds_need_the_shockers_switch_too():
     h = Host()
     h.befriend(A, shock=False)
@@ -1167,10 +1360,8 @@ def test_your_changes_raise_your_panel_version():
     h.set_friend_level(A, proto.ALL_TOYS, 0.5)
     h.set_friend_pattern(A, "Edge", "sine")
     assert h._friends_cmd_for(A)["syn"] == 2
-    h.set_friend_sync(A, False)
-    assert "syn" not in h._friends_cmd_for(A)
     h.set_friend_level(A, proto.ALL_TOYS, 0.6)
-    assert "syn" not in h._friends_cmd_for(A)
+    assert h._friends_cmd_for(A)["syn"] == 3                 # always: syncing is their call
 
 
 def test_a_newer_shared_panel_becomes_yours():
@@ -1196,12 +1387,11 @@ def test_a_tie_lost_to_someone_else_takes_theirs():
     assert h._my_levels[A] == {proto.ALL_TOYS: 0.9}
 
 
-def test_without_sync_the_shared_panel_is_ignored():
+def test_a_shared_panel_is_always_taken_whoever_drives_them():
     h = Host()
     h.befriend(A)
-    h.set_friend_sync(A, False)
     h._friend_panel_in(A, proto.make_panel(9, {proto.ALL_TOYS: 0.9}))
-    assert A not in h._my_levels or not h._my_levels[A]
+    assert h._my_levels[A] == {proto.ALL_TOYS: 0.9}
 
 
 def test_who_else_drives_them_reaches_your_panel():
@@ -1626,3 +1816,141 @@ def test_after_an_avatar_load_ogps_values_go_back_on_the_menu():
     assert sent["OGP/Friend/Level"] == pytest.approx(0.6) and sent["OGP/Friend/Strength"] == 0.5
     assert {"OGP/Friend/Toy1", "OGP/Friend/Shocker4"} <= set(sent)
     assert not any(p.startswith("OGP/Both/") for p in sent)
+
+
+# --- every friend gets each shocker's own limits (no per-friend share since
+# Blise's call, 2026-11-17) -------------------------------------------------
+
+from controllers.friends_common import ME as SELF          # noqa: E402
+
+
+def test_a_friend_gets_each_shockers_own_limits():
+    h = Host()
+    h.befriend(A, shock=True)
+    h.pishock_engine.own = {22: {"max_intensity": 10, "max_vibrate": 10, "max_pulse_ms": 400}}
+    h._friends_on_event("message", A, shock("s1", (0, 1), 1.0, 1.0))
+    assert sorted(h.pishock_engine.pulses) == [(11, "shock", 40, 2000), (22, "shock", 10, 400)]
+    # each pulse carries its shocker's own longest pulse as the run cap
+    caps = {p[0]: r.get("run_cap_ms") for p, r in zip(h.pishock_engine.pulses,
+                                                       h.pishock_engine.rules)}
+    assert caps == {11: 2000, 22: 400}
+    h._my_state = h._build_my_state()
+    st = proto.read_status(h._friends_status_for(A))
+    assert st["shocker_caps"] == [(40, 40, 2000), (10, 10, 400)]
+
+
+def test_their_status_carries_each_shockers_own_limits_and_switches():
+    h = Host()
+    h.befriend(A, shock=True)
+    h.pishock_engine.switched = {22: {"beep"}}
+    h._my_state = h._build_my_state()
+    raw = h._friends_status_for(A)
+    assert "fw" not in raw and "nc" not in raw              # the share's bits are gone
+    st = proto.read_status(proto.decode(proto.encode(raw)))
+    assert st["shocker_caps"] == [(40, 40, 2000), (40, 40, 2000)]
+    assert st["shocker_ops"] == [["shock", "vibrate", "beep"], ["shock", "vibrate"]]
+    assert (st["max_intensity"], st["max_pulse_ms"]) == (40, 2000)   # what older copies read
+    assert "warn_first" not in st and "holds_ok" not in st
+
+
+def test_the_controller_has_no_share_to_set_any_more():
+    h = Host()
+    for name in ("set_friend_share", "set_group_share", "set_friends_web_share", "_share_of"):
+        assert not hasattr(h, name), name
+
+
+def test_an_old_share_left_in_the_file_limits_nothing():
+    h = Host()
+    h.befriend(A, shock=True)
+    # a strict share from before 2026-11-17 still in memory: nothing reads it
+    # (a file is cleaned of it on load: test_friends_settings)
+    h.friends_settings.settings["friends"][0]["share"] = {"shock": False, "max": 5,
+                                                          "cont": False, "warn": True}
+    h._friends_rebuild_perms()
+    h._friends_on_event("message", A, shock("s1", (0,), 1.0, 1.0))
+    assert h.pishock_engine.pulses == [(11, "shock", 40, 2000)]   # no warning, full caps
+    h._friends_on_event("message", A, proto.make_cmd({}, None, holds={1: ("shock", 1.0)}))
+    h._pump_friend_holds(time.monotonic())
+    assert h.pishock_engine.holds == [(22, "shock", 40)]          # holds, no warning first
+
+
+def test_an_op_switched_off_on_one_shocker_is_held_back_there_only():
+    h = Host()
+    h.befriend(A, shock=True)
+    h.pishock_engine.switched = {22: {"shock"}}
+    h._friends_on_event("message", A, shock("s1", (0, 1)))
+    assert h.pishock_engine.pulses == [(11, "shock", 40, 2000)]
+    assert "held back on Shocker 22: shock is switched off there" in h.log_text()
+
+
+def test_a_hold_plays_at_once_without_a_warning_first():
+    h = Host()
+    h.befriend(A, shock=True)
+    h._friends_on_event("message", A, proto.make_cmd({}, None, holds={0: ("shock", 1.0)}))
+    h._pump_friend_holds(time.monotonic())
+    assert h.pishock_engine.holds == [(11, "shock", 40)]
+
+
+def test_a_hold_of_an_op_switched_off_there_is_refused():
+    h = Host()
+    h.befriend(A, shock=True)
+    h.pishock_engine.switched = {11: {"vibrate"}}
+    h._friends_on_event("message", A, proto.make_cmd({}, None, holds={0: ("vibrate", 1.0),
+                                                                    1: ("vibrate", 1.0)}))
+    h._pump_friend_holds(time.monotonic())
+    assert h.pishock_engine.holds == [(22, "vibrate", 40)]
+    assert "held back: vibrate is switched off there" in h.log_text()
+
+
+def test_the_web_remote_gets_each_shockers_own_limits():
+    h, code = web_host()
+    h.set_friends_web_permission("shock", True)
+    h._friends_invite_ok(W, code, "Sam")
+    h._friends_on_event("message", W, shock("s1", (0,), 1.0, 1.0))
+    assert h.pishock_engine.pulses == [(11, "shock", 40, 2000)]
+    assert "share" not in h.get_friends_status()["web"]
+
+
+def test_you_on_your_own_list_obey_the_switches_like_any_friend():
+    h = Host()
+    h.pishock_engine.switched = {11: {"shock"}}
+    h._friends_on_event("message", SELF, shock("s1", (0, 1)))
+    assert h.pishock_engine.pulses == [(22, "shock", 40, 2000)]
+
+
+
+# --- the sender sees why (Blise's call, 2026-11-14) ------------------------------
+
+def test_their_status_says_what_is_switched_off_so_their_panel_can_say_why():
+    h = Host()
+    h.befriend(A, shock=True)
+    h.pishock_engine.switched = {11: {"shock"}}
+    h._my_state = h._build_my_state()
+    st = proto.read_status(h._friends_status_for(A))
+    assert st["shocker_off"] == [["shock"], []]
+    assert proto.shocker_why(st, 0, "shock") == "Shock is switched off on their side"
+    assert proto.shocker_why(st, 1, "shock") == ""
+
+
+def test_a_shocker_that_cant_warn_still_lets_them_shock_without_one():
+    h = Host()
+    h.befriend(A, shock=True)
+    h.pishock_engine.switched = {11: {"vibrate", "beep"}}
+    h.pishock_engine.is_armed = True
+    h._my_state = h._build_my_state()
+    st = proto.read_status(h._friends_status_for(A))
+    assert st["shocker_ops"][0] == ["shock"]                 # Warning greys, Shock doesn't
+    assert not proto.can_warn(st, 0) and proto.can_warn(st, 1)
+
+
+def test_a_refused_hold_is_logged_once_with_why():
+    h = Host()
+    h.befriend(A, shock=True)
+    h.pishock_engine.switched = {11: {"shock"}}
+    t0 = time.monotonic()
+    h._friends_on_event("message", A, proto.make_cmd({}, None, holds={0: ("shock", 1.0)}))
+    for i in range(5):
+        h._pump_friend_holds(t0 + i * 0.1)
+    assert h.pishock_engine.holds == []
+    lines = [e["text"] for e in h.get_friends_log() if "tried to hold" in e["text"]]
+    assert lines == ["Alex tried to hold shock on Collar - held back: shock is switched off there"]

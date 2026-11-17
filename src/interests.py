@@ -43,6 +43,10 @@ GROUPS: Tuple[Group, ...] = (
                "Over Bluetooth, without the bHaptics Player"),
         Choice("feature_owo", "An OWO suit",
                "Through the My OWO app"),
+        Choice("feature_trackers", "Trackers that vibrate",
+               "A Vive Tracker with a Haptic Pancake, a Tundra with a Tundra Tapper"),
+        Choice("feature_psvr2", "A PlayStation VR2 headset",
+               "Its rumble motor, through PSVR2Toolkit (needs a jailbroken one)"),
     )),
     Group("WHAT YOU WANT", (
         Choice("feature_friends", "Play with friends over the internet",

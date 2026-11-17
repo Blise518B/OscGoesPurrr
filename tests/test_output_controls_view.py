@@ -71,6 +71,21 @@ class FakeController:
         self.switches.append(index)
 
 
+class TestOffIsYourOwnSwitch:
+    """While "Off while you're away" holds everything off, the Off button
+    keeps showing the user's own switch -- the hold never presses it."""
+
+    def test_follows_the_switch_not_the_hold(self, qapp):
+        ctl = FakeController()
+        ctl.is_off_switch_on = lambda: False
+        ctl.is_output_off = lambda: True          # held off: AFK
+        host = _Host(ctl).build_sidebar_block()
+        assert host.sidebar_off_button.isChecked() is False
+        ctl.is_off_switch_on = lambda: True
+        host.refresh_output_controls()
+        assert host.sidebar_off_button.isChecked() is True
+
+
 class _Host(DashboardMixin):
     """Minimal stand-in for OscGoesPurrrUI: just the helpers the sidebar
     block calls.

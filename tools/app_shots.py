@@ -10,15 +10,15 @@ Bluetooth, iroh or any socket, and no settings manager is ever built.
     from app_shots import open_app
     shots = open_app(1280, 800)
     img = shots.page("Friends")                 # QImage of the whole window
-    img = shots.page("Friends", scroll="Sync with others")   # scrolled to it
-    rect = shots.anchor("Friends", "Sync with others")   # QRect | None
+    img = shots.page("Friends", scroll="Pause all friends")   # scrolled to it
+    rect = shots.anchor("Friends", "Pause all friends")   # QRect | None
     every = shots.anchors("Shockers")           # {title: QRect}
     shots.ui                                    # the OscGoesPurrrUI itself
 
     python tools/app_shots.py --dump <dir>      # a PNG + <page>.anchors.txt per page
 
-Page names are the keys of `shots.ui.views` ("Home", "Friends", "My Avatar
-Remote", "Shockers", "Suits", "Statistics", ...); a unique part of one
+Page names are the keys of `shots.ui.views` ("Home", "Toys", "Friends", "My
+Avatar Remote", "Shockers", "Suits", "Statistics", ...); a unique part of one
 works too ("Avatar Remote"). Anchors are the app's hover explanations
 (src/ui/tooltips.py `tip_html`): a widget whose toolTip() starts with
 "<b>Title</b>". Their rectangles are in window coordinates, the visible
@@ -386,6 +386,163 @@ def _demo_stats(now: float) -> dict:
 # The controller
 # ========================================================================
 
+def _demo_event_log(now: float):
+    """The log's demo entries (event_log.Event), memory only: friends from
+    friends_demo, a web remote guest, your avatar's shocker behaviours and
+    a few switches of your own -- the Log page and Friends' By person."""
+    import event_log as el
+    import friends_demo
+    ids = {f["nick"]: f["id"] for f in friends_demo._FRIENDS}
+    rows = [
+        # seconds ago, who, name, role, kind, op, dir, level, ms, on, held, text
+        (2 * 86400, "you", "You", "you", el.LINK, "online", "", None, None, (), "",
+         "You went online"),
+        (26 * 3600, ids["Kiko"], "Kiko", "friend", el.SHOCK, "vibrate", el.IN, 20, 800,
+         ("Collar",), "", "Kiko: vibrate 20 · 0.8 s on Collar"),
+        (5 * 3600, "avatar", "Your avatar", "avatar", el.SHOCK, "shock", el.IN, 15, 300,
+         ("Collar",), "", "Your avatar (Contact · Tap): shock 15 · 0.3 s on Collar",
+         "Contact · Tap"),
+        (4 * 3600, ids["Nova"], "Nova", "friend", el.PARAMS, "set", el.IN, None, None, (), "",
+         "Nova turned your Tail wag on"),
+        (2 * 3600, ids["Nova"], "Nova", "friend", el.SHOCK, "shock", el.IN, None, None, (),
+         "your shockers aren't shared with friends",
+         "Nova tried to shock you - held back: your shockers aren't shared with friends"),
+        (3000, "web-sam", "Sam (web)", "web", el.LINK, "online", el.IN, None, None, (), "",
+         "Sam opened your web remote"),
+        (2400, "web-sam", "Sam (web)", "web", el.TOYS, "start", el.IN, None, None, (), "",
+         "Sam (web) started driving your toys"),
+        (1500, ids["Kiko"], "Kiko", "friend", el.LINK, "online", "", None, None, (), "",
+         "Kiko is online"),
+        (900, ids["Mika"], "Mika", "friend", el.LINK, "online", "", None, None, (), "",
+         "Mika is online"),
+        (600, ids["Mika"], "Mika", "friend", el.TOYS, "start", el.IN, None, None, (), "",
+         "Mika started driving your toys"),
+        (420, ids["Mika"], "Mika", "friend", el.TOYS, "strength", el.IN, 70, None, (), "",
+         "Mika set your strength to 70 %"),
+        (2100, "avatar", "Your avatar", "avatar", el.SHOCK, "vibrate", el.IN, 15, 500,
+         ("Collar",), "", "Your avatar (Touch zones · Neck): vibrate 15 · 0.5 s on Collar",
+         "Touch zones · Neck"),
+        # asked for 2.0 s, sent Collar's longest pulse: the Log's muted line
+        (1800, ids["Mika"], "Mika", "friend", el.SHOCK, "vibrate", el.IN, 30, 1000,
+         ("Collar",), "", "Mika: vibrate 30 · 2.0 s on Collar", "", "",
+         {"asked_ms": 2000, "fixed": "your longest pulse"}),
+        (1320, "__me__", "You (Me)", "me", el.SHOCK, "shock", el.IN, 10, 300,
+         ("Thigh",), "", "You (Me): shock 10 · 0.3 s on Thigh", el.VIA_MENU),
+        (1200, "avatar", "Your avatar", "avatar", el.SHOCK, "vibrate", el.IN, 18, 500,
+         ("Collar",), "", "Your avatar (Touch zones · Neck): vibrate 18 · 0.5 s on Collar",
+         "Touch zones · Neck"),
+        (300, "avatar", "Your avatar", "avatar", el.SHOCK, "hold", el.IN, 12, None,
+         ("Collar",), "", "Your avatar (Continuous · Prox) is holding vibrate 12 on Collar",
+         "Continuous · Prox", "vibrate"),
+        (288, "avatar", "Your avatar", "avatar", el.SHOCK, "let-go", el.IN, 22, 12000,
+         ("Collar",), "",
+         "Your avatar (Continuous · Prox) let go of Collar after 12.0 s (up to vibrate 22)",
+         "Continuous · Prox", "vibrate"),
+        (180, ids["Mika"], "Mika", "friend", el.SHOCK, "shock", el.IN, 25, 500,
+         ("Collar", "Thigh"), "", "Mika: shock 25 · 0.5 s on Collar, Thigh"),
+        (95, ids["Mika"], "Mika", "friend", el.TOYS, "strength", el.OUT, 55, None, (), "",
+         "You set Mika's strength to 55 %"),
+        (40, ids["Kiko"], "Kiko", "friend", el.SHOCK, "beep", el.IN, None, None,
+         ("Collar",), "", "Kiko: beep · 0.3 s on Collar"),
+    ]
+    log = el.EventLog(None)
+    # oldest first, as the log keeps them (with your avatar's behaviour, the
+    # menu or Party Mode -- and what a hold plays -- where a row says)
+    for ago, who, name, role, kind, op, d, lvl, ms, on, held, text, *more in sorted(
+            rows, key=lambda r: -r[0]):
+        via, asked, extra = (list(more) + ["", "", {}][len(more):])[:3]
+        log.add(el.Event(now - ago, text, who, name, role, kind, op, d, lvl, ms, on, held,
+                         asked, via, **extra))
+    return log
+
+
+def _demo_whom(now: float, log, stats: dict):
+    """From whom (stats_events.StatsEvents, memory only): the log's demo
+    entries counted into the running session, on top of ten weeks of made-up
+    older ones -- friends, your avatar's behaviours, you from your avatar
+    menu and Party Mode, a web remote guest -- and the suits' on-time."""
+    import event_log as el
+    import friends_demo
+    import stats_events as se
+    store = se.StatsEvents(None)
+    rng = random.Random(1518)
+    ids = {f["nick"]: f["id"] for f in friends_demo._FRIENDS}
+    live = next(r for r in stats["rows"] if r["kind"] == "live")
+    olds = [r for r in stats["rows"] if r["kind"] != "live"]
+    who = [(ids["Mika"], "Mika", el.ROLE_FRIEND, ""), (ids["Kiko"], "Kiko", el.ROLE_FRIEND, ""),
+           (ids["Nova"], "Nova", el.ROLE_FRIEND, ""),
+           ("avatar", "Your avatar", el.ROLE_AVATAR, "Touch zones · Neck"),
+           ("avatar", "Your avatar", el.ROLE_AVATAR, "Contact · Tap"),
+           ("avatar", "Your avatar", el.ROLE_AVATAR, "Impact · Butt"),
+           ("__me__", "You (Me)", el.ROLE_ME, el.VIA_MENU),
+           ("__me__", "You (Me)", el.ROLE_ME, el.VIA_PARTY),
+           ("web-sam", "Sam (web)", el.ROLE_WEB, "")]
+    weights = [9, 5, 3, 8, 4, 2, 2, 1, 2]
+    for r in olds:
+        t = r["started_ts"] + 60
+        for _ in range(rng.randrange(0, 14)):
+            peer, name, role, via = rng.choices(who, weights)[0]
+            op = rng.choices(("shock", "vibrate", "beep"), (4, 7, 1))[0]
+            lvl = None if op == "beep" else rng.randrange(8, 46)
+            on = (rng.choice(("Collar", "Thigh")),)
+            t += rng.uniform(20, 300)
+            store.count(el.Event(t, "", peer, name, role, el.SHOCK, op, el.IN, lvl,
+                                 rng.choice((300, 500, 800, 1000)), on, "", "", via),
+                        r["id"], r["started_ts"])
+        for peer, name in ((ids["Mika"], "Mika"), (ids["Kiko"], "Kiko")):
+            if rng.random() < 0.4:
+                t0 = r["started_ts"] + rng.uniform(60, 600)
+                for op, at in (("start", t0), ("stop", t0 + rng.uniform(120, 1500))):
+                    store.count(el.Event(at, "", peer, name, el.ROLE_FRIEND, el.TOYS, op,
+                                         el.IN), r["id"], r["started_ts"])
+        if rng.random() < 0.3:
+            for _ in range(rng.randrange(1, 9)):
+                store.count(el.Event(r["started_ts"] + 90, "", ids["Nova"], "Nova",
+                                     el.ROLE_FRIEND, el.PARAMS, "set", el.IN),
+                            r["id"], r["started_ts"])
+        if rng.random() < 0.5:
+            store.add_worn(r["id"], r["started_ts"], r["active_s"] * rng.uniform(0.2, 0.6),
+                           ["bHaptics Vest"])
+        if rng.random() < 0.25:
+            store.add_worn(r["id"], r["started_ts"], r["active_s"] * 0.3, ["Tracker · Hips"])
+    for ev in log.window(live["started_ts"]):
+        store.count(ev, live["id"], live["started_ts"])
+    for peer, name, role in ((ids["Mika"], "Mika", el.ROLE_FRIEND),
+                             ("web-sam", "Sam (web)", el.ROLE_WEB)):
+        store.count(el.Event(now - 60, "", peer, name, role, el.TOYS, "stop", el.IN),
+                    live["id"], live["started_ts"])
+    store.add_worn(live["id"], live["started_ts"], 640.0, ["bHaptics Vest"])
+    return store
+
+
+def _demo_live_detail(now: float, stats: dict, store, log):
+    """The running session's page: a made-up timeline in the history's own
+    shape (stats_history), with its counts and the log's marks."""
+    import stats_events as se
+    import stats_history as sh
+    live = next(r for r in stats["rows"] if r["kind"] == "live")
+    rng = random.Random(42)
+    tl = {"id": live["id"], "started_ts": live["started_ts"], "ended_ts": None,
+          "bucket_s": sh.BUCKET_S, "recovered": False, "gated": 1, "buckets": {}}
+    n = int((now - live["started_ts"]) // sh.BUCKET_S)
+    lush = edge = 0.3
+    for i in range(6, n):
+        if 120 <= i < 140:
+            continue                               # a break
+        lush = max(0.0, min(1.0, lush + rng.uniform(-0.12, 0.13)))
+        edge = max(0.0, min(1.0, edge + rng.uniform(-0.1, 0.1)))
+        tl["buckets"][i] = {"a": 10.0, "t": rng.randrange(0, 9),
+                            "y": {"Lovense Lush 3": [10.0, 10.0 * lush],
+                                  "Lovense Edge 2": [10.0, 10.0 * edge]},
+                            "z": {"Orf/Ring": 10.0} if i % 7 < 4 else {}}
+    out = sh.summarize(tl, now)
+    out.update(kind="live", timeline=True, bucket_s=sh.BUCKET_S, dense=sh.dense(tl),
+               analysis=sh.analyse(tl), tags=[])
+    out["shocks"] = {"tally": store.session_view(live["id"]),
+                     "marks": se.marks(log.window(live["started_ts"]))}
+    return out
+
+
 def _loud(cls):
     """Every public method prints its traceback before the UI's own
     try/except can swallow it -- no page fails silently."""
@@ -408,6 +565,15 @@ def _loud(cls):
     return cls
 
 
+# Made-up VRChat accounts: who's in your instance, and your VRCX friends
+VRC_INSTANCE = [("usr_00000001-0000-4000-8000-000000000001", "MikaPaws"),
+                ("usr_00000002-0000-4000-8000-000000000002", "Juno"),
+                ("usr_00000003-0000-4000-8000-000000000003", "Pixelfox")]
+VRC_VRCX = [(f"usr_{n:08x}-0000-4000-8000-{n:012x}", name) for n, name in enumerate(
+    ("Kiko~", "NovaStar", "Rinny", "Ash", "Bea", "Calla", "Dax", "Echo", "Fern", "Gale",
+     "Hex", "Ivy", "Jet", "Koi", "Lux", "Moss"), start=16)]
+
+
 @_loud
 class DemoController:
     """The controller facade the UI talks to, answered from demo data.
@@ -419,7 +585,8 @@ class DemoController:
     is_debugging_osc = False
     FEATURE_KEYS = ("feature_osc_inspector", "feature_intiface", "feature_osc_router_518",
                     "feature_statistics", "feature_pishock", "feature_bhaptics",
-                    "feature_owo", "feature_friends", "feature_params")
+                    "feature_owo", "feature_trackers", "feature_psvr2", "feature_friends",
+                    "feature_params")
 
     def __init__(self):
         import body_map
@@ -437,6 +604,9 @@ class DemoController:
             "bind_all_interfaces": True, "hide_console": True, "minimize_to_tray": False,
             "router_poll_rate_hz": 90, "toy_antistuck_enabled": True,
             "toy_antistuck_active_s": 1, "toy_antistuck_peaked_s": 10,
+            # off, as on a new install: the gallery's Home has no headset row
+            # (its page still renders: shots.page("PSVR2"))
+            "feature_psvr2": False,
         }
         self.settings.update({k: True for k in self.FEATURE_KEYS})
         self.strength = 0.7
@@ -461,12 +631,25 @@ class DemoController:
 
         # ---- friends: the app's own examples ----
         self.friends_demo = friends_demo.FriendsDemo()
+        # Mika is linked to her VRChat account and in your instance with Juno
+        self.vrc_links = {self.friends_demo.entries({}, {})[0]["id"]: (VRC_INSTANCE[0][0], "MikaPaws")}
+        self.vrcx_imported = False
+        # Only friends in my instance (controllers/friends_instance.py): off,
+        # as for a new install; a render switches it on to show it
+        self.instance_only = False
+        self.anywhere = set()
         self.mika = friends_demo._id(1)
         self.friends_demo.selected = {"kind": "friend", "id": self.mika}
         self.friends_paused = False
+        self.friends_sync = True
         self.my_levels = {self.mika: {"Lovense Lush 3": 0.55}}
 
         # ---- shockers ----
+        # Separate limits for friends: off, as a new install has it; the
+        # friends' set is what the guide shows once it's on
+        self.separate_limits = False
+        self.friend_limits = {"max_intensity": 20, "max_vibrate": 50, "max_pulse_ms": 1000,
+                              "cooldown_s": 1.0, "max_hold_s": 8.0, "hold_rest_s": 3.0}
         self.pishock_rules = {
             "zones": [{"enabled": True, "name": "Touch zones", "op": "vibrate",
                        "mode": "pulse", "intensity": 25, "duration_ms": 600,
@@ -475,7 +658,7 @@ class DemoController:
             "triggers": [{"enabled": True, "name": "Headpat", "param": "Headpat",
                           "mode": "hold", "intensity": 15, "duration_ms": 500,
                           "op": "shock", "shockers": [24325, 24326]}],
-            "continuous": [], "impacts": []}
+            "continuous": [], "impacts": [], "pulls": []}
 
         # ---- suits ----
         self.bh_settings = _clean_bhaptics({"auto_connect": True})
@@ -498,6 +681,10 @@ class DemoController:
         self.book.sync_params(dict(BOARD_TYPES))
         self.param_values = dict(BOARD_VALUES)
         self.yolo = False
+        # the Height box: VRChat says 1.42 m, the world allows it
+        import avatar_height as ah
+        self.height_settings = ah.clean_settings(None)
+        self.height_now = 1.42
 
         # ---- statistics ----
         self.stats = _demo_stats(self.now)
@@ -588,8 +775,90 @@ class DemoController:
     def is_output_off(self):
         return self.output_off
 
+    def is_off_switch_on(self):
+        return self.output_off
+
+    # ---- Settings → Safety → Off while you're away (away_facade) ---------
+    def get_away_settings(self):
+        return {"enabled": bool(self.settings.get("away_off_enabled", True)),
+                "vrchat_afk": bool(self.settings.get("away_off_vrchat_afk", True)),
+                "gogo_afk": bool(self.settings.get("away_off_gogo_afk", True)),
+                "params": self.get_away_params()}
+
+    def set_away_switch(self, which, on):
+        key = {"enabled": "away_off_enabled", "vrchat_afk": "away_off_vrchat_afk",
+               "gogo_afk": "away_off_gogo_afk"}.get(which)
+        if key:
+            self.settings[key] = bool(on)
+
+    def get_away_params(self):
+        return list(self.settings.get("away_off_params", []))
+
+    def add_away_param(self, name):
+        params = self.get_away_params()
+        if not name or name in params:
+            return False
+        self.settings["away_off_params"] = params + [name]
+        return True
+
+    def remove_away_param(self, name):
+        self.settings["away_off_params"] = [p for p in self.get_away_params() if p != name]
+
+    def get_away_reasons(self):
+        return ()
+
+    def get_away_status_text(self):
+        return ""
+
     def is_sleep_active(self):
         return self.sleep
+
+    # ---- a toy's own Sleep and anti-stuck; each kind's anti-stuck --------
+    def is_toy_sleep_on(self, name):
+        return name in self.__dict__.setdefault("toys_asleep", set())
+
+    def set_toy_sleep(self, name, on):
+        asleep = self.__dict__.setdefault("toys_asleep", set())
+        (asleep.add if on else asleep.discard)(name)
+
+    def get_toys_antistuck(self):
+        import antistuck
+        return antistuck.from_app(lambda k, d: self.settings.get(k, d))
+
+    def set_toys_antistuck(self, **changes):
+        import antistuck
+        new = antistuck.changed(self.get_toys_antistuck(), **changes)
+        for field, key in antistuck.TOY_KEYS.items():
+            self.settings[key] = new[field]
+
+    def is_toy_antistuck_on(self, name):
+        import antistuck
+        return antistuck.toy_on(self.profiles.get(name))
+
+    def set_toy_antistuck(self, name, on):
+        import antistuck
+        self.profiles.setdefault(name, {})[antistuck.TOY_KEY] = bool(on)
+
+    def get_suit_antistuck(self, kind):
+        import antistuck
+        return dict(self.__dict__.setdefault("suit_antistuck", {}).get(kind)
+                    or antistuck.DEFAULTS)
+
+    def set_suit_antistuck(self, kind, **changes):
+        import antistuck
+        blocks = self.__dict__.setdefault("suit_antistuck", {})
+        blocks[kind] = antistuck.changed(self.get_suit_antistuck(kind), **changes)
+        target = {"bhaptics": self.bh_settings, "owo": self.owo_settings}.get(kind)
+        if target is not None:
+            target["antistuck"] = dict(blocks[kind])
+
+    def get_psvr2_antistuck(self):
+        import antistuck
+        return dict(self.__dict__.get("psvr2_antistuck") or antistuck.DEFAULTS)
+
+    def set_psvr2_antistuck(self, **changes):
+        import antistuck
+        self.psvr2_antistuck = antistuck.changed(self.get_psvr2_antistuck(), **changes)
 
     def get_master_scale(self):
         return 0.0 if self.output_off else self.strength
@@ -639,10 +908,23 @@ class DemoController:
         return 5
 
     def get_toy_connected_param(self, device):
-        return (False, f"OGP/{device.replace(' ', '')}Connected")
+        return (True, f"OGP/{device.replace(' ', '')}Connected")
 
     def get_toy_presence_param(self):
-        return (False, "OGP/ToyConnected")
+        return (True, "OGP/ToyConnected")
+
+    def get_device_connected_param(self, slot):
+        """The suits' and shockers' (presence_facade): on, default names,
+        shockers numbered like their cards."""
+        from controllers import presence_facade as pf
+        if slot.startswith("shocker:"):
+            ids = [s["id"] for s in SHOCKERS]
+            sid = int(slot.split(":", 1)[1])
+            return (True, f"OGP/Shocker{ids.index(sid) + 1 if sid in ids else sid}Connected")
+        return (True, pf._FIXED_DEFAULTS.get(slot, "OGP/DeviceConnected"))
+
+    def set_device_connected_param(self, slot, enabled, name):
+        pass
 
     def get_toy_sounds_enabled(self):
         return True
@@ -712,8 +994,7 @@ class DemoController:
         return {"id": "__me__", "nick": NICK, "me": True, "toys": True, "shock": True,
                 "params": True, "added": 0.0, "linked": True, "path": "this PC", "rtt": None,
                 "selected": selected == {"kind": "friend", "id": "__me__"},
-                "theirs": theirs, "my_levels": {}, "driving_me": False, "others": [],
-                "sync": False}
+                "theirs": theirs, "my_levels": {}, "driving_me": False, "others": []}
 
     def get_friends_status(self):
         demo = self.friends_demo
@@ -724,9 +1005,19 @@ class DemoController:
             f.setdefault("my_override", set())
             f.setdefault("my_patterns", {})
             f.setdefault("my_holds", {})
+            # these stand for real friends here (VRChat account field and all)
+            f.pop("demo", None)
+            vrc = self.vrc_links.get(f["id"])
+            f.update(vrc=vrc[0] if vrc else "", vrc_name=vrc[1] if vrc else "",
+                     here=bool(vrc) and any(p[0] == vrc[0] for p in VRC_INSTANCE))
+            f.update(anywhere=f["id"] in self.anywhere,
+                     not_here=(self.instance_only and not f.get("me") and not f["here"]
+                               and f["id"] not in self.anywhere))
+        owner = {v[0]: fid for fid, v in self.vrc_links.items()}
         return {
             "available": True, "enabled": True, "running": True, "online": True,
             "error": "", "my_id": MY_ID, "nickname": NICK, "paused": self.friends_paused,
+            "sync_all": self.friends_sync,
             "requests": [], "asking": [], "friends": friends,
             "groups": [dict(g, members=list(g["members"])) for g in demo.groups],
             "selected": selected, "online_switch": True,
@@ -734,7 +1025,58 @@ class DemoController:
             "elsewhere": False, "pending_invite": "",
             "invites": [{"kind": "week", "expires": self.now + 5 * 86400, "uses": 1}],
             "params_on": True, "behind": None,
+            "shocker_layout": self.get_shocker_layout(),
+            "vrchat": {"log": True, "state": "ok", "vrcx": "", "vrcx_count": 0,
+                       "people": [{"id": u, "name": n, "friend": owner.get(u, "")}
+                                  for u, n in VRC_INSTANCE]},
+            "instance": {"on": self.instance_only, "web_anyway": False,
+                         "web_blocked": self.instance_only},
         }
+
+    # ---- whose shocker buttons (controllers/friends_control.py) ------------
+    def get_shocker_layout(self):
+        import shocker_layout
+        return shocker_layout.clean(self.get_app_setting(shocker_layout.SETTING_KEY))
+
+    def set_shocker_layout(self, name):
+        import shocker_layout
+        self.set_app_setting(shocker_layout.SETTING_KEY, shocker_layout.clean(name))
+        if self.ui is not None:
+            self.ui.refresh_friends()
+
+    # ---- only friends in my instance (controllers/friends_instance.py) ----
+    def set_friends_instance_only(self, on):
+        self.instance_only = bool(on)
+
+    def set_friend_anywhere(self, peer, on):
+        (self.anywhere.add if on else self.anywhere.discard)(peer)
+
+    # ---- a friend's VRChat account (controllers/friends_vrchat.py) ----------
+    def get_vrchat_choices(self, query="", limit=40):
+        q = " ".join(str(query or "").split()).casefold()
+        owner = {v[0]: fid for fid, v in self.vrc_links.items()}
+        here = [{"id": u, "name": n, "friend": owner.get(u, "")}
+                for u, n in VRC_INSTANCE if q in n.casefold()]
+        vrcx = [{"id": u, "name": n, "friend": owner.get(u, "")}
+                for u, n in VRC_VRCX if q in n.casefold()] if self.vrcx_imported else []
+        return {"log": True, "state": "ok", "instance": here, "vrcx": vrcx[:limit],
+                "vrcx_more": max(0, len(vrcx) - limit),
+                "vrcx_state": "ok" if self.vrcx_imported else "",
+                "vrcx_count": len(VRC_VRCX) if self.vrcx_imported else 0,
+                "vrcx_installed": True}
+
+    def import_vrcx_friends(self):
+        self.vrcx_imported = True
+        return {"state": "ok", "count": len(VRC_VRCX)}
+
+    def link_friend_vrchat(self, peer, user_id, name=""):
+        for fid in [f for f, v in self.vrc_links.items() if v[0] == user_id]:
+            del self.vrc_links[fid]
+        self.vrc_links[peer] = (user_id, name)
+        return True
+
+    def unlink_friend_vrchat(self, peer):
+        self.vrc_links.pop(peer, None)
 
     def get_friends_log(self):
         lines = [(40, "Mika is driving your toys"),
@@ -745,6 +1087,54 @@ class DemoController:
                  (900, "Mika linked (direct, 18 ms)")]
         return [{"t": self.now - s, "text": t} for s, t in lines]
 
+    # --- the log (controllers/log_facade.py), from a memory-only demo log
+    def _event_log(self):
+        log = self.__dict__.get("_demo_log")      # (__getattr__ answers anything else)
+        if log is None:
+            log = self._demo_log = _demo_event_log(self.now)
+        return log
+
+    def get_friends_log_people(self):
+        import event_log
+        recent = self._event_log().recent(600, where=lambda e: e.role != event_log.ROLE_AVATAR)
+        return [p.as_dict(self.now) for p in event_log.by_person(
+            recent, skip_roles=(event_log.ROLE_YOU,))]
+
+    def get_log_version(self):
+        return self._event_log().version
+
+    def get_log_spans(self):
+        from controllers.log_facade import SPANS
+        return list(SPANS)
+
+    def get_log_kinds(self):
+        import event_log
+        return [{"key": k, "label": event_log.KIND_LABELS[k]} for k in event_log.KINDS]
+
+    def get_log_events(self, person=None, kinds=None, span="", text="", hide_avatar=False,
+                       limit=1000):
+        import event_log
+        from controllers.log_facade import _since
+        hits, total = self._event_log().query(person, kinds, _since(span), text,
+                                              (event_log.AVATAR,) if hide_avatar else (), limit)
+        return {"events": [e.as_dict() for e in hits], "total": total, "shown": len(hits),
+                "loaded": True}
+
+    def get_log_people(self, kinds=None, span="", text="", hide_avatar=False):
+        import event_log
+        from controllers.log_facade import _since
+        hits, _ = self._event_log().query(None, kinds, _since(span), text,
+                                          (event_log.AVATAR,) if hide_avatar else ())
+        return [p.as_dict(self.now) for p in event_log.by_person(hits, 25)]
+
+    def get_log_page(self, person=None, kinds=None, span="", text="", hide_avatar=False,
+                     limit=1000):
+        got = self.get_log_events(person, kinds, span, text, hide_avatar, limit)
+        return {**got, "people": self.get_log_people(kinds, span, text, hide_avatar)}
+
+    def clear_log(self):
+        self._event_log().clear()
+
     def set_friends_selected(self, kind, sid):
         self.friends_demo.selected = {"kind": kind, "id": sid}
 
@@ -753,6 +1143,9 @@ class DemoController:
 
     def set_friends_paused(self, paused):
         self.friends_paused = bool(paused)
+
+    def set_friends_sync(self, on):
+        self.friends_sync = bool(on)
 
     def friends_invite_message(self, kind="once"):
         return "https://example.invalid/friend"
@@ -774,7 +1167,15 @@ class DemoController:
                                "24326": {"max_intensity": 40, "max_vibrate": 80,
                                          "max_pulse_ms": 2000}},
             "ranges": dict(pishock_limits.RANGES), "hub_name": "PiShock",
+            "separate_limits": self.separate_limits, "friend_limits": dict(self.friend_limits),
         }
+
+    def set_pishock_separate_limits(self, on):
+        self.separate_limits = bool(on)
+
+    def set_pishock_friend_limit(self, key, value):
+        if key in self.friend_limits:
+            self.friend_limits[key] = value
 
     def get_pishock_live(self):
         return {"values": {"Contact/Neck": 1.0, "Contact/ThighL": 0.0, "Headpat": 0.0},
@@ -806,7 +1207,46 @@ class DemoController:
                         "paused": False, "error": "",
                         "active": {"Pectoral_L": 35, "Abdominal_L": 20}, "frequency": 50,
                         "settings": self.owo_settings, "feature": True},
+                "trackers": dict(self._demo_trackers(),
+                                 antistuck=self.get_suit_antistuck("trackers")),
                 "output_off": False}
+
+    # ---- PSVR2 headset -------------------------------------------------------
+    def get_psvr2_status(self):
+        return {"feature": self.get_feature_enabled("feature_psvr2"),
+                "available": True, "connected": True, "paused": False,
+                "last_error": None, "auto_connect": True, "output_off": False,
+                "output": {"min_hz": 10.0, "max_hz": 25.0, "max_cmd_hz": 10.0,
+                           "keepalive_s": 0.0},
+                "contact": {"enabled": True, "parameter": "HapticHead",
+                            "threshold": 0.05, "gain": 1.2},
+                "antistuck": self.get_psvr2_antistuck(),
+                "extras": {"driver_active": True, "level": 0.4, "rumble_hz": 16,
+                           "rtt_ms": 9.0, "sends_per_min": 42, "slotless": False,
+                           "paused": False, "dll_path": None}}
+
+    def get_psvr2_live(self):
+        return {"strength": 0.38, "level": 0.4, "rumble_hz": 16}
+
+    def get_psvr2_contact_found(self):
+        return True
+
+    def _demo_trackers(self):
+        """Two Vive Trackers with a Haptic Pancake placed by their SteamVR
+        roles, a third not placed yet."""
+        from settings.suits import _clean_trackers
+        spots = _clean_trackers({})["spots"]
+        def dev(serial, role, spot, battery):
+            return {"serial": serial, "model": "VIVE Tracker 3.0 MV", "kind": "vive",
+                    "battery": battery, "role": role, "role_spot": spot, "spot": spot,
+                    "placed_by": "steamvr" if spot else None}
+        hips = dev("LHR-6E1A20C4", "TrackerRole_Waist", "hips", 74)
+        foot = dev("LHR-781FC61B", "TrackerRole_LeftFoot", "foot_l", 58)
+        loose = dev("LHR-2B90D3F7", "TrackerRole_None", None, 91)
+        return {"feature": True, "available": True, "alive": True, "paused": False,
+                "devices": [hips, foot, loose], "all_spots": spots,
+                "spots": {"hips": dict(spots["hips"], trackers=[hips], contacts=[1, 1]),
+                          "foot_l": dict(spots["foot_l"], trackers=[foot], contacts=[1, 1])}}
 
     def get_suits_live(self):
         frame = self.body_map.empty_frame()
@@ -822,7 +1262,8 @@ class DemoController:
         dots = {pos: tuple(int(round(v * 100)) for v in frame[pos])
                 for pos in ("VestFront", "VestBack")}
         return {"frame": frame, "owo": {"Pectoral_L": 0.35, "Abdominal_L": 0.2},
-                "dots": dots, "owo_sending": {"Pectoral_L": 35, "Abdominal_L": 20}}
+                "dots": dots, "owo_sending": {"Pectoral_L": 35, "Abdominal_L": 20},
+                "trackers": {"hips": 0.6}}
 
     def get_suits_detected(self):
         return {"positions": ["Head", "VestBack", "VestFront"],
@@ -865,6 +1306,31 @@ class DemoController:
             self.param_values[control["param"]] = out
         return out is not None
 
+    def get_height_status(self):
+        return {**self.height_settings, "height": self.height_now, "own": 1.42,
+                "allowed": True, "world_min": 0.2, "world_max": 5.0, "gliding": False,
+                "target": None, "by": None, "version": 1, "vrchat": True}
+
+    def height_go(self, height, mode="grow"):
+        import avatar_height as ah
+        s = self.height_settings
+        self.height_now = ah.clamp(float(height), s["lo"], s["hi"])
+        return True
+
+    def height_reset(self):
+        self.height_now = 1.42
+        return True
+
+    def height_set_option(self, key, value):
+        import avatar_height as ah
+        s = dict(self.height_settings)
+        if key in ("lo", "hi"):
+            s = ah.with_range(s, **{key: float(value)})
+        else:
+            s[key] = value
+        self.height_settings = ah.clean_settings(s)
+        return dict(self.height_settings)
+
     # ---- statistics ------------------------------------------------------------
     def get_stats_snapshot(self):
         return {"lifetime": self.stats["lifetime"], "session": self.stats["session"],
@@ -873,8 +1339,42 @@ class DemoController:
     def get_stats_sessions(self):
         return [dict(r) for r in self.stats["rows"]]
 
-    def get_stats_session_detail(self, _sid):
-        return None
+    def get_stats_session_detail(self, sid):
+        live = next(r for r in self.stats["rows"] if r["kind"] == "live")
+        if sid != live["id"]:
+            return None
+        return _demo_live_detail(self.now, self.stats, self._whom(), self._event_log())
+
+    # --- From whom (controllers/stats_events_facade.py)
+    def _whom(self):
+        store = self.__dict__.get("_demo_whom")
+        if store is None:
+            store = self._demo_whom = _demo_whom(self.now, self._event_log(), self.stats)
+        return store
+
+    def get_stats_from_whom(self, span="lifetime"):
+        import stats_events as se
+        store = self._whom()
+        live = next(r for r in self.stats["rows"] if r["kind"] == "live")
+        if span == "session":
+            out = store.session_view(live["id"]) or se.view(se.fresh_tally())
+        else:
+            out = store.lifetime_view()
+        out.update(names=True, kept=store.has_names(), on=True)
+        return out
+
+    def get_stats_worn(self):
+        store = self._whom()
+        live = next(r for r in self.stats["rows"] if r["kind"] == "live")
+        session = store.session_view(live["id"])
+        return {"lifetime": store.lifetime_view()["worn"],
+                "session": session["worn"] if session else []}
+
+    def get_stats_friend_names(self):
+        return True
+
+    def forget_stats_friend_names(self):
+        return False
 
     def get_stats_patterns(self, days=None):
         import stats_history as sh
@@ -917,6 +1417,8 @@ class DemoController:
 _ARRIVAL = (
     ("_setup_card", ("_refresh_setup_checklist", "_refresh_toy_summaries",
                      "_refresh_home_devices")),
+    ("_toy_server_card", ("_refresh_toy_scan", "_refresh_toy_server",
+                          "_refresh_toy_summaries", "_refresh_sps_summary")),
     ("_stats_active_tile", ("_refresh_statistics_view",)),
     ("_pishock_pill", ("refresh_pishock_status", "_refresh_pishock_live")),
     ("_bh_pill", ("refresh_suits_status", "_refresh_suits_live")),
@@ -978,13 +1480,28 @@ class Shots:
 
     def _push_live(self, name):
         """What the real controller pushes rather than the page pulling:
-        Home's motor meters and batteries."""
-        if self._owns(name, "unified_devices_frame"):
+        the toys' motor meters and batteries (Home's rows, the Toys page's
+        cards)."""
+        if self._owns(name, "home_list_frame") or self._owns(name, "unified_devices_frame"):
             for toy, motor, level in self.controller.live_levels():
                 self.ui.update_motor_vibe(toy, motor, level)
             for toy, (_m, on, batt, _lv, _z) in TOYS.items():
                 if on and batt is not None:
                     self.ui.update_battery_label(toy, batt)
+
+    def open_chain(self, toy, motor=0, chain=0):
+        """`toy`'s card open on the Toys page with one of its chains
+        unfolded -- how a toy is tuned. (A card opens by itself, on its
+        motors' folded chains.)"""
+        from PySide6.QtTest import QTest
+        from ui.motor_signal_chain import _ChainFoldBar
+        data = self.ui.device_ui_frames[toy]
+        data["set_expanded"](True)
+        self.pump(60)
+        bar = next(b for b in data["body"].findChildren(_ChainFoldBar)
+                   if b._motor_idx == motor and b._chain_idx == chain and b.isVisible())
+        QTest.mouseClick(bar, Qt.LeftButton)
+        self.pump(400)
 
     def show(self, name):
         """Bring a page up and let it fill (no grab; the scroll stays)."""

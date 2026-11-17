@@ -22,12 +22,17 @@ from .replay_facade import ReplayFacade
 from .steamvr_toys_facade import SteamVRToysFacade
 from .pishock_facade import PiShockFacade
 from .suits_facade import SuitsFacade
+from .psvr2_facade import PSVR2Facade
 from .friends_facade import FriendsFacade
 from .params_facade import ParamsFacade
 from .toy_sounds_facade import ToySoundsFacade
-from .toy_presence_facade import ToyPresenceFacade
+from .presence_facade import PresenceFacade
 from .whats_new_facade import WhatsNewFacade
 from .interests_facade import InterestsFacade
+from .tour_facade import TourFacade
+from .away_facade import AwayFacade
+from .log_facade import LogFacade
+from .history_facade import HistoryFacade
 
 __all__ = [
     "IntifaceFacade",
@@ -42,10 +47,15 @@ __all__ = [
     "SteamVRToysFacade",
     "PiShockFacade",
     "SuitsFacade",
+    "PSVR2Facade",
     "FriendsFacade",
     "ParamsFacade",
     "ToySoundsFacade",
-    "ToyPresenceFacade",
+    "PresenceFacade",
     "WhatsNewFacade",
     "InterestsFacade",
+    "TourFacade",
+    "AwayFacade",
+    "LogFacade",
+    "HistoryFacade",
 ]

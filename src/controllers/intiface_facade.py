@@ -28,6 +28,7 @@ import threading
 import time
 from typing import Any, Dict, List, Tuple
 
+import antistuck
 import debug_log
 from constants import (
     AUTO_REFRESH_RATE_S, TOY_SCAN_SECONDS, TOY_SEARCH_RATE_RANGE, TOY_SEARCH_RATE_S,
@@ -88,7 +89,7 @@ class IntifaceFacade:
         # Toys arrive and leave with the connection; a manual Disconnect
         # comes straight here rather than through the queue.
         self.toy_sounds_on_devices_changed()
-        self.toy_presence_on_devices_changed()
+        self.presence_on_devices_changed()
 
         if connected:
             # Kick off the periodic rescan so toys powered on AFTER connect get
@@ -580,7 +581,7 @@ class IntifaceFacade:
         return AUTO_REFRESH_RATE_S
 
     def get_toy_scan_status(self) -> Dict[str, Any]:
-        """For Home's "Next scan in 4 s": whether the toy server is up,
+        """For the Toys page's "Next scan in 4 s": whether the toy server is up,
         whether the app looks by itself, a scan running, and when the next
         one starts (seconds, None while nothing is scheduled)."""
         eng = getattr(self, "haptic_engine", None)
@@ -891,6 +892,41 @@ class IntifaceFacade:
         if not self._muted_devices:
             return
         self._muted_devices.clear()
+
+    # ------------------------------------------------------------------
+    # Anti-stuck for the toys (antistuck.py): the toys' switch and timers
+    # (the Toys page) and each toy's own on / off (its bar's chip)
+    # ------------------------------------------------------------------
+
+    def get_toys_antistuck(self) -> Dict[str, Any]:
+        """The toys' `{enabled, active_s, peaked_s}`."""
+        return self._get_toy_antistuck()
+
+    def set_toys_antistuck(self, **changes) -> None:
+        """Change the toys' anti-stuck (any of enabled / active_s /
+        peaked_s); the router reads it on its next tick."""
+        new = antistuck.changed(self.get_toys_antistuck(), **changes)
+        for field, key in antistuck.TOY_KEYS.items():
+            if field in changes and self.get_app_setting(key) != new[field]:
+                self.set_app_setting(key, new[field])
+        self._wake_routing()
+
+    def is_toy_antistuck_on(self, device_name: str) -> bool:
+        """A toy's own anti-stuck switch (on unless switched off)."""
+        return antistuck.toy_on(self.mode_manager.wiring.get(device_name))
+
+    def set_toy_antistuck(self, device_name: str, on: bool) -> None:
+        """A toy's own anti-stuck on / off: a rig fact, shared by every mode
+        and remembered (modes.json). Off only counts while the toys'
+        anti-stuck is on; switching it off is asked again by Ctrl+Z
+        (ModeManager.history_asks)."""
+        if bool(on) == self.is_toy_antistuck_on(device_name):
+            return
+        self.mode_manager.update_device_config(device_name, antistuck.TOY_KEY, bool(on))
+        self.mode_manager.save_profiles()
+        self.log_message(f"{device_name}: anti-stuck "
+                         + ("on" if on else "off -- a frozen contact keeps it playing"))
+        self._wake_routing()
 
     # ------------------------------------------------------------------
     # Test pulses

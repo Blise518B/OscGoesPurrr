@@ -196,6 +196,23 @@
 .pg-stats .st-dot-blue { color: var(--blue); }
 .pg-stats .st-dot-purple { color: var(--purple); }
 .pg-stats .st-dot-pink { color: var(--pink); }
+.pg-stats .st-dot-yellow { color: var(--yellow); }
+.pg-stats .st-dot-green { color: var(--accent); }
+
+/* ── from whom (statistics_whom.py): tiles, by person, per shocker ────────── */
+.pg-stats .st-whom {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) repeat(8, auto);
+  column-gap: 18px; row-gap: 2px; align-items: center; padding-top: 4px;
+}
+.pg-stats .st-whom > span, .pg-stats .st-whomsh > span { white-space: nowrap; line-height: 17px; overflow: hidden; text-overflow: ellipsis; }
+.pg-stats .st-whom > .st-th, .pg-stats .st-whomsh > .st-th { color: var(--muted); font-size: 12px; line-height: 16px; letter-spacing: 0; }
+.pg-stats .st-whom > .st-td-s { color: var(--muted); font-size: 12px; }
+.pg-stats .st-whomsh { display: grid; grid-template-columns: repeat(5, auto) 1fr; column-gap: 18px; row-gap: 2px; align-items: center; }
+.pg-stats .st-whom > span, .pg-stats .st-whomsh > span { font-weight: 400; }
+.pg-stats .st-ic { display: inline-flex; width: 13px; height: 13px; vertical-align: -2px; margin-right: 3px; }
+.pg-stats .st-ic svg { width: 13px; height: 13px; }
+.pg-stats .st-whom[hidden], .pg-stats .st-whomsh[hidden], .pg-stats [data-st="whom-shockers-h"][hidden] { display: none; }
+.pg-stats .st-btn[data-whom] { min-width: 72px; }
 
 /* ── people: the card's switch + table, the session page's tags ────────── */
 .pg-stats .st-swrow { display: flex; align-items: center; gap: 8px; min-height: 22px; }

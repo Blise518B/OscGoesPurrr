@@ -10,6 +10,10 @@ from mixer import (
 )
 from sps_source import evaluate_sps_source
 import sps3_zone
+from contact_filters import (
+    TOUCH_SELF as _TS, TOUCH_OTHERS as _TO, PEN_SELF as _PS,
+    PEN_OTHERS as _PO, DEFAULTS as _CONTACT_DEFAULTS,
+)
 
 _GLOB_CHARS = frozenset("*?[")
 
@@ -126,8 +130,9 @@ CHAIN_TYPE_PENETRATION = "penetration"
 CHAIN_TYPE_CUSTOM = "custom"
 CHAIN_TYPES = (CHAIN_TYPE_TOUCH, CHAIN_TYPE_PENETRATION, CHAIN_TYPE_CUSTOM)
 
-#: What a chain's type implies for the touch/pen interaction filters.
-#: None means "read the explicit filter keys instead".
+#: Which kinds of contact a chain's type hears: (touch, penetration). A
+#: typed chain reads only its own kind's two pairs of the 2x2 (see
+#: contact_filters); None means custom -- all four.
 _TYPE_FILTERS = {
     CHAIN_TYPE_TOUCH:       (True, False),
     CHAIN_TYPE_PENETRATION: (False, True),
@@ -142,6 +147,7 @@ _TYPE_FILTERS = {
 DEFAULT_ZONE_SELECTION = "All SPS"
 
 from constants import SIM_PEN_ADDRESS, SIM_TOUCH_ADDRESS, SIM_ADDRESSES  # noqa: E402
+from antistuck import TOY_KEY as _TOY_ANTISTUCK_KEY  # noqa: E402
 
 
 class MotorRouter:
@@ -194,7 +200,7 @@ class MotorRouter:
     # smoothing envelope are never perturbed — forcing d_raw->0 would spoof
     # a |Δ|/dt motion spike straight through the speed channel and could
     # make a stuck motor pulse *harder*. Timeouts come from app settings
-    # (Settings → Toy Safety); these are only the hardcoded
+    # (the Toys page; each toy's own switch off = None); these are only the hardcoded
     # detection thresholds.
     _ANTISTUCK_EPSILON = 0.001     # |Δd_raw| at or below this == "unchanged"
     _ANTISTUCK_SATURATED = 0.95    # d_raw at/above this is treated as peaked
@@ -382,7 +388,8 @@ class MotorRouter:
     def __init__(self, clock: Callable[[], float] = time.monotonic,
                  get_sleep_active: Optional[Callable[[], bool]] = None,
                  get_master_scale: Optional[Callable[[], float]] = None,
-                 get_friend_drive: Optional[Callable[[str], Any]] = None) -> None:
+                 get_friend_drive: Optional[Callable[[str], Any]] = None,
+                 get_toy_sleep: Optional[Callable[[str], bool]] = None) -> None:
         # `clock` is dependency-injected so tests can drive time deterministically.
         # Defaults to time.monotonic so production callers don't change.
         self._clock = clock
@@ -391,6 +398,9 @@ class MotorRouter:
         # every chain's Wake stage runs SLEEP_WAKE_OVERRIDE instead of its
         # stored config.
         self.get_sleep_active = get_sleep_active or (lambda: False)
+        # One toy's own Sleep (its bar's Sleep chip, session-only like the
+        # sidebar's): the same override, for that toy alone. A set lookup.
+        self.get_toy_sleep = get_toy_sleep or (lambda _name: False)
         # Global strength (0.0 while the Off toggle is on). The Buttplug
         # path applies it HERE rather than at dispatch, because each
         # chain's Output band has to sit downstream of it — a floor
@@ -598,30 +608,48 @@ class MotorRouter:
     # ----------------------------------------------------------- contributions
     def _chain_filters(self, config: Dict[str, Any], motor_idx: int,
                        chain_idx: int, chain_type: str):
-        """(allow_touch, allow_pen, allow_self, allow_others) for a chain.
+        """What a chain hears: `(touch_self, touch_others, pen_self,
+        pen_others, sim_touch, sim_pen)`.
 
-        Touch and penetration come from the chain's TYPE, because that is
-        the whole point of splitting them: a Touch chain never sees
-        penetration and vice versa, without the user having to keep two
-        filter pairs consistent by hand. A "custom" chain falls back to
-        the explicit filter keys, which is how every chain behaved before
-        types existed.
+        The first four are the 2x2 (contact_filters), each resolved per
+        chain with the motor's key as the fallback. A typed chain hears
+        only its own kind -- a Touch chain never sees penetration and vice
+        versa -- so it reads just its own two pairs and the other kind is
+        off whatever is stored. A "custom" chain reads all four.
 
-        Self/Others stays a real choice either way, resolved per chain
-        with the motor-level value as the fallback."""
+        The last two gate the simulator's addresses (`_compute_inputs`),
+        which carry a kind of contact but no source: a typed chain always
+        hears its own kind's, a custom chain a kind it hears from anyone.
+
+        Per tick per chain: two key lookups for a typed chain, four for a
+        custom one -- what the two old pairs cost."""
         implied = _TYPE_FILTERS.get(str(chain_type), None)
+        read = self._chain_routing_value
         if implied is None:
-            allow_touch = bool(self._chain_routing_value(
-                config, motor_idx, chain_idx, "touch", True))
-            allow_pen = bool(self._chain_routing_value(
-                config, motor_idx, chain_idx, "pen", True))
-        else:
-            allow_touch, allow_pen = implied
-        allow_self = bool(self._chain_routing_value(
-            config, motor_idx, chain_idx, "self", False))
-        allow_others = bool(self._chain_routing_value(
-            config, motor_idx, chain_idx, "others", True))
-        return allow_touch, allow_pen, allow_self, allow_others
+            ts = bool(read(config, motor_idx, chain_idx, _TS, False))
+            to = bool(read(config, motor_idx, chain_idx, _TO, True))
+            ps = bool(read(config, motor_idx, chain_idx, _PS, False))
+            po = bool(read(config, motor_idx, chain_idx, _PO, True))
+            return ts, to, ps, po, ts or to, ps or po
+        touch_on, pen_on = implied
+        ts = to = ps = po = False
+        if touch_on:
+            ts = bool(read(config, motor_idx, chain_idx, _TS, False))
+            to = bool(read(config, motor_idx, chain_idx, _TO, True))
+        if pen_on:
+            ps = bool(read(config, motor_idx, chain_idx, _PS, False))
+            po = bool(read(config, motor_idx, chain_idx, _PO, True))
+        return ts, to, ps, po, touch_on, pen_on
+
+    @staticmethod
+    def _motor_filters(config: Dict[str, Any], motor_idx: int):
+        """`_chain_filters` for a caller that passes none: the motor's own
+        2x2 keys, read as a custom chain would (tests and tools that probe a
+        single zone)."""
+        ts, to, ps, po = (
+            bool(config.get(f"motor_{motor_idx}_{p}", _CONTACT_DEFAULTS[p]))
+            for p in (_TS, _TO, _PS, _PO))
+        return ts, to, ps, po, ts or to, ps or po
 
     def _zone_contribution(
         self,
@@ -655,12 +683,10 @@ class MotorRouter:
         contacts, never on depth; older avatars give 0 and the chain works
         speed out from the level alone (see `_derive_speed_signal`)."""
         if filters is None:
-            allow_touch = config.get(f"motor_{motor_idx}_touch", True)
-            allow_pen = config.get(f"motor_{motor_idx}_pen", True)
-            allow_self = config.get(f"motor_{motor_idx}_self", False)
-            allow_others = config.get(f"motor_{motor_idx}_others", True)
-        else:
-            allow_touch, allow_pen, allow_self, allow_others = filters
+            filters = self._motor_filters(config, motor_idx)
+        # The 2x2: touch from yourself / others, penetration from yourself
+        # / others (contact_filters).
+        ts, to, ps, po = filters[0], filters[1], filters[2], filters[3]
 
         prefix = f"OGB/{zone_type}/{zone_name}"
         contributions: List[float] = []
@@ -673,9 +699,8 @@ class MotorRouter:
         if zone_type == "Touch":
             speed = 0.0
             for p in (prefix, f"VFH/Zone/Touch/{zone_name}"):
-                for on, contact in ((allow_self, "Self"),
-                                    (allow_others, "Others")):
-                    if not (allow_touch and on):
+                for on, contact in ((ts, "Self"), (to, "Others")):
+                    if not on:
                         continue
                     v = self._get_param(all_params, f"{p}/{contact}")
                     if v is not None:
@@ -694,17 +719,15 @@ class MotorRouter:
         if zone_type in ("Orf", "Pen") and sps3_zone.is_sps3_zone(
                 all_params, prefix):
             level = speed = 0.0
-            if allow_touch:
-                for on, contact in ((allow_self, "TouchSelf"),
-                                    (allow_others, "TouchOthers")):
-                    if on:
-                        key = f"{prefix}/{contact}"
-                        level = max(level, sps3_zone.touch_level(all_params, key))
-                        speed = max(speed, sps3_zone.touch_speed(all_params, key))
-            if allow_pen and allow_self:
+            for on, contact in ((ts, "TouchSelf"), (to, "TouchOthers")):
+                if on:
+                    key = f"{prefix}/{contact}"
+                    level = max(level, sps3_zone.touch_level(all_params, key))
+                    speed = max(speed, sps3_zone.touch_speed(all_params, key))
+            if ps:
                 level = max(level, sps3_zone.depth(
                     all_params, prefix, zone_type, "DepthSelf"))
-            if allow_pen and allow_others:
+            if po:
                 level = max(level, sps3_zone.depth(
                     all_params, prefix, zone_type, "DepthOthers"))
                 key = f"{prefix}/FrotOthers"
@@ -713,12 +736,12 @@ class MotorRouter:
             return level, speed
 
         # --- Touch (gated by TouchSelfClose / TouchOthersClose) ----------------
-        if allow_touch and allow_self:
+        if ts:
             if self._get_bool(all_params, f"{prefix}/TouchSelfClose"):
                 v = self._get_param(all_params, f"{prefix}/TouchSelf")
                 if v is not None:
                     contributions.append(v)
-        if allow_touch and allow_others:
+        if to:
             if self._get_bool(all_params, f"{prefix}/TouchOthersClose"):
                 v = self._get_param(all_params, f"{prefix}/TouchOthers")
                 if v is not None:
@@ -727,7 +750,7 @@ class MotorRouter:
         # --- Penetration (depth-aware for orifices, raw for plugs) -------------
         if zone_type == "Orf":
             # Socket: PenSelf — prefer new-pen depth, fall back to legacy PenSelf.
-            if allow_pen and allow_self:
+            if ps:
                 new_amt = self._get_new_pen_amount(zone_type, zone_name, True, all_params)
                 if new_amt is not None:
                     contributions.append(new_amt)
@@ -740,7 +763,7 @@ class MotorRouter:
 
             # Socket: PenOthers — prefer new-pen depth; legacy is gated by
             # PenOthersClose (default true when the param is absent).
-            if allow_pen and allow_others:
+            if po:
                 new_amt = self._get_new_pen_amount(zone_type, zone_name, False, all_params)
                 if new_amt is not None:
                     contributions.append(new_amt)
@@ -755,27 +778,27 @@ class MotorRouter:
                             contributions.append(legacy)
 
             # Socket: FrotOthers (raw, no close-gate for the orifice side).
-            if allow_pen and allow_others:
+            if po:
                 v = self._get_param(all_params, f"{prefix}/FrotOthers")
                 if v is not None:
                     contributions.append(v)
 
         elif zone_type == "Pen":
             # Plug side: legacy raw values; new-pen depth is the orifice's job.
-            if allow_pen and allow_self:
+            if ps:
                 v = self._get_param(all_params, f"{prefix}/PenSelf")
                 if v is None:
                     v = self._get_param(all_params, f"{prefix}/PenetratingSelf")
                 if v is not None:
                     contributions.append(v)
-            if allow_pen and allow_others:
+            if po:
                 v = self._get_param(all_params, f"{prefix}/PenOthers")
                 if v is None:
                     v = self._get_param(all_params, f"{prefix}/PenetratingOthers")
                 if v is not None:
                     contributions.append(v)
             # Plug: FrotOthers gated by FrotOthersClose.
-            if allow_pen and allow_others:
+            if po:
                 if self._get_bool(all_params, f"{prefix}/FrotOthersClose"):
                     v = self._get_param(all_params, f"{prefix}/FrotOthers")
                     if v is not None:
@@ -1658,7 +1681,6 @@ class MotorRouter:
         by both live routing and as the fallback for the Tune view's
         input override."""
         d_raw = 0.0
-        allow_touch = allow_pen = None
         for literal in compiled["literals"]:
             if literal in SIM_ADDRESSES:
                 # The simulator's two addresses are the one custom input
@@ -1666,15 +1688,11 @@ class MotorRouter:
                 # touch/pen filter like a zone would, so a Touch chain
                 # hears a simulated touch and a Penetration chain a
                 # simulated penetration, never the other way round.
-                if allow_touch is None:
-                    if filters is None:
-                        allow_touch = config.get(f"motor_{motor_idx}_touch", True)
-                        allow_pen = config.get(f"motor_{motor_idx}_pen", True)
-                    else:
-                        allow_touch, allow_pen = filters[0], filters[1]
-                if literal == SIM_PEN_ADDRESS and not allow_pen:
+                if filters is None:
+                    filters = self._motor_filters(config, motor_idx)
+                if literal == SIM_PEN_ADDRESS and not filters[5]:
                     continue
-                if literal == SIM_TOUCH_ADDRESS and not allow_touch:
+                if literal == SIM_TOUCH_ADDRESS and not filters[4]:
                     continue
             param_val = all_params.get(literal)
             if param_val is None:
@@ -1816,7 +1834,8 @@ class MotorRouter:
                 pen_raw = max(pen_raw, chain_inputs[_ci])
 
         try:
-            sleeping = bool(self.get_sleep_active())
+            sleeping = (bool(self.get_sleep_active())
+                        or bool(self.get_toy_sleep(device_name)))
         except Exception:
             sleeping = False
         if sleeping != state.get("sleeping", False):
@@ -1966,8 +1985,9 @@ class MotorRouter:
             # chain's rise envelope and sleeping rides its fall — no hard
             # steps. Per-chain state so two chains on one motor can hold
             # different wake states.
-            # The Sleep toggle replaces the stage wholesale for the session
-            # (see SLEEP_WAKE_OVERRIDE); the stored config is untouched.
+            # The Sleep toggle (the sidebar's for every toy, a toy's own for
+            # it alone) replaces the stage wholesale for the session (see
+            # SLEEP_WAKE_OVERRIDE); the stored config is untouched.
             wake_cfg = (self.SLEEP_WAKE_OVERRIDE if sleeping
                         else self._wake_cfg(chain))
             wake_mode = str(wake_cfg.get("mode", "activity"))
@@ -2407,9 +2427,10 @@ class MotorRouter:
         SPS sources (from the controller). A motor that selected a source by
         name picks up its evaluated value; None disables the feature.
 
-        `antistuck` is the `{enabled, active_s, peaked_s}` config (from app
-        settings) for the per-motor stuck-input safety cutoff; None disables
-        it."""
+        `antistuck` is the toys' `{enabled, active_s, peaked_s}` config
+        (from app settings) for the per-chain stuck-input safety cutoff;
+        None disables it. A toy whose own switch is off (antistuck.TOY_KEY
+        False in its wiring) runs without it."""
         zones = self._get_zone_tuples(all_params, zones)
         # Refresh length calibrations first so all motor calculations see fresh state.
         self._update_length_detectors(all_params, zones)
@@ -2418,12 +2439,14 @@ class MotorRouter:
         updates: List[Tuple[str, float, int]] = []
         for device_name, config in active_profile.items():
             motor_count = config.get("motor_count", 0)
+            toy_antistuck = (antistuck if config.get(_TOY_ANTISTUCK_KEY, True) is not False
+                             else None)
             for motor_idx in range(motor_count):
                 target_val = self._calculate_motor_target(
                     device_name, motor_idx, config, all_params,
                     zones=zones, profile_dict=active_profile,
                     sps_sources=sps_sources,
-                    antistuck=antistuck,
+                    antistuck=toy_antistuck,
                 )
 
                 state_key = (device_name, motor_idx)

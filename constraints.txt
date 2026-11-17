@@ -20,6 +20,7 @@ PySide6==6.11.1
 buttplug==1.0.0
 python-osc==1.10.2
 iroh==1.2.0
+openvr==2.12.1401
 pyserial==3.5
 bleak==3.0.2
 zeroconf==0.149.16

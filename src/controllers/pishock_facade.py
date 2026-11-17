@@ -21,6 +21,8 @@ from pishock_limits import RANGES
 from pishock_router import PiShockRouter
 from settings.pishock import PiShockSettingsManager
 
+from .shockosc_facade import ShockOscFacade
+
 FEATURE_KEY = "feature_pishock"
 
 # What the page's test buttons send: gentle and short, whatever the rules say.
@@ -28,8 +30,9 @@ TEST_INTENSITY = 10
 TEST_DURATION_MS = 500
 
 
-class PiShockFacade:
-    """Mixin: PiShock controller surface. Composed into OscGoesPurrrApp."""
+class PiShockFacade(ShockOscFacade):
+    """Mixin: PiShock controller surface. Composed into OscGoesPurrrApp.
+    ShockOSC's setup and feedback ride along (shockosc_facade.py)."""
 
     # ------------------------------------------------------------------
     # Lifecycle — main.py calls init in _setup_components, shutdown on quit
@@ -49,17 +52,21 @@ class PiShockFacade:
         self.pishock_router = PiShockRouter(
             self.pishock_engine,
             get_rules=self.pishock_settings.get_all_rules,
-            is_output_off=self.is_output_off)
+            is_output_off=self.is_output_off,
+            report=getattr(self, "_log_avatar_shock", None))   # the log (LogFacade)
+        self._shockosc_init()
         if self.get_feature_enabled(FEATURE_KEY):
             self._pishock_start()
 
     def _pishock_start(self) -> None:
         self.pishock_router.start()
         self.pishock_engine.start(self.pishock_settings.get_auto_connect())
+        self._shockosc_start()
 
     def _pishock_stop(self) -> None:
         self.pishock_router.stop()
         self.pishock_engine.stop()
+        self._shockosc_stop()
 
     def _pishock_shutdown(self) -> None:
         if getattr(self, "pishock_engine", None) is not None:
@@ -82,9 +89,11 @@ class PiShockFacade:
         s = self.pishock_settings
         self.pishock_engine.set_port(s.get_port())
         self.pishock_engine.set_limits(**s.get_limits())
+        self.pishock_engine.set_separate_limits(s.get_separate_limits(), s.get_friend_limits())
         self.pishock_engine.set_shocker_limits(s.get_shocker_limits())
         self.pishock_engine.set_openshock_shockers(s.get_openshock_shockers())
         self.pishock_engine.set_shockers_off(s.get_shockers_off())
+        self.pishock_engine.set_ops_off(s.get_shocker_ops_off())
         self.pishock_engine.set_shocker_names(s.get_shocker_names())
 
     # ------------------------------------------------------------------
@@ -107,6 +116,8 @@ class PiShockFacade:
             "shockers": eng.shockers(),          # in use: Home, friends
             "all_shockers": eng.all_shockers(),  # the page: switched-off ones too
             "shockers_off": s.get_shockers_off(),
+            # each shocker's Shock / Vibrate / Beep switched off, by id
+            "ops_off": s.get_shocker_ops_off(),
             "openshock_shockers": s.get_openshock_shockers(),
             "shocker_names": s.get_shocker_names(),
             "armed": eng.is_armed,
@@ -115,6 +126,10 @@ class PiShockFacade:
             "auto_connect": s.get_auto_connect(),
             "friends_may_use": s.get_friends_may_use(),
             "limits": s.get_limits(),
+            # Separate limits for friends: on, friends keep to their own
+            # rest, longest hold and forced break (the Limits box's second set)
+            "separate_limits": s.get_separate_limits(),
+            "friend_limits": s.get_friend_limits(),
             # each shocker's caps as they apply (its own, else the hub's), by
             # id -- the hub's shockers and the OpenShock list alike
             "shocker_limits": {str(sid): s.shocker_limits_for(sid) for sid in
@@ -167,15 +182,26 @@ class PiShockFacade:
     def add_openshock_shocker(self) -> int:
         idx = self.pishock_settings.add_openshock_shocker()
         self._pishock_push_config()
+        self._pishock_presence_follow()
         return idx
 
     def set_openshock_shocker(self, index: int, shocker: Dict[str, Any]) -> None:
         self.pishock_settings.set_openshock_shocker(index, shocker)
         self._pishock_push_config()
+        self._pishock_presence_follow()
 
     def delete_openshock_shocker(self, index: int) -> None:
         self.pishock_settings.delete_openshock_shocker(index)
         self._pishock_push_config()
+        self._pishock_presence_follow()
+
+    def _pishock_presence_follow(self) -> None:
+        """The page's OpenShock list changed: its shockers' "connected"
+        avatar parameters follow (presence_facade) -- also while the hub is
+        unplugged, when no state change would say so."""
+        sync = getattr(self, "presence_sync", None)
+        if sync is not None:
+            sync()
 
     def set_pishock_shocker_name(self, shocker_id, name: str) -> None:
         """Your name for a shocker the hub reports by id: on this page, in
@@ -191,10 +217,43 @@ class PiShockFacade:
         self.pishock_engine.set_shockers_off(self.pishock_settings.get_shockers_off())
         name = self.pishock_settings.get_shocker_names().get(str(shocker_id)) or f"Shocker {shocker_id}"
         self.log_message(f"Shockers: {name} {'in use again' if on else 'switched off - not in use'}")
+        self._pishock_redraw()
+
+    def set_pishock_shocker_op(self, shocker_id, op: str, on: bool) -> None:
+        """One shocker's Shock, Vibrate or Beep switch (its card): off, the
+        engine refuses that op on it whoever sends it -- behaviours, friends,
+        the web remote, the menu -- and stops one that is running. Friends'
+        panels grey that button. Remembered across launches."""
+        if op not in ("shock", "vibrate", "beep"):
+            return
+        self.pishock_settings.set_shocker_op(shocker_id, op, on)
+        self.pishock_engine.set_ops_off(self.pishock_settings.get_shocker_ops_off())
+        name = self.pishock_settings.get_shocker_names().get(str(shocker_id)) or f"Shocker {shocker_id}"
+        self.log_message(f"Shockers: {name} - {op} {'on' if on else 'switched off'}")
+        self._pishock_redraw()
+
+    def _pishock_redraw(self) -> None:
+        """A setting the page and Home both show changed: both redraw on
+        the main thread (_pishock_state_changed) -- whichever of them it
+        was changed on."""
         try:
-            self.thread_queue.put(("pishock_state", None))   # the page and Home redraw
+            self.thread_queue.put(("pishock_state", None))
         except Exception:
             pass
+
+    def _pishock_state_changed(self) -> None:
+        """Main thread, for a "pishock_state" on the queue: the hub, its
+        shocker list or one of the switches changed. The Shockers page and
+        Home's shocker row redraw from get_pishock_status() -- the one
+        place the switches are kept."""
+        ui = getattr(self, "ui", None)
+        for name in ("refresh_pishock_status", "refresh_home_devices"):
+            refresh = getattr(ui, name, None)
+            if callable(refresh):
+                refresh()
+        # a shocker's name or the hub changed: which shocker a ShockOSC
+        # group without a behaviour lights up may have too
+        self._shockosc_follow()
 
     # ------------------------------------------------------------------
     # Safety
@@ -206,16 +265,37 @@ class PiShockFacade:
         self.pishock_settings.set_limit(key, value)
         self._pishock_push_config()
 
+    def set_pishock_separate_limits(self, on: bool) -> None:
+        """Separate limits for friends: on, friends (Me and the web remote
+        too) keep to a timing of their own -- the rest after a pulse, the
+        longest hold and the forced break -- counted apart from your
+        avatar's, and to their own max shock, max vibrate and longest pulse,
+        which only lower each shocker's own for them; off, one set and one
+        count for everyone. Arming and the switches stay shared either way."""
+        self.pishock_settings.set_separate_limits(bool(on))
+        self._pishock_push_config()
+        self.log_message("Shockers: separate limits for friends " + ("on" if on else "off"))
+        self._pishock_redraw()
+
+    def set_pishock_friend_limit(self, key: str, value) -> None:
+        """One of the friends' own limits (while separate): a cap or the
+        timing."""
+        self.pishock_settings.set_friend_limit(key, value)
+        self._pishock_push_config()
+
     def set_pishock_shocker_limit(self, shocker_id, key: str, value) -> None:
         """One shocker's own max shock, max vibrate or longest pulse."""
         self.pishock_settings.set_shocker_limit(shocker_id, key, value)
         self._pishock_push_config()
 
     def set_pishock_armed(self, armed: bool) -> None:
+        """Arm shocks -- the Shockers page's switch and Home's are this one
+        setting (ui/views/shocker_switches.py)."""
         self.pishock_engine.set_armed(bool(armed))
         self.pishock_settings.set_armed(bool(armed))      # remembered
         self.log_message("Shockers: shocks ARMED" if armed
                          else "Shockers: shocks disarmed — shock rules vibrate")
+        self._pishock_redraw()
 
     def pishock_stop_all(self) -> None:
         """The page's Stop all, Home's switch to Off: end everything now
@@ -225,6 +305,7 @@ class PiShockFacade:
         self.pishock_settings.set_enabled(False)
         self._pishock_drop_friend_shocks()
         self.log_message("Shockers off — nothing reaches them until you switch them on")
+        self._pishock_redraw()
 
     def _pishock_drop_friend_shocks(self) -> None:
         """What friends already sent (a warned shock, a hold) never comes."""
@@ -238,22 +319,25 @@ class PiShockFacade:
         self.pishock_engine.set_paused(False)
         self.pishock_settings.set_enabled(True)
         self.log_message("Shockers on")
+        self._pishock_redraw()
 
     def set_pishock_friends_may_use(self, value: bool) -> None:
-        """Home's "Share with friends": one switch for every friend, on top
-        of each friend's own Shockers switch -- off, friends don't see your
-        shockers at all. Off also drops what a friend has already sent (a
-        warned shock never comes)."""
+        """"Share with friends" (Home's shocker row and the Shockers page):
+        one switch for every friend, on top of each friend's own Shockers
+        switch -- off, friends don't see your shockers at all. Off also
+        drops what a friend has already sent (a warned shock never comes)."""
         value = bool(value)
         if value == self.pishock_settings.get_friends_may_use():
             return
         self.pishock_settings.set_friends_may_use(value)
         if not value:
             self._pishock_drop_friend_shocks()
+        self._pishock_redraw()
         note = getattr(self, "_friends_note", None)
         if note is not None:
             note("Friends may use your shockers again" if value
-                 else "Your shockers are no longer shared with friends")
+                 else "Your shockers are no longer shared with friends", kind="settings",
+                 op="allow" if value else "deny")
 
     def pishock_test(self, op: str, shocker: Optional[int] = None) -> bool:
         """One gentle, short test op on every shocker, or on one (the
@@ -266,7 +350,12 @@ class PiShockFacade:
             return False
         ids = eng.shocker_ids() if shocker is None else [
             sid for sid in eng.shocker_ids() if sid == shocker]
-        fired = [sid for sid in ids
+        switched = [sid for sid in ids if not eng.op_allowed(sid, op)]
+        if ids and len(switched) == len(ids):
+            self.log_message(f"Shocker test: {op} is switched off on "
+                             f"{'that shocker' if shocker is not None else 'every shocker'}.")
+            return False
+        fired = [sid for sid in ids if sid not in switched
                  if eng.pulse(sid, op, TEST_INTENSITY, TEST_DURATION_MS)]
         if fired:
             sent = op if op != "shock" or eng.is_armed else "vibrate (shocks not armed)"
@@ -288,12 +377,22 @@ class PiShockFacade:
     def add_pishock_rule(self, kind: str) -> int:
         idx = self.pishock_settings.add_rule(kind)
         self.pishock_router.rules_changed()
+        self._shockosc_follow()
         return idx
 
     def set_pishock_rule(self, kind: str, index: int, rule: Dict[str, Any]) -> None:
+        before = self.pishock_settings.get_rules(kind)
+        old = before[index] if 0 <= index < len(before) else {}
         self.pishock_settings.set_rule(kind, index, rule)
         self.pishock_router.rules_changed()
+        self._shockosc_follow()
+        # a ShockOSC behaviour's value: the others with the same avatar
+        # parameter follow, and the avatar hears it (shockosc_sync)
+        after = self.pishock_settings.get_rules(kind)
+        if old and 0 <= index < len(after):
+            self._shockosc_rule_edited(kind, index, old, after[index])
 
     def delete_pishock_rule(self, kind: str, index: int) -> None:
         self.pishock_settings.delete_rule(kind, index)
         self.pishock_router.rules_changed()
+        self._shockosc_follow()

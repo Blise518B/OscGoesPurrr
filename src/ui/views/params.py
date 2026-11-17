@@ -16,8 +16,12 @@ Mixin for ui_components.OscGoesPurrrUI, shown while `feature_params` is on
     Remote ▸'s seven Toggles and seven Radials, picked on a radial like
     VRChat's (param_slots.py) -- beside the avatar's parameter list: live values,
     a filter, double-click or drag one into a category to make a control.
-    The bar between them drags the list wider for long parameter names
-    (kept, app setting `params_dock_w`).
+    A control dragged back onto the list goes, with Undo for a few seconds;
+    a whole category asks first (param_remove.py -- in the window, never a
+    popup). The bar between them drags the list wider for long parameter
+    names (kept, app setting `params_dock_w`);
+  * under the categories, the Height box (param_height.py): your height in
+    VRChat -- Grow, Right away, Reset -- with its own switch for friends.
 
 What friends see is your *worn* avatar's preset, whatever is open here.
 Everything goes through the controller's Params facade (Demeter rule).
@@ -28,15 +32,18 @@ from typing import Any, Dict, List, Optional
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QHeaderView, QInputDialog, QLabel, QLineEdit, QMenu, QMessageBox,
-    QPushButton, QSplitter, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QPushButton, QSplitter, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 import param_board as pb
 from ui.layout_helpers import clear_layout, hbox as _hbox, vbox as _vbox
 from ui.views.param_cards import (
-    CARD_W, ParamCard, ParamCategory, ParamTree, drag_ghost, fmt_value,
+    CARD_W, MIME_CATEGORY, MIME_CONTROL, ParamCard, ParamCategory, ParamTree, drag_ghost,
+    fmt_value,
 )
 from ui.views.param_dialogs import ControlDialog
+from ui.views.param_height import HeightBox
+from ui.views.param_remove import RemoveStrip
 from ui.views.param_slots import SlotDot, SlotRadial
 from ui.widgets import Card as _Card
 
@@ -121,6 +128,17 @@ class ParamsMixin:
         self._params_ncols = 2
         left = _vbox(0, 8)
         left.addWidget(self._params_board)
+        # your height: below the categories, a box of its own (not part of
+        # any avatar's board -- one for every avatar)
+        self._params_height = self._build_params_height()
+        left.addSpacing(4)
+        # in a row with a stretch, not AlignLeft: an aligned box is drawn at
+        # its own width but given the height of the column's, so a note that
+        # wraps one more line there squeezed its buttons
+        height_row = _hbox(0, 0)
+        height_row.addWidget(self._params_height)
+        height_row.addStretch(1)
+        left.addLayout(height_row)
         self._params_empty = self._muted_label(
             "Waiting for VRChat...\n\nStart VRChat with OSC on (Action Menu → Options → OSC) "
             "and load into an avatar. A saved avatar's board can be edited any time: "
@@ -215,6 +233,61 @@ class ParamsMixin:
         lay.addLayout(row2)
         return card
 
+    def _build_params_height(self) -> HeightBox:
+        c = self.controller
+        box = HeightBox()
+        box.go.connect(lambda mode, h: c.height_go(h, mode))
+        box.reset.connect(lambda: c.height_reset())
+        box.switched.connect(lambda on: c.height_set_option("on", on))
+        box.lock_toggled.connect(lambda locked: c.height_set_option("locked", locked))
+        box.option_changed.connect(lambda key, v: c.height_set_option(key, v))
+        box.slot_dot.clicked.connect(
+            lambda _=False: self._params_open_slots(box.slot_dot, pb.HEIGHT_LABEL))
+        self._explain(box, "Height",
+                      "Your height in VRChat, from here, from your avatar menu and from "
+                      "friends you allow. It stays where it was put until someone changes it.")
+        self._explain(box.now_lbl, "Your height now",
+                      "Your eye height, live from VRChat. A world can still hold you to its "
+                      "own limits.")
+        self._explain(box.slider, "Height to go to",
+                      "The height Grow or Right away takes you to, between your lowest and "
+                      "highest. Equal steps are equal factors, so small and tall both get room.")
+        self._explain(box.grow_btn, "Grow",
+                      "Glides to the slider's height at your Grow speed. Gentle, so VRChat's "
+                      "view doesn't jitter.")
+        self._explain(box.now_btn, "Right away", "Jumps straight to the slider's height.")
+        self._explain(box.reset_btn, "Reset",
+                      "Back to your own height: what VRChat reported before anyone changed "
+                      "it - your avatar's own, or what you picked in VRChat's menu.")
+        self._explain(box.switch, "Height for friends",
+                      "Whether friends you allow see this box and can change your height. "
+                      "Off, they don't see it and nothing they send changes it; your own "
+                      "box and avatar menu still work.")
+        self._explain(box.lock_btn, "Lock",
+                      "Friends see your height but can't change it. Your own box and avatar "
+                      "menu still work.")
+        self._explain(box.menu_btn, "Height settings",
+                      "Your lowest and highest height, and how fast Grow glides. Nobody can "
+                      "take you past them, friends included.")
+        lo_s, _ = box.opt_rows["lo"]
+        hi_s, _ = box.opt_rows["hi"]
+        speed_s, _ = box.opt_rows["double_s"]
+        self._explain(lo_s, "Lowest height",
+                      "The smallest anyone can make you, you included. VRChat's own menu "
+                      "stops at 0.2 m, and VRChat doesn't support under 0.1 m.")
+        self._explain(hi_s, "Highest height",
+                      "The tallest anyone can make you, you included. VRChat's own menu "
+                      "stops at 5 m, and VRChat doesn't support over 100 m.")
+        self._explain(speed_s, "Grow speed",
+                      "How long Grow takes to double or halve your height. Slower is gentler "
+                      "on VRChat's view, which can jitter while the height glides.")
+        self._explain(box.slot_dot, "Avatar menu slot",
+                      "Puts your height in your avatar's own menu, on one of OscGoesPurrr ▸ "
+                      "Avatar Remote's seven radials. Click, then a number: it takes that "
+                      "radial from whatever had it; a number it already has frees it. The "
+                      "radial sets your height right away, between your lowest and highest.")
+        return box
+
     @staticmethod
     def _params_small(text: str) -> QPushButton:
         b = QPushButton(text)
@@ -227,6 +300,11 @@ class ParamsMixin:
         bar = _hbox(0, 8)
         add = QPushButton("＋ Category")
         add.clicked.connect(lambda _=False: self.controller.params_edit("add_category"))
+        # (the guided tour's "Build a board" points here: ui/tour_steps.py)
+        self._explain(add, "＋ Category",
+                      "Adds a category to this board: a box for your controls. Double-click "
+                      "a parameter in the list beside it, or drag it into the category, to "
+                      "make a control.")
         bar.addWidget(add)
         self._params_yolo = QPushButton("⚡ YOLO")
         self._params_yolo.setProperty("role", "yolo")
@@ -275,6 +353,8 @@ class ParamsMixin:
         self._params_filter.setPlaceholderText("Filter parameters…")
         self._params_filter.textChanged.connect(lambda _t: self._params_apply_filter())
         lay.addWidget(self._params_filter)
+        self._params_remove_strip = self._build_params_remove_strip()
+        lay.addWidget(self._params_remove_strip)
         tree = ParamTree()
         tree.setObjectName("paramTree")
         tree.setHeaderLabels(["Parameter", "Type", "Value"])
@@ -282,9 +362,13 @@ class ParamsMixin:
         tree.setAlternatingRowColors(True)
         # a long name keeps its end -- usually the part that tells two apart
         tree.setTextElideMode(Qt.ElideMiddle)
-        tree.setDragEnabled(True)
-        tree.setDragDropMode(QTreeWidget.DragOnly)
         tree.setMinimumHeight(420)
+        # the board's pieces dragged back onto the list go (your own board
+        # only: a friend's copy has nothing to drag)
+        tree.accept_removal(MIME_CONTROL, "Undo brings it back.")
+        tree.accept_removal(MIME_CATEGORY, "The whole category and its controls. "
+                                           "You're asked first.")
+        tree.remove_dropped.connect(self._params_remove_dropped)
         hh = tree.header()
         hh.setStretchLastSection(False)
         hh.setSectionResizeMode(0, QHeaderView.Stretch)
@@ -296,10 +380,22 @@ class ParamsMixin:
         lay.addWidget(tree, 1)
         self._params_tree = tree
         lay.addWidget(self._muted_label("Double-click a parameter, or drag it into a "
-                                        "category, to make a control."))
+                                        "category, to make a control. Drag a control "
+                                        "back here to remove it."))
         self._params_list_note = self._muted_label("")
         lay.addWidget(self._params_list_note)
         return card
+
+    def _build_params_remove_strip(self) -> RemoveStrip:
+        strip = RemoveStrip()
+        self._explain(strip.undo, "Undo",
+                      "Puts back what you just dragged to the list, where it was and in "
+                      "the same avatar menu slots. Offered for a few seconds.")
+        self._explain(strip.yes, "Remove",
+                      "Removes the category and every control in it. Undo is offered "
+                      "for a few seconds after.")
+        self._explain(strip.no, "Keep", "Leaves the category on the board as it is.")
+        return strip
 
     # ----------------------------------------------------------
     # Refresh
@@ -317,6 +413,7 @@ class ParamsMixin:
             QTimer.singleShot(0, self._params_rebuild)
         self._params_refresh_header()
         self._params_refresh_slots()
+        self._params_refresh_height()
 
     def refresh_params_live(self) -> None:
         """Values, ten times a second -- only while the page is shown."""
@@ -340,6 +437,25 @@ class ParamsMixin:
                     item.setText(2, text)
         if self._params_live_n % 10 == 0:
             self._params_refresh_header()
+        self._params_refresh_height()
+
+    def _params_refresh_height(self) -> None:
+        """The Height box: VRChat's word on your height, and its settings."""
+        st = self.controller.get_height_status()
+        if not st["vrchat"]:
+            note = "Waiting for VRChat - your height shows once it's running."
+        elif st["allowed"] is False:
+            note = "This world doesn't allow changing your height."
+        elif not st["on"]:
+            note = "Off: friends don't see this box."
+        else:
+            note = ""
+        box = self._params_height
+        box.show_settings(st["on"], st["locked"], st["lo"], st["hi"], st["double_s"],
+                          (st["world_min"], st["world_max"]))
+        box.show_state(st["height"], st["lo"], st["hi"], gliding=st["gliding"],
+                       target=st["target"], usable=st["vrchat"] and st["allowed"] is not False,
+                       can_reset=st["own"] is not None, note=note)
 
     def _params_page_shown(self) -> bool:
         stack = getattr(self, "main_stack", None)
@@ -416,9 +532,12 @@ class ParamsMixin:
         for col in self._params_cols:
             clear_layout(col)
         self._params_cards, self._params_boxes = {}, {}
+        # an Undo or question about a board that isn't open any more goes
+        self._params_remove_strip.keep_only_for((st["avatar_id"], board.get("id")))
         has = st["avatar_id"] is not None
         self._params_empty.setVisible(not has)
         self._params_board.setVisible(has)
+        self._params_height.setVisible(has)
         if not has:
             return
         others = [(p["id"], p["name"]) for p in st["presets"] if p["id"] != board.get("id")]
@@ -492,7 +611,8 @@ class ParamsMixin:
 
     def _params_refresh_slots(self) -> None:
         board = self.controller.get_params_status()["board"]
-        for holder in list(self._params_cards.values()) + list(self._params_boxes.values()):
+        holders = list(self._params_cards.values()) + list(self._params_boxes.values())
+        for holder in holders + [self._params_height]:
             dot = getattr(holder, "slot_dot", None)
             if dot is not None:
                 dot.set_slots(pb.slots_of(board, dot.key))
@@ -674,6 +794,78 @@ class ParamsMixin:
         cats = self.controller.get_params_status()["board"]["categories"]
         ids = {c["id"] for c in cats}
         return self._params_last_cat if self._params_last_cat in ids else cats[0]["id"]
+
+    # ---- dragged back to the list: removed ------------------------
+
+    def _params_remove_dropped(self, mime: str, key: str) -> None:
+        """A card or a category dropped on the parameter list."""
+        if mime == MIME_CONTROL:
+            self._params_take_control(key)
+        elif mime == MIME_CATEGORY:
+            self._params_ask_take_category(key)
+
+    @staticmethod
+    def _params_board_key(st: Dict[str, Any]):
+        return st["avatar_id"], st["board"].get("id")
+
+    def _params_take_control(self, control_id: str) -> None:
+        """A control goes at once; Undo puts it back for a few seconds."""
+        control = pb.find_control(self.controller.get_params_status()["board"], control_id)
+        if control is None:
+            return
+        label = control["label"]
+        snap = self.controller.params_edit("take_control", control_id)
+        if snap:
+            self._params_offer_undo(f"Removed “{label}”.", snap)
+
+    def _params_ask_take_category(self, cat_id: str) -> None:
+        """A whole category: asked first, in the window."""
+        st = self.controller.get_params_status()
+        board = st["board"]
+        cat = pb.find_category(board, cat_id)
+        if cat is None:
+            return
+        name = cat["name"]
+        n = sum(1 for c in board["controls"] if c.get("cat") == cat_id)
+        controls = f"{n} control{'' if n == 1 else 's'}"
+        strip = self._params_remove_strip
+        if len(board["categories"]) <= 1:
+            if not n:
+                strip.note("The board keeps one category, and this one is already empty.")
+                return
+            text = (f"Remove the {controls} in “{name}”? It's the board's last category, "
+                    "so it stays, empty.")
+        elif n:
+            text = f"Remove the category “{name}” and its {controls}?"
+        else:
+            text = f"Remove the empty category “{name}”?"
+        strip.ask(text, self._params_board_key(st),
+                  lambda: self._params_take_category(cat_id, name))
+
+    def _params_take_category(self, cat_id: str, name: str) -> None:
+        last = len(self.controller.get_params_status()["board"]["categories"]) <= 1
+        snap = self.controller.params_edit("take_category", cat_id)
+        if snap:
+            self._params_offer_undo(f"Emptied “{name}”." if last else f"Removed “{name}”.", snap)
+
+    def _params_offer_undo(self, text: str, snap: Dict[str, Any]) -> None:
+        self._params_remove_strip.offer_undo(
+            text, (snap["avatar_id"], snap["preset"]), lambda: self._params_put_back(snap))
+
+    def _params_put_back(self, snap: Dict[str, Any]) -> None:
+        # Still the newest step in the app's Ctrl+Z history: undone there,
+        # so Ctrl+Y can take it again; the status bar says what came back.
+        via = getattr(self.controller, "history_undo_action", None)
+        done = via(snap) if via is not None else None
+        if done is not None:
+            if done.get("status") == "done":
+                self.set_status_message(done.get("text", ""))
+            else:
+                self._params_remove_strip.note(done.get("text", ""))
+            return
+        if not self.controller.params_edit("put_back", snap):
+            self._params_remove_strip.note("Couldn't put it back - it's already there, "
+                                           "or its board isn't open any more.")
 
     def _params_yolo_toggled(self, on: bool) -> None:
         if on:

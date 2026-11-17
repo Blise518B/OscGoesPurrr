@@ -191,15 +191,22 @@ class ReplayFacade:
             return
         frame = frames[self._replay_idx]
         try:
-            # Fold the frame onto the running OGB state: a full snapshot
-            # replaces it, a delta merges. The store gets the complete
-            # current state each tick (it drops keys a fresh snapshot no
-            # longer lists).
-            if frame.is_full:
-                self._replay_state = dict(frame.params)
+            if frame.kind == "raw":
+                # Recorded packets (Record raw contacts): through the
+                # store's whole input path, as they arrived.
+                store.replay_packets(frame.packets)
+            elif frame.kind == "raw_snapshot":
+                store.replay_snapshot(frame.params)
             else:
-                self._replay_state.update(frame.params)
-            store.apply_replay_frame(self._replay_state)
+                # Fold the frame onto the running OGB state: a full
+                # snapshot replaces it, a delta merges. The store gets the
+                # complete current state each tick (it drops keys a fresh
+                # snapshot no longer lists).
+                if frame.is_full:
+                    self._replay_state = dict(frame.params)
+                else:
+                    self._replay_state.update(frame.params)
+                store.apply_replay_frame(self._replay_state)
             if hasattr(self, "force_recalculate"):
                 self.force_recalculate(dispatch_direct=True)
         except Exception as e:

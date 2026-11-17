@@ -10,7 +10,7 @@ facade's pace window, both fed only what passed the activity gate. So the
 counters need Settings → Features → Usage statistics; with it off there is
 nothing to send.
 
-Like the connected-toy parameters (toy_presence_facade), only values that
+Like the connected-device parameters (presence_facade), only values that
 changed go out — except when VRChat can have lost them: the OSC link
 coming up and an avatar loading re-send the lot. Turning the switch off,
 and quitting, put the pace back to 0 so an avatar never shows a stale

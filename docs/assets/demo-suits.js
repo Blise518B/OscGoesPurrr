@@ -2,7 +2,7 @@
 // suits_cards.py): her front and back with every bHaptics dot and OWO patch
 // where the app puts them, the card that opens beside her for what you click
 // (with its line to it), the chips under her, the contact check, each suit's
-// own frame, and the zone routes. Its
+// own frame with its "Tell VRChat" parameters, and the zone routes. Its
 // sidebar entry shows while Settings -> Features has a suit switched on, as in
 // the app, and each suit switched on has its row on Home (home_devices.py),
 // which this file keeps up to date.
@@ -121,10 +121,12 @@ const SU = {
     paused: false,                      // Home's On / Off (bhaptics_stop_all)
     have: new Set(["vest"]), auto: true, react: 0, follow: true,
     devices: Object.fromEntries(POSITIONS.map(([p]) => [p, { on: true, strength: 100 }])),
+    stuck: { on: true, active: 1, peaked: 10 },     // its own anti-stuck (antistuck.py)
   },
   owo: {
     connected: true, paused: false, auto: false, react: 0, follow: true, ceiling: 60, freq: 50,
     muscles: Object.fromEntries(MUSCLES.map((m) => [m, { on: true, top: 100 }])),
+    stuck: { on: true, active: 1, peaked: 10 },
   },
   pick: { part: null, muscle: null },
   held: null,               // [position, index] pressed on her
@@ -542,6 +544,28 @@ function bodyCard() {
 
 /** A small card in a suit's frame (Avatar Remote's): a title, then rows. */
 const smallCard = (title, ...kids) => el("div.su-small", {}, el("b.su-small-t", {}, title), ...kids);
+
+/** A suit's own anti-stuck (ui/views/antistuck_box.py, in its card titled
+ * Anti-stuck): On, and while it is on the two times, as the app's sliders on
+ * a log scale from 1 s to 10 min. */
+const STUCK_MAX = 600, STUCK_STEPS = 1000;
+const stuckX = (s) => Math.round((STUCK_STEPS * Math.log(Math.max(1, s))) / Math.log(STUCK_MAX));
+const stuckS = (x) => Math.max(1, Math.min(STUCK_MAX, Math.round(Math.exp((x / STUCK_STEPS) * Math.log(STUCK_MAX)))));
+const secText = (s) => (s < 60 ? `${s} s` : `${Math.floor(s / 60)} min${s % 60 ? ` ${s % 60} s` : ""}`);
+function stuckCard(hue, stuck, what) {
+  const tip = "VRChat only sends a value when it changes. If a contact stops updating - you swap avatar, your "
+    + `partner leaves, the link drops - its last value would keep ${what} going. Anti-stuck notices a value that `
+    + "has frozen and stops it: one frozen part-way after a second, one held at 100% after ten, then it eases off. "
+    + "Each kind of device has its own. On by default.";
+  const timer = (label, key) => valueRow(label, { min: 0, max: STUCK_STEPS, value: stuckX(stuck[key]), hue,
+    fmt: (x) => secText(stuckS(x)), onInput: (x) => { stuck[key] = stuckS(x); } });
+  const times = el("div.su-stuck", {}, timer("Frozen part-way: stop after", "active"),
+    timer("Held at 100%: ease off after", "peaked"));
+  times.hidden = !stuck.on;
+  const card = smallCard("Anti-stuck", toggle("On", stuck.on, (v) => { stuck.on = v; times.hidden = !v; }), times);
+  card.title = tip;
+  return card;
+}
 function react(hue, state) {
   return el("div.su-react", {}, el("span.pg-muted", {}, "Feel touches from"),
     segmented(REACT, hue, (i) => { state.react = i; }, state.react));
@@ -550,6 +574,23 @@ function category(title, hue, body) {
   return hued(el(`div.pg-cat.su-cat.${hue}`, {}, el("div.pg-bar", {}, el("i.pg-ic", { innerHTML: D.icons.suits || "" }),
     el("span", {}, title)), body), hue);
 }
+
+/** A suit's "Tell VRChat" card (suits.py _build_suits_presence_card): a
+ *  "connected" Bool per row, on by default under its fixed name. */
+function tellRow(label, name, tip) {
+  const sw = toggle(label, true, () => {});
+  sw.classList.add("su-tellsw");
+  return el("div.pg-row.tight", { title: tip }, sw, el("span.o-in.pg-param", {}, name),
+    btn("Pick…", "", () => {}, "Pick a parameter your avatar already sends."));
+}
+function tellCard(rows, tip) {
+  const card = smallCard("Tell VRChat", muted("A Bool on your avatar that is true while it's connected."), ...rows);
+  card.title = tip;
+  return card;
+}
+const TELL_TIP = "They are on by default under these names, so an avatar asset made for OGP can use them. Add a "
+  + "Bool with the name to your avatar's parameters; the name is yours to change, or Pick… one your avatar already "
+  + "sends. It is sent again whenever you change avatar, and goes false when you close the app.";
 
 function bhapticsFrame() {
   const bh = SU.bh;
@@ -573,7 +614,14 @@ function bhapticsFrame() {
     toggle("Connect when the app starts", bh.auto, (v) => { bh.auto = v; }));
   W.bhFollow = toggle("Also feel OWO's contacts", bh.follow, (v) => { bh.follow = v; homeRows(); });
   const touches = smallCard("Touches", react("orange", bh), W.bhFollow);
-  return category("BHAPTICS", "orange", el("div.su-grid", {}, el("div.su-stack", {}, have, touches), link));
+  const stuck = stuckCard("orange", bh.stuck, "the suit buzzing");
+  // the whole suit, then each part you have (presence_facade's names)
+  const tip = "Sends a Bool avatar parameter that is true while that part of the suit is connected and false while "
+    + "it isn't, so your avatar can show which parts are live. Any part is true while at least one is. " + TELL_TIP;
+  W.bhTell = Object.fromEntries(PART_GROUPS.map(([key, name]) => [key, tellRow(name, `OGP/BHaptics${name}Connected`, tip)]));
+  const tell = tellCard([tellRow("Any part", "OGP/BHapticsConnected", tip), ...Object.values(W.bhTell)], tip);
+  return category("BHAPTICS", "orange", el("div.su-grid", {}, el("div.su-stack", {}, have, touches),
+    el("div.su-stack", {}, link, stuck, tell)));
 }
 
 function owoFrame() {
@@ -598,7 +646,15 @@ function owoFrame() {
       + "setting or a test asks for."));
   W.owoFollow = toggle("Also feel bHaptics' contacts", o.follow, (v) => { o.follow = v; refresh(); });
   const touches = smallCard("Touches", react("purple", o), W.owoFollow);
-  return category("OWO", "purple", el("div.su-grid", {}, el("div.su-stack.wide", {}, link, touches), strength));
+  const stuck = stuckCard("purple", o.stuck, "the suit's EMS going");
+  const tip = "Sends a Bool avatar parameter that is true while OGP is connected to My OWO and false while it isn't, "
+    + "so your avatar can show that your suit is live. " + TELL_TIP;
+  const tell = tellCard([tellRow("OWO suit", "OGP/OWOConnected", tip)], tip);
+  for (const [card, area] of [[link, "link"], [strength, "strength"], [touches, "touches"],
+    [stuck, "stuck"], [tell, "tell"]]) {
+    card.style.gridArea = area;
+  }
+  return category("OWO", "purple", el("div.su-grid.owo", {}, link, strength, touches, stuck, tell));
 }
 
 const ZONE_TYPES = ["Orf", "Pen", "Touch"];
@@ -662,6 +718,9 @@ function refresh() {
   else W.bhPill.set("Let go", "idle");
   W.bhInfo.textContent = linked ? `Connected: ${SUIT.label} · ${SUIT.battery} %` : "Switch the suit on and press Connect.";
   W.bhRelease.disabled = !linked;
+  // a "connected" parameter for each part you have, or that is connected
+  const live = new Set(linked ? SUIT.positions.map((p) => GROUP_OF[p]) : []);
+  for (const [key, row] of Object.entries(W.bhTell)) row.hidden = !(SU.bh.have.has(key) || live.has(key));
 
   const o = SU.owo;
   if (o.paused) W.owoPill.set("Stopped", "warn");

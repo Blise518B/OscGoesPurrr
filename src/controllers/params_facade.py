@@ -9,6 +9,12 @@ worn avatar's board sends to VRChat as you use it.
 Your avatar's menu: its Avatar Remote submenu's seven Toggles and seven
 Radials drive whatever controls you gave those slots (params_menu.py).
 
+Your height: the page's Height box, below the categories -- VRChat's
+/avatar/eyeheight, Grow / Right away / Reset, for you, friends and a menu
+Radial (height_facade.py). It isn't part of any avatar's board: one box for
+every avatar, shared with friends inside the worn avatar's board while its
+own switch is on.
+
 Friends: everyone whose third switch (AVATAR) is on in the friends list (on
 for a new friend) sees your *worn* avatar's active preset -- whatever you have open
 here -- and may use it, except a locked category. With ⚡ YOLO they get
@@ -39,10 +45,15 @@ import threading
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+import inbound_rate
 import param_board as pb
 import remote_params as rp
+import settings_history
 import vrchat_avatars
+from event_log import IN, PARAMS
+from controllers.height_facade import HeightMixin
 from controllers.params_menu import ParamsMenuMixin
+from param_filters import NOT_PARAMETERS
 from parameter_store import store
 from settings.param_boards import ParamBoardsSettingsManager
 
@@ -63,12 +74,14 @@ _EDITS = frozenset({
     "add_category", "move_category", "rename_category", "set_category_locked",
     "set_category_color", "remove_category", "add_preset", "rename_preset",
     "remove_preset", "switch_preset", "copy_category_to_preset",
+    # dragged back to the parameter list, and its Undo
+    "take_control", "take_category", "put_back",
 })
 
 _QUIET_EDITS = frozenset({"rename_category", "set_category_locked", "toggle_slot"})
 
 _NO_SHARE = {"ver": "", "msg": None, "controls": {}, "types": {}, "keys": [],
-             "n_board": 0, "yolo": False, "avatar": ""}
+             "n_board": 0, "yolo": False, "avatar": "", "height": None}
 
 
 def relay_data_dir() -> str:
@@ -92,9 +105,9 @@ def read_relay_boards(folder: Optional[str] = None) -> List[Dict[str, Any]]:
     return out
 
 
-class ParamsFacade(ParamsMenuMixin):
+class ParamsFacade(ParamsMenuMixin, HeightMixin):
     """Mixin: the Avatar Remote page's controller surface, your avatar
-    menu's slots, and the owner's half of a friend's board."""
+    menu's slots, your height, and the owner's half of a friend's board."""
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -113,12 +126,16 @@ class ParamsFacade(ParamsMenuMixin):
         self._params_seen: Dict[tuple, int] = {}               # (peer, target) -> newest set id
         self._params_held: Dict[str, Dict[str, Any]] = {}      # peer -> {control id: control}
         self._params_held_t: Dict[str, float] = {}
+        # how often each friend may set, press or move your height
+        # (inbound_rate): far above what their board sends
+        self._params_budget = inbound_rate.Budget(*inbound_rate.PARAMS)
         self._params_types_at = 0.0
         self._params_tick_running = False
         # the every-parameter list's values, one snapshot for every friend
         # watching: (board version, when, {name: value}) -- the link's thread
         self._params_rest: Tuple[str, float, Dict[str, Any]] = ("", 0.0, {})
         self._params_menu_init()
+        self._height_init()
 
     def _params_ui_ready(self) -> None:
         if self._params_tick_running or getattr(self, "ui", None) is None:
@@ -194,10 +211,58 @@ class ParamsFacade(ParamsMenuMixin):
         it returns; a change is saved and reaches friends at once."""
         if op not in _EDITS:
             raise ValueError(f"not a board edit: {op}")
+        if op in ("take_control", "take_category"):
+            return self._params_take(op, *args)
         result = getattr(self._params_book, op)(*args, **kwargs)
         if result:
             self._params_changed()
         return result
+
+    def _params_take(self, op: str, thing_id: str):
+        """A control or a whole category dragged back to the parameter list
+        -- one step in the app's Ctrl+Z history (settings_history.py), with
+        its own way back: put_back puts it where it was, into the menu slots
+        nothing took since; Ctrl+Y takes it again. Returns put_back's
+        snapshot, as the book does."""
+        book = self._params_book
+        board = book.board
+        if op == "take_control":
+            thing = pb.find_control(board, thing_id)
+            name, emptied = (thing or {}).get("label", ""), False
+        else:
+            thing = pb.find_category(board, thing_id)
+            name, emptied = (thing or {}).get("name", ""), len(board["categories"]) <= 1
+        with settings_history.action() as act:
+            snap = getattr(book, op)(thing_id)
+            if snap:
+                self._params_changed()
+        if not snap:
+            return snap
+        held = {"snap": snap}
+        board_name = book.avatar_name
+        preset_name = board.get("name", "")
+
+        def undo():
+            s = held["snap"]
+            b = self._params_book
+            if s.get("avatar_id") != b.avatar_id or s.get("preset") != b.board.get("id"):
+                return f"open {board_name}'s “{preset_name}” board again first"
+            if not b.put_back(s):
+                return "it's already back"
+            self._params_changed()
+            return True
+
+        def redo():
+            again = getattr(self._params_book, op)(thing_id)
+            if not again:
+                return "it isn't on the open board"
+            held["snap"] = again
+            self._params_changed()
+            return True
+
+        what = "emptied" if emptied else "removed"
+        act.done(f"{what} {name} from the Avatar Remote", undo, redo, key=snap)
+        return snap
 
     def params_edit_quiet(self, op: str, *args):
         """An edit the page already shows (a category's new name, its lock):
@@ -235,7 +300,8 @@ class ParamsFacade(ParamsMenuMixin):
             return
         self.params_settings.set_yolo(on)
         self._params_note("⚡ YOLO on - friends get every parameter, locks don't hold for them"
-                          if on else "⚡ YOLO off - friends get your board only")
+                          if on else "⚡ YOLO off - friends get your board only",
+                          op="yolo")
         self._params_rebuild_share()
         self._params_refresh_ui()
 
@@ -287,6 +353,7 @@ class ParamsFacade(ParamsMenuMixin):
             self.params_settings.set_last_avatar(book.avatar_id)
             self._params_release_all()
             self._params_menu_forget()
+            self._height_avatar_changed()
             self._params_types_at = 0.0
             self._params_sync_types(force=True)
             self._params_rebuild_share()
@@ -312,7 +379,10 @@ class ParamsFacade(ParamsMenuMixin):
     def _params_vrchat_gone(self) -> None:
         """GUI thread: the OSC link to VRChat went away -- nothing is worn."""
         book = getattr(self, "_params_book", None)
-        if book is None or book.live_avatar_id is None:
+        if book is None:
+            return
+        self._height_vrchat_gone()
+        if book.live_avatar_id is None:
             return
         self._params_release_all()
         book.avatar_gone()
@@ -327,7 +397,9 @@ class ParamsFacade(ParamsMenuMixin):
         book = self._params_book
         if book.live_avatar_id is None:
             return
-        listed, retyped = book.sync_params(store.get_param_types())
+        # (VRChat's height messages land in the store too: never a parameter)
+        types = {n: t for n, t in store.get_param_types().items() if n not in NOT_PARAMETERS}
+        listed, retyped = book.sync_params(types)
         if listed or retyped:
             self._params_rebuild_share()
             self._params_refresh_ui(rebuild=retyped or not book.is_live, params=listed)
@@ -344,6 +416,11 @@ class ParamsFacade(ParamsMenuMixin):
         except Exception:
             return False
         store.update_synthetic(name, value)
+        # a ShockOSC setting a friend set (YOLO, Avatar Remote): the
+        # Shockers' behaviours follow, as from your own menu (shockosc_sync)
+        heard = getattr(self, "_shockosc_heard_set", None)
+        if heard is not None:
+            heard(name, value)
         return True
 
     # ------------------------------------------------------------------
@@ -360,19 +437,21 @@ class ParamsFacade(ParamsMenuMixin):
         book = self._params_book
         board = book.live_board() if self._params_enabled() else None
         yolo = self.params_settings.get_yolo()
+        height = self._height_share()
         if board is None:
-            share = dict(_NO_SHARE, yolo=yolo)
+            share = dict(_NO_SHARE, yolo=yolo, height=height)
         else:
             profile = book.live_profile()
             key = rp.avatar_key(book.live_avatar_id or "")
-            msg = rp.with_version(rp.public_board(board, profile["name"], book.types, yolo, key))
+            msg = rp.with_version(rp.public_board(board, profile["name"], book.types, yolo, key,
+                                                  height=height))
             cats = {c["id"]: c["locked"] for c in board["categories"]}
             share = {
                 "ver": msg["b"], "msg": msg,
                 "controls": {c["id"]: (dict(c), bool(cats.get(c["cat"])))
                              for c in board["controls"]},
                 "types": dict(book.types), "keys": list(msg["keys"]), "n_board": msg["nb"],
-                "yolo": yolo, "avatar": key,
+                "yolo": yolo, "avatar": key, "height": height,
             }
         old = self._params_share
         self._params_share = share
@@ -397,6 +476,7 @@ class ParamsFacade(ParamsMenuMixin):
     def _params_tick(self) -> None:
         try:
             self._params_sync_types()
+            self._height_tick()
             self._params_menu_follow()
             now = time.monotonic()
             stale = []
@@ -427,12 +507,16 @@ class ParamsFacade(ParamsMenuMixin):
         if refresh is not None:
             refresh(rebuild=rebuild, params=params or rebuild)
 
-    def _params_note(self, text: str, key: Any = None) -> None:
+    def _params_note(self, text: str, key: Any = None, **what: Any) -> None:
+        """An Avatar Remote entry in the log (`what`: who, op, dir -- as for
+        `_friends_note`; `{who}` in `text` is the person's name)."""
         note = getattr(self, "_friends_note", None)
         if note is not None:
-            note(text, key=key)
+            note(text, key=key, kind=PARAMS, **what)
         else:
-            self.log_message(f"Avatar Remote: {text}")
+            who = what.get("who")
+            name = self._friend_nick(who) if who is not None else "You"
+            self.log_message(f"Avatar Remote: {text.replace('{who}', name)}")
 
     # ------------------------------------------------------------------
     # The link's thread: a friend and your board
@@ -442,16 +526,28 @@ class ParamsFacade(ParamsMenuMixin):
         perms = self._friend_perms.get(peer)
         return bool(perms and len(perms) > 2 and perms[2] and self._params_enabled())
 
-    def _params_blocked(self) -> bool:
-        """Pause all friends: nothing they send reaches your avatar."""
-        return bool(self.friends_settings.get_paused())
+    def _params_blocked(self, peer: Optional[str] = None) -> bool:
+        """Pause all friends: nothing they send reaches your avatar -- nor
+        anything `peer` sends while only friends in your instance may and
+        they aren't in it (friends_instance.py). Whatever sets your avatar
+        for a friend asks this."""
+        if self.friends_settings.get_paused():
+            return True
+        return peer is not None and peer in (getattr(self, "_not_here", None) or ())
+
+    def _params_refused(self, peer: str, what: str) -> None:
+        """Say in the log that `peer` was refused for not being in your
+        instance (rate-limited there; nothing while they aren't)."""
+        refused = getattr(self, "_not_here_refused", None)
+        if refused is not None:
+            refused(peer, PARAMS, what)
 
     def _params_prm_for(self, peer: str) -> Optional[Dict[str, Any]]:
         """Inside your status to `peer`: that you share a board with them."""
         if not self._params_allowed(peer):
             return None
         share = self._params_share
-        return rp.make_prm(share["ver"], share["yolo"], self._params_blocked(),
+        return rp.make_prm(share["ver"], share["yolo"], self._params_blocked(peer),
                            share.get("avatar", ""))
 
     def _params_more_for(self, peer: str) -> Dict[str, Dict[str, Any]]:
@@ -476,6 +572,8 @@ class ParamsFacade(ParamsMenuMixin):
                 self._params_rest = (share["ver"], now, rest)
             got = {**rest, **got}
         msgs = rp.make_values(share["ver"], w["epoch"], [got.get(k) for k in keys])
+        if share.get("height") is not None and live:
+            rp.add_height(msgs[0], self._height.height)       # the Height box's "now"
         return {f"pv{i}": m for i, m in enumerate(msgs)}
 
     def _params_on_watch(self, peer: str, msg: Dict[str, Any]) -> None:
@@ -510,7 +608,10 @@ class ParamsFacade(ParamsMenuMixin):
                 return                      # a copy, or older than what landed
             self._params_seen[key] = seq
         share = self._params_share
-        if not share["ver"] or not self._params_allowed(peer) or self._params_blocked():
+        if not share["ver"] or not self._params_allowed(peer):
+            return
+        if self._params_blocked(peer):
+            self._params_refused(peer, "use your avatar's board")
             return
         if cid:
             entry = share["controls"].get(cid)
@@ -527,28 +628,37 @@ class ParamsFacade(ParamsMenuMixin):
                 return
             value = pb.any_value(ptype, raw)
             name, label, control = pname, pname, None
-        if value is None or not self._params_send(name, ptype, value):
+        if value is None or not self._params_spend(peer):
+            return
+        if not self._params_send(name, ptype, value):
             return
         what = _said(control, ptype, value)
-        self._params_note(f"{self._friend_nick(peer)} {what.format(label=label)}"
-                          + ("" if cid else " (YOLO)"), key=("prm-in", peer, key[1]))
+        self._params_note("{who} " + what.format(label=label) + ("" if cid else " (YOLO)"),
+                          key=("prm-in", peer, key[1]), who=peer, op="set", dir=IN)
 
     def _params_on_holds(self, peer: str, msg: Dict[str, Any]) -> None:
         ids = set(rp.read_holds(msg))
         share = self._params_share
-        ok = bool(share["ver"]) and self._params_allowed(peer) and not self._params_blocked()
+        allowed = bool(share["ver"]) and self._params_allowed(peer)
+        ok = allowed and not self._params_blocked(peer)
+        if allowed and not ok and ids:
+            self._params_refused(peer, "hold your avatar's buttons")
         now = time.monotonic()
         pressed, let_go = [], []
+        too_fast = False
         with self._params_lock:
             held = dict(self._params_held.get(peer, {}))
             for cid in list(held):
                 if cid not in ids or not ok:
-                    let_go.append(held.pop(cid))
+                    let_go.append(held.pop(cid))     # letting go is never rationed
             if ok:
-                for cid in ids - set(held):
+                for cid in sorted(ids - set(held)):
                     entry = share["controls"].get(cid)
                     if entry is None or entry[1] or entry[0]["kind"] != "button":
                         continue
+                    if not self._params_budget.take(peer, now):
+                        too_fast = True              # a new press past their budget
+                        break
                     held[cid] = entry[0]
                     pressed.append(entry[0])
             if held:
@@ -559,10 +669,30 @@ class ParamsFacade(ParamsMenuMixin):
                 self._params_held_t.pop(peer, None)
         for control in let_go:
             self._params_press(control, False)
+        if too_fast:
+            self._params_too_fast(peer, now)
         for control in pressed:
             if self._params_press(control, True):
-                self._params_note(f"{self._friend_nick(peer)} held your {control['label']}",
-                                  key=("prm-in", peer, control["id"]))
+                self._params_note(f"{{who}} held your {control['label']}",
+                                  key=("prm-in", peer, control["id"]), who=peer, op="hold",
+                                  dir=IN)
+
+    def _params_spend(self, peer: str) -> bool:
+        """One set, press or height change of `peer`'s, within how often
+        they may (inbound_rate.PARAMS -- their board sends a slider at most
+        every 60 ms): False refuses it, said in the log at most every few
+        seconds. Any thread."""
+        now = time.monotonic()
+        if self._params_budget.take(peer, now):
+            return True
+        self._params_too_fast(peer, now)
+        return False
+
+    def _params_too_fast(self, peer: str, now: float) -> None:
+        if self._params_budget.say(peer, now):
+            self._params_note("{who} sent changes to your avatar too fast - held back",
+                              key=("prm-fast", peer), who=peer, op="fast", dir=IN,
+                              held="sent faster than OGP sends")
 
     def _params_press(self, control: Dict[str, Any], down: bool) -> bool:
         value = pb.send_value(control, down)
@@ -581,6 +711,9 @@ class ParamsFacade(ParamsMenuMixin):
             peers = list(self._params_held)
         for peer in peers:
             self._params_release(peer)
+        height = getattr(self, "_height", None)
+        if height is not None:
+            height.stop_friends()               # a glide a friend started stops there
 
     def _params_drop_friend(self, peer: str) -> None:
         """A friend went offline, was unfriended or lost the switch."""

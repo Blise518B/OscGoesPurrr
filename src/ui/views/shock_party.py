@@ -9,7 +9,9 @@ picks among them, as PiShock has it:
     a click on a name makes it next (so you choose who gets it).
 
 It only draws and calls back with (peer, slot) pairs; the view wires those
-to the controller's party_* calls."""
+to the controller's party_* calls. Its card is whichever shocker buttons
+the panel shows (`card_cls`: PiShock's ShockerCard by default, or
+OpenShock's card -- shocker_layout.py); both speak the same callbacks."""
 
 import random
 from typing import Callable, List, Optional, Sequence, Set, Tuple
@@ -39,7 +41,7 @@ class ShockParty(QFrame):
                  on_release: Callable[[List[Pair]], None],
                  on_stop: Callable[[List[Pair]], None],
                  on_ticks: Optional[Callable[[Set[Pair]], None]] = None,
-                 big: bool = False):
+                 big: bool = False, card_cls: type = ShockerCard):
         super().__init__()
         self.setObjectName("partyFrame")
         self._fire_cb, self._hold_cb, self._release_cb, self._stop_cb = (
@@ -65,8 +67,8 @@ class ShockParty(QFrame):
         head.addWidget(unit)
         head.addStretch(1)
         lay.addLayout(head)
-        self.card = ShockerCard("", hue, self._fire, self._hold, self._release, self._stop,
-                                big=big)
+        self.card = card_cls("", hue, self._fire, self._hold, self._release, self._stop,
+                             big=big)
         self.card.set_caps(PARTY_CAPS)
         lay.addWidget(self.card)
         row = hbox(0, 8)

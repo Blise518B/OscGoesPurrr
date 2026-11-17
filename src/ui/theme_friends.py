@@ -26,6 +26,13 @@ def friends_qss(mode_name: str, v: Dict[str, str]) -> str:
         # lit in the accent instead of the shockers' yellow)
         f'QFrame#dropZone[kind="friends"][hover="true"] {{ background-color: {v["tint"]};'
         f' border-color: {v["accent"]}; }}\n',
+        # a friend's VRChat account box, with someone from your instance
+        # dragged over it (friends_account.py)
+        f'QFrame#vrcAccount {{ border: 1px solid transparent; border-radius: {v["r_btn"]}px; }}\n',
+        f'QFrame#vrcAccount[drop="true"] {{ background-color: {v["tint"]};'
+        f' border-color: {v["accent"]}; }}\n',
+        # ... and its picker, folded out under it
+        f'QFrame#vrcPicker {{ border: 1px solid {v["line"]}; border-radius: {v["r_btn"]}px; }}\n',
         f'QPushButton[role="friendRow"][active="true"] {{ background-color: {v["tint"]};'
         f' border-color: {v["accent"]}; }}\n',
         f'QPushButton[role="friendRow"][active="true"] QLabel#friendName {{'
@@ -112,6 +119,9 @@ def friends_qss(mode_name: str, v: Dict[str, str]) -> str:
         f' border: 1px solid {v["line"]}; border-radius: 5px; padding: 0px;'
         ' min-width: 20px; max-width: 20px; min-height: 20px; max-height: 20px; }\n'
         'QPushButton[role="mini"][wide="true"] { max-width: 90px; padding: 0px 6px; }\n'
+        # outranks the plain QPushButton:disabled, so it says it again (the ↻
+        # greyed for a few seconds after a check)
+        f'QPushButton[role="mini"]:disabled {{ color: {v["dim"]}; }}\n'
         'QPushButton[role="chip"][row="main"] { min-height: 24px; padding: 3px 10px;'
         ' font-size: 12px; }\n'
         f'QPushButton[role="control"] {{ background-color: transparent; color: {v["cyan"]};'
@@ -219,6 +229,28 @@ def friends_qss(mode_name: str, v: Dict[str, str]) -> str:
         'QSlider:vertical { min-width: 22px; }\n'
         'QSlider[big="true"]:vertical { min-width: 34px; }\n'
         f'QSlider::add-page:vertical:disabled {{ background: {v["dim"]}; }}\n'
+        # OpenShock's card (openshock_card.py): its three wide buttons --
+        # lit (a press running, Live control's pick) in the op's hue -- and
+        # the small LIVE tag in its corner, purple while Live control is on
+        # (OpenShock's own LIVE glows purple)
+        f'QPushButton[role="osButton"] {{ background-color: transparent; color: {v["txt"]};'
+        f' border: 2px solid {v["line"]}; border-radius: {v["r_btn"]}px; min-height: 32px;'
+        ' padding: 2px 8px; }\n'
+        f'QPushButton[role="osButton"]:hover {{ background-color: {v["hover"]}; }}\n'
+        f'QPushButton[role="osButton"]:checked {{ background-color: {v["hover"]};'
+        f' border-color: {v["txt"]}; }}\n'
+        f'QPushButton[role="osButton"]:disabled {{ border-color: {rest};'
+        ' background-color: transparent; }\n'
+        'QPushButton[role="osButton"][big="true"] { min-height: 48px; }\n'
+        f'QPushButton[role="liveTag"] {{ background-color: transparent; color: {v["muted"]};'
+        f' border: 1px solid {v["line"]}; border-radius: 3px; padding: 0px 5px;'
+        ' min-height: 16px; font-size: 10px; font-weight: 700; letter-spacing: 1px; }\n'
+        f'QPushButton[role="liveTag"]:hover {{ color: {v["txt"]}; border-color: {v["txt"]}; }}\n'
+        f'QPushButton[role="liveTag"]:checked {{ color: {PALETTE["purple"][0]};'
+        f' border-color: {PALETTE["purple"][0]}; background-color: {PALETTE["purple"][2]}; }}\n'
+        f'QPushButton[role="liveTag"]:disabled {{ color: {v["dim"]}; border-color: {rest}; }}\n'
+        'QPushButton[role="liveTag"][big="true"] { min-height: 26px; font-size: 14px;'
+        ' padding: 0px 9px; }\n'
     )
     for hue in (FRIEND_TOYS_HUE, FRIEND_SHOCK_HUE):
         vib, mid, tint = PALETTE[hue]
@@ -267,6 +299,13 @@ def friends_qss(mode_name: str, v: Dict[str, str]) -> str:
             f'QPushButton[role="opTile"][hue="{hue}"] QLabel#tileValue:disabled,'
             f' QPushButton[role="opTile"][hue="{hue}"] QLabel#tileCaption:disabled'
             f' {{ color: {v["dim"]}; }}\n'
+            f'QPushButton[role="osButton"][hue="{hue}"] {{ border-color: {mid}; }}\n'
+            f'QPushButton[role="osButton"][hue="{hue}"]:hover {{ background-color: {tint};'
+            f' border-color: {vib}; }}\n'
+            f'QPushButton[role="osButton"][hue="{hue}"]:checked {{ background-color: {tint};'
+            f' border-color: {vib}; }}\n'
+            f'QPushButton[role="osButton"][hue="{hue}"]:disabled {{ border-color: {rest};'
+            ' background-color: transparent; }\n'
             f'QPushButton[role="pick"][hue="{hue}"]:checked {{ background-color: {vib};'
             f' color: {v["ink"]}; border-color: {vib}; }}\n'
             f'QPushButton[role="pick"][hue="{hue}"]:hover {{ border-color: {vib}; }}\n'

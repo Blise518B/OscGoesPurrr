@@ -41,6 +41,12 @@ Light on the network, so n0's free relays never see us as a nuisance:
     dials first -- so a thousand friends cost the network what 180 do. A
     pasted ID or invite retries faster (ASK_RETRY_S), since someone is
     waiting for it, and is given up after ASK_GIVE_UP tries.
+  * Checking a friend now (`check_now`: the Friends list's ↻ and Check
+    all) dials outside that budget, at the front of the queue -- still
+    DIAL_GAP_S apart, so a long list never goes out in a burst. A click is
+    the only trigger, and each friend is tried at most once per
+    CHECK_GAP_S however often it comes. A check that fails leaves the
+    background schedule as it was (never sooner than CHECK_GAP_S away).
   * On a live link, `status_for(peer)` and `cmd_for(peer)` are looked at
     four times a second but only sent when they changed (plus REPEATS
     copies, since datagrams can get lost, and the status every
@@ -78,7 +84,7 @@ import os
 import random
 import threading
 import time
-from typing import Any, Callable, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 import remote_protocol as proto
 from version import VERSION as APP_VERSION
@@ -96,6 +102,8 @@ RETRY_S = (10.0, 30.0, 120.0, 600.0, 1800.0)    # after failed dials in a row
 BACKGROUND_GAP_S = 10.0     # those retries, all friends together: one per this at most
 ASK_RETRY_S = (3.0, 5.0, 10.0, 30.0, 60.0, 300.0)
 ASK_GIVE_UP = len(ASK_RETRY_S) + 3   # tries before a pasted ID is given up on (~20 min)
+CHECK_GAP_S = 10.0          # checking a friend now (↻): one try per friend per this at most
+CHECK_SHOW_MAX_S = 60.0     # a check not settled by then stops saying "checking" (a backstop)
 DIAL_TIMEOUT_S = 6.0
 LAG_TICK_S = 0.25              # the link loop's own heartbeat ...
 LAG_WARN_S = 0.5               # ... running this much late is logged
@@ -164,6 +172,13 @@ class RemoteLink:
         self._next_try: Dict[str, float] = {}
         self._fails: Dict[str, int] = {}          # failed dials in a row
         self._last_retry = float("-inf")          # the last background retry (BACKGROUND_GAP_S)
+        # Checking a friend now (check_now). The first two are written by
+        # the caller's thread too, so under the lock; the third is the
+        # link thread's own.
+        self._check_lock = threading.Lock()
+        self._check_at: Dict[str, float] = {}     # peer -> their last check (CHECK_GAP_S)
+        self._checking: Dict[str, float] = {}     # peer -> when their unsettled check began
+        self._check_saved: Dict[str, float] = {}  # peer queued by a check -> their background next try
         self._dialing: set = set()
         self._tasks: set = set()       # running fire-and-forget tasks (_spawn)
         self._snapshot: Dict[str, Dict[str, Any]] = {}
@@ -192,6 +207,7 @@ class RemoteLink:
         self._unfriended = set(unfriended)
         # coming online dials every friend once, whatever the last time online left
         self._next_try, self._fails, self._last_retry = {}, {}, float("-inf")
+        self._check_saved = {}
         self._stopping = False
         self.online = False
         self._thread = threading.Thread(target=self._run, name="friends-link", daemon=True)
@@ -216,6 +232,8 @@ class RemoteLink:
             else:
                 self._thread = None
         self._snapshot = {}
+        with self._check_lock:
+            self._checking = {}          # offline: nothing is being checked
         self.online = False
 
     def forget_identity(self) -> bool:
@@ -237,6 +255,9 @@ class RemoteLink:
         self._apps, self._versions = {}, {}
         self._unfriended, self._fails = set(), {}
         self._sessions, self._pending, self._snapshot = {}, {}, {}
+        with self._check_lock:
+            self._check_at, self._checking = {}, {}
+        self._check_saved = {}
         return True
 
     def set_nickname(self, nickname: str) -> None:
@@ -278,6 +299,54 @@ class RemoteLink:
         the web remote whose link went off or that was kicked. Nobody
         redials it: it was never a contact."""
         self._call(self._drop, str(peer), bytes(reason))
+
+    def check_now(self, peers: Iterable[str]) -> List[str]:
+        """Dial these friends now instead of at their turn in the
+        background -- the Friends list's ↻ and Check all. A click is the
+        only trigger, and each friend is tried at most once per CHECK_GAP_S
+        however often it comes, so clicking never makes the link heavy.
+        Returns the friends a try goes out for: not one already linked,
+        being checked, checked moments ago or not a friend, and nobody
+        while the link isn't online."""
+        if not self.online or self._stopping or self._loop is None:
+            return []
+        now = time.monotonic()
+        went: List[str] = []
+        contacts = self._contacts
+        with self._check_lock:
+            for peer in dict.fromkeys(str(p) for p in peers):
+                s = self._sessions.get(peer)
+                started = self._checking.get(peer)
+                if (peer not in contacts
+                        or (s is not None and s.live and not s.closed)
+                        or (started is not None and now - started < CHECK_SHOW_MAX_S)
+                        or now - self._check_at.get(peer, float("-inf")) < CHECK_GAP_S):
+                    continue
+                self._check_at[peer] = now
+                self._checking[peer] = now
+                went.append(peer)
+        if went:
+            self._call(self._check, went)
+        return went
+
+    def check_state(self) -> Dict[str, Tuple[bool, float]]:
+        """{peer: (being checked, seconds until the next check may go)} for
+        every friend checked in the last CHECK_GAP_S or still being checked
+        -- what the ↻ shows. A check not settled after CHECK_SHOW_MAX_S
+        stops counting (a backstop: every way a try ends clears it)."""
+        now = time.monotonic()
+        out: Dict[str, Tuple[bool, float]] = {}
+        with self._check_lock:
+            for peer in list(self._check_at):
+                wait = CHECK_GAP_S - (now - self._check_at[peer])
+                started = self._checking.get(peer)
+                checking = started is not None and now - started < CHECK_SHOW_MAX_S
+                if checking or wait > 0:
+                    out[peer] = (checking, max(0.0, wait))
+                else:
+                    self._check_at.pop(peer, None)
+                    self._checking.pop(peer, None)
+        return out
 
     def peer_version(self, peer: str) -> int:
         """The protocol their OGP's hello said (0 before one came). The
@@ -450,7 +519,16 @@ class RemoteLink:
                     "declined": peer in self._declined,
                 }
             self._snapshot = snap
+            self._checks_seen_linked(snap)
             await asyncio.sleep(0.5)
+
+    def _checks_seen_linked(self, snap: Dict[str, Dict[str, Any]]) -> None:
+        """A check is over once the page can see the friend linked -- not
+        before, or the row would say offline for a moment in between."""
+        with self._check_lock:              # a click may add one meanwhile
+            seen = [p for p in self._checking if snap.get(p, {}).get("linked")]
+        for peer in seen:
+            self._check_over(peer)
 
     # contacts, pairing
     def _set_contacts(self, contacts: set) -> None:
@@ -458,9 +536,32 @@ class RemoteLink:
         self._contacts = contacts
         self._targets -= contacts
         for peer in removed:
+            self._check_over(peer)
             s = self._sessions.get(peer)
             if s:
                 s.close(7, b"removed")
+
+    # checking a friend now
+    def _check(self, peers: List[str]) -> None:
+        """Checked friends go to the front of the dial queue (`_next_dial`
+        takes them at once, like a first try), unless something already
+        settles it: linked, a link coming up or a dial going -- how that
+        ends ends the check."""
+        for peer in peers:
+            s = self._sessions.get(peer)
+            if (peer not in self._contacts or peer in self._declined or peer in self._pending
+                    or (s is not None and s.live and not s.closed)):
+                self._check_over(peer)
+            elif (s is not None and not s.closed) or peer in self._dialing:
+                continue
+            else:
+                self._check_saved.setdefault(peer, self._next_try.get(peer, 0.0))
+                self._next_try[peer] = 0.0
+
+    def _check_over(self, peer: str) -> None:
+        self._check_saved.pop(peer, None)
+        with self._check_lock:
+            self._checking.pop(peer, None)
 
     def _pair_with(self, peer: str, invite: str = "") -> None:
         if peer == self.my_id:
@@ -629,16 +730,17 @@ class RemoteLink:
 
     def _next_dial(self, now: float) -> Optional[str]:
         """Who to dial now, if anyone. Pasted IDs first (someone is
-        waiting), then a friend's first try since coming online and a
-        dropped link -- both at once. A retry of a friend who wasn't there
-        waits for the shared budget (BACKGROUND_GAP_S): the one with the
-        fewest failed dials goes first (a link that just dropped before
-        someone who has been offline all day), then the longest overdue."""
+        waiting), then a friend's first try since coming online, a dropped
+        link and a friend you're checking (check_now) -- all at once. A
+        retry of a friend who wasn't there waits for the shared budget
+        (BACKGROUND_GAP_S): the one with the fewest failed dials goes first
+        (a link that just dropped before someone who has been offline all
+        day), then the longest overdue."""
         due = [peer for peer in sorted(self._targets) + sorted(self._contacts - self._targets)
                if not (peer in self._sessions or peer in self._dialing or peer in self._declined
                        or peer in self._pending or now < self._next_try.get(peer, 0.0))]
         for peer in due:
-            if peer in self._targets or not self._fails.get(peer):
+            if peer in self._targets or peer in self._check_saved or not self._fails.get(peer):
                 return peer
         if due and now - self._last_retry >= BACKGROUND_GAP_S:
             self._last_retry = now
@@ -665,9 +767,25 @@ class RemoteLink:
             conn = await asyncio.wait_for(self._ep.connect(addr, proto.ALPN), DIAL_TIMEOUT_S)
             self._adopt(conn, peer, dialer=self.my_id, live=False)
         except Exception:
-            self._retry_later(peer)
+            self._dial_failed(peer)
         finally:
             self._dialing.discard(peer)
+            self._check_saved.pop(peer, None)
+            if peer not in self._sessions:
+                self._check_over(peer)       # the try gave up: a check ends here
+            # connected: the check ends when they say hello, or the link ends
+
+    def _dial_failed(self, peer: str) -> None:
+        """A dial that didn't connect. A check that stood in for a try due
+        anyway (no failed dial yet: a first try, a dropped link) counts as
+        that try; any other check leaves the background schedule as it was,
+        only never sooner than CHECK_GAP_S from now -- the two never dial a
+        friend back to back."""
+        saved = self._check_saved.pop(peer, None)
+        if saved is None or not self._fails.get(peer):
+            self._retry_later(peer)
+        else:
+            self._next_try[peer] = max(saved, time.monotonic() + CHECK_GAP_S)
 
     def _adopt(self, conn, peer: str, dialer: str, live: bool) -> None:
         if self._stopping:
@@ -692,6 +810,9 @@ class RemoteLink:
     def _went_live(self, s: Session) -> None:
         s.live, s.waiting = True, False
         self._fails.pop(s.peer, None)
+        # a check of theirs is settled; it stops saying so once the page
+        # sees them linked (_snapshot_loop)
+        self._check_saved.pop(s.peer, None)
         self._targets.discard(s.peer)
         self._invites_out.pop(s.peer, None)
         self._declined.discard(s.peer)
@@ -828,6 +949,7 @@ class RemoteLink:
         if self._sessions.get(s.peer) is not s:
             return
         del self._sessions[s.peer]
+        self._check_over(s.peer)
         if word == "refused":
             self._declined.add(s.peer)
             self._targets.discard(s.peer)

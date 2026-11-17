@@ -31,6 +31,15 @@ until a friend actually has your board open:
     right now, sent every SEND_S while any is held. A hold whose friend
     stops saying so for HOLD_STALE_S is let go.
 
+Your height (the Height box, avatar_height.py) rides the same messages:
+the board's ``ht`` (only while the box is on) says its lowest and highest
+height, ``lk`` while it is locked and ``no`` while the world forbids
+scaling; the first ``pv`` carries your height right now (``h``, metres);
+and a friend changes it with ``pht`` (an event sent a few times, applied
+once per ``id`` like ``pst``): ``m`` grow (glide there) / now (jump) /
+reset (back to your own height), ``v`` the height. An OGP from before it
+ignores all three.
+
 Values travel as numbers: a Bool as 1/0, a Float to two decimals (enough
 for a slider; jitter below that is no change), null for one not known.
 """
@@ -40,8 +49,10 @@ import json
 import math
 from typing import Any, Dict, List, Optional, Tuple
 
+import avatar_height as ah
 import param_board as pb
 import remote_protocol as proto
+from param_filters import BUILTINS, NOT_PARAMETERS
 
 MAX_BLOB = 256 * 1024
 MAX_CONTROLS = 400
@@ -52,30 +63,22 @@ WATCH_STALE_S = 25.0
 HOLD_STALE_S = proto.DRIVE_STALE_S
 CHUNK_BYTES = proto.MAX_DATAGRAM - 80      # room for the slot's own fields
 
-# VRChat drives these itself: setting one over OSC does nothing, and the
-# motion ones change every frame -- not worth a datagram. Never offered to
-# a friend's YOLO list.
-BUILTINS = frozenset({
-    "IsLocal", "PreviewMode", "Viseme", "Voice", "GestureLeft", "GestureRight",
-    "GestureLeftWeight", "GestureRightWeight", "AngularY", "VelocityX", "VelocityY",
-    "VelocityZ", "VelocityMagnitude", "Upright", "Grounded", "Seated", "AFK",
-    "TrackingType", "VRMode", "MuteSelf", "InStation", "Earmuffs", "IsOnFriendsList",
-    "AvatarVersion", "IsAnimatorEnabled", "ScaleModified", "ScaleFactor",
-    "ScaleFactorInverse", "EyeHeightAsMeters", "EyeHeightAsPercent",
-})
-
-
 def settable(name: str) -> bool:
-    """A parameter a friend's YOLO list may offer."""
-    return name not in BUILTINS and not name.startswith("OGB/")
+    """A parameter a friend's YOLO list may offer: not one VRChat drives
+    itself (param_filters.BUILTINS), not SPS's, and not one of VRChat's
+    own messages that land in the parameter store (the height ones)."""
+    return (name not in BUILTINS and name not in NOT_PARAMETERS
+            and not name.startswith("OGB/"))
 
 
 # --- what you share --------------------------------------------------------------
 
 def public_board(board: Optional[Dict[str, Any]], avatar_name: str,
-                 types: Dict[str, str], yolo: bool, avatar: str = "") -> Dict[str, Any]:
+                 types: Dict[str, str], yolo: bool, avatar: str = "",
+                 height: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """The ``pbd`` for a board (None: nothing worn). Without its version --
-    `with_version` adds that."""
+    `with_version` adds that. `height`: the Height box (`make_height_box`),
+    None while it is off."""
     cats, ctl = [], []
     if board is not None:
         for c in board["categories"][:MAX_CATEGORIES]:
@@ -99,6 +102,8 @@ def public_board(board: Optional[Dict[str, Any]], avatar_name: str,
                            "cats": cats, "ctl": ctl, "keys": keys, "nb": len(keys)}
     if avatar:
         msg["a"] = str(avatar)
+    if height is not None and board is not None:
+        msg["ht"] = dict(height)
     if yolo and board is not None:
         rest = sorted(n for n, p in types.items() if p in pb.PTYPES and settable(n))[:MAX_ALL]
         msg["all"] = [[n, types[n]] for n in rest]
@@ -153,7 +158,7 @@ def read_prm(raw: Any) -> Optional[Dict[str, Any]]:
 def _num(value: Any) -> Optional[float]:
     try:
         v = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     return v if math.isfinite(v) else None
 
@@ -163,7 +168,7 @@ def read_board(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if msg.get("t") != "pbd" or not isinstance(msg.get("b"), str):
         return None
     cats = []
-    for c in (msg.get("cats") or [])[:MAX_CATEGORIES]:
+    for c in proto.as_list(msg.get("cats"))[:MAX_CATEGORIES]:
         if not isinstance(c, dict) or not c.get("id"):
             continue
         cats.append({"id": str(c["id"])[:32], "name": str(c.get("name") or "")[:pb.NAME_MAX],
@@ -171,7 +176,7 @@ def read_board(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
                      "locked": bool(c.get("locked"))})
     ids = {c["id"] for c in cats}
     ctl = []
-    for raw in (msg.get("ctl") or [])[:MAX_CONTROLS]:
+    for raw in proto.as_list(msg.get("ctl"))[:MAX_CONTROLS]:
         if not isinstance(raw, dict) or raw.get("ptype") not in pb.PTYPES:
             continue
         c = {"id": str(raw.get("id") or "")[:32], "param": str(raw.get("param") or "")[:NAME_MAX],
@@ -190,21 +195,22 @@ def read_board(msg: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if c["ptype"] == "Bool" and raw.get("invert"):
             c["invert"] = True
         ctl.append(c)
-    keys = [str(k)[:NAME_MAX] for k in (msg.get("keys") or [])[:MAX_CONTROLS + MAX_ALL]
+    keys = [str(k)[:NAME_MAX] for k in proto.as_list(msg.get("keys"))[:MAX_CONTROLS + MAX_ALL]
             if isinstance(k, str)]
     all_ = []
-    for item in (msg.get("all") or [])[:MAX_ALL]:
+    for item in proto.as_list(msg.get("all"))[:MAX_ALL]:
         if isinstance(item, list) and len(item) == 2 and item[1] in pb.PTYPES \
                 and isinstance(item[0], str):
             all_.append((item[0][:NAME_MAX], item[1]))
     try:
         nb = max(0, min(len(keys), int(msg.get("nb", len(keys)))))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         nb = len(keys)
     return {"ver": msg["b"][:32], "name": str(msg.get("name") or "")[:pb.AVATAR_NAME_MAX],
             "avatar": _key(msg.get("a")),
             "categories": cats, "controls": ctl, "keys": keys, "n_board": nb,
-            "all": all_ if "all" in msg else None}
+            "all": all_ if "all" in msg else None,
+            "height": read_height_box(msg.get("ht"))}
 
 
 # --- values -------------------------------------------------------------------------
@@ -246,13 +252,13 @@ def read_values(msg: Dict[str, Any], board: Dict[str, Any]) -> Dict[str, Any]:
         return {}
     try:
         start = int(msg.get("o", 0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return {}
     keys = board["keys"]
     types = {c["param"]: c["ptype"] for c in board["controls"]}
     types.update({n: p for n, p in (board.get("all") or [])})
     out = {}
-    for i, raw in enumerate(msg.get("x") or []):
+    for i, raw in enumerate(proto.as_list(msg.get("x"))):
         at = start + i
         if at < 0 or at >= len(keys):
             break
@@ -306,7 +312,7 @@ def read_set(msg: Dict[str, Any]) -> Optional[Tuple[int, str, str, float]]:
     empty -- or None."""
     try:
         seq = int(msg.get("id"))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     v = _num(msg.get("v"))
     control = str(msg.get("c") or "")[:32]
@@ -321,4 +327,70 @@ def make_holds(ids) -> Dict[str, Any]:
 
 
 def read_holds(msg: Dict[str, Any]) -> List[str]:
-    return [str(i)[:32] for i in (msg.get("h") or [])[:MAX_CONTROLS] if isinstance(i, str)]
+    return [str(i)[:32] for i in proto.as_list(msg.get("h"))[:MAX_CONTROLS] if isinstance(i, str)]
+
+
+# --- your height (the Height box) ---------------------------------------------------
+
+def make_height_box(lo: float, hi: float, locked: bool = False,
+                    forbidden: bool = False) -> Dict[str, Any]:
+    """The board's ``ht``: the box's lowest and highest height, whether it
+    is locked (look-only) and whether the world forbids scaling."""
+    out: Dict[str, Any] = {"lo": round(float(lo), 3), "hi": round(float(hi), 3)}
+    if locked:
+        out["lk"] = 1
+    if forbidden:
+        out["no"] = 1
+    return out
+
+
+def read_height_box(raw: Any) -> Optional[Dict[str, Any]]:
+    """{lo, hi, locked, allowed} out of a board's ``ht`` -- None when there
+    is none (the box is off, or an OGP from before it)."""
+    if not isinstance(raw, dict):
+        return None
+    lo, hi = _num(raw.get("lo")), _num(raw.get("hi"))
+    if lo is None or hi is None:
+        return None
+    lo, hi = ah.safe(lo), ah.safe(hi)
+    if hi <= lo:
+        return None
+    return {"lo": lo, "hi": hi, "locked": bool(raw.get("lk")), "allowed": not raw.get("no")}
+
+
+def add_height(msg: Dict[str, Any], height: Optional[float]) -> Dict[str, Any]:
+    """Your height right now, on the first ``pv``."""
+    if height is not None and height > 0:
+        msg["h"] = round(float(height), 3)
+    return msg
+
+
+def read_height(msg: Dict[str, Any]) -> Optional[float]:
+    """The height a ``pv`` carries (None: it carries none)."""
+    v = _num(msg.get("h"))
+    return ah.safe(v) if v is not None and v > 0 else None
+
+
+def make_height_set(seq: int, mode: str, value: Optional[float] = None) -> Dict[str, Any]:
+    """A friend's ``pht``: grow (glide) or now (jump) to `value`, or reset."""
+    msg: Dict[str, Any] = {"t": "pht", "id": int(seq), "m": str(mode)}
+    if value is not None and mode != ah.RESET:
+        msg["v"] = round(float(value), 3)
+    return msg
+
+
+def read_height_set(msg: Dict[str, Any]) -> Optional[Tuple[int, str, Optional[float]]]:
+    """(seq, mode, height -- None for a reset), or None when it isn't one."""
+    try:
+        seq = int(msg.get("id"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    mode = msg.get("m")
+    if mode not in ah.MODES:
+        return None
+    if mode == ah.RESET:
+        return seq, mode, None
+    v = _num(msg.get("v"))
+    if v is None or v <= 0:
+        return None
+    return seq, mode, v

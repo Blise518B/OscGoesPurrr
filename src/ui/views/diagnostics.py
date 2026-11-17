@@ -105,6 +105,10 @@ class DiagnosticsMixin:
         sps_lay.addWidget(self.sps_status_label)
         parent_layout.addWidget(sps_card)
 
+        # --- Debug recording (Blise's ask, 2026-11-13): record a stretch of
+        # contacts to look at later -- ui/views/sessions.py ---
+        parent_layout.addWidget(self._build_debug_recording_card())
+
         # --- OSC Inspector ---
         dbg_title = QLabel("Real-Time OSC Inspector")
         dbg_title.setObjectName("sectionTitle")

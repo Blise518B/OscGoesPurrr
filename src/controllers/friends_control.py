@@ -13,7 +13,9 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import friend_patterns
 import remote_protocol as proto
-from controllers.friends_common import op_text, unit
+import shocker_layout
+from controllers.friends_common import came_through, op_text, unit
+from event_log import OUT, SHOCK, TOYS, VIA_PARTY
 
 _STRENGTH_RESEND_S = 3.0     # a strength change rides the next cmds this long
 
@@ -50,8 +52,9 @@ class FriendsControlMixin:
         for peer in self._friends_targets():
             sent += bool(self.friend_shock(peer, slots, intensity, length, op, warn_ms, warn_intensity))
         if not sent:
-            self._friends_note(f"{op.capitalize()} not sent - nobody selected allows it, "
-                               "or no shocker is ticked")
+            why = "nobody selected allows it, or no shocker is ticked"
+            self._friends_note(f"{op.capitalize()} not sent - {why}", kind=SHOCK, op=op,
+                               dir=OUT, held=why)
         return sent
 
     def targets_hold(self, slots: List[int], op: str, intensity: float) -> None:
@@ -83,6 +86,11 @@ class FriendsControlMixin:
         """One operation to those shockers. The length is real time, each
         shocker's own longest pulse at most; the strength a part of each
         one's caps. Returns how many friends it went to."""
+        with came_through(VIA_PARTY):            # the log: from Party Mode
+            return self._party_shock(pairs, op, intensity, length_ms, warn_ms, warn_intensity)
+
+    def _party_shock(self, pairs: List[Tuple[str, int]], op: str, intensity: float,
+                     length_ms: int, warn_ms: int, warn_intensity: float) -> int:
         sent = 0
         for peer, slots in self._party_slots(pairs).items():
             st = self._status_of(peer)
@@ -100,8 +108,9 @@ class FriendsControlMixin:
                                                warn_intensity))
             sent += went
         if not sent:
-            self._friends_note(f"{op.capitalize()} not sent - nobody in the party allows it "
-                               "right now")
+            why = "nobody in the party allows it right now"
+            self._friends_note(f"{op.capitalize()} not sent - {why}", kind=SHOCK, op=op,
+                               dir=OUT, held=why)
         return sent
 
     def party_hold(self, pairs: List[Tuple[str, int]], op: str, intensity: float) -> None:
@@ -121,35 +130,22 @@ class FriendsControlMixin:
     # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
-    # Sync with others: one panel per friend among those who sync
+    # Sync with others: their call (Blise's, 2026-11-17) -- your panel
+    # always says its version and takes their shared panel when it comes;
+    # whether there is one is up to them (``sep`` in their ``st``)
     # ------------------------------------------------------------------
-
-    def _sync_on(self, peer: str) -> bool:
-        f = self.friends_settings.get_friend(peer)
-        return bool(f.get("sync", True)) if f is not None else False
 
     def _panel_changed(self, peer: str) -> None:
         """A change of yours to their toy cards: past the newest version
         you have seen, so it wins over the others' older ones."""
-        if self._sync_on(peer):
-            self._my_pseq = {**self._my_pseq, peer: self._my_pseq.get(peer, 0) + 1}
-
-    def set_friend_sync(self, peer: str, on: bool) -> None:
-        """Sync with others: share one set of toy cards for this friend
-        with everyone else who syncs -- or drive on your own (the highest
-        level wins, as between friends who don't)."""
-        self.friends_settings.set_sync(peer, on)
-        # joining takes the shared panel as it stands; leaving keeps yours
-        self._my_pseq = {**self._my_pseq, peer: 0}
-        self.friends_link.push_cmd(peer)
-        self._friends_note(f"You {'share one panel with the others' if on else 'drive on your own'}"
-                           f" on {self._friend_nick(peer)}'s toys", key=("sync", peer))
+        self._my_pseq = {**self._my_pseq, peer: self._my_pseq.get(peer, 0) + 1}
 
     def _friend_panel_in(self, peer: str, msg: Dict[str, Any]) -> None:
         """Their OGP's shared panel (the link's thread): newer than yours,
-        or the same version won by someone else -- take it as your own."""
+        or the same version won by someone else -- take it as your own.
+        It only comes while they sync everyone."""
         got = proto.read_panel(msg)
-        if got is None or not self._sync_on(peer):
+        if got is None:
             return
         seq, levels, override, patterns = got
         mine = self._my_pseq.get(peer, 0)
@@ -183,10 +179,11 @@ class FriendsControlMixin:
         st = self._status_of(peer)
         return bool(st.get("allow_toys")) and not st.get("paused")
 
-    def _toys_note(self, peer: str, text: str, key: Any = None) -> None:
-        """A log line about their toys, only if the change reaches them."""
+    def _toys_note(self, peer: str, text: str, key: Any = None, op: str = "") -> None:
+        """A log line about their toys (`{who}` for their name), only if the
+        change reaches them."""
         if self._takes_toys(peer):
-            self._friends_note(text, key=key)
+            self._friends_note(text, key=key, who=peer, kind=TOYS, op=op, dir=OUT)
 
     def set_friend_level(self, peer: str, toy: str, value: float, source: str = "ui") -> None:
         """Your level for one of the friend's toys, or proto.ALL_TOYS.
@@ -206,8 +203,8 @@ class FriendsControlMixin:
             self._menu_follow(peer, str(toy))
         now = any(x > 0 for x in levels.values())
         if now != was:
-            self._toys_note(peer, f"You {'started' if now else 'stopped'} driving "
-                                  f"{self._friend_nick(peer)}'s toys")
+            self._toys_note(peer, f"You {'started' if now else 'stopped'} driving {{who}}'s toys",
+                            op="start" if now else "stop")
 
     def set_friend_override(self, peer: str, toy: str, on: bool, source: str = "ui") -> None:
         """Override: while you drive this toy (or all of them), your level
@@ -222,8 +219,8 @@ class FriendsControlMixin:
             self._menu_follow(peer, str(toy))
         what = "all their toys" if toy == proto.ALL_TOYS else toy
         self._toys_note(peer, f"You {'override' if on else 'no longer override'} "
-                              f"{self._friend_nick(peer)}'s own output on {what}",
-                        key=("ovr", peer, toy))
+                              f"{{who}}'s own output on {what}",
+                        key=("ovr", peer, toy), op="override")
 
     def set_friend_pattern(self, peer: str, toy: str, wave: str, period: float = 2.0,
                            lo: float = 0.0, hi: float = 1.0, source: str = "ui") -> None:
@@ -244,11 +241,11 @@ class FriendsControlMixin:
         what = "all their toys" if toy == proto.ALL_TOYS else toy
         if clean is None:
             if was is not None:
-                self._toys_note(peer, f"You stopped the auto mode on "
-                                      f"{self._friend_nick(peer)}'s {what}")
+                self._toys_note(peer, f"You stopped the auto mode on {{who}}'s {what}",
+                                op="pattern")
         elif was is None or was[0] != clean[0]:
             self._toys_note(peer, f"You started {friend_patterns.LABELS[clean[0]]} on "
-                                  f"{self._friend_nick(peer)}'s {what}", key=("pat", peer, toy))
+                                  f"{{who}}'s {what}", key=("pat", peer, toy), op="pattern")
 
     def friend_hold(self, peer: str, slots: List[int], op: str, intensity: float) -> None:
         """Hold: those shockers run while you hold the button (within their
@@ -274,8 +271,8 @@ class FriendsControlMixin:
         msg = proto.make_stop(proto.new_id(), slots)
         if msg["slots"]:
             self.friends_link.send_event(peer, msg)
-            self._friends_note(f"You stopped {self._friend_nick(peer)}'s shockers",
-                               key=("stp", peer))
+            self._friends_note("You stopped {who}'s shockers", key=("stp", peer), who=peer,
+                               kind=SHOCK, op="stop", dir=OUT)
 
     def set_friend_strength(self, peer: str, value: float, source: str = "ui") -> None:
         """Their strength slider. Unlike a level it is one change, not a
@@ -289,8 +286,9 @@ class FriendsControlMixin:
         self.friends_link.push_cmd(peer)
         if source != "menu":
             self._menu_follow_strength(peer, v)
-        self._friends_note(f"You set {self._friend_nick(peer)}'s strength to {round(v * 100)} %",
-                           key=("str-out", peer))
+        pct = round(v * 100)
+        self._friends_note(f"You set {{who}}'s strength to {pct} %", key=("str-out", peer),
+                           who=peer, kind=TOYS, op="strength", dir=OUT, level=pct)
 
     def friend_shock(self, peer: str, slots: List[int], intensity: float, length: float,
                      op: str = "shock", warn_ms: int = 0, warn_intensity: float = 0.0) -> bool:
@@ -308,10 +306,37 @@ class FriendsControlMixin:
         lvl, ms = proto.shock_values(msg["int"], msg["len"],
                                      shock_cap if op == "shock" else vib_cap, top)
         first = f"{warn_ms / 1000:.1f} s warning, then " if msg.get("warn") else ""
-        what = op_text(op, lvl, st.get("armed"), "their ")
-        self._friends_note(f"You → {self._friend_nick(peer)}: {first}{what} · {ms / 1000:.1f} s"
-                           f" on {', '.join(names) or 'no shocker'}")
+        armed = bool(st.get("armed"))
+        what = op_text(op, lvl, armed, "their ")
+        went = "vibrate" if op == "shock" and not armed else op
+        self._friends_note(f"You → {{who}}: {first}{what} · {ms / 1000:.1f} s"
+                           f" on {', '.join(names) or 'no shocker'}",
+                           who=peer, kind=SHOCK, op=went, dir=OUT,
+                           level=None if op == "beep" else lvl, ms=ms, on=names,
+                           asked=op if went != op else "")
         return True
+
+    # ------------------------------------------------------------------
+    # The shocker buttons: PiShock's panel or OpenShock's -- one setting
+    # for every panel (shocker_layout.py). Only a face: both layouts call
+    # the same friend_* / party_* methods above.
+    # ------------------------------------------------------------------
+
+    def get_shocker_layout(self) -> str:
+        """Whose shocker buttons the panels show: "pishock" (the default)
+        or "openshock"."""
+        get = getattr(self, "get_app_setting", None)
+        return shocker_layout.clean(get(shocker_layout.SETTING_KEY, shocker_layout.DEFAULT)
+                                    if get is not None else None)
+
+    def set_shocker_layout(self, name: str) -> None:
+        """Switch every panel's shocker buttons (remembered). Only how they
+        look: nothing is sent, nothing loosens -- so its undo never asks."""
+        name = shocker_layout.clean(name)
+        if name == self.get_shocker_layout():
+            return
+        self.set_app_setting(shocker_layout.SETTING_KEY, name)
+        self._friends_refresh_ui()
 
     def set_friend_levels_watch(self, peer: Optional[str]) -> None:
         """Whose panel the page shows now (None: nobody's, a group's, or
@@ -342,4 +367,4 @@ class FriendsControlMixin:
         return proto.make_cmd(self._my_levels.get(peer, {}), strength,
                               self._my_override.get(peer, ()), self._my_patterns.get(peer),
                               self._my_holds.get(peer),
-                              syn=self._my_pseq.get(peer, 0) if self._sync_on(peer) else None)
+                              syn=self._my_pseq.get(peer, 0))

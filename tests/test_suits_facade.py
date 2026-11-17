@@ -61,8 +61,9 @@ class FakeRouter:
     def stop(self):
         self.running = False
 
-    def configure(self, cfg, bhaptics_on, owo_on):
+    def configure(self, cfg, bhaptics_on, owo_on, trackers_on=False):
         self.config = (cfg, bhaptics_on, owo_on)
+        self.trackers_on = trackers_on
 
     def live(self):
         return {}
@@ -89,6 +90,38 @@ def fakes(monkeypatch):
     monkeypatch.setattr(sf, "BHapticsEngine", FakeEngine)
     monkeypatch.setattr(sf, "OwoEngine", FakeEngine)
     monkeypatch.setattr(sf, "SuitsRouter", FakeRouter)
+    monkeypatch.setattr(sf, "TrackerEngine", FakeTrackerEngine)
+
+
+class FakeTrackerEngine:
+    def __init__(self, **_k):
+        self.running = False
+        self.caps = {}
+        self.devices = []
+        self.identified = []
+
+    def set_state_callback(self, cb):
+        self.callback = cb
+
+    def start(self):
+        self.running = True
+
+    def stop(self):
+        self.running = False
+
+    def set_caps(self, caps):
+        self.caps = dict(caps)
+
+    def status_snapshot(self):
+        return {"available": True, "alive": self.running, "paused": False,
+                "devices": [dict(d) for d in self.devices]}
+
+    def output_snapshot(self):
+        return {}
+
+    def identify(self, serial):
+        self.identified.append(serial)
+        return True
 
 
 def test_both_switches_off_starts_nothing():
@@ -128,6 +161,22 @@ def test_settings_reach_the_owo_caps_and_the_router():
     caps, global_max = h.owo_engine.caps
     assert caps["Arm_L"] == 25 and global_max == 40
     assert h.suits_router.config[0]["owo"]["muscles"]["Arm_L"]["max"] == 25
+
+
+def test_each_kind_starts_as_the_toys_anti_stuck_and_reaches_the_router():
+    """An update from one anti-stuck for all: each suit and the trackers
+    start with the toys' switch and times, then change on their own."""
+    h = Host({sf.FEATURE_OWO: True})
+    toys = {"enabled": False, "active_s": 4, "peaked_s": 30}
+    h._get_toy_antistuck = lambda: dict(toys)
+    h._suits_init()
+    for kind in ("bhaptics", "owo", "trackers"):
+        assert h.get_suit_antistuck(kind) == toys
+    h.set_suit_antistuck("owo", enabled=True)
+    cfg = h.suits_router.config[0]
+    assert cfg["owo"]["antistuck"]["enabled"] is True
+    assert cfg["bhaptics"]["antistuck"]["enabled"] is False
+    assert cfg["trackers"]["antistuck"] == toys
 
 
 def test_state_changes_go_through_the_queue():
@@ -191,3 +240,33 @@ def test_the_contact_check_reads_the_worn_avatars_parameter_list(monkeypatch):
     assert h.get_suits_detected()["source"] == "osc"
     monkeypatch.setattr(sf.store, "get_all_parameters", lambda: {})
     assert h.get_suits_detected()["source"] == ""
+
+
+# ---- haptic trackers -------------------------------------------------------------
+
+def _dev(serial, role_spot=None, role=""):
+    return {"serial": serial, "model": "VIVE Tracker 3.0 MV", "kind": "vive",
+            "battery": 80, "role": role, "role_spot": role_spot}
+
+
+def test_trackers_follow_their_switch_their_role_and_your_placing():
+    h = Host({sf.FEATURE_TRACKERS: True})
+    h._suits_init()
+    eng = h.tracker_engine
+    assert eng.running and h.suits_router.running and h.suits_router.trackers_on
+    eng.devices = [_dev("LHR-1", "hips", "TrackerRole_Waist"), _dev("LHR-2")]
+    h._suits_note_connected()                    # a tracker came: the router hears it
+    assert h.suits_router.config[0]["trackers"]["at"] == {"LHR-1": "hips"}
+    assert eng.caps == {"LHR-1": 80}
+    h.place_tracker("LHR-2", "knee_l")
+    assert h.suits_router.config[0]["trackers"]["at"] == {"LHR-1": "hips", "LHR-2": "knee_l"}
+    st = h.get_suits_status()["trackers"]
+    assert st["feature"] is True and set(st["spots"]) == {"hips", "knee_l"}
+    assert [d["placed_by"] for d in st["devices"]] == ["steamvr", "you"]
+    h.set_tracker("hips", params="HapticHips, Extra", max=60)
+    assert h.suits_settings.trackers()["spots"]["hips"]["params"] == ["HapticHips", "Extra"]
+    assert eng.caps["LHR-1"] == 60
+    assert h.tracker_test("hips") is True and eng.identified == ["LHR-1"]
+    h._features[sf.FEATURE_TRACKERS] = False
+    h._trackers_feature_changed(False)
+    assert not eng.running and not h.suits_router.running

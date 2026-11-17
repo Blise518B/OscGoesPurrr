@@ -198,26 +198,36 @@ shockers are submenus of their own.
 Upload, and you're done. (If you'd rather not click through Unity
 inspectors, use Option A or B above — same result.)
 
-## Showing on your avatar which toys are connected
+## Showing on your avatar what's connected
 
-The app can also tell your avatar whether a toy is connected, so the
-avatar can light an icon, swap a material or switch an object on. These
-are plain **Bool** parameters you name yourself; both kinds are off until
-you switch them on.
+The app also tells your avatar whether each toy, suit and shocker is
+connected, so the avatar can light an icon, swap a material or switch an
+object on. These are plain **Bool** parameters, **all on by default**
+under the names below, so an asset made for OGP can count on them. Each
+one can be renamed or switched off where it's listed.
 
-| What | Where to switch it on | Default name | True while |
+| What | Where | Default name | True while |
 |---|---|---|---|
 | Any toy | Settings → Connection Settings → *Tell VRChat while any toy is connected* | `OGP/ToyConnected` | at least one toy is connected |
-| One toy | Home → open the toy → *Tell VRChat while this toy is connected* | `OGP/<ToyName>Connected` | that toy is connected |
+| One toy | Home → open the toy → *Tell VRChat while this toy is connected* | `OGP/<ToyName>Connected` (`OGP/LovenseLushConnected`) | that toy is connected |
+| bHaptics suit | Suits → BHAPTICS → *Tell VRChat* → Any part | `OGP/BHapticsConnected` | at least one part is connected |
+| One bHaptics part | the same card, a row per part you have | `OGP/BHapticsVestConnected`, `…SleevesConnected`, `…HandsConnected`, `…FeetConnected`, `…HeadConnected` | that part is connected |
+| OWO suit | Suits → OWO → *Tell VRChat* | `OGP/OWOConnected` | OGP is connected to My OWO |
+| Any shocker | Shockers → Hub → *Tell VRChat while a shocker is connected* | `OGP/ShockerConnected` | the hub is connected and at least one shocker is in use |
+| One shocker | Shockers → the shocker's card → *Tell VRChat* | `OGP/Shocker1Connected`, `OGP/Shocker2Connected`, … (numbered like the cards) | the hub is connected and that shocker is in use (its switch On) |
+
+The suits' and the shockers' are only sent while that feature is on
+(Settings → Features).
 
 Add a Bool with the same name to your avatar's Expression Parameters
 (unsynced is fine if only you need to see it; synced if others should),
-and drive whatever you like from it in your FX layer. Two toys given the
+and drive whatever you like from it in your FX layer. A parameter your
+avatar doesn't have is simply ignored by VRChat. Two things given the
 same name share one parameter — true while either is connected.
 
 The app sends the values again every time you change avatar or VRChat
 reconnects, and sets them all to false when you close it, so an avatar is
-never left showing a toy that is gone. If your parameter is a Float or
+never left showing a device that is gone. If your parameter is a Float or
 Int instead of a Bool it receives 1 and 0.
 
 ## Thrust counters for a counter display

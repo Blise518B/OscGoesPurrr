@@ -1,8 +1,9 @@
-"""The sidebar's mode + output controls and Home's tuning-tools bar.
+"""The sidebar's mode + output controls and the Toys page's tuning-tools
+bar.
 
 (The module keeps its historical name; the Dashboard page it was named
-after is gone -- everything it held now lives in the sidebar, on Home
-or in Settings.)
+after is gone -- everything it held now lives in the sidebar, on the Toys
+page or in Settings.)
 
 Mixin for ui_components.OscGoesPurrrUI. Relies on attributes initialised
 by OscGoesPurrrUI.__init__ (self.controller, self.invoker, etc.)."""
@@ -70,8 +71,8 @@ class DashboardMixin:
     def _build_routing_top_bar(self) -> QWidget:
         """One compact bar holding the two tuning tools, as two groups in
         a flow layout: one row on a wide window, wrapping to two when the
-        window is narrow -- never a horizontal scroll. Home shows it
-        inside its Tuning tools fold.
+        window is narrow -- never a horizontal scroll. The Toys page shows
+        it inside its Tuning tools fold.
 
         Grouped here rather than spread through the page because neither
         is a per-motor concern: the simulator drives EVERY motor's chains
@@ -355,7 +356,12 @@ class DashboardMixin:
                     label.setText(f"{value * 100:.0f}%")
             except RuntimeError:
                 pass  # widget destroyed during a rebuild
-        for attr, getter in (("sidebar_off_button", "is_output_off"),
+        # The Off button is the user's own switch: a hold ("Off while
+        # you're away") silences everything without pressing it, and says
+        # so in the status bar instead.
+        off_getter = ("is_off_switch_on" if hasattr(ctl, "is_off_switch_on")
+                      else "is_output_off")
+        for attr, getter in (("sidebar_off_button", off_getter),
                              ("sidebar_sleep_button", "is_sleep_active")):
             toggle = getattr(self, attr, None)
             if toggle is None:
@@ -366,6 +372,10 @@ class DashboardMixin:
                 toggle.blockSignals(False)
             except RuntimeError:
                 pass
+        # every toy's Sleep chip lights while the sidebar's Sleep is on
+        chips = getattr(self, "_refresh_safety_chips", None)
+        if callable(chips):
+            chips()
 
     # ------------------------------------------------------------------
     # Modes section helpers
@@ -413,7 +423,7 @@ class DashboardMixin:
         "A mode is a <b>routing</b> \u2014 which parts of your avatar drive "
         "which toys. Click to make this one live.<br><br>"
         "All four start out the same; what each does is up to you. Pick a "
-        "mode, then open a toy on Home and set its zones \u2014 the Input "
+        "mode, then open a toy on the Toys page and set its zones \u2014 the Input "
         "stage always edits the live mode. Your tuning, your toys and the "
         "strength stay the same whichever mode is on.<br><br>"
         "<b>Right-click</b> to rename it or change its icon. From inside "
@@ -425,7 +435,7 @@ class DashboardMixin:
         "it back up restores exactly the feel you had.<br><br>"
         "From inside VRChat: the <b>OGP/Strength</b> radial.<br><br>"
         "If one toy always feels stronger than the rest, leave this alone "
-        "and trim that toy instead: Home \u2192 the toy \u2192 its chain "
+        "and trim that toy instead: Toys \u2192 the toy \u2192 its chain "
         "\u2192 Output \u2192 Gain."
     )
     _OFF_TIP = (
@@ -435,11 +445,13 @@ class DashboardMixin:
         "From inside VRChat: <b>OGP/Off</b>."
     )
     _SLEEP_TIP = (
-        "Makes your toys hard to wake: nothing plays until three full "
+        "Makes every toy hard to wake: nothing plays until three full "
         "strokes land within six seconds, so a brush against a sleeping "
         "partner does nothing. Your own Wake settings are untouched and "
         "come straight back when you switch it off. Not remembered across "
         "restarts.<br><br>"
+        "Each toy's bar has a <b>Sleep</b> of its own, for that toy alone; "
+        "while this one is on, all of them are lit.<br><br>"
         "From inside VRChat: <b>OGP/Sleep</b>."
     )
 
@@ -556,11 +568,15 @@ class DashboardMixin:
         "Shockers":              ("feature_pishock",),
         "Friends":               ("feature_friends",),
         "My Avatar Remote":      ("feature_params",),
+        "PSVR2":                 ("feature_psvr2",),
+        "Toys":                  ("feature_intiface",),
     }
     # ...and entries shown while ANY one of their flags is on: the Suits
-    # page carries both suits, each behind its own switch.
+    # page carries both suits and the trackers, each behind its own switch.
     _FEATURE_VIEW_ANY = {
-        "Suits":                 ("feature_bhaptics", "feature_owo"),
+        "Suits":                 ("feature_bhaptics", "feature_owo", "feature_trackers"),
+        # the log has friends' doings and your avatar's shocks: either one
+        "Log":                   ("feature_friends", "feature_pishock"),
     }
 
     def _feature_allows_view(self, view_name: str) -> bool:
@@ -577,24 +593,28 @@ class DashboardMixin:
 
     def apply_feature_visibility(self):
         """Re-evaluate sidebar visibility after a feature toggle changes:
-        feature-gated pages disappear from the nav, the Intiface block and
-        Home's toy list with the Intiface feature, and a page that just
-        became hidden hands the view back to Home."""
+        feature-gated pages disappear from the nav (the Toys page with the
+        Intiface feature), the Intiface block and Home's device list with
+        the Intiface feature too, and a page that just became hidden hands
+        the view back to Home."""
         get = getattr(self.controller, "get_feature_enabled", None)
         toys_on = bool(get("feature_intiface")) if get else True
         if self.intiface_sidebar_section is not None:
             self.intiface_sidebar_section.setVisible(toys_on)
-        # Home can't leave the nav the way Device Routing used to, so with
-        # the toy server off its toy list and tuning tools step aside for
-        # a one-line note instead.
+        # Home can't leave the nav, so with the toy server off its device
+        # list steps aside for a one-line note instead (the shocker, suit
+        # and headset rows move to a box of their own, HomeMixin).
         for attr, show in (("devices_container_frame", toys_on),
-                           ("_tuning_tools", toys_on),
                            ("_home_toys_off_note", not toys_on)):
             w = getattr(self, attr, None)
             if w is not None:
                 w.setVisible(show)
         for name, btn in self.nav_buttons.items():
             btn.setVisible(self._feature_allows_view(name))
+        # Settings → Safety's buttons to each page's anti-stuck go with them
+        links = getattr(self, "_refresh_antistuck_links", None)
+        if callable(links):
+            links()
         # A button that opens Friends goes with it (My Avatar Remote's)
         to_friends = getattr(self, "_params_friends_btn", None)
         if to_friends is not None:

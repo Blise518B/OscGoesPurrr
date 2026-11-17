@@ -301,15 +301,16 @@ BTN_HEIGHT_LARGE = 35
 BTN_HEIGHT_SMALL = 30
 
 # --- Timing & System (ms/seconds) ---
-# Haptic engine loop period. 10 ms (100 Hz) keeps the time between a target
-# changing and the command going out small. The loop only emits on change and
-# dispatches fire-and-forget, so a faster tick costs almost nothing. The loop
-# rate sets end-to-end *latency*; the per-feature command rate to real hardware
-# is capped separately by HAPTIC_MAX_SEND_HZ below, so a fast loop is safe.
+# The haptic engine runs a pass the moment a target changes (update_target
+# wakes it), so neither pace below adds latency to a new level. 10 ms is the
+# pace while something still needs passes between changes: a linear toy's
+# stroke physics, or a value the send cap / an in-flight send holds back (a
+# stop must go out even if nothing changes again). The per-feature command
+# rate to real hardware is capped separately by HAPTIC_MAX_SEND_HZ below.
 HAPTIC_POLL_RATE = 0.01
-# The engine worker's pace while there is nothing to send to: no toy server
-# connected, or connected with no toy. It finds a new toy by polling the
-# device list every 2 s anyway, so this costs no reaction time.
+# The engine worker's pace otherwise: no toy server, no toy, or nothing held
+# back. Changes wake it, and it finds a new toy by polling the device list
+# every 2 s anyway, so this costs no reaction time.
 HAPTIC_IDLE_RATE = 0.1
 # Per-feature send-rate cap (Hz). The engine loop runs fast for low latency, but
 # actual commands to any single motor are throttled to this rate so a real
@@ -352,6 +353,9 @@ LINEAR_MAX_SEND_INTERVAL_MS = 100.0
 # lets a held/resting stroke go quiet instead of re-commanding the same spot.
 LINEAR_MIN_POSITION_DELTA = 1e-4
 
+# The routing tick's first beat, and its pace if the rate setting is
+# unreadable. Its beat comes from precise_alarm.PreciseAlarm, never a QTimer
+# (past 16 running timers Qt falls back to Windows' 15.6 ms step).
 ROUTER_POLL_RATE_MS = 16
 # The routing tick's pace while nothing moves (no fresh OSC, every output at
 # zero): it sleeps this long between looks instead of polling at the full

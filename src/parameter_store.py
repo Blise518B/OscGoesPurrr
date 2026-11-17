@@ -1,13 +1,38 @@
 import threading
 import time
-from typing import Dict, Any, List, Set, Tuple
+from typing import Dict, Any, List, Optional, Set, Tuple
 
 from utilities import classify_ogb_zone
-from sps3_zone import SocketPlugLengths, canon_zone_key
+from sps3_zone import (LENGTH_SUFFIX as PLUG_LENGTH_SUFFIX,
+                       SocketPlugLengths, canon_zone_key)
 
 
 # OSCQuery's type tags -> the types the Avatar Remote page speaks
 _TYPE_TAGS = {"T": "Bool", "F": "Bool", "i": "Int", "f": "Float"}
+
+
+def _flatten_raw(node: Any, prefix: str, wanted: Tuple[str, ...],
+                 values: Dict[str, Any], types: Dict[str, str]) -> None:
+    """The OSCQuery tree's parameters under `avatar/parameters/` whose name
+    starts with one of `wanted`, as VRChat names them -- no renaming."""
+    if not isinstance(node, dict):
+        return
+    contents = node.get("CONTENTS")
+    if isinstance(contents, dict):
+        for key, child in contents.items():
+            _flatten_raw(child, f"{prefix}/{key}" if prefix else str(key),
+                         wanted, values, types)
+        return
+    name = prefix
+    if name.startswith(ParameterStore._AVATAR_PARAM_PREFIX):
+        name = name[len(ParameterStore._AVATAR_PARAM_PREFIX):]
+    if not name.startswith(wanted):
+        return
+    val = node.get("VALUE")
+    values[name] = val[0] if isinstance(val, list) and val else None
+    tag = node.get("TYPE")
+    if isinstance(tag, str) and tag:
+        types[name] = tag
 
 
 class ParameterStore:
@@ -56,6 +81,13 @@ class ParameterStore:
         # approaches) and written back as `<contact>_PlugLength` -- see
         # sps3_zone. Touched only under `self.lock`.
         self._plug_lengths = SocketPlugLengths()
+        # Debug recording (Settings -> Sessions -> Record raw contacts):
+        # `(on_packet, on_snapshot, prefixes)` or None. Live packets whose
+        # wire name starts with one of `prefixes` go to on_packet(address,
+        # value) as they arrive, an OSCQuery rebuild's matching parameters
+        # to on_snapshot(values, types). Both must only queue (the session
+        # logger's worker writes), never block: they run on the OSC thread.
+        self._tap = None
         self.lock = threading.Lock()
 
     # The OSCQuery tree is rooted at avatar/parameters/* for VRChat avatars,
@@ -215,7 +247,20 @@ class ParameterStore:
 
             self._refresh_zone_lists()
             self._version += 1
-            return len(self.all_parameters)
+            count = len(self.all_parameters)
+        tap = self._tap
+        if tap is not None:
+            # The avatar's contact parameters as VRChat names them (before
+            # any renaming) -- the constants among them (DepthRadius,
+            # LengthMult2 ...) never arrive as packets.
+            values: Dict[str, Any] = {}
+            types: Dict[str, str] = {}
+            _flatten_raw(data, "", tap[2], values, types)
+            try:
+                tap[1](values, types)
+            except Exception:
+                pass
+        return count
 
     def update_parameter(self, address: str, value: Any):
         """Updates a single parameter in real-time when a UDP packet arrives.
@@ -224,26 +269,98 @@ class ParameterStore:
         for a brand-new zone path rebuilds the public name lists, so the
         steady-state cost is one dict write plus one tuple-set membership check.
         """
+        tap = self._tap
+        if (tap is not None and not self._input_locked
+                and address.startswith(tap[2])):
+            try:
+                tap[0](address, value)
+            except Exception:
+                pass
         address = self._canon_param_key(address)
         with self.lock:
             if self._input_locked:
                 return  # session replay owns the store; drop live writes
-            is_new_key = address not in self.all_parameters
-            if value is True and self.all_parameters.get(address) is not True:
-                self._rises[address] = self._rises.get(address, 0) + 1
-            self.all_parameters[address] = value
-            if address.startswith("OGB/Orf/"):
-                for key, length in self._plug_lengths.on_write(
-                        address, value, self.all_parameters,
-                        time.monotonic()):
-                    self.all_parameters[key] = length
+            self._ingest_locked(address, value, time.monotonic(),
+                                count_rises=True)
             self._version += 1
             self.packets_received += 1
-            if is_new_key:
-                zone = classify_ogb_zone(address)
-                if zone is not None and zone not in self._zone_tuples:
-                    self._zone_tuples.add(zone)
-                    self._refresh_zone_lists()
+
+    def _ingest_locked(self, address: str, value: Any, now: float,
+                       count_rises: bool) -> None:
+        """One packet into the table (already renamed): the value, an SPS 3
+        socket's plug length, and zone discovery. Caller holds the lock."""
+        is_new_key = address not in self.all_parameters
+        if (count_rises and value is True
+                and self.all_parameters.get(address) is not True):
+            self._rises[address] = self._rises.get(address, 0) + 1
+        self.all_parameters[address] = value
+        if address.startswith("OGB/Orf/"):
+            for key, length in self._plug_lengths.on_write(
+                    address, value, self.all_parameters, now):
+                self.all_parameters[key] = length
+        if is_new_key:
+            zone = classify_ogb_zone(address)
+            if zone is not None and zone not in self._zone_tuples:
+                self._zone_tuples.add(zone)
+                self._refresh_zone_lists()
+
+    # ---- debug recording + its replay -----------------------------------
+
+    def set_contact_tap(self, on_packet, on_snapshot, prefixes) -> None:
+        """Start handing live contact packets and avatar loads to a recorder
+        (see `self._tap`). `prefixes`: wire-name prefixes to pass."""
+        self._tap = (on_packet, on_snapshot, tuple(prefixes))
+
+    def clear_contact_tap(self) -> None:
+        self._tap = None
+
+    def contact_snapshot(self, prefixes) -> Tuple[Dict[str, Any], Dict[str, str]]:
+        """`(values, types)` of the stored parameters starting with one of
+        `prefixes` -- for a recording that starts after the avatar loaded.
+        Names are the stored ones (SPS 3's Socket / Plug already Orf / Pen);
+        a recorder's own derived keys (`_PlugLength`) are left out."""
+        prefixes = tuple(prefixes)
+        with self.lock:
+            values = {k: v for k, v in self.all_parameters.items()
+                      if k.startswith(prefixes)
+                      and not k.endswith(PLUG_LENGTH_SUFFIX)}
+            types = {k: t for k, t in self._declared_types.items()
+                     if k in values}
+        return values, types
+
+    def replay_packets(self, packets, now: Optional[float] = None) -> None:
+        """Recorded packets, replayed: the live ingest -- renaming, SPS 3
+        plug lengths, zone discovery -- past the replay lock, so a fix to
+        any of it can be tried on a recording. `packets` is a list of
+        `(address, value)` as VRChat sent them; `now` (monotonic seconds)
+        is when they arrived, default now. OnEnter edges are not counted,
+        as for every replay, and nothing reaches the recording tap."""
+        t = time.monotonic() if now is None else float(now)
+        with self.lock:
+            for address, value in packets:
+                self._ingest_locked(self._canon_param_key(str(address)),
+                                    value, t, count_rises=False)
+            self._version += 1
+            self.packets_received += 1
+
+    def replay_snapshot(self, values: Dict[str, Any]) -> None:
+        """A recorded avatar load, replayed: every OGB key is replaced by
+        the recording's (as rebuild_from_json does live), past the replay
+        lock; anything else in the table stays."""
+        with self.lock:
+            for key in [k for k in self.all_parameters if k.startswith("OGB/")]:
+                del self.all_parameters[key]
+            for address, value in values.items():
+                self.all_parameters[self._canon_param_key(str(address))] = value
+            for key, length in self._plug_lengths.refresh_all(
+                    self.all_parameters):
+                self.all_parameters[key] = length
+            self._zone_tuples = {
+                zone for zone in map(classify_ogb_zone, self.all_parameters)
+                if zone is not None}
+            self._refresh_zone_lists()
+            self._version += 1
+            self.packets_received += 1
 
     def update_synthetic(self, address: str, value: Any) -> None:
         """A value the APP generates (the input simulator), not one that

@@ -4,11 +4,15 @@ Mixin: the four routing modes — switching, metadata editing, device
 seeding, per-avatar memory — the global strength multiplier and the
 Off / Sleep toggles, plus the VRChat expression-menu integration
 (OGP/Mode int, OGP/Strength float, OGP/Off + OGP/Sleep bools, all
-two-way; OGP/Test connectivity pulse). Composed into OscGoesPurrrApp.
+two-way; OGP/Test connectivity pulse). Off has two halves: the user's
+switch and a hold ("Off while you're away", controllers/away_facade.py)
+that silences the same way without touching it. Composed into
+OscGoesPurrrApp.
 Relies on `self.mode_manager`, `self.ui`, `self.log_message`,
 `self.force_recalculate`, `self.thread_queue`, the backend router/engine
 attributes, and `self.osc_manager`."""
 
+import math
 import threading
 import time
 from collections import deque
@@ -326,6 +330,15 @@ class ModesFacade:
         schedule(_STRENGTH_SAVE_DEBOUNCE_MS, _save)
 
     def is_output_off(self) -> bool:
+        """Everything is off: the Off switch, or a hold that keeps it off
+        without touching the switch ("Off while you're away"). What every
+        output path obeys -- the shockers' router, friends' shocks, the
+        status friends see. The switch alone is `is_off_switch_on`."""
+        return bool(self.mode_manager.is_silenced())
+
+    def is_off_switch_on(self) -> bool:
+        """The user's own Off switch (the sidebar button, OGP/Off), never
+        changed by a hold."""
         return bool(self.mode_manager.output_off)
 
     def set_output_off(self, active: bool, source: str = "ui") -> None:
@@ -333,9 +346,15 @@ class ModesFacade:
         if not self.mode_manager.set_output_off(active):
             return
         self._apply_output_change()
-        self.log_message("Output OFF — everything silenced"
-                         if self.mode_manager.output_off
-                         else "Output back on")
+        if self.mode_manager.output_off:
+            self.log_message("Output OFF — everything silenced")
+        elif self.mode_manager.held_off:
+            held = getattr(self, "get_away_status_text", None)
+            why = held() if callable(held) else ""
+            self.log_message("Off switch off — everything stays off while "
+                             "it's held" + (f" ({why})" if why else ""))
+        else:
+            self.log_message("Output back on")
         if source != "osc":
             self._send_ogp_bool_out(OGP_OFF_PARAMETER,
                                     self.mode_manager.output_off)
@@ -359,6 +378,27 @@ class ModesFacade:
             self._send_ogp_bool_out(OGP_SLEEP_PARAMETER,
                                     self.mode_manager.sleep_active)
         self._refresh_strength_ui()
+
+    def is_toy_sleep_on(self, device_name: str) -> bool:
+        """One toy's own Sleep (its bar's Sleep chip). Read by motor_router
+        for every motor on every tick -- a set lookup, nothing more."""
+        return device_name in self.mode_manager.sleeping_toys
+
+    def is_toy_asleep(self, device_name: str) -> bool:
+        """Whether a toy sleeps now: its own Sleep, or the sidebar's for
+        every toy."""
+        return bool(self.mode_manager.sleep_active) or self.is_toy_sleep_on(device_name)
+
+    def set_toy_sleep(self, device_name: str, active: bool) -> None:
+        """A toy's own Sleep on / off (Blise's ask, 2026-11-17): that toy
+        alone wakes only after three full strokes, as under the sidebar's
+        Sleep. Session-only like it -- a launch never starts asleep -- so
+        no setting and no Ctrl+Z step, like Mute."""
+        if not self.mode_manager.set_toy_sleep(device_name, active):
+            return
+        self._apply_output_change()
+        self.log_message(f"{device_name}: Sleep ON — takes three strokes to wake"
+                         if active else f"{device_name}: Sleep OFF")
 
     def _apply_output_change(self) -> None:
         """Push a change that alters output without changing router inputs
@@ -523,9 +563,9 @@ class ModesFacade:
         (runs on the GUI thread via the queue drain)."""
         try:
             level = float(value)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return
-        if level != level:  # NaN
+        if not math.isfinite(level):    # NaN, or an infinity: not a dial's place
             return
         level = max(0.0, min(1.0, level))
         now = time.monotonic()
@@ -567,7 +607,7 @@ class ModesFacade:
         the GUI thread via the queue drain)."""
         try:
             idx = int(float(value))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return
         now = time.monotonic()
         if now < self._ogp_mode_guard_until:

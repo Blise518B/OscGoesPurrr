@@ -207,3 +207,53 @@ def test_each_shockers_own_caps_ride_the_status():
     old = proto.read_status(proto.make_status(
         [], {}, 1.0, False, False, True, True, ["Collar"], True, 40, 2000, max_vibrate=60))
     assert old["shocker_caps"] == [] and proto.shocker_caps(old, 0) == (40, 60, 2000)
+
+
+def test_what_a_friend_may_send_rides_the_status_and_reads_back():
+    """Each shocker's own switches reach the friend's panel: per shocker
+    what they may send (``sop``) -- never a per-friend share's ``fw`` /
+    ``nc`` (gone since 2026-11-17)."""
+    st = proto.make_status([], {}, 1.0, False, False, True, True, ["Collar", "Thigh"], True,
+                           20, 1500, 20, 5.0, shocker_caps=[(20, 20, 1500), (10, 20, 500)],
+                           shocker_ops=[proto.ops_mask(["vibrate", "beep"]), 0xFF])
+    assert st["sop"] == [6, 7] and "fw" not in st and "nc" not in st
+    got = proto.read_status(proto.decode(proto.encode(st)))
+    assert got["shocker_ops"] == [["vibrate", "beep"], ["shock", "vibrate", "beep"]]
+    assert proto.shocker_ops(got, 0) == ["vibrate", "beep"]
+    assert proto.shocker_caps(got, 1) == (10, 20, 500)
+    assert "warn_first" not in got and "holds_ok" not in got
+
+
+def test_a_test_build_that_still_sends_a_shares_bits_is_ignored():
+    """An OGP from between 2026-11-14 and 2026-11-17 may still say ``fw`` /
+    ``nc``: read, nothing comes of them (its own receiver still holds to its
+    share, and refuses what it doesn't allow)."""
+    st = proto.make_status([], {}, 1.0, False, False, True, True, ["Collar"], True, 40, 2000,
+                           shocker_ops=[proto.ALL_OPS_MASK])
+    got = proto.read_status({**st, "fw": 1, "nc": 1})
+    assert got == proto.read_status(st)
+    assert proto.shocker_why(got, 0, "shock") == ""
+
+
+def test_a_status_from_before_shares_allows_everything():
+    st = proto.make_status([], {}, 1.0, False, False, True, True, ["Collar"], False, 40, 2000)
+    assert "sop" not in st and "fw" not in st and "nc" not in st
+    got = proto.read_status(st)
+    assert got["shocker_ops"] == [] and proto.shocker_ops(got, 0) == list(proto.OPS)
+    # out of step with the shockers, or not numbers: none of it, never half
+    for bad in ([7], [7, "x"], [True, 7], "7"):
+        assert proto.read_status({**st, "shk": ["a", "b"], "sop": bad})["shocker_ops"] == []
+
+
+
+def test_a_warning_can_play_unless_vibrate_and_beep_are_both_off():
+    def st(off):
+        return proto.read_status(proto.make_status(
+            [], {}, 1.0, False, False, True, True, ["Collar"], True, 40, 2000,
+            shocker_ops=[7], shocker_off=[proto.ops_mask(off)]))
+    assert proto.can_warn(st([]), 0) and proto.can_warn(st(["vibrate"]), 0)
+    assert proto.can_warn(st(["beep", "shock"]), 0)
+    assert not proto.can_warn(st(["vibrate", "beep"]), 0)
+    old = proto.read_status(proto.make_status([], {}, 1.0, False, False, True, True,
+                                              ["Collar"], True, 40, 2000))
+    assert proto.can_warn(old, 0)                          # a copy that doesn't say

@@ -37,7 +37,7 @@ def clean(wave, period, lo, hi) -> Optional[Tuple[str, float, float, float]]:
         return None
     try:
         period, lo, hi = float(period), float(lo), float(hi)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if not all(math.isfinite(v) for v in (period, lo, hi)):
         return None

@@ -36,6 +36,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 import body_map
+import tracker_spots
 from ui import theme as _theme
 
 FRONT, BACK = 0, 1
@@ -112,19 +113,18 @@ def _places() -> Dict[str, Tuple[int, float, Tuple[Point, ...]]]:
 PLACES = _places()
 _SIDE_MARKS = ((268.0, 440.0), (756.0, 440.0))     # where the R / L letters go
 
-# Where a Vive tracker can sit, for tracker haptics -- their backend lives on
-# main and isn't in this build yet, so the page shows these only when the
-# controller reports trackers. (key, name, centre on her front)
-TRACKERS: Tuple[Tuple[str, str, Point], ...] = (
-    ("chest", "Chest", (512.0, 341.0)),
-    ("hip", "Hip", (512.0, 745.0)),
-    ("upper_arm_r", "Right upper arm", (365.0, 470.0)),
-    ("upper_arm_l", "Left upper arm", (659.0, 470.0)),
-    ("upper_leg_r", "Right upper leg", (455.0, 960.0)),
-    ("upper_leg_l", "Left upper leg", (569.0, 960.0)),
-    ("ankle_r", "Right ankle", (468.0, 1345.0)),
-    ("ankle_l", "Left ankle", (556.0, 1345.0)),
-)
+# Where a haptic tracker can sit: Haptic Pancake's nine spots
+# (tracker_spots.py), each on her front in the drawing's pixels. The page
+# shows a spot only while a tracker is placed there -- all nine while you
+# place one. (key, name, centre on her front)
+_TRACKER_XY: Dict[str, Point] = {
+    "head": (512.0, 70.0), "chest": (512.0, 341.0), "hips": (512.0, 745.0),
+    "elbow_r": (360.0, 548.0), "elbow_l": (664.0, 548.0),
+    "knee_r": (462.0, 1110.0), "knee_l": (562.0, 1110.0),
+    "foot_r": (468.0, 1345.0), "foot_l": (556.0, 1345.0),
+}
+TRACKERS: Tuple[Tuple[str, str, Point], ...] = tuple(
+    (key, tracker_spots.SPOT_NAMES[key], _TRACKER_XY[key]) for key in tracker_spots.SPOT_KEYS)
 TRACKER_NAMES: Dict[str, str] = {key: name for key, name, _xy in TRACKERS}
 _TRACKER_AT: Dict[str, Point] = {key: xy for key, _name, xy in TRACKERS}
 

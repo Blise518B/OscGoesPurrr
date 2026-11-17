@@ -13,13 +13,21 @@ you hold it (`friend_param_hold`): your OGP keeps saying so every SEND_S,
 and theirs lets go when it stops -- a dropped link can't leave it pressed.
 What you set shows at once and stays shown for _OWN_S, until their avatar
 has had time to answer.
+
+Their height (their Avatar Remote page's Height box, while its switch is
+on): the box comes with the board (its range, its lock, whether their world
+allows scaling), their height right now with the values, and Grow / Right
+away / Reset go as an event (`friend_height`) -- applied on their side
+inside their range, and it stays where you put it.
 """
 
 import time
 from typing import Any, Dict, Optional
 
+import avatar_height as ah
 import param_board as pb
 import remote_params as rp
+from event_log import OUT, PARAMS
 
 _OWN_S = 1.5        # your own set is shown over theirs this long
 
@@ -36,6 +44,7 @@ class FriendsParamsMixin:
         self._their_values: Dict[str, Dict[str, Any]] = {}
         self._my_param_sets: Dict[str, Dict[str, tuple]] = {}   # peer -> name -> (value, t)
         self._my_param_holds: Dict[str, set] = {}               # peer -> control ids held
+        self._their_heights: Dict[str, float] = {}              # peer -> their height now
         self._had_param_holds: set = set()
         self._param_seq = int(time.time() * 1000)   # only grows, across restarts too
 
@@ -54,7 +63,10 @@ class FriendsParamsMixin:
 
     def get_friend_board(self, peer: str) -> Optional[Dict[str, Any]]:
         """What the panel shows of a friend's avatar: None when they share
-        none, else {prm, board (None until it came), values, holds}."""
+        none, else {prm, board (None until it came), values, holds,
+        not_here (you aren't in their instance: why it's paused), height
+        (their height now, None unknown)} -- the board's ``height`` is their
+        Height box (None while it is off)."""
         demo = self._demo_of("friend", peer)
         if demo is not None:
             return demo.board(peer)
@@ -73,7 +85,9 @@ class FriendsParamsMixin:
             if now - t < _OWN_S:
                 values[name] = value
         return {"prm": prm, "board": board, "values": values,
-                "holds": set(self._my_param_holds.get(peer, ()))}
+                "holds": set(self._my_param_holds.get(peer, ())),
+                "not_here": bool(st.get("not_here")),
+                "height": self._their_heights.get(peer) if board is not None else None}
 
     def friend_param_set(self, peer: str, control_id: str, value: Any) -> None:
         """A toggle, slider or stepper on a friend's board."""
@@ -92,8 +106,9 @@ class FriendsParamsMixin:
             self._param_seq += 1
             self.friends_link.send_event(peer, rp.make_set(self._param_seq, value, control=control_id))
         what = _said(control, out)
-        self._friends_note(f"You {what.format(nick=self._friend_nick(peer), label=control['label'])}",
-                           key=("prm-out", peer, control_id))
+        self._friends_note(f"You {what.format(nick='{who}', label=control['label'])}",
+                           key=("prm-out", peer, control_id), who=peer, kind=PARAMS,
+                           op="set", dir=OUT)
 
     def friend_param_set_any(self, peer: str, name: str, value: Any) -> None:
         """YOLO: any parameter of a friend's avatar, from the full list."""
@@ -113,8 +128,9 @@ class FriendsParamsMixin:
             self._param_seq += 1
             self.friends_link.send_event(peer, rp.make_set(self._param_seq, out, param=name))
         what = _said(None, out, ptype)
-        self._friends_note(f"You {what.format(nick=self._friend_nick(peer), label=name)} (YOLO)",
-                           key=("prm-out", peer, name))
+        self._friends_note(f"You {what.format(nick='{who}', label=name)} (YOLO)",
+                           key=("prm-out", peer, name), who=peer, kind=PARAMS, op="set",
+                           dir=OUT)
 
     def friend_param_hold(self, peer: str, control_id: str, held: bool) -> None:
         """A hold button on a friend's board, pressed or let go."""
@@ -138,8 +154,38 @@ class FriendsParamsMixin:
             # now, not at the link's next look (the slot keeps repeating it)
             self.friends_link.send_event(peer, rp.make_holds(holds), repeat=1)
         if held:
-            self._friends_note(f"You held {self._friend_nick(peer)}'s {control['label']}",
-                               key=("prm-out", peer, control_id))
+            self._friends_note(f"You held {{who}}'s {control['label']}",
+                               key=("prm-out", peer, control_id), who=peer, kind=PARAMS,
+                               op="hold", dir=OUT)
+
+    def friend_height(self, peer: str, mode: str, value: Optional[float] = None) -> bool:
+        """Their Height box: Grow (glide) or Right away (jump) to `value`,
+        or Reset (back to their own height). Kept inside their range; a
+        locked box, their Pause all and a world that forbids it refuse."""
+        theirs = self.get_friend_board(peer)
+        board = theirs.get("board") if theirs else None
+        box = board.get("height") if board else None
+        if (box is None or theirs["prm"]["stop"] or box["locked"] or not box["allowed"]
+                or mode not in ah.MODES or self._demo_of("friend", peer) is not None):
+            return False
+        if mode != ah.RESET:
+            v = ah.num(value)
+            if v is None:
+                return False
+            value = ah.clamp(v, box["lo"], box["hi"])
+        self._param_seq += 1
+        self.friends_link.send_event(peer, rp.make_height_set(self._param_seq, mode, value))
+        if mode == ah.NOW:
+            text = f"You set {{who}}'s height to {ah.fmt(value)}"
+        elif mode == ah.GROW:
+            now = theirs.get("height")
+            shrink = now is not None and value < now
+            text = f"You {'shrank' if shrink else 'grew'} {{who}} to {ah.fmt(value)}"
+        else:
+            text = "You put {who}'s height back"
+        self._friends_note(text, key=("prm-out", peer, "@height"), who=peer, kind=PARAMS,
+                           op="height", dir=OUT)
+        return True
 
     def _their_control(self, peer: str, control_id: str):
         theirs = self.get_friend_board(peer)
@@ -198,6 +244,7 @@ class FriendsParamsMixin:
         old = self._their_boards.get(peer)
         self._their_boards = {**self._their_boards, peer: board}
         self._their_values = {**self._their_values, peer: {}}
+        self._their_heights = {k: v for k, v in self._their_heights.items() if k != peer}
         debug = getattr(self, "_friends_debug", None)
         if debug is not None and (old is None or old["ver"] != board["ver"]):
             debug(f"Friends: got {self._friend_nick(peer)}'s board ({board['name'] or 'no name'}, "
@@ -211,6 +258,9 @@ class FriendsParamsMixin:
         if got:
             self._their_values = {**self._their_values,
                                   peer: {**self._their_values.get(peer, {}), **got}}
+        height = rp.read_height(msg) if msg.get("b") == board.get("ver") else None
+        if height is not None:
+            self._their_heights = {**self._their_heights, peer: height}
 
     def _drop_their_board(self, peer: str) -> None:
         self._their_boards = {k: v for k, v in self._their_boards.items() if k != peer}
@@ -218,6 +268,7 @@ class FriendsParamsMixin:
         self._my_param_sets = {k: v for k, v in self._my_param_sets.items() if k != peer}
         self._my_param_holds = {k: v for k, v in self._my_param_holds.items() if k != peer}
         self._had_param_holds.discard(peer)
+        self._their_heights = {k: v for k, v in self._their_heights.items() if k != peer}
 
 
 def _said(control: Optional[Dict[str, Any]], value: Any, ptype: str = "") -> str:

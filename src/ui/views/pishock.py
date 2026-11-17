@@ -4,14 +4,19 @@ contacts into shocks. Laid out in Avatar Remote's card design (Blise's
 ask, 2026-10-28):
 
   * Hub        — the link (port, Connect, connect when the app starts),
-                 Arm shocks (remembered across launches) and Stop all;
+                 Arm shocks (remembered across launches), Share with
+                 friends and Stop all -- the very switches Home's
+                 shocker row shows (shocker_switches.py);
   * Shockers   — a card per shocker: its name, what it is doing right
                  now, its own max shock / max vibrate / longest pulse and
                  Beep / Vibrate / Shock to test it; on OpenShock firmware
                  also its model and transmitter id (＋ Add shocker), since
                  that firmware keeps no list of its own. Beside them, the
                  timing every shocker shares (pishock_cards.py);
-  * Behaviours — Touch zones, Contact, Continuous and Impact cards
+  * ShockOSC   — while the worn avatar has ShockOSC's parameters, a card
+                 that sets them up as behaviours in one click
+                 (pishock_shockosc.py);
+  * Behaviours — Touch zones, Contact, Continuous, Impact and Pull cards
                  (pishock_rules.py): drag a shocker card onto one and it
                  drives that shocker.
 
@@ -35,13 +40,15 @@ from ui.views.pishock_cards import (
     SHOCK_HUE, SharedTimingCard, ShockerSetupCard, category_frame, mini_button, state_pill,
 )
 from ui.views.pishock_rules import PiShockRulesMixin
+from ui.views.pishock_shockosc import PiShockShockOscMixin
+from ui.views import shocker_switches as _switches
 from ui.widgets import ToggleSwitch, Card as _Card
 from ui.frame_clock import when_on_screen
 
 VIEW_NAME = "Shockers"
 
 
-class PiShockMixin(PiShockRulesMixin):
+class PiShockMixin(PiShockRulesMixin, PiShockShockOscMixin):
 
     _is_updating_pishock = False
     _pishock_cards_key: tuple = ()
@@ -63,6 +70,7 @@ class PiShockMixin(PiShockRulesMixin):
 
         parent_layout.addWidget(self._build_pishock_hub_card())
         parent_layout.addWidget(self._build_pishock_shockers_frame())
+        parent_layout.addWidget(self._build_pishock_shockosc_card())
         parent_layout.addWidget(self._build_pishock_behaviours_frame())
         parent_layout.addStretch(1)
 
@@ -154,31 +162,50 @@ class PiShockMixin(PiShockRulesMixin):
             else self.controller.set_pishock_auto_connect(bool(on)))
         self._explain(self._pishock_auto, "Connect when the app starts",
                       "Off by default: a shocker never connects unless you ask.")
-        self._pishock_arm = ToggleSwitch("Arm shocks")
-        self._pishock_arm.toggled.connect(
-            lambda on: None if self._is_updating_pishock
-            else self.controller.set_pishock_armed(bool(on)))
-        self._explain(self._pishock_arm, "Arm shocks",
-                      "Until this is on, every shock — a behaviour's, a friend's, a test — "
-                      "goes out as a vibrate instead. It stays as you leave it, across "
-                      "restarts too.")
-        self._pishock_armed_pill = state_pill("", "warn")
+        # Arm shocks, Share with friends and Stop all / Resume: Home's shocker
+        # row shows the very same three (shocker_switches.py), in this order
+        self._pishock_share = ToggleSwitch(_switches.SHARE_TEXT)
+        self._pishock_share.toggled.connect(
+            lambda on: None if self._is_updating_pishock else self._on_pishock_share(bool(on)))
+        self._explain(self._pishock_share, _switches.SHARE_TEXT, _switches.SHARE_TIP)
+        self._pishock_arm = _switches.ArmSwitch("page", self._on_pishock_arm)
+        self._explain(self._pishock_arm.switch, _switches.ARM_TEXT, _switches.arm_tip("page"))
+        self._explain(self._pishock_arm.ask, _switches.ARM_TEXT + "?", _switches.ASK_TIP)
+        self._explain(self._pishock_arm.status, _switches.STATUS_TITLE, _switches.STATUS_TIP)
         self._pishock_stop_btn = QPushButton("Stop all")
         self._pishock_stop_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
         self._pishock_stop_btn.setProperty("role", "danger")
         self._pishock_stop_btn.clicked.connect(self._on_pishock_stop_clicked)
-        self._explain(self._pishock_stop_btn, "Stop all / Resume",
-                      "Ends whatever every shocker is doing right now and keeps them quiet "
-                      "until you press Resume - even after a restart. The same as the "
-                      "Shockers switch on Home. The sidebar's Off silences the shockers "
-                      "too, along with the toys.")
+        self._explain(self._pishock_stop_btn, "Stop all / Resume", _switches.STOP_TIP)
         # the switches centred on Stop all's height (a flow tops its line)
         self._pishock_stop_btn.ensurePolished()        # its styled height
         tall = self._pishock_stop_btn.sizeHint().height()
+        self._pishock_share_box = self._pishock_centred([self._pishock_share], tall)
         lay.addWidget(self._pishock_flow([
             self._pishock_centred([self._pishock_auto], tall),
-            self._pishock_centred([self._pishock_arm, self._pishock_armed_pill], tall),
+            self._pishock_centred([self._pishock_arm], tall),     # + its red words
+            self._pishock_share_box,
             self._pishock_stop_btn]))
+
+        # "a shocker is connected" for the avatar; each shocker's own is on
+        # its card (the controller's slots: "shockers", "shocker:<id>")
+        getter = getattr(self.controller, "get_device_connected_param", None)
+        if callable(getter):
+            on, name = getter("shockers")
+            lay.addWidget(self._build_connected_param_row(
+                "Tell VRChat while a shocker is connected", on, name,
+                lambda on, n: self.controller.set_device_connected_param("shockers", on, n),
+                "Tell VRChat while a shocker is connected",
+                "Sends a Bool avatar parameter that is <b>true while the hub is "
+                "connected and at least one shocker is in use</b> (its card On) "
+                "and false otherwise — so your avatar can show that your "
+                "shockers are live.<br><br>"
+                "It is on by default under this name, so an avatar asset made "
+                "for OGP can use it. Add a Bool with the name to your avatar's "
+                "parameters; the name is yours to change, or <b>Pick…</b> one "
+                "your avatar already sends. Each shocker has its own on its "
+                "card. They are sent again whenever you change avatar, and go "
+                "false when you close the app."))
 
         self._pishock_info = self._muted_label("")
         lay.addWidget(self._pishock_info)
@@ -232,6 +259,16 @@ class PiShockMixin(PiShockRulesMixin):
             self.controller.pishock_connect()
         self.refresh_pishock_status()
 
+    def _on_pishock_arm(self, on: bool) -> None:
+        """Arm shocks, the same setting as Home's (its switch has already
+        asked, where ARM_ASKS_FROM says so)."""
+        self.controller.set_pishock_armed(on)
+        self.refresh_pishock_status()
+
+    def _on_pishock_share(self, on: bool) -> None:
+        self.controller.set_pishock_friends_may_use(on)
+        self.refresh_pishock_status()
+
     def _on_pishock_stop_clicked(self) -> None:
         if self.controller.get_pishock_status().get("paused"):
             self.controller.pishock_resume()
@@ -283,6 +320,7 @@ class PiShockMixin(PiShockRulesMixin):
         own = st.get("shocker_limits") or {}
         hub = st.get("limits") or {}
         off = set(st.get("shockers_off") or [])
+        ops_off = st.get("ops_off") or {}
         for idx, s in enumerate(listed):
             sid = int(s["id"])
             limits = own.get(str(sid)) or {k: hub.get(k) for k in
@@ -295,16 +333,39 @@ class PiShockMixin(PiShockRulesMixin):
                 on_test=lambda op, x=sid: self.controller.pishock_test(op, x),
                 openshock=({"models": [(m, label) for m, label in models],
                             "model": s.get("model")} if openshock else None),
-                on_use=lambda on, x=sid: self._pishock_use(x, on))
+                on_use=lambda on, x=sid: self._pishock_use(x, on),
+                on_op=lambda op, on, x=sid: self._pishock_op(x, op, on),
+                ops_off=ops_off.get(str(sid), ()))
             if openshock:
                 card.model.currentIndexChanged.connect(
                     lambda _v, i=idx: self._push_openshock(i))
                 card.rf_id.valueChanged.connect(lambda _v, i=idx: self._push_openshock(i))
                 card.delete.clicked.connect(lambda _=False, i=idx: self._on_openshock_delete(i))
+            getter = getattr(self.controller, "get_device_connected_param", None)
+            if callable(getter):
+                on, name = getter(f"shocker:{sid}")
+                card.add_row(self._build_connected_param_row(
+                    "Tell VRChat", on, name,
+                    lambda on, n, x=sid: self.controller.set_device_connected_param(
+                        f"shocker:{x}", on, n),
+                    "Tell VRChat while this shocker is connected",
+                    "Sends a Bool avatar parameter that is <b>true while the hub "
+                    "is connected and this shocker is in use</b> (its switch On) "
+                    "and false otherwise — so your avatar can show which shocker "
+                    "is live.<br><br>"
+                    "It is on by default, numbered like the cards here (the "
+                    "first card is <b>OGP/Shocker1Connected</b>), so an avatar "
+                    "asset made for OGP can use it. Add a Bool with the name to "
+                    "your avatar's parameters; the name is yours to change, or "
+                    "<b>Pick…</b> one your avatar already sends.",
+                    stacked=True))
             self._pishock_cards_flow.addWidget(card)
             self._pishock_cards[sid] = card
         self._pishock_shared_card = SharedTimingCard(
-            hub, ranges, on_limit=lambda key, v: self.controller.set_pishock_limit(key, v))
+            hub, ranges, on_limit=lambda key, v: self.controller.set_pishock_limit(key, v),
+            separate=bool(st.get("separate_limits")), friend_limits=st.get("friend_limits"),
+            on_separate=lambda on: self.controller.set_pishock_separate_limits(on),
+            on_friend_limit=lambda key, v: self.controller.set_pishock_friend_limit(key, v))
         self._pishock_cards_flow.addWidget(self._pishock_shared_card)
         self._pishock_add_btn.setVisible(openshock or st.get("hub_kind") == "openshock")
         if listed:
@@ -323,6 +384,12 @@ class PiShockMixin(PiShockRulesMixin):
         if card is not None:
             card.set_on(on)
         self.controller.set_pishock_shocker_on(sid, on)
+        self.refresh_pishock_status()
+
+    def _pishock_op(self, sid: int, op: str, on: bool) -> None:
+        """A card's Shock / Vibrate / Beep switch: the engine refuses that op
+        on it from now on, and the behaviours' chips for it follow."""
+        self.controller.set_pishock_shocker_op(sid, op, on)
         self.refresh_pishock_status()
 
     def _pishock_named(self, idx: int, sid: int, text: str) -> None:
@@ -401,11 +468,13 @@ class PiShockMixin(PiShockRulesMixin):
         self._is_updating_pishock = True
         try:
             self._pishock_auto.setChecked(bool(st.get("auto_connect")))
-            self._pishock_arm.setChecked(bool(st.get("armed")))
+            self._pishock_arm.set_armed(bool(st.get("armed")))
+            self._pishock_share.setChecked(bool(st.get("friends_may_use", True)))
         finally:
             self._is_updating_pishock = False
-        self._pishock_armed_pill.setText("ARMED · shocks are real")
-        self._pishock_armed_pill.setVisible(bool(st.get("armed")))
+        # sharing is there while Friends is (as on Home's row)
+        get = getattr(self.controller, "get_feature_enabled", None)
+        self._pishock_share_box.setVisible(bool(get("feature_friends")) if callable(get) else False)
         self._pishock_stop_btn.setText("Resume" if st.get("paused") else "Stop all")
 
         listed, openshock = self._pishock_listed(st)
@@ -417,20 +486,28 @@ class PiShockMixin(PiShockRulesMixin):
         else:
             own = st.get("shocker_limits") or {}
             off = set(st.get("shockers_off") or [])
+            ops_off = st.get("ops_off") or {}
             for sid, card in self._pishock_cards.items():
                 if str(sid) in own:
                     card.set_limits(own[str(sid)])
                 card.set_on(sid not in off)
+                card.set_ops_off(ops_off.get(str(sid), ()))
             if self._pishock_shared_card is not None:
                 self._pishock_shared_card.set_limits(st.get("limits") or {})
+                self._pishock_shared_card.set_separate(bool(st.get("separate_limits")),
+                                                       st.get("friend_limits"))
 
         # what the behaviours' drop zones call the shockers
         choices = tuple((int(s["id"]), self._pishock_shocker_label(s)) for s in listed)
         off = frozenset(int(x) for x in st.get("shockers_off") or [])
-        if choices != self._pishock_shocker_choices or off != self._pishock_shockers_off:
+        ops_off = {int(k): frozenset(v) for k, v in (st.get("ops_off") or {}).items()}
+        if (choices != self._pishock_shocker_choices or off != self._pishock_shockers_off
+                or ops_off != self._pishock_ops_off):
             self._pishock_shocker_choices = choices
             self._pishock_shockers_off = off
+            self._pishock_ops_off = ops_off
             self._rebuild_pishock_rules()
+        self.refresh_pishock_shockosc()
         self._refresh_pishock_live()
 
     @staticmethod
@@ -469,3 +546,4 @@ class PiShockMixin(PiShockRulesMixin):
             else:
                 card.set_state("READY", "ok")
         self._refresh_pishock_rules_live(live.get("values", {}))
+        self._shockosc_tick()

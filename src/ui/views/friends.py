@@ -22,7 +22,8 @@ nickname: nothing goes online, and nothing else shows, before it. After:
     section with a card per toy and a yellow one with a small PiShock
     panel per shocker (toy_card.py, shocker_card.py), and for one friend
     the board of the avatar they wear (friends_board.py). Control mode
-    makes it fill the window, everything big, for VR;
+    makes it fill the window, everything big, for VR; Pop out puts it,
+    big, in a window of its own (friends_window.py);
   * under it the log, and the VRChat menu tip (friends_vrc_tip.py).
 
 Everything goes through the controller's Friends facade (Demeter rule);
@@ -35,21 +36,21 @@ from typing import Any, Dict, List
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QDialog, QFrame, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QSlider, QVBoxLayout,
-    QWidget,
+    QDialog, QFrame, QLabel, QLineEdit, QPlainTextEdit, QPushButton, QScrollArea, QSlider,
+    QVBoxLayout, QWidget,
 )
 
 from constants import *
 from ui.layout_helpers import SIDE_GAP, SideBySide, clear_layout, vbox as _vbox, hbox as _hbox
 from ui.text_helpers import html_escape
-from ui.views.card_parts import CARD_MIN_W, WheelSafeSlider
+from ui.views.card_parts import CARD_MIN_W, WheelSafeSlider, segmented
 from ui.views.friends_board import FriendsBoardMixin
 from ui.views.friends_list import LIST_W, FriendsListMixin
 from ui.views.friends_panel import PANEL_MAX_W, FriendsPanelMixin
 from ui.views.friends_update import FriendsUpdateMixin
 from ui.views.friends_vrc_tip import VrchatMenuTip
-from ui.widgets import Card as _Card
-from ui.frame_clock import when_on_screen
+from ui.views.log_people import PersonLog
+from ui.widgets import Card as _Card, install_rainbow_scrollbars
 
 VIEW_NAME = "Friends"
 
@@ -118,7 +119,8 @@ class FriendsMixin(FriendsListMixin, FriendsPanelMixin, FriendsBoardMixin, Frien
         self._friend_rows, self._group_rows, self._panel_w = {}, {}, {}
         self._friends_live_timer = QTimer()
         self._friends_live_timer.setInterval(150)
-        self._friends_live_timer.timeout.connect(when_on_screen(self, self._refresh_friends_live))
+        # while the main window is on screen, or the popped-out panel is
+        self._friends_live_timer.timeout.connect(self._friends_tick)
         self._friends_live_timer.start()
         self.refresh_friends()
 
@@ -284,7 +286,20 @@ class FriendsMixin(FriendsListMixin, FriendsPanelMixin, FriendsBoardMixin, Frien
     # ---- Log ---------------------------------------------------
 
     def _build_friends_log_card(self) -> QFrame:
-        card, lay, _hdr, _ = self._friends_card("Log")
+        """The log, two ways: as it happens (every entry, newest first) or
+        by person (a row each, unfolding into what they did). The whole of
+        it, kept for days, is on the Log page."""
+        card, lay, hdr_row, _ = self._friends_card("Log")
+        self._friends_log_mode = 0
+        seg, self._friends_log_seg = segmented(["As it happens", "By person"], "accent",
+                                              self._set_friends_log_mode)
+        hdr_row.addWidget(seg)
+        self._explain(self._friends_log_seg.button(0), "As it happens",
+                      "Every entry as it comes in, newest first: who linked, who drove "
+                      "whose toys, every strength change and every shock.")
+        self._explain(self._friends_log_seg.button(1), "By person",
+                      "A row per person with the last thing they did and how long ago. "
+                      "Click one to unfold what they did; shocks stand out in yellow.")
         self._friends_log_view = QPlainTextEdit()
         self._friends_log_view.setReadOnly(True)
         self._friends_log_view.setFixedHeight(130)
@@ -292,21 +307,69 @@ class FriendsMixin(FriendsListMixin, FriendsPanelMixin, FriendsBoardMixin, Frien
             "Who linked, who drove whose toys, every strength change and "
             "every shock - newest first.")
         lay.addWidget(self._friends_log_view)
+        self._friends_log_people = PersonLog(
+            "Nobody has done anything yet. When friends drive you, each gets a row "
+            "here with what they did last.", explain=self._explain)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(self._friends_log_people)
+        install_rainbow_scrollbars(scroll)            # the app's own, as on every page
+        scroll.setFixedHeight(220)
+        scroll.setVisible(False)
+        self._friends_log_people_box = scroll
+        lay.addWidget(scroll)
+        to_page = QPushButton("Whole log ▸")
+        to_page.setProperty("role", "secondary")
+        to_page.setCursor(Qt.PointingHandCursor)
+        to_page.clicked.connect(lambda _=False: self.select_view("Log"))
+        self._explain(to_page, "Whole log",
+                      "Opens the Log page: everything of the last 30 days, filtered by "
+                      "person, kind, time or words.")
+        self._friends_log_to_page = to_page
+        lay.addWidget(to_page, 0, Qt.AlignRight)
         return card
 
+    def _set_friends_log_mode(self, mode: int) -> None:
+        self._friends_log_mode = mode
+        self._friends_log_view.setVisible(mode == 0)
+        self._friends_log_people_box.setVisible(mode == 1)
+        self._friends_log_shown = None
+        self._update_friends_log()
+
     def _update_friends_log(self) -> None:
+        mode = getattr(self, "_friends_log_mode", 0)
+        version = getattr(self.controller, "get_log_version", None)
+        now = time.time()
+        sig = (version() if callable(version) else None, mode)
+        if sig[0] is not None and sig == self._friends_log_shown:
+            if mode == 1:
+                self._friends_log_people.refresh_ago(now)   # "3 min ago" moves on by itself
+            return
         try:
-            entries = self.controller.get_friends_log()
+            if mode == 1:
+                get = getattr(self.controller, "get_friends_log_people", None)
+                people = get() if callable(get) else []
+            else:
+                entries = self.controller.get_friends_log()
         except Exception:
             return
-        sig = (len(entries), entries[0]["t"] if entries else 0,
-               entries[0]["text"] if entries else "")
-        if sig == self._friends_log_shown:
-            return
+        if sig[0] is None and mode == 0:       # a controller that keeps no version
+            sig = (len(entries), entries[0]["t"] if entries else 0,
+                   entries[0]["text"] if entries else "")
+            if sig == self._friends_log_shown:
+                return
         self._friends_log_shown = sig
-        self._friends_log_view.setPlainText("\n".join(
-            f"{time.strftime('%H:%M:%S', time.localtime(e['t']))}  {e['text']}"
-            for e in entries))
+        if mode == 1:
+            self._friends_log_people.set_people(people, now)
+            return
+        lines = []
+        for e in entries:
+            lines.append(f"{time.strftime('%H:%M:%S', time.localtime(e['t']))}  {e['text']}")
+            if e.get("correction"):           # what went out instead, and why
+                lines.append(f"{' ' * 10}{e['correction']}")
+        self._friends_log_view.setPlainText("\n".join(lines))
 
     # ----------------------------------------------------------
     # Refresh
@@ -317,9 +380,10 @@ class FriendsMixin(FriendsListMixin, FriendsPanelMixin, FriendsBoardMixin, Frien
         if page is None or not page.isVisible():
             if getattr(self, "_friends_big", False):
                 self._set_friends_control(False)       # another page took over
-            self._friends_watch(None)                 # nobody's board is open
-            self._friends_levels_watch("")            # ... nor anyone's toy cards
-            return
+            if not self._friends_window_seen():       # (the popped-out panel stays)
+                self._friends_watch(None)             # nobody's board is open
+                self._friends_levels_watch("")        # ... nor anyone's toy cards
+                return
         self.refresh_friends()
 
     def _friends_stacked(self, stacked: bool, width: int) -> None:

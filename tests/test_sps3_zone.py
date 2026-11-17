@@ -234,8 +234,9 @@ class TestTouchSpeed:
 # ------------------------------------------------------------- router
 
 def _cfg(touch=True, pen=True, self_=False, others=True):
-    return {"motor_0_touch": touch, "motor_0_pen": pen,
-            "motor_0_self": self_, "motor_0_others": others}
+    from contact_filters import pairs_from_legacy
+    return {f"motor_0_{p}": v for p, v in
+            pairs_from_legacy(touch, pen, self_, others).items()}
 
 
 SOCKET = {"OGB/Orf/B/DepthRadius": 0.5}      # marks the zone as SPS 3

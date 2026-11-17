@@ -5,16 +5,21 @@
 OscGoesPurrr reads the contacts on your avatar and turns every touch into
 smooth, real-time output on your Bluetooth toys — Lovense, We-Vibe, Kiiroo
 and anything else [Buttplug.io](https://buttplug.io/) supports — and, if
-you have them, on PiShock / OpenShock shockers and bHaptics / OWO suits.
-Friends can drive them over the internet.
+you have them, on PiShock / OpenShock shockers, bHaptics / OWO suits,
+vibrating trackers and a PS VR2 headset. Friends can drive them over the
+internet.
 
 <p align="center">
   <a href="https://github.com/Blise518B/OscGoesPurrr/releases/latest/download/OscGoesPurrr-Windows.exe">
     <img src="docs/assets/download-badge.svg" alt="Download for Windows — OscGoesPurrr-Windows.exe, latest release">
+  </a>
+  <a href="https://blise518b.github.io/OscGoesPurrr/guide/">
+    <img src="docs/assets/guide-badge.svg" alt="Read the guide — every page in detail, with pictures">
   </a><br>
   <sub>On Linux? Get the <a href="https://github.com/Blise518B/OscGoesPurrr/releases/latest/download/OscGoesPurrr-Linux-x86_64.AppImage">AppImage</a> ·
   OGP in your avatar's menu: the <a href="#your-avatars-menu-optional">VRCFury prefab</a> ·
   more on the <a href="https://blise518b.github.io/OscGoesPurrr/">website</a> ·
+  how it all works in the <a href="https://blise518b.github.io/OscGoesPurrr/guide/">guide</a> ·
   every version on the <a href="https://github.com/Blise518B/OscGoesPurrr/releases">Releases</a> page</sub>
 </p>
 
@@ -26,13 +31,17 @@ Friends can drive them over the internet.
    (the exe isn't code-signed). Click **More info → Run anyway**.
 3. **Tick what you'll use.** The app asks once what you have and want —
    toys, a shocker, friends … — and shows those pages. Settings →
-   Features changes it later.
+   Features changes it later. Then a **guided tour** walks you through
+   the rest for real: your toy on Home, its card on the **Toys** page
+   (signal chains, SPS Sources), who it feels, Test and strength, then
+   what you picked. *Help → Take the tour* runs it again.
 4. **Switch your toy on** and start VRChat with **OSC enabled**
    (Action menu → Options → OSC).
 5. Press **Test all** on the Home page. If you feel it, you're set.
 
 You'll need an avatar with **OGB / SPS contacts** — the standard toy setup.
 New versions install themselves: the app lets you know when there's one.
+Everything in detail: the [user guide](https://blise518b.github.io/OscGoesPurrr/guide/).
 
 **On Linux** it's one AppImage: make it executable (`chmod +x`, or
 *Allow executing* in its Properties) and run it. Bluetooth needs BlueZ
@@ -69,7 +78,13 @@ and the manual way.
   3.0 or newer, with *Listen on all network interfaces* on.
 - 🎚️ **One strength bar** — turn everything up or down without touching
   your tuning.
-- 💤 **Off and Sleep** — instant silence, or only wake for real strokes.
+- 💤 **Off and Sleep** — instant silence, or only wake for real strokes —
+  for every toy, or Sleep for one toy from its row. Everything also holds
+  off by itself while VRChat says you're AFK (or a parameter of your
+  choosing is on), and comes back when you are.
+- 🧊 **Anti-stuck** — a contact that freezes (an avatar swap, a partner
+  leaving) stops the toy, the suit or the headset. Each kind has its own
+  settings, and a toy's row can leave that one toy out.
 - 🔀 **Four routing modes** — pick which parts of your avatar drive which
   toy.
 - 🎮 **Control it in-game** — strength, mode, Off and Sleep from your
@@ -85,11 +100,17 @@ and the manual way.
   oscillate…)
   or overriding what your avatar does — move your strength slider and
   use your shockers from a small PiShock-style panel each (shock, vibrate,
-  beep, hold, a warning first, stop), or all of it big in Control mode for
+  beep, hold, a warning first, stop) or OpenShock's card with its Live
+  control, or all of it big in Control mode for
   VR — only what you switch on for them, every friend you
   allow at once, all of it logged. No account and no server: the two PCs
-  talk directly. Your strength, Off, each toy's maximum and your shocker
-  caps and arming still hold. No OGP on their side? Share your **web
+  talk directly. Your strength, Off, each toy's maximum and each
+  shocker's own limits, switches and arming still hold, the same for
+  every friend. Link a friend to their VRChat account (from
+  your instance or VRCX, kept on your PC) and you can let only friends in
+  your instance drive you. **Pop out** puts a friend's panel in a window
+  of its own for a VR overlay, and ↻ looks for an offline friend right
+  now. No OGP on their side? Share your **web
   remote** link instead: whoever opens it gets a friend's whole panel in
   their browser -- your toys, and your shockers and avatar's board once
   you tick them -- everyone on it under one row you can switch off, kick
@@ -104,15 +125,25 @@ and the manual way.
   direct link as everything else; nothing is sent until a friend looks.
   Your avatar's menu gets seven toggles and seven radials you hand out to
   controls or whole categories from the board (the circle in each top bar).
-  Boards made in VRC Parameter Relay import with one click. Off until you
-  switch it on in Settings → Features.
+  A **Height** box changes your height in VRChat — grow or jump, from your
+  menu or a friend you allow, within a range they can't widen. Drag a
+  control back to the list to remove it. Boards made in VRC Parameter
+  Relay import with one click. Off until you switch it on in Settings →
+  Features.
 - 🎯 **Feels right** — a signal chain per contact, so each toy feels like
-  *that* toy.
+  *that* toy, on the **Toys** page. Home is the overview of every device,
+  and four chips on each toy's row set who it feels: touch and
+  penetration, from you, from others or both.
 - 📈 **Every session, charted** — click a session for its timeline: each
-  toy's intensity, thrusts per minute, which zones were touched, and your
-  hottest five minutes. Plus lifetime fun facts, a when-you-play heatmap
-  and a month calendar. It all stays on your PC: one switch in Settings
-  turns it off (keeping what's recorded), one button deletes it.
+  toy's intensity, thrusts per minute, which zones were touched, every
+  shock, and your hottest five minutes. Plus lifetime fun facts, a
+  when-you-play heatmap, a month calendar, and **From whom**: every shock,
+  vibrate and beep per shocker and per person. It all stays on your PC:
+  one switch in Settings turns it off (keeping what's recorded), one
+  button deletes it.
+- 📜 **A Log page** — who did what, person by person: friends, web remote
+  guests and your own avatar's shocker behaviours, kept 30 days on your PC,
+  with filters and a search.
 - 👥 **Stats per person** — tag who a session was with, the whole of it or
   a stretch dragged out on its timeline, and the People card ranks
   everyone by thrusts. Optionally the app tags it for you while you're
@@ -120,9 +151,12 @@ and the manual way.
 - 🔢 **Thrust counters on your avatar** — the lifetime total, this
   session's count and the live pace per minute as Int parameters, digit
   by digit, for a counter display ([parameter list](docs/VRCHAT_MENU.md#thrust-counters-for-a-counter-display)).
-- 💡 **Explains itself** — hover over anything in the app to see what it
-  does. Press F1 (or *Show me around*) on any page for its steps on top,
-  with whatever you point at lit up and named.
+- 💡 **Explains itself** — a guided tour at the first launch, one real step
+  at a time. Hover over anything in the app to see what it does. Press F1
+  (or *Show me around*) on any page for its steps on top, with whatever you
+  point at lit up and named.
+- ↩️ **Ctrl+Z** — undoes your last five changes on any page, Ctrl+Y redoes
+  them. One that would loosen your shocker safety asks first.
 - 🎨 **Any colour you like** — one slider in Settings turns the whole app
   from green to the colour you pick, in a Vibrant or a Darker look. Both
   change while you watch.
@@ -132,18 +166,31 @@ and the manual way.
 - ⚡ **PiShock / OpenShock over USB** — continuous, contact and impact
   rules straight down the cable, no account needed. Works with PiShock's
   own firmware and with OpenShock (a reflashed PiShock hub or a DIY ESP32
-  board with CaiXianlin / Petrainer collars). Off until you switch it on
-  in Settings → Features, and shocks stay vibrates until you arm them.
+  board with CaiXianlin / Petrainer collars). Each shocker has its own
+  limits and its own Shock, Vibrate and Beep switch; one switched off never
+  fires. An avatar built for ShockOSC is set up in one click, its feedback
+  lights included. Off until you switch it on in Settings → Features, and
+  shocks stay vibrates until you arm them — on Home or the Shockers page,
+  and it asks first.
 - 🦺 **Haptic suits** — a bHaptics suit, sleeves or head straight over
   Bluetooth (no bHaptics Player), and an OWO suit through the My OWO app,
   from your avatar's bHaptics and OWO contacts. The Suits page draws them on
   a body and says which contacts the avatar you wear has. OWO is EMS: it
   connects only when you press Connect and starts capped at 60 %. Each suit
   is off until you switch it on in Settings → Features.
+- 📳 **Trackers that vibrate** — a Vive Tracker with a Haptic Pancake, a
+  Tundra with a Tundra Tapper: they buzz from your avatar's contacts, using
+  Haptic Pancake's parameter names, so an avatar set up for it works as it
+  is. Each lands where its SteamVR role puts it on the Suits page (or where
+  you click). Off until you switch it on in Settings → Features.
+- 🥽 **PS VR2 headset rumble** — the headset's motor from a contact on your
+  avatar, through your PSVR2Toolkit (its experimental builds, which need a
+  jailbroken headset). Windows only; off until you switch it on in
+  Settings → Features.
 
 ## Coming later
 
-SteamVR trackers, DG-Lab Coyote e-stim and The Handy are in the works.
+DG-Lab Coyote e-stim and The Handy are in the works.
 See the [roadmap](https://blise518b.github.io/OscGoesPurrr/#roadmap).
 
 ## For developers

@@ -6,6 +6,11 @@ one (or its ＋, which lists them, for a VR pointer or a touch screen).
 
 A limit is a slider with its value written beside it in full ("1.0 s",
 "60"), never a spin box: their numbers were cut off on a scaled display.
+The limits sit in a boxed "Limits" group (limits_group) with the ceiling
+icon and the line "Nothing is sent from here", each labelled "Up to ..."
+(or "At least" for the rest); the Test buttons, which do send, sit under
+a line of their own, apart from it (Blise's friends, 2026-11-14: the
+sliders read as controls).
 Every value goes out after the hand stops moving it (SAVE_AFTER_MS), not
 on every pixel of a drag. Cards only draw and call back with primitive
 values; pishock.py and pishock_rules.py wire them to the controller.
@@ -18,11 +23,13 @@ from PySide6.QtCore import QEvent, QMimeData, QPoint, QRect, QSize, Qt, QTimer
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFrame, QGraphicsOpacityEffect, QLabel, QLayout, QLineEdit,
-    QPushButton, QSpinBox, QWidget,
+    QPushButton, QSpinBox, QVBoxLayout, QWidget,
 )
 
 from ui.layout_helpers import FlowLayout, hbox, vbox
+from ui.tooltips import tip_html
 from ui.views.card_parts import set_quiet, slider
+from ui.views.op_chips import SHOCKER_OP_TIPS, OpChips
 from ui.views.param_cards import CARD_W
 from ui.widgets import IdentityMark, ToggleSwitch
 
@@ -31,6 +38,14 @@ SHOCK_HUE = "yellow"
 SAVE_AFTER_MS = 300
 Targets = Union[str, List[int]]                 # "all", or shocker ids
 
+# What a Limits group says about itself (Blise's friends, 2026-11-14: the
+# sliders looked like they operate the shocker). The hover explanation says
+# the rest.
+LIMITS_HINT = ("The most anything may send: friends, behaviours, the menu. "
+               "Nothing is sent from here.")
+SHARED_LIMITS_HINT = ("All shockers keep to these: friends, behaviours, the menu. "
+                      "Nothing is sent from here.")
+
 
 def fmt_seconds(s: float) -> str:
     if s >= 120:
@@ -38,6 +53,14 @@ def fmt_seconds(s: float) -> str:
     if s >= 10:
         return f"{s:.0f} s"
     return f"{s:.1f} s"
+
+
+def fmt_short(ms: float) -> str:
+    """A short wait in seconds, to the hundredth under a second (a touch
+    held 0.25 s -- fmt_seconds would say 0.2)."""
+    if ms >= 1000:
+        return fmt_seconds(ms / 1000)
+    return f"{ms / 1000:.2f}".rstrip("0").rstrip(".") + " s"
 
 
 class ValueSlider(QWidget):
@@ -55,9 +78,9 @@ class ValueSlider(QWidget):
         lay = vbox(0, 2)
         self.setLayout(lay)
         row = hbox(0, 6)
-        name = QLabel(label)
-        name.setProperty("muted", "true")
-        row.addWidget(name)
+        self.name_label = QLabel(label)
+        self.name_label.setProperty("muted", "true")
+        row.addWidget(self.name_label)
         row.addStretch(1)
         self.value_label = QLabel("")
         self.value_label.setObjectName("cardValue")
@@ -255,11 +278,46 @@ def name_edit(text: str, placeholder: str, on_done: Callable[[str], None]) -> QL
     return edit
 
 
+def limits_group(hint: str, tip: str) -> Tuple[QFrame, QVBoxLayout]:
+    """A card's Limits: a box headed by the ceiling icon and "Limits", one
+    line on what they are, then the caller's sliders in the returned layout.
+    Nothing in it sends anything -- that is what the box says, and what
+    sets it apart from the Test buttons under it. Not folded: the heading
+    and the "Up to ..." labels are what stop them reading as controls."""
+    box = QFrame()
+    box.setObjectName("limitsGroup")
+    box.setToolTip(tip_html("Limits", tip))
+    lay = vbox(0, 6)
+    lay.setContentsMargins(8, 6, 8, 8)
+    box.setLayout(lay)
+    head = hbox(0, 5)
+    head.addWidget(IdentityMark("limits", 16))
+    title = QLabel("Limits")
+    title.setObjectName("limitsTitle")
+    head.addWidget(title)
+    head.addStretch(1)
+    lay.addLayout(head)
+    note = QLabel(hint)
+    note.setObjectName("cardHint")
+    note.setWordWrap(True)
+    lay.addWidget(note)
+    return box, lay
+
+
+def card_rule() -> QFrame:
+    """A thin line across a card, between what only sets a limit and what
+    sends something."""
+    rule = QFrame()
+    rule.setObjectName("cardRule")
+    rule.setFixedHeight(1)
+    return rule
+
+
 # ---- a shocker --------------------------------------------------------------
 
 class ShockerSetupCard(QFrame):
-    """One shocker: its name, its On / Off, what it is doing, its own limits
-    and three test buttons. Dragged by its ⠿ onto a behaviour, it is that
+    """One shocker: its name, its On / Off, what it is doing, its Shock /
+    Vibrate / Beep switches, its own limits and three test buttons. Dragged by its ⠿ onto a behaviour, it is that
     behaviour's shocker from then on. An OpenShock shocker carries its model
     and the transmitter id the collar is paired to as well, and can be
     deleted. Switched off (not in use) the card stays where it is, greyed
@@ -269,7 +327,9 @@ class ShockerSetupCard(QFrame):
                  ranges: Dict[str, Tuple], on_name: Callable[[str], None],
                  on_limit: Callable[[str, float], None], on_test: Callable[[str], None],
                  openshock: Optional[Dict[str, Any]] = None,
-                 on_use: Optional[Callable[[bool], None]] = None):
+                 on_use: Optional[Callable[[bool], None]] = None,
+                 on_op: Optional[Callable[[str, bool], None]] = None,
+                 ops_off: Sequence[str] = ()):
         super().__init__()
         self.shocker_id = int(shocker["id"])
         self.setObjectName("paramCard")
@@ -343,32 +403,101 @@ class ShockerSetupCard(QFrame):
             line.addWidget(self.rf_id)
             lay.addLayout(line)
 
+        # its Shock / Vibrate / Beep: what may reach it at all, whoever sends
+        # it (the engine refuses one switched off) -- Blise's friends,
+        # 2026-11-14. Kept apart from the Limits: these say whether, those how
+        # much.
+        self.ops = OpChips(lambda op, on: self._op_flipped(op, on, on_op), SHOCKER_OP_TIPS,
+                           label="Allowed")
+        lay.addWidget(self.ops)
+
+        # the ceilings: boxed under "Limits", every label "Up to ..."; nothing
+        # in the box sends anything
+        box, group = limits_group(
+            LIMITS_HINT,
+            "The most anything may send to this shocker: behaviours, friends, the web "
+            "remote and your avatar's menu. Nothing is sent from here - these only set "
+            "the ceiling. The Test buttons below are what send.")
+        lay.addWidget(box)
         self.limits: Dict[str, ValueSlider] = {}
-        for key, label, hue, fmt, tip in (
-                ("max_intensity", "Max shock", SHOCK_HUE, lambda v: f"{v:.0f}",
-                 "No shock on this shocker goes above this, whatever a behaviour or a "
-                 "friend asks for."),
-                ("max_vibrate", "Max vibrate", "pink", lambda v: f"{v:.0f}",
-                 "The same for vibrates. A shock that isn't armed goes out as a vibrate "
-                 "under this one."),
-                ("max_pulse_ms", "Longest pulse", SHOCK_HUE, lambda v: fmt_seconds(v / 1000),
-                 "The longest one pulse on this shocker may run.")):
+        for key, label, hue, fmt, title, tip in (
+                ("max_intensity", "Up to shock strength", SHOCK_HUE, lambda v: f"{v:.0f}",
+                 "Up to shock strength",
+                 "No shock on this shocker goes above this, whatever a behaviour, a friend "
+                 "or the menu asks for. Moving it sends nothing."),
+                ("max_vibrate", "Up to vibrate strength", "pink", lambda v: f"{v:.0f}",
+                 "Up to vibrate strength",
+                 "The most any vibrate on this shocker may carry. A shock that isn't armed "
+                 "goes out as a vibrate under this one. Moving it sends nothing."),
+                ("max_pulse_ms", "Up to a pulse of", SHOCK_HUE,
+                 lambda v: fmt_seconds(v / 1000), "Up to a pulse of",
+                 "The longest one pulse on this shocker may run. Moving it sends nothing.")):
             lo, hi, _default = ranges[key]
             step = 100 if key == "max_pulse_ms" else 1
             s = ValueSlider(label, lo, hi, limits[key], step, fmt, hue,
-                            on_change=lambda v, k=key: on_limit(k, v), tip=tip)
+                            on_change=lambda v, k=key: on_limit(k, v), tip=tip_html(title, tip))
             self.limits[key] = s
-            lay.addWidget(s)
+            group.addWidget(s)
 
+        # what does send, set apart from the ceilings by a line and its own
+        # heading -- kept last: add_row's rows go in above it
+        self._tail = QWidget()
+        tail = vbox(0, 6)
+        self._tail.setLayout(tail)
+        tail.addWidget(card_rule())
+        head = hbox(0, 6)
+        test_title = QLabel("Test")
+        test_title.setObjectName("testTitle")
+        head.addWidget(test_title)
+        test_note = QLabel("sends one short pulse")
+        test_note.setObjectName("cardHint")
+        head.addStretch(1)
+        head.addWidget(test_note)
+        tail.addLayout(head)
         tests = hbox(0, 4)
+        self.tests: Dict[str, QPushButton] = {}
         for label, op in (("Beep", "beep"), ("Vibrate", "vibrate"), ("Shock", "shock")):
-            b = mini_button(label, f"One short {label.lower()} at strength 10 on this shocker. "
-                            "Shock only shocks while shocks are armed; else it vibrates.")
+            b = mini_button(label, tip_html(
+                f"Test: {label}",
+                f"Sends one short {label.lower()} at strength 10 to this shocker, now. "
+                + ("It only shocks while shocks are armed; otherwise it vibrates."
+                   if op == "shock" else "It stays under this shocker's limits.")))
+            b.setObjectName("testButton")
             b.clicked.connect(lambda _=False, o=op: on_test(o))
             tests.addWidget(b, 1)
-        lay.addLayout(tests)
+            self.tests[op] = b
+        tail.addLayout(tests)
+        lay.addWidget(self._tail)
+        self._body_lay = lay
 
         self.set_on(not shocker.get("off"))
+        self.set_ops_off(ops_off)
+
+    def _op_flipped(self, op: str, on: bool, on_op) -> None:
+        self._show_ops()
+        if on_op is not None:
+            on_op(op, on)
+
+    def set_ops_off(self, ops_off: Sequence[str]) -> None:
+        """Which of Shock / Vibrate / Beep are switched off (from the
+        settings: shown, not sent back)."""
+        self.ops.set_on({op: op not in ops_off for op in self.ops.chips})
+        self._show_ops()
+
+    def ops_off(self) -> List[str]:
+        return [op for op, chip in self.ops.chips.items() if not chip.isChecked()]
+
+    def _show_ops(self) -> None:
+        """A Test button rests while its op is switched off."""
+        off = set(self.ops_off())
+        for op, b in self.tests.items():
+            b.setEnabled(op not in off)
+
+    def add_row(self, widget: QWidget) -> None:
+        """One more row above the Test buttons, greyed with the rest while
+        the shocker is off (the page puts its "Tell VRChat" row here): the
+        Limits and the Test buttons stay apart with it between."""
+        self._body_lay.insertWidget(self._body_lay.indexOf(self._tail), widget)
 
     def set_on(self, on: bool) -> None:
         """In use (on) or not: off, the card dims and its controls rest --
@@ -434,12 +563,63 @@ class ShockerSetupCard(QFrame):
         drag.exec(Qt.CopyAction)
 
 
+# The timing limits, in the order the box lists them: (key, label, step, tip)
+TIMING_LIMITS = (
+    ("cooldown_s", "At least a rest of", 0.1,
+     "How long a shocker rests after a pulse ends before the next one - the least it "
+     "gets. A stronger pulse may still take over one that's running, so a hard hit "
+     "lands at full strength. Moving it sends nothing."),
+    ("max_hold_s", "Up to a hold of", 1.0,
+     "Continuous, While touching and a friend's hold run at most this long in one go, "
+     "then the shocker takes a forced break. Moving it sends nothing."),
+    ("hold_rest_s", "Then a forced break of", 0.5,
+     "How long that forced break lasts. Moving it sends nothing."),
+)
+# The friends' own caps while their limits are separate (Blise's call,
+# 2026-11-17): (key, label, hue, fmt, step, tip) -- each only ever lowers a
+# shocker's own for friends
+FRIEND_CAPS = (
+    ("max_intensity", "Up to shock strength", SHOCK_HUE, lambda v: f"{v:.0f}", 1,
+     "No shock a friend sends goes above this, on any shocker - where a shocker's own "
+     "limit is lower, that one holds. Your avatar keeps each shocker's own. Moving it "
+     "sends nothing."),
+    ("max_vibrate", "Up to vibrate strength", "pink", lambda v: f"{v:.0f}", 1,
+     "The most any vibrate a friend sends may carry, on any shocker - a shocker's own "
+     "limit still wins where it is lower. Moving it sends nothing."),
+    ("max_pulse_ms", "Up to a pulse of", SHOCK_HUE, lambda v: fmt_seconds(v / 1000), 100,
+     "The longest one pulse a friend sends may run, on any shocker - a shocker's own "
+     "still wins where it is shorter. Moving it sends nothing."),
+)
+SEPARATE_TITLE = "Separate limits for friends"
+SEPARATE_TIP = (
+    "Gives friends limits of their own: a max shock, max vibrate and longest pulse - "
+    "which only ever lower each shocker's own - and a rest, longest hold and forced "
+    "break, counted apart from your avatar's. Off, everyone keeps to one set - the "
+    "easy way, and the default. On, your avatar (your behaviours, ShockOSC's and your "
+    "avatar menu) keeps to each shocker's own caps and the timing above, and friends "
+    "(Me and the web remote too) to theirs, so a friend's long hold never blocks your "
+    "contact shocks, and the other way round. The catch: your avatar's longest hold "
+    "and a friend's can then run back to back, without the forced break between them. "
+    "Arming and each shocker's switches stay shared either way. Switching it sends "
+    "nothing.")
+
+
 class SharedTimingCard(QFrame):
     """The timing every shocker shares: the rest after a pulse, the longest
-    a hold may run, and the break it then takes."""
+    a hold may run, and the break it then takes -- under "Limits" like each
+    shocker's own ceilings, and with no button that sends anything.
+
+    Its switch, Separate limits for friends (Blise's call, 2026-11-17; off
+    by default), gives friends a set of their own under a Friends heading --
+    their max shock, max vibrate and longest pulse (each lowering a
+    shocker's own, never raising it) and their timing -- and the first set
+    becomes your avatar's."""
 
     def __init__(self, limits: Dict[str, float], ranges: Dict[str, Tuple],
-                 on_limit: Callable[[str, float], None]):
+                 on_limit: Callable[[str, float], None], *, separate: bool = False,
+                 friend_limits: Optional[Dict[str, float]] = None,
+                 on_separate: Optional[Callable[[bool], None]] = None,
+                 on_friend_limit: Optional[Callable[[str, float], None]] = None):
         super().__init__()
         self.setObjectName("paramCard")
         self.setProperty("hue", SHOCK_HUE)
@@ -450,30 +630,88 @@ class SharedTimingCard(QFrame):
         title = QLabel("Every shocker")
         title.setObjectName("paramLabel")
         lay.addWidget(title)
+        box, group = limits_group(
+            SHARED_LIMITS_HINT,
+            "The timing every shocker on the hub keeps to, whoever drives it: behaviours, "
+            "friends, the web remote and your avatar's menu. Nothing is sent from here - "
+            "these only set the limits.")
+        lay.addWidget(box)
+        self.separate = ToggleSwitch(SEPARATE_TITLE)
+        self.separate.setChecked(bool(separate))
+        self.separate.setToolTip(tip_html(SEPARATE_TITLE, SEPARATE_TIP))
+        if on_separate is not None:
+            self.separate.toggled.connect(on_separate)
+        group.addWidget(self.separate)
+        self.avatar_head = _sub_head("Your avatar")
+        group.addWidget(self.avatar_head)
         self.limits: Dict[str, ValueSlider] = {}
-        for key, label, step, tip in (
-                ("cooldown_s", "Rest after a pulse", 0.1,
-                 "How long a shocker rests after a pulse ends before the next one. A "
-                 "stronger pulse may still take over one that's running, so a hard hit "
-                 "lands at full strength."),
-                ("max_hold_s", "Longest hold", 1.0,
-                 "Continuous, While touching and a friend's hold run at most this long in "
-                 "one go, then the shocker takes a forced break."),
-                ("hold_rest_s", "Then a break of", 0.5, "How long that forced break lasts.")):
+        for key, label, step, tip in TIMING_LIMITS:
             lo, hi, _default = ranges[key]
             s = ValueSlider(label, lo, hi, limits[key], step, fmt_seconds, log=True,
-                            on_change=lambda v, k=key: on_limit(k, v), tip=tip)
+                            on_change=lambda v, k=key: on_limit(k, v),
+                            tip=tip_html(label, tip))
             self.limits[key] = s
-            lay.addWidget(s)
-        hint = QLabel("Every shocker on the hub keeps to these, whoever drives it.")
-        hint.setProperty("muted", "true")
-        hint.setWordWrap(True)
-        hint.setObjectName("cardHint")
-        lay.addWidget(hint)
+            group.addWidget(s)
+        # the friends' own set: shown while the switch is on
+        self.friends_box = QWidget()
+        fl = vbox(0, 6)
+        fl.setContentsMargins(0, 4, 0, 0)
+        self.friends_box.setLayout(fl)
+        fl.addWidget(_sub_head("Friends", "friends"))
+        theirs = dict(limits, **(friend_limits or {}))
+        self.friend_limits: Dict[str, ValueSlider] = {}
+        friend_change = on_friend_limit or (lambda *_a: None)
+        for key, label, hue, fmt, step, tip in FRIEND_CAPS:
+            lo, hi, _default = ranges[key]
+            s = ValueSlider(label, lo, hi, theirs[key], step, fmt, hue,
+                            on_change=lambda v, k=key: friend_change(k, v),
+                            tip=tip_html(label, tip))
+            self.friend_limits[key] = s
+            fl.addWidget(s)
+        for key, label, step, tip in TIMING_LIMITS:
+            lo, hi, _default = ranges[key]
+            s = ValueSlider(label, lo, hi, theirs[key], step, fmt_seconds, log=True,
+                            on_change=lambda v, k=key: friend_change(k, v),
+                            tip=tip_html(label, "Friends' own, while their limits are separate: "
+                                         + tip[0].lower() + tip[1:]))
+            self.friend_limits[key] = s
+            fl.addWidget(s)
+        group.addWidget(self.friends_box)
+        self._show_separate(bool(separate))
+
+    def _show_separate(self, on: bool) -> None:
+        self.avatar_head.setVisible(on)
+        self.friends_box.setVisible(on)
 
     def set_limits(self, limits: Dict[str, float]) -> None:
         for key, s in self.limits.items():
             s.set_value(limits[key])
+
+    def set_separate(self, on: bool, friend_limits: Optional[Dict[str, float]] = None) -> None:
+        """The switch and the friends' set as the settings have them now."""
+        if self.separate.isChecked() != bool(on):
+            self.separate.blockSignals(True)
+            self.separate.setChecked(bool(on))
+            self.separate.blockSignals(False)
+        self._show_separate(bool(on))
+        for key, s in self.friend_limits.items():
+            if friend_limits and key in friend_limits:
+                s.set_value(friend_limits[key])
+
+
+def _sub_head(text: str, identity: str = "") -> QWidget:
+    """A set's heading inside the Limits box: Your avatar / Friends (with
+    the Friends icon -- one icon per thing)."""
+    w = QWidget()
+    row = hbox(0, 5)
+    w.setLayout(row)
+    if identity:
+        row.addWidget(IdentityMark(identity, 14))
+    label = QLabel(text)
+    label.setObjectName("limitsSub")
+    row.addWidget(label)
+    row.addStretch(1)
+    return w
 
 
 # ---- where a behaviour takes its shockers -------------------------------------
@@ -481,16 +719,20 @@ class SharedTimingCard(QFrame):
 class ShockerDropZone(QFrame):
     """The shockers a behaviour (or one Touch zone) drives, as chips -- a
     chip's × takes one off. A shocker card dropped here adds it; so does
-    the ＋, which lists them (no drag needed, for a VR pointer)."""
+    the ＋, which lists them (no drag needed, for a VR pointer). A chip is
+    grey while its shocker is switched off, or has the behaviour's op
+    switched off (`op_off`: the ids, `op`: which one) -- skipped either way."""
 
     def __init__(self, targets: Targets, names: Sequence[Tuple[int, str]],
-                 on_change: Callable[[Targets], None], off: Sequence[int] = ()):
+                 on_change: Callable[[Targets], None], off: Sequence[int] = (),
+                 op_off: Sequence[int] = (), op: str = ""):
         super().__init__()
         self.setObjectName("dropZone")
         self.setAcceptDrops(True)
         self._targets: Targets = targets if targets == "all" else list(targets)
         self._names = list(names)              # ((id, label), ...) on the page now
         self._off = set(off)                   # switched off on their card: skipped
+        self._op_off, self._op = set(op_off), op   # this behaviour's op off there: skipped
         self._on_change = on_change
         self._picking = False
         self._flow = FlowLayout(margin=6, h_spacing=6, v_spacing=6)
@@ -501,6 +743,13 @@ class ShockerDropZone(QFrame):
     def targets(self) -> Targets:
         return self._targets
 
+    def set_op_off(self, op_off: Sequence[int], op: str) -> None:
+        """The behaviour's op changed (or a shocker's switch for it): the
+        chips grey again for it."""
+        if set(op_off) != self._op_off or op != self._op:
+            self._op_off, self._op = set(op_off), op
+            self._fill()
+
     def _label(self, sid: int) -> str:
         return next((n for i, n in self._names if i == sid), f"Shocker {sid}")
 
@@ -510,17 +759,28 @@ class ShockerDropZone(QFrame):
             if item.widget() is not None:
                 item.widget().deleteLater()
         chosen = ["all"] if self._targets == "all" else list(self._targets)
+        every = [i for i, _n in self._names]
         for sid in chosen:
             text = "All shockers" if sid == "all" else self._label(sid)
             chip = QPushButton(f"{text}  ×")
             chip.setProperty("role", "chip")
             chip.setProperty("hue", SHOCK_HUE)
             chip.setCheckable(True)
-            off = sid in self._off
-            chip.setChecked(not off)          # unchecked: the grey chip
+            ids = every if sid == "all" else [sid]
+            off = bool(ids) and all(i in self._off for i in ids)
+            op_off = not off and bool(ids) and all(i in self._off or i in self._op_off
+                                                   for i in ids)
+            chip.setChecked(not (off or op_off))    # unchecked: the grey chip
             chip.setCursor(Qt.PointingHandCursor)
-            chip.setToolTip("Switched off on its card - this behaviour skips it until it's "
-                            "back on. Click to take it off." if off else "Click to take it off")
+            if off:
+                tip = ("Switched off on its card - this behaviour skips it until it's back on. "
+                       "Click to take it off.")
+            elif op_off:
+                tip = (f"{self._op.capitalize()} is switched off on its card - this behaviour "
+                       "skips it until that's back on. Click to take it off.")
+            else:
+                tip = "Click to take it off"
+            chip.setToolTip(tip)
             chip.clicked.connect(lambda _=False, s=sid: self._remove(s))
             self._flow.addWidget(chip)
         add = QPushButton("＋" if chosen else "＋  Drop a shocker here")

@@ -14,6 +14,13 @@ from ui import theme
 HEX = re.compile(r"#[0-9a-fA-F]{6}\b")
 
 
+@pytest.fixture(scope="module")
+def qapp():
+    import sys
+    from PySide6.QtWidgets import QApplication
+    return QApplication.instance() or QApplication(sys.argv[:1])
+
+
 def _token_hexes():
     out = set()
     for mode in T.MODES.values():
@@ -154,14 +161,46 @@ class TestModes:
 class TestTags:
     def test_status_tag_only_accents_the_name(self):
         html = theme.status_tag_html("OscGoesPurrr", "1.2.3")
-        assert "OscGoesPurrr</a> v1.2.3 · made by " in html
+        assert ">v1.2.3</a> · made by " in html
         assert html.count(T.MODES[C.UI_MODE]["accent"]) == 1
         assert "<b" in html and "Blise518B" in html
-        # the app's name links to the project, his name to his profile
+        # the app's name and its version link to the project, his name to
+        # his profile
         assert html.startswith(f'<a href="{theme.GITHUB_URL}"')
         assert f'<a href="{theme.AUTHOR_URL}"' in html
         assert theme.GITHUB_URL == "https://github.com/Blise518B/OscGoesPurrr"
         assert theme.AUTHOR_URL == "https://github.com/Blise518B"
+
+    def test_status_tag_version_links_to_the_repository_dim_and_plain(self):
+        import re
+        html = theme.status_tag_html("OscGoesPurrr", "1.2.3")
+        links = re.findall(r'<a href="([^"]+)" style="([^"]*)">(.*?)</a>', html)
+        by_text = {text: (href, style) for href, style, text in links}
+        # name and version both lead to the repository ...
+        assert by_text["OscGoesPurrr"][0] == theme.GITHUB_URL
+        assert by_text["v1.2.3"][0] == theme.GITHUB_URL
+        # ... both dim like the rest of the tag, neither underlined
+        dim = theme.CHROME["dim"]
+        for text in ("OscGoesPurrr", "v1.2.3"):
+            style = by_text[text][1]
+            assert f"color:{dim}" in style
+            assert "text-decoration:none" in style
+        # his name keeps its own profile link
+        assert by_text["<b>Blise518B</b>"][0] == theme.AUTHOR_URL
+
+    def test_status_tag_renders_in_a_label(self, qapp):
+        # the one caller (ui_components._build_status_bar) puts it in a
+        # rich-text QLabel: both the name and the version must show as
+        # links there, and the visible text must read as before
+        from PySide6.QtWidgets import QLabel
+        from PySide6.QtCore import Qt
+        lbl = QLabel(theme.status_tag_html("OscGoesPurrr", "1.2.3"))
+        lbl.setTextFormat(Qt.RichText)
+        assert lbl.text().count("<a href=") == 3
+        from PySide6.QtGui import QTextDocument
+        doc = QTextDocument()
+        doc.setHtml(lbl.text())
+        assert doc.toPlainText() == "OscGoesPurrr v1.2.3 · made by Blise518B"
 
     def test_build_number_is_a_commit_count_not_the_version(self):
         # Public releases carry a hand-set VERSION ("0.9.0"), so the

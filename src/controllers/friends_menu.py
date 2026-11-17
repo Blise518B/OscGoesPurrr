@@ -25,7 +25,8 @@ from constants import (
     OGP_FRIEND_VIBRATE_PARAMETER, OGP_FRIEND_WARNING_PARAMETER, OGP_REMOTE_TOGGLE_PARAMETERS,
     OGP_STRENGTH_PARAMETER,
 )
-from controllers.friends_common import FEATURE_KEY, unit
+from controllers.friends_common import FEATURE_KEY, came_through, unit
+from event_log import VIA_MENU
 from parameter_store import store
 
 _MENU_PREFIX = "OGP/Friend/"
@@ -120,8 +121,9 @@ class FriendsMenuMixin:
         elif address in _MENU_OPS:
             if self._menu_pressed(address, value):
                 op = _MENU_OPS[address]
-                self.targets_shock(slots, m.shock_int, m.shock_len, op,
-                                   self._menu_warning(op), m.shock_int)
+                with came_through(VIA_MENU):    # the log: from your avatar menu
+                    self.targets_shock(slots, m.shock_int, m.shock_len, op,
+                                       self._menu_warning(op), m.shock_int)
         elif address == OGP_FRIEND_STOP_SHOCK_PARAMETER:
             if self._menu_pressed(address, value):
                 self.targets_stop(list(range(proto.MAX_SHOCKERS)))
@@ -301,16 +303,17 @@ class FriendsMenuMixin:
         if has != getattr(self, "_avatar_has_friends_menu", None):
             if has:
                 self._friends_note("Your avatar has the OGP Friends menu - you can control "
-                                   "friends from VRChat")
+                                   "friends from VRChat", kind="settings", op="menu")
             elif getattr(self, "_avatar_has_friends_menu", None) is not None:
-                self._friends_note("This avatar has no OGP Friends menu")
+                self._friends_note("This avatar has no OGP Friends menu", kind="settings",
+                                   op="menu")
             self._avatar_has_friends_menu = has
 
 
 def _menu_mode(value: Any) -> int:
     try:
         return max(0, min(len(friend_patterns.WAVES), int(value)))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 0
 
 

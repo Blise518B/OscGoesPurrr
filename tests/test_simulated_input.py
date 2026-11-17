@@ -107,7 +107,7 @@ class TestSimAddressesPassTheTypeFilter:
     def test_custom_chain_follows_its_own_filters(self, router, clock):
         cfg = self._cfg()
         cfg["mix"]["0"]["chains"][0]["type"] = "custom"
-        cfg["motor_0_touch"] = True
-        cfg["motor_0_pen"] = False                   # custom chain: touch only
+        cfg["motor_0_pen_self"] = False              # custom chain: touch only
+        cfg["motor_0_pen_others"] = False
         d = self._outs(router, clock, cfg, {SIM_PEN_ADDRESS: 0.9, SIM_TOUCH_ADDRESS: 0.3})
         assert d[0] == pytest.approx(0.3)

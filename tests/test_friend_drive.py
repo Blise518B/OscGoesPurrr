@@ -17,8 +17,9 @@ def _cfg(band=None):
     }
     if band:
         chain["output"] = {"min": band[0], "max": band[1]}
-    return {"motor_0_touch": True, "motor_0_pen": True, "motor_0_self": False,
-            "motor_0_others": True, "osc_addresses": {"0": ["MyParam"]},
+    return {"motor_0_touch_self": False, "motor_0_touch_others": True,
+            "motor_0_pen_self": False, "motor_0_pen_others": True,
+            "osc_addresses": {"0": ["MyParam"]},
             "mix": {"0": {"chains": [chain], "merge": "max"}}}
 
 

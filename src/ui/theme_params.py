@@ -67,6 +67,12 @@ def params_qss(mode_name: str, v: Dict[str, str]) -> str:
         f' border-radius: {v["r_btn"]}px; font-weight: 700; padding: 2px 8px; }}\n',
         f'QPushButton[role="paramSwitch"]:disabled, QPushButton[role="paramHold"]:disabled {{'
         f' color: {v["dim"]}; border-color: {v["dim"]}; background-color: transparent; }}\n',
+        # the Height box (param_height.py): your height in big numbers, and its
+        # settings folded out under a line
+        f'QLabel#heightNow {{ color: {v["txt"]}; font-size: 20px; font-weight: 700; }}\n',
+        f'QLabel#heightNow:disabled {{ color: {v["dim"]}; }}\n',
+        f'QFrame#heightOptions {{ background-color: transparent; border: none;'
+        f' border-top: 1px solid {v["line"]}; }}\n',
         # the Avatar Remote page's own bits
         f'QPushButton[role="yolo"] {{ background-color: transparent; color: {v["warn"]};'
         f' border: 1px solid {v["warn_mid"]}; border-radius: {v["r_btn"]}px; padding: 3px 12px;'
@@ -85,6 +91,15 @@ def params_qss(mode_name: str, v: Dict[str, str]) -> str:
         f'QLabel#paramAvatarId {{ color: {v["dim"]}; font-size: 11px; padding-left: 8px; }}\n',
         f'QTreeWidget#paramTree {{ background-color: {v["well"]}; border: 1px solid {v["line"]};'
         f' border-radius: {v["r_btn"]}px; alternate-background-color: {v["card"]}; }}\n',
+        # a card or category held over the parameter list: "Drop to remove",
+        # and the strip above the list that offers Undo / asks after a drop
+        f'QLabel#paramRemoveDrop {{ background-color: {v["err_tint"]}; color: {v["err"]};'
+        f' border: 1px solid {v["err"]}; border-radius: {v["r_btn"]}px;'
+        ' font-size: 15px; font-weight: 700; padding: 48px 16px 16px 16px; }\n',
+        f'QFrame#paramRemoveStrip {{ background-color: {v["card"]}; border: 1px solid {v["line"]};'
+        f' border-radius: {v["r_btn"]}px; }}\n',
+        f'QFrame#paramRemoveStrip[tone="ask"] {{ border-color: {v["err_mid"]}; }}\n',
+        f'QLabel#paramRemoveText {{ color: {v["txt"]}; }}\n',
         # the Shockers page's cards (pishock_cards.py): a name edited in
         # place, a limit's value in full, and the zones shockers are dropped on
         f'QLineEdit#cardName {{ background-color: transparent; border: 1px solid transparent;'
@@ -95,6 +110,15 @@ def params_qss(mode_name: str, v: Dict[str, str]) -> str:
         f' background-color: {v["card"]}; }}\n',
         f'QLabel#cardValue {{ color: {v["txt"]}; font-weight: 700; }}\n',
         f'QLabel#cardHint {{ color: {v["muted"]}; font-size: 11px; }}\n',
+        # a card's Limits (the ceilings), boxed and headed, and the line that sets
+        # the Test buttons -- which do send something -- apart from them
+        f'QFrame#limitsGroup {{ background-color: transparent; border: 1px solid {v["line"]};'
+        f' border-radius: {v["r_btn"]}px; }}\n',
+        f'QLabel#limitsTitle, QLabel#testTitle {{ color: {v["txt"]}; font-weight: 700; }}\n',
+        # a set's heading inside the Limits box (Your avatar / Friends), while
+        # friends have separate limits
+        f'QLabel#limitsSub {{ color: {v["muted"]}; font-size: 11px; font-weight: 700; }}\n',
+        f'QFrame#cardRule {{ background-color: {v["line"]}; border: none; }}\n',
         # a shocker that is shocking right now: the shockers' yellow, and a
         # resting one readable on the card's dark well (the dim grey isn't)
         f'QLabel[role="pill"][tone="shock"] {{ background-color: {PALETTE["yellow"][2]};'
@@ -164,6 +188,11 @@ def params_qss(mode_name: str, v: Dict[str, str]) -> str:
         f'QFrame#paramCard QSpinBox:disabled {{ color: {v["dim"]}; border-color: {v["dim"]}; }}\n'
         f'QFrame#paramCard QSlider::sub-page:horizontal:disabled {{ background: {v["dim"]}; }}\n'
         f'QFrame#paramCard QSlider::handle:horizontal:disabled {{ background: {v["dim"]}; }}\n'
+        # the Height box greyed (a world that forbids scaling, a friend's locked box)
+        f'QFrame#paramCat[box="height"] QSlider::sub-page:horizontal:disabled {{'
+        f' background: {v["dim"]}; }}\n'
+        f'QFrame#paramCat[box="height"] QSlider::handle:horizontal:disabled {{'
+        f' background: {v["dim"]}; }}\n'
         # a shocker switched off on its card (not in use): the frame greyed too
         # (grey's mid in both modes: Vibrant's `dim` is a green)
         f'QFrame#paramCard[off="true"] {{ border-color: {PALETTE["grey"][1]}; }}\n'

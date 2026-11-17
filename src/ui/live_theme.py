@@ -9,7 +9,7 @@ level. Instead:
 
 * The app-level stylesheet is set once, at launch, and never touched again.
 * The UI registers SECTIONS ("roots"): the sidebar, each page, and on Home
-  each toy's bar and each motor's chain block. Sections never contain one
+  and the Toys page each toy's bar and each motor's chain block. Sections never contain one
   another, so re-styling one costs only that section — 5 to 30 ms.
 * A colour change is applied to a section by giving it the new stylesheet
   as its own (it overrides the app's), and by swapping the colours its

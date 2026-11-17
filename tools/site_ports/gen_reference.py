@@ -592,9 +592,10 @@ def load_ui_text_helpers():
                    flags=__future__.annotations.compiler_flag,
                    dont_inherit=True)
     from typing import Any, Callable, Dict, List, Optional, Tuple
+    import contact_filters
     ns = {"copy": copy, "Any": Any, "Callable": Callable, "Dict": Dict,
           "List": List, "Optional": Optional, "Tuple": Tuple,
-          "SIM_ADDRESSES": SIM_ADDRESSES}
+          "SIM_ADDRESSES": SIM_ADDRESSES, "_contact": contact_filters}
     exec(code, ns)
     return ns
 
@@ -647,7 +648,14 @@ def summary_reference():
                             {"motor_0_zones": "Mouth, Butt"}):
                 mix = make()
                 cfg = {"mix": {"0": mix}}
-                cfg.update(routing)
+                # The app keeps who a chain hears as the contact 2x2; the
+                # port still takes the old Self / Others, so the profile is
+                # written from them by the app's own migration.
+                import contact_filters
+                per_dev = dict(routing)
+                contact_filters.migrate_routing(
+                    per_dev, contact_filters.chain_types_from_feel({"0": mix}))
+                cfg.update(per_dev)
                 params = []
                 if sim_on:
                     params = ["MyParam", SIM_PEN_ADDRESS, SIM_TOUCH_ADDRESS]

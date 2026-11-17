@@ -304,6 +304,51 @@ def set_windows_app_id(app_id: str = WINDOWS_APP_ID) -> None:
         pass     # very old Windows -- the taskbar falls back to the exe
 
 
+def set_window_class_icon(hwnd: int, ico_path: str) -> bool:
+    """Give the window's class OGP's icon as well as the window (Windows
+    only). Qt registers its window class with Windows' generic program icon
+    unless the exe carries an IDI_ICON1 resource -- python.exe (run.bat)
+    never does -- and the taskbar shows the class icon whenever it doesn't
+    take the window's own, so OGP's button now and then came up with that
+    generic icon. With the class carrying the cat too, both ways show it.
+    Call it before the window is first shown; True when the icon was set."""
+    if sys.platform != "win32" or not hwnd or not os.path.isfile(ico_path):
+        return False
+    try:
+        from ctypes import wintypes
+        # a private handle, so these signatures don't leak into other modules
+        user32 = ctypes.WinDLL("user32")
+        user32.LoadImageW.restype = wintypes.HANDLE
+        user32.LoadImageW.argtypes = [wintypes.HINSTANCE, wintypes.LPCWSTR, wintypes.UINT,
+                                      ctypes.c_int, ctypes.c_int, wintypes.UINT]
+        user32.SetClassLongPtrW.restype = ctypes.c_void_p
+        user32.SetClassLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int, ctypes.c_void_p]
+        user32.GetClassLongPtrW.restype = ctypes.c_void_p
+        user32.GetClassLongPtrW.argtypes = [wintypes.HWND, ctypes.c_int]
+        user32.GetDpiForWindow.argtypes = [wintypes.HWND]
+        dpi = user32.GetDpiForWindow(hwnd) or 96
+
+        def metric(index: int) -> int:
+            try:
+                return user32.GetSystemMetricsForDpi(index, dpi)
+            except Exception:      # before Windows 10 1607
+                return user32.GetSystemMetrics(index)
+
+        IMAGE_ICON, LR_LOADFROMFILE = 1, 0x10
+        big = user32.LoadImageW(None, ico_path, IMAGE_ICON,
+                                metric(11), metric(12), LR_LOADFROMFILE)   # SM_C[XY]ICON
+        small = user32.LoadImageW(None, ico_path, IMAGE_ICON,
+                                  metric(49), metric(50), LR_LOADFROMFILE)  # SM_C[XY]SMICON
+        if big:
+            user32.SetClassLongPtrW(hwnd, -14, big)        # GCLP_HICON
+        if small:
+            user32.SetClassLongPtrW(hwnd, -34, small)      # GCLP_HICONSM
+        # read back: not a real window (Qt offscreen) takes nothing
+        return bool(big) and user32.GetClassLongPtrW(hwnd, -14) == big
+    except Exception:
+        return False
+
+
 def toggle_windows_console(show: bool):
     """Hides or shows the Windows terminal console (Windows only)."""
     if os.name == 'nt':

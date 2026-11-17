@@ -91,6 +91,8 @@
 .rpanel .pg-vrow input.hs { width: 100%; flex: none; }
 .pg-tests { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
 .pg-tests .pg-btn { width: 100%; padding: 0; }
+.pg-tell { display: flex; flex-direction: column; gap: 4px; }
+.pg-param { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .pg-scard.every > b { font-size: 13px; }
 .pg-bgrid { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
 .pg-bcard {
@@ -230,6 +232,175 @@
 .pg-schip.off { border-color: var(--line); color: var(--dim); background: transparent; }
 .rpanel .pg-schip.off .pg-x { color: var(--dim); }
 
+/* 0.16: what may reach a shocker (op_chips: lit on, grey off), its boxed
+   Limits (pishock_cards.limits_group) and the Test buttons set apart under a
+   line; Arm shocks' question in the switch's place */
+.pg-ops { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.pg-ops .pg-muted { margin-right: 2px; }
+.rpanel .pg-op {
+  height: 22px; padding: 0 5px; border-radius: 5px; font: 11px "Segoe UI", system-ui, sans-serif; cursor: pointer;
+  background: transparent; color: var(--dim); border: 1px solid var(--line);
+}
+.rpanel .pg-op.on { background: var(--yellow-tint); color: var(--yellow); border-color: var(--yellow); }
+.rpanel .pg-op:hover { border-color: var(--yellow); }
+.pg-limits { border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px 8px; display: flex; flex-direction: column; gap: 6px; }
+.pg-lhead { display: flex; align-items: center; gap: 5px; }
+.pg-lhead b, .pg-thead b { color: var(--txt); font-weight: 700; font-size: 13px; }
+.pg-lic { display: inline-flex; width: 16px; height: 16px; color: var(--muted); }
+.pg-lic svg { width: 16px; height: 16px; }
+.pg-lhint { color: var(--muted); font-size: 11px; line-height: 15px; margin: 0; }
+/* a set's heading inside the Limits box (Your avatar / Friends), while friends
+   have separate limits -- QLabel#limitsSub */
+.pg-lsub { color: var(--muted); font-size: 11px; font-weight: 700; display: flex; align-items: center; gap: 5px; }
+.pg-lset { display: flex; flex-direction: column; gap: 6px; padding-top: 4px; }
+.pg-lsub[hidden], .pg-lset[hidden] { display: none; }
+.pg-limits .pg-vhead { line-height: 17px; }
+.rpanel .pg-limits .pg-vrow input.hs { height: 16px; }
+.pg-rule { height: 1px; background: var(--line); }
+.pg-thead { display: flex; align-items: center; gap: 6px; }
+.rpanel .pg-btn:disabled { color: var(--dim); border-color: var(--dim); cursor: default; }
+.pg-arm { display: inline-flex; align-items: center; gap: 6px; }
+.pg-armask { display: inline-flex; align-items: center; gap: 6px; }
+.pg-armask[hidden], .pg-arm label.sw[hidden], .pg-armw[hidden] { display: none; }
+.rpanel .pg-armask .pg-btn { height: 28px; }
+.rpanel .pg-btn.danger { color: var(--err); border-color: var(--err-mid); background: var(--err-tint); font-weight: 700; }
+.pg-armw { color: var(--err); font-weight: 700; min-width: 112px; margin-left: 6px; white-space: nowrap; }
+.pg-armw.not { font-weight: 400; }
+.rpanel .su-input.pg-pfield { flex: 1; }
+.pg-addrow[hidden] { display: none; }
+.pg-addrow { gap: 8px; }
+
+/* The Log (log_page.py, log_people.py, theme_log.py): the filters, People
+   beside Entries; a person is a well-coloured row, their shocks in yellow */
+.lg-filters { gap: 8px; }
+.lg-filters .pg-row.tight > span { color: var(--txt); }
+.rpanel .lg-select {
+  height: 30px; padding: 0 26px 0 8px; border: 1px solid var(--line); border-radius: 7px; color: var(--txt);
+  font: 13px "Segoe UI", system-ui, sans-serif; cursor: pointer; -webkit-appearance: none; appearance: none;
+  background: var(--well) linear-gradient(var(--line), var(--line)) no-repeat calc(100% - 22px) 0 / 1px 100%;
+}
+.lg-selwrap { position: relative; display: inline-flex; flex: none; }
+.lg-selwrap::after {
+  content: "\25BE"; position: absolute; right: 0; top: 0; bottom: 0; width: 22px; pointer-events: none;
+  display: flex; align-items: center; justify-content: center; font-size: 10px; color: var(--txt);
+}
+.rpanel .lg-select.wide { width: 190px; }
+.rpanel .lg-select { width: 112px; }
+.rpanel .lg-search { flex: 1; min-width: 0; }
+.rpanel .pg-btn.lg-clear { color: var(--err); border-color: var(--err-mid); font-weight: 700; }
+.lg-ask { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; border: 1px solid var(--err-mid); border-radius: 8px; }
+.lg-ask[hidden] { display: none; }
+.rpanel .lg-kind {
+  display: inline-flex; align-items: center; gap: 5px; height: 26px; padding: 2px 9px; border-radius: 6px; cursor: pointer;
+  background: transparent; color: var(--muted); border: 1px solid var(--line); font: 12px "Segoe UI", system-ui, sans-serif;
+}
+.rpanel .lg-kind:hover { background: var(--hover); }
+.rpanel .lg-kind.on { background: var(--ok-tint); color: var(--accent); border-color: var(--accent); }
+.lg-ic { display: inline-flex; width: 14px; height: 14px; flex: none; color: var(--muted); }
+.lg-ic svg { width: 14px; height: 14px; }
+.lg-cols { display: grid; grid-template-columns: 380px minmax(0, 1fr); gap: 14px; align-items: start; }
+.lg-card { gap: 8px; padding: 12px 16px 14px; }
+.lg-people { display: flex; flex-direction: column; gap: 6px; }
+.lg-person { background: var(--well); border: 1px solid var(--well); border-radius: 8px; padding: 6px 8px 8px; }
+.lg-person:hover { border-color: var(--line); }
+.lg-phead { display: flex; align-items: center; gap: 8px; height: 26px; cursor: pointer; }
+.lg-caret { color: var(--muted); font-size: 9px; width: 14px; text-align: center; }
+.lg-pname { color: var(--txt); font-weight: 700; }
+.lg-shocks { color: var(--yellow); background: var(--yellow-tint); border: 1px solid var(--yellow-mid); border-radius: 5px; padding: 1px 6px; font-size: 11px; font-weight: 700; }
+.lg-ago { color: var(--muted); font-size: 12px; }
+.rpanel .lg-only { height: 22px; padding: 0 5px; border-radius: 5px; border: 1px solid var(--accent); background: transparent; color: var(--muted); font: 11px "Segoe UI", system-ui, sans-serif; cursor: pointer; }
+.rpanel .lg-only:hover { color: var(--accent); }
+.lg-last { color: var(--muted); font-size: 12px; padding-left: 22px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lg-body { padding: 4px 0 2px 22px; font-size: 12px; line-height: 18px; }
+.lg-when { color: var(--muted); margin-right: 10px; }
+.lg-body .out { color: var(--yellow); font-weight: 700; }
+.lg-body .op { color: var(--yellow); }
+.lg-body .held { color: var(--dim); }
+.lg-table { border: 1px solid var(--line); border-radius: 6px; background: var(--well); overflow: hidden; min-height: 380px; }
+.lg-row { display: grid; grid-template-columns: 92px 86px minmax(0, 1fr); align-items: center; height: 30px; font-size: 13px; }
+.lg-row:nth-child(even) { background: color-mix(in srgb, var(--card) 70%, transparent); }
+.lg-row > span { padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.lg-row.th { height: 32px; border-bottom: 1px solid var(--line); background: transparent; }
+.lg-row.th > span { font-size: 10px; font-weight: 700; letter-spacing: 1px; color: var(--muted); text-align: center; border-right: 1px solid var(--line); }
+.lg-row.th > span:last-child { border-right: none; }
+.lg-c3 { display: flex; align-items: center; gap: 8px; }
+.lg-what { overflow: hidden; text-overflow: ellipsis; }
+.lg-row.out { color: var(--yellow); font-weight: 700; }
+.lg-row.op .lg-c3 { color: var(--yellow); }
+.lg-row.held { color: var(--dim); }
+/* A corrected entry (log_page.CorrectionDelegate, log_people.history_html):
+   what went out and why, muted on a second line under it */
+.lg-row.fixed { height: 46px; }
+.lg-row.fixed .lg-c3 { align-items: flex-start; }
+.lg-row.fixed .lg-ic { margin-top: 3px; }
+.lg-what .lg-line, .lg-what .lg-fix { display: block; overflow: hidden; text-overflow: ellipsis; }
+.lg-row .lg-fix { color: var(--muted); font-weight: 400; }
+.lg-body .lg-fix { color: var(--muted); padding-left: 20px; }
+.fr-people { max-height: 220px; overflow-y: auto; }
+.fr-people[hidden], .fr-logbody[hidden] { display: none; }
+
+/* Friends, 0.16: a row's second line (their VRChat account), ↻ / Check all,
+   In your VRChat instance, a panel's account line (friends_account.py,
+   friends_list.py) */
+.fr-row { flex-direction: column; align-items: stretch; justify-content: center; height: auto; min-height: 34px; gap: 0; padding: 0 6px; }
+.fr-line { display: flex; align-items: center; gap: 8px; height: 32px; }
+.fr-vrcline { display: flex; align-items: center; gap: 8px; padding: 0 0 5px 28px; margin-top: -4px; font-size: 12px; }
+.fr-vrcline[hidden] { display: none; }
+.fr-vname { color: var(--muted); }
+.fr-vname.big { color: var(--txt); font-size: 13px; }
+.fr-vtag { color: var(--muted); font-size: 12px; }
+.fr-vtag.ok { color: var(--accent); }
+.fr-vtag.warn { color: var(--warn); }
+.rpanel .fr-check {
+  width: 22px; height: 22px; padding: 0; border: 1px solid var(--line); border-radius: 6px; background: transparent;
+  color: var(--txt); font-size: 12px; cursor: pointer; margin-right: 4px; flex: none;
+}
+.rpanel .fr-check:disabled { color: var(--dim); cursor: default; }
+.rpanel .fr-check[hidden] { display: none; }
+.rpanel .fr-checkall {
+  height: 22px; padding: 0 6px; border: 1px solid var(--line); border-radius: 6px; background: transparent;
+  color: var(--muted); font: 12px "Segoe UI", system-ui, sans-serif; cursor: pointer;
+}
+.rpanel .fr-checkall:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+.rpanel .fr-checkall:disabled { color: var(--dim); cursor: default; }
+.rpanel .fr-checkall[hidden] { display: none; }
+.fr-inst { display: flex; flex-direction: column; gap: 6px; }
+.fr-instline[hidden], .fr-vrcchips[hidden] { display: none; }
+.fr-small { font-size: 11px; }
+.fr-vrcchips { display: flex; flex-wrap: wrap; gap: 6px; }
+.rpanel .fr-vchip, .fr-vchip {
+  display: inline-flex; align-items: center; height: 22px; padding: 0 5px; border-radius: 5px; cursor: grab;
+  border: 1px solid var(--accent); color: var(--txt); background: transparent; font: 11px "Segoe UI", system-ui, sans-serif;
+}
+.fr-vchip.linked { border-color: var(--hue); color: var(--hue); background: color-mix(in srgb, var(--hue) 14%, var(--bg)); }
+button.fr-vchip { cursor: pointer; }
+.fr-account { display: flex; flex-direction: column; gap: 4px; border: 1px solid transparent; border-radius: 8px; }
+.fr-account.drop { border-color: var(--accent); background: var(--tint); }
+.fr-account label.sw[hidden], .fr-vpick[hidden] { display: none; }
+.rpanel .pg-link.muted { color: var(--dim); }
+.rpanel .pg-link[hidden] { display: none; }
+.fr-vpick { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+.rpanel .friend-section[hidden] { display: none; }
+
+/* My Avatar Remote, 0.16: the Height box's own extras, a control dragged back
+   to the list (param_remove.py, theme_params paramRemove*) */
+.rpanel .pg-avboard .hbox { max-width: 246px; }
+.pg-hopts { display: flex; flex-direction: column; gap: 6px; padding: 0 4px 6px; }
+.pg-hopts[hidden] { display: none; }
+.pg-hopt { width: 72px; flex: none; }
+.pg-hopts .row .hs { flex: 1; min-width: 0; }
+.pg-hsw { margin-left: 2px; }
+.pg-ptable { position: relative; }
+.pg-rmdrop {
+  position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; gap: 12px; padding: 48px 16px 16px;
+  background: var(--err-tint); color: var(--err); border: 1px solid var(--err); border-radius: 8px; text-align: center; pointer-events: none;
+}
+.pg-rmdrop[hidden] { display: none; }
+.pg-rmdrop b { font-size: 15px; font-weight: 700; }
+.pg-rmstrip { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 10px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; }
+.pg-rmstrip.ask { border-color: var(--err-mid); }
+.pg-rmstrip[hidden], .pg-rmstrip .pg-btn[hidden] { display: none; }
+
 /* Add a friend: a header with its own +/- box, the fold hanging from it */
 .fr-addcard { display: flex; flex-direction: column; }
 .rpanel .fr-addhead {
@@ -312,9 +483,13 @@
 }
 .su-grid > :last-child { grid-column: span 2; }
 .su-stack { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
-.su-grid > .su-stack.wide { grid-column: span 2; }
-.su-grid > .su-stack.wide + * { grid-column: span 1; }
-.su-stack.wide > :last-child { width: calc(50% - 5px); }
+/* OWO's: Link and Strength side by side, Touches right under Link, Tell
+   VRChat under Strength -- as the app's columns place them */
+.su-grid.owo { grid-template-areas: "link link strength" "touches stuck strength" "tell tell ."; }
+/* a suit's anti-stuck: its two times under On, shown while it is on */
+.su-stuck { display: flex; flex-direction: column; gap: 6px; }
+.su-stuck[hidden] { display: none; }
+.su-tellsw { min-width: 118px; }
 .su-small {
   background: var(--well); border: 1px solid var(--hue-mid); border-radius: 8px; padding: 10px 10px 12px 12px;
   display: flex; flex-direction: column; gap: 8px; min-width: 0; align-items: flex-start;

@@ -10,6 +10,9 @@ Read-only dashboard over the controller's stats facade, top to bottom:
   per-zone time (lifetime and this session side by side).
 * **People** — everyone sessions were tagged with, most thrusts first,
   and the opt-in switch that tags from VRChat's log.
+* **From whom** — who did what to you, counted from the log: shocks,
+  vibrates and beeps by person and per shocker, friends' time on your toys
+  and their Avatar Remote sets, and the switch that keeps friends' names.
 * **When you play** — active time by weekday x hour over a chosen span.
 * **Month** — a calendar of active time per day with the month's totals.
 
@@ -40,6 +43,7 @@ from ui.text_helpers import fmt_when
 from ui.widgets import Card as _Card
 from ui.views.statistics_people import StatisticsPeopleMixin
 from ui.views.statistics_session import StatisticsSessionMixin
+from ui.views.statistics_whom import StatisticsWhomMixin
 from ui.frame_clock import when_on_screen
 
 
@@ -65,16 +69,20 @@ _DEFAULT_SPAN = 1
 _fmt_dur = fmt_dur
 
 
-class StatisticsMixin(StatisticsPeopleMixin, StatisticsSessionMixin):
+class StatisticsMixin(StatisticsPeopleMixin, StatisticsWhomMixin, StatisticsSessionMixin):
     """Statistics sidebar view (this file: the overview -- sessions,
     lifetime, when you play, month; statistics_people.py: people and
-    tagging; statistics_session.py: one session's page). Controller methods
+    tagging; statistics_whom.py: From whom and the suits;
+    statistics_session.py: one session's page). Controller methods
     used: `get_stats_snapshot`, `get_stats_sessions`,
     `get_stats_session_detail`, `get_stats_patterns`, `get_stats_month`,
     `get_stats_fun_facts`, `reset_stats`, and the people ones
     (`get_people_table`, `get_people_names`, `tag_session`,
     `tag_session_stretch`, `remove_session_tag`,
-    `get_people_autodetect_status`, `set_people_autodetect`)."""
+    `get_people_autodetect_status`, `set_people_autodetect`) and the From
+    whom ones (`get_stats_from_whom`, `get_stats_worn`,
+    `get_stats_friend_names`, `set_stats_friend_names`,
+    `forget_stats_friend_names`)."""
 
     # ----------------------------------------------------------
     # View construction
@@ -106,6 +114,7 @@ class StatisticsMixin(StatisticsPeopleMixin, StatisticsSessionMixin):
         self._stats_build_sessions_card(ov)
         self._stats_build_lifetime_card(ov)
         self._stats_build_people_card(ov)
+        self._stats_build_whom_card(ov)
         self._stats_build_patterns_card(ov)
         self._stats_build_month_card(ov)
         self._stats_build_detail_page(dv)
@@ -246,6 +255,7 @@ class StatisticsMixin(StatisticsPeopleMixin, StatisticsSessionMixin):
         # Per-toy and per-zone tables (name / lifetime / this session).
         self._stats_toys_table = self._stats_make_table(lay, "Toys")
         self._stats_zones_table = self._stats_make_table(lay, "Zones")
+        self._stats_build_worn_table(lay)
 
     def _stats_make_table(self, parent_lay, header_text: str) -> Dict[str, Any]:
         """A small name / lifetime / this-session grid with in-place
@@ -370,6 +380,7 @@ class StatisticsMixin(StatisticsPeopleMixin, StatisticsSessionMixin):
         self._stats_fill_people_status()
         if slow:
             self._stats_fill_people()
+            self._stats_fill_whom()
             self._stats_fill_facts()
             self._stats_fill_patterns()
             self._stats_fill_month()
@@ -457,6 +468,7 @@ class StatisticsMixin(StatisticsPeopleMixin, StatisticsSessionMixin):
             ))
         self._stats_fill_table(self._stats_zones_table, zone_rows,
                                "No zone contact recorded yet.")
+        self._stats_fill_worn()
 
     def _stats_fill_facts(self) -> None:
         try:
@@ -666,9 +678,9 @@ class StatisticsMixin(StatisticsPeopleMixin, StatisticsSessionMixin):
         confirm = QMessageBox.question(
             (getattr(self, "dialog_parent", None) or self.window), "Reset statistics",
             "Reset ALL statistics: the lifetime totals, every session and "
-            "its timeline, the charts, and who each session was with (the "
-            "people tags and the names remembered from VRChat)? This cannot "
-            "be undone.",
+            "its timeline, the charts, who each session was with (the "
+            "people tags and the names remembered from VRChat) and From "
+            "whom? This cannot be undone.",
             QMessageBox.Yes | QMessageBox.No,
             QMessageBox.No,
         )

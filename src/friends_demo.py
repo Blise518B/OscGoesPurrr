@@ -188,7 +188,6 @@ class FriendsDemo:
                 "theirs": theirs, "my_levels": dict(my_levels.get(fid, {})),
                 "driving_me": f["driving"] and self.perms[fid][0],
                 "others": list(f.get("others", ())) if theirs is not None else [],
-                "sync": True,
                 "demo": True,
             })
         return out

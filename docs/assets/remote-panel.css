@@ -230,6 +230,13 @@
 .rpanel .pswitch:active:not(:disabled), .rpanel .phold:active:not(:disabled) { transform: none; }
 .rpanel .pswitch:disabled, .rpanel .phold:disabled { opacity: 1; color: var(--dim); border-color: var(--dim); background: transparent; }
 .rpanel .cat.locked .pc-label { color: var(--dim); }
+/* their Height box (param_height.py): their height in big numbers, a slider, three buttons */
+.rpanel .hbox { max-width: 454px; }
+.rpanel .hbody { display: flex; flex-direction: column; gap: 8px; padding: 0 4px; }
+.rpanel .hnow { font-size: 20px; font-weight: 700; color: var(--txt); }
+.rpanel .hbody .row .hs { flex: 1; min-width: 0; }
+.rpanel .htarget { min-width: 52px; text-align: right; }
+.rpanel .hbox.locked .hnow, .rpanel .hbody .hs:disabled { color: var(--dim); opacity: 0.6; }
 .rpanel .pswitch.ysw { width: 60px; height: 24px; --hue: var(--accent); --hue-mid: var(--line); --hue-tint: var(--tint); }
 .rpanel .stepper { display: flex; gap: 4px; align-items: center; }
 .rpanel .stepper .mini { width: 32px; height: 32px; font-size: 14px; color: var(--txt); border-color: var(--hue-mid); }
@@ -245,3 +252,55 @@
 .rpanel .yrow .pnum { flex: none; width: 90px; height: 26px; }
 .rpanel .yrow input.hs { flex: none; width: 180px; }
 .rpanel .filter { width: 100%; font-size: 13px; padding: 6px 9px; }
+/* the shocker buttons' switch in THEIR SHOCKERS' header (friends_shockers._layout_switch) */
+.rpanel .layout-switch { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+/* OpenShock's card (openshock_card.py, remote-openshock.js): its limits line, two round
+   dials, three wide buttons (lit while a press runs, or Live control's pick), the LIVE tag
+   in its corner -- purple while on, as OpenShock's -- and Live control's pad */
+.rpanel .live-tag { flex: none; background: transparent; color: var(--muted); border: 1px solid var(--line);
+  border-radius: 3px; padding: 0 5px; min-height: 18px; font-size: 10px; font-weight: 700; letter-spacing: 1px; }
+.rpanel .live-tag:hover:not(:disabled) { background: transparent; color: var(--txt); border-color: var(--txt); }
+.rpanel .live-tag.on, .rpanel .live-tag.on:hover:not(:disabled) { color: var(--purple); border-color: var(--purple);
+  background: var(--purple-tint); }
+.rpanel .live-tag:disabled { opacity: 1; color: var(--dim); border-color: var(--dim); }
+.rpanel .os-limits { display: flex; justify-content: center; gap: 12px; }
+.rpanel .os-lim { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.rpanel .os-classic, .rpanel .os-live { display: flex; flex-direction: column; gap: 6px; }
+.rpanel .os-classic[hidden], .rpanel .os-live[hidden] { display: none; }
+.rpanel .os-dials { display: flex; justify-content: center; gap: 8px; }
+.rpanel .dial { position: relative; width: 104px; height: 104px; flex: none; touch-action: none; cursor: pointer;
+  outline: none; --hue: var(--yellow); --hue-mid: var(--yellow-mid); }
+.rpanel .dial-svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.rpanel .dial-track { fill: none; stroke: var(--hue-mid); stroke-width: 16; stroke-linecap: round; }
+.rpanel .dial-fill { fill: none; stroke: var(--hue); stroke-width: 8; stroke-linecap: round; }
+.rpanel .dial-knob { fill: var(--panel); stroke: var(--muted); stroke-width: 1.5; }
+.rpanel .dial:focus-visible .dial-knob { stroke: var(--accent); stroke-width: 2.5; }
+.rpanel .dial-v { position: absolute; left: 0; right: 0; top: 50%; transform: translateY(-50%); text-align: center;
+  font-size: 20px; font-weight: 700; color: var(--txt); pointer-events: none; font-variant-numeric: tabular-nums; }
+.rpanel .dial-l { position: absolute; left: 0; right: 0; bottom: 2px; text-align: center; font-size: 12px;
+  color: var(--muted); pointer-events: none; }
+.rpanel .dial.disabled { cursor: default; }
+.rpanel .dial.disabled .dial-track { stroke: var(--grey-mid); }
+.rpanel .dial.disabled .dial-fill { stroke: var(--dim); }
+.rpanel .dial.disabled .dial-v, .rpanel .dial.disabled .dial-l { color: var(--dim); }
+.rpanel .os-buttons { display: flex; gap: 8px; }
+.rpanel .osb { flex: 1; display: inline-flex; align-items: center; justify-content: center; min-height: 36px;
+  background: transparent; color: var(--txt); border: 2px solid var(--line); border-radius: var(--r-btn); padding: 2px 8px; }
+.rpanel .osb[style*="--hue"] { color: var(--hue); border-color: var(--hue-mid); }
+.rpanel .osb:hover:not(:disabled) { background: var(--hover); border-color: var(--line); }
+.rpanel .osb[style*="--hue"]:hover:not(:disabled) { background: var(--hue-tint); border-color: var(--hue); color: var(--hue); }
+.rpanel .osb.on, .rpanel .osb.on:hover:not(:disabled) { background: var(--hover); border-color: var(--txt); }
+.rpanel .osb[style*="--hue"].on, .rpanel .osb[style*="--hue"].on:hover:not(:disabled) { background: var(--hue-tint);
+  border-color: var(--hue); }
+.rpanel .osb.running { color: var(--err); }
+.rpanel .osb:disabled { opacity: 1; background: transparent; color: var(--dim); border-color: var(--dim); }
+.rpanel .pad { position: relative; height: 200px; border: 1px solid var(--line); border-radius: 6px; background: var(--well);
+  touch-action: none; cursor: pointer; outline: none; user-select: none; --y: 1; --hue: var(--pink); }
+.rpanel .pad:focus-visible { border-color: var(--accent); }
+.rpanel .pad-line { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+.rpanel .pad-h { position: absolute; left: 50%; top: calc(25px + var(--y) * (100% - 50px)); width: 40px; height: 40px;
+  transform: translate(-50%, -50%); border-radius: 50%; background: var(--hue); color: var(--ink); font-size: 12px;
+  font-weight: 700; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+.rpanel .pad.held .pad-h { width: 48px; height: 48px; outline: 1.5px solid var(--txt); }
+.rpanel .pad.disabled { cursor: default; }
+.rpanel .pad.disabled .pad-h { background: var(--dim); }

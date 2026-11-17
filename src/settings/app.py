@@ -4,6 +4,7 @@ import json
 import os
 from typing import Any, Dict
 
+import settings_history
 from utilities import atomic_write_json
 
 from ._paths import APP_SETTINGS_FILE
@@ -30,11 +31,20 @@ DEFAULT_APP_SETTINGS = {
     # (avatar swap, partner leaves, OSC routing loss) would otherwise drive a
     # motor at its last value forever. Two-timer model: a mid-range value
     # stuck for `active_s` is cut hard; a saturated (~100%) value gets the
-    # longer `peaked_s` fuse then a gentle ramp. Configured from the
-    # Settings → Toy Safety.
+    # longer `peaked_s` fuse then a gentle ramp. Set on the Toys page; each
+    # toy has its own on / off too (antistuck.py). The suits, the trackers
+    # and the PSVR2 have their own since 2026-11-17, seeded from these.
     "toy_antistuck_enabled": True,
     "toy_antistuck_active_s": 1,
     "toy_antistuck_peaked_s": 10,
+    # Off while you're away (away_off.py, Settings → Safety): while
+    # VRChat's AFK, GoGo Loco's AFK (VRCEmote 101) or a picked parameter
+    # is on, everything is held off -- the same Off as OGP/Off, without
+    # touching that switch. On by default (decided 2026-11-14).
+    "away_off_enabled": True,
+    "away_off_vrchat_afk": True,
+    "away_off_gogo_afk": True,
+    "away_off_params": [],
     # How often the router re-evaluates all motors. Time-constant math
     # (decay_tau / attack_ms / release_ms) is wall-clock-based so this
     # is purely a CPU-vs-fidelity knob — no recalibration needed when
@@ -97,6 +107,10 @@ DEFAULT_APP_SETTINGS = {
     # False -- a new install, or one from before the question -- asks it
     # once at launch.
     "interests_asked": False,
+    # The guided tour (ui/tour.py) started by itself (a new install, after
+    # the question above) or was offered (an older one, on the update that
+    # brought it). False -- not yet: it happens once at launch.
+    "tour_offered": False,
     # Settings → Appearance → Colour: the hue (OKLCH degrees, 0-360) every
     # green in the UI is turned to, or None for the house green. Changing
     # it applies while the app runs (ui/live_theme.py); constants.py reads
@@ -106,11 +120,70 @@ DEFAULT_APP_SETTINGS = {
     # {"pink": hue, ...}. One left out moves by itself when the colour
     # above lands too close to it (constants.IDENTITY_HUES).
     "ui_identity_hues": {},
+    # The Add Variable picker's filter chips, once for every picker:
+    # {group key: hidden} (param_filters.SETTING_KEY / GROUPS). {} -- or a
+    # group not named -- takes the group's default.
+    "picker_hidden_groups": {},
+    # Friends → a friend's shockers: whose shocker buttons every panel
+    # shows, "pishock" (PiShock's own panel, the default) or "openshock"
+    # (OpenShock's card with Live control) -- shocker_layout.py. Only a
+    # face: both send the same, and the receiver's rules hold either way.
+    "shocker_layout": "pishock",
 }
+
+
+# Kept here but no setting, so never a Ctrl+Z step (settings_history.py):
+# where windows are and how big, folds and docks, what you've already been
+# shown, offered or asked (What's new, the questions, the tour), the
+# variable picker's filter chips.
+NOT_SETTINGS = frozenset({
+    "window_geometry", "window_state",
+    "friends_window_state", "friends_window_on_top",
+    "params_dock_w", "home_setup_compact", "picker_hidden_groups",
+    "whats_new_seen_version", "interests_asked", "update_popup_skipped_version",
+    "tour_offered",
+})
+# ...and any key that ends like one of those
+NOT_SETTINGS_ENDINGS = ("_geometry", "_window_state", "_dock_w", "_open", "_folded",
+                        "_collapsed", "_expanded", "_seen", "_shown", "_offered",
+                        "_seen_version", "_skipped_version", "_asked")
+
+# Settings → their names on the Settings page, for "Undid: ..." when the
+# control it was changed on has no name of its own.
+DESCRIBE = {
+    "auto_connect": "Auto Connect to Intiface",
+    "auto_refresh": "Auto Refresh Devices",
+    "auto_connect_osc": "Auto Connect to VRChat",
+    "bind_all_interfaces": "OSC network bind",
+    "avatar_modes_enabled": "Remember mode per avatar",
+    "toy_antistuck_enabled": "Toys' anti-stuck",
+    "toy_antistuck_active_s": "Toys' anti-stuck: stuck part-way",
+    "toy_antistuck_peaked_s": "Toys' anti-stuck: stuck at the top",
+    "away_off_enabled": "Off while you're away",
+    "router_poll_rate_hz": "Update rate",
+    "toy_connect_sounds": "Toy connect sounds",
+    "toy_connect_sounds_volume": "Toy connect sounds volume",
+    "ui_mode": "Vibrant / Darker",
+    "ui_accent_hue": "Colour",
+    "ui_identity_hues": "Other colours",
+    "show_toys_in_steamvr": "Show toys in SteamVR",
+    "use_integrated_intiface": "Intiface engine",
+    "intiface_address": "Intiface address",
+    "shocker_layout": "Shocker buttons",
+}
+
+
+def is_setting(key: Any) -> bool:
+    """False for what app_settings.json keeps that is no setting."""
+    key = str(key)
+    return key not in NOT_SETTINGS and not key.endswith(NOT_SETTINGS_ENDINGS)
 
 
 class AppSettingsManager:
     """Manages app-level settings (auto_connect, auto_refresh, etc.)"""
+
+    HISTORY_KEY = "app"
+    HISTORY_LABEL = "Settings"
 
     def __init__(self):
         self.settings: Dict[str, Any] = {}
@@ -118,6 +191,37 @@ class AppSettingsManager:
         # not an update (nothing to tell it about what changed).
         self.created_fresh = False
         self._load_or_create_defaults()
+        settings_history.track(self)
+
+    # -- Ctrl+Z (settings_history.py) ---------------------------------------
+
+    @staticmethod
+    def history_ignore(path, before, after) -> bool:
+        return not path or not is_setting(path[0])
+
+    @staticmethod
+    def history_asks(current: Dict[str, Any], target: Dict[str, Any]) -> list:
+        """Ctrl+Z (settings_history.py): the toys' anti-stuck switched off,
+        or a timer made longer, asks first -- it loosens a safety cutoff."""
+        import antistuck
+        from settings_history import Ask
+
+        def block(state):
+            state = state if isinstance(state, dict) else {}
+            return antistuck.from_app(lambda k, d: state.get(k, d))
+        return [Ask("confirm", f"Toys' anti-stuck: {what}")
+                for what in antistuck.loosens(block(current), block(target))]
+
+    @staticmethod
+    def history_describe(path) -> str:
+        if not path:
+            return ""
+        key = str(path[0])
+        if key in DESCRIBE:
+            return DESCRIBE[key]
+        if key.startswith("feature_"):
+            return f"Features: {settings_history.humanize(key[len('feature_'):])}"
+        return settings_history.humanize(key)
 
     def _load_or_create_defaults(self) -> None:
         """Load settings from JSON file or create defaults if not exists."""
@@ -144,6 +248,7 @@ class AppSettingsManager:
             atomic_write_json(APP_SETTINGS_FILE, self.settings, indent=2)
         except OSError as e:
             print(f"App settings save error: {e}")
+        settings_history.saved(self)
 
     def get(self, key: str, default=None) -> Any:
         """Get a setting value"""

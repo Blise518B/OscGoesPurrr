@@ -2,8 +2,8 @@
 
 The demo (docs/assets/demo.js) draws the app's sidebar, so it needs the
 app's icons: the identity ones (toys, shockers, Avatar Remote, friends, the
-suits, the web remote) and the line-art page ones (Statistics, the tools, Settings,
-Help). Rather than redrawing them by hand, this runs the app's own drawing
+suits, the web remote, the PSVR2 headset) and the line-art page ones (Statistics,
+Log, the tools, Settings, Help, the Shockers page's Limits). Rather than redrawing them by hand, this runs the app's own drawing
 code (src/ui/icons.py) into Qt's SVG generator and writes them, in
 currentColor, to docs/assets/demo-icons.js -- the demo colours each one with
 the token the app uses for it.
@@ -32,8 +32,8 @@ from ui import icons  # noqa: E402
 
 OUT = REPO / "docs" / "assets" / "demo-icons.js"
 MARK = "#123456"        # the colour drawn with, swapped for currentColor after
-NAMES = ("toys", "shock", "params", "friends", "suits", "web", "stats", "sps", "inspector",
-         "diagnostics", "log", "settings", "help")
+NAMES = ("toys", "shock", "params", "friends", "suits", "web", "psvr2", "stats", "activity",
+         "inspector", "diagnostics", "log", "settings", "help", "limits")
 
 
 def svg(name: str) -> str:

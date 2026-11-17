@@ -42,6 +42,61 @@ class Release(NamedTuple):
 
 
 RELEASES: Tuple[Release, ...] = (
+    # Friends' reviews, built and merged 2026-11-14 (docs/ROADMAP.md § "Next
+    # up"): one item per area, because the window doesn't scroll and takes
+    # the height of its tallest page (16 items, one per feature, made it
+    # 1,284 px -- off a 1080p screen; these ten, two lines each, ~760).
+    # What most people meet first, then shockers, friends, Avatar Remote,
+    # records, PSVR2. The fixes, the version link, the parameter picker's
+    # filters and the small touches are only in tools/RELEASE_NOTES.md.
+    Release("0.16.0", (
+        Item("Toys have a page of their own",
+             "A toy's chains, Scan now and SPS Sources are on the new Toys "
+             "page. On Home, chips set who a toy feels, and Sleep for one toy.",
+             "toys", icon="toys"),
+        Item("A guided tour",
+             "It shows you around one real step at a time - your toy, its "
+             "zones, Test, then what you use - and changes no setting by "
+             "itself. Help → Take the tour.",
+             "help", icon="help"),
+        Item("Ctrl+Z takes it back",
+             "Ctrl+Z undoes your last five changes on any page, Ctrl+Y redoes "
+             "them. An undo that would arm shocks or loosen a limit asks first.",
+             icon="settings"),
+        Item("Off while you're away, anti-stuck each",
+             "While VRChat or GoGo Loco says you're AFK, everything is off. "
+             "Toys, each suit and the headset have their own anti-stuck.",
+             "toy_safety", icon="settings"),
+        Item("Shock, vibrate and beep apart",
+             "Each shocker has a Shock, Vibrate and Beep switch, and friends "
+             "can get limits of their own. Arming asks first, on Home too.",
+             "shockers", icon="shock"),
+        Item("ShockOSC avatars in one click",
+             "A card on the Shockers page sets up an avatar's ShockOSC groups, "
+             "and its lights follow your shockers. New behaviour: Pull, for a "
+             "PhysBone.",
+             "shockers", icon="shock"),
+        Item("Friends, linked to VRChat",
+             "Link friends to VRChat; only those in your instance may drive "
+             "you. Their shockers can have OpenShock's buttons. Sync is now "
+             "your switch.",
+             "friends", icon="friends"),
+        Item("Your height on the Avatar Remote",
+             "A Height box under your categories: grow, jump or reset, from "
+             "your menu or a friend you allow. Its own switch keeps your "
+             "height yours.",
+             "params", icon="params"),
+        Item("A Log page, shocks in Statistics",
+             "The Log page keeps who did what for 30 days, on your PC. "
+             "Statistics count every shock, vibrate and beep, per shocker and "
+             "per person.",
+             "log", icon="activity"),
+        Item("PSVR2 rumble, trackers that buzz",
+             "Your PSVR2 headset's rumble (Windows, PSVR2Toolkit) and trackers "
+             "with a Haptic Pancake or Tundra Tapper. Switch them on in "
+             "Settings → Features.",
+             "features", icon="psvr2"),
+    )),
     # The suits' own release (main.FEATURES_NOT_YET emptied, 2026-11-03),
     # with what came since 0.14.1. 0.14.1 had no entry (a patch release).
     Release("0.15.0", (
@@ -240,7 +295,7 @@ RELEASES: Tuple[Release, ...] = (
              "While no toy is connected the app looks every 5 seconds "
              "(Settings changes how often), and Home says when it looks next, "
              "with a Scan now button.",
-             "home", icon="toys"),
+             "toys", icon="toys"),
         Item("Statistics off keeps them",
              "Switching statistics off only stops recording. Delete "
              "statistics… right below the switch is what deletes them.",
@@ -286,7 +341,7 @@ RELEASES: Tuple[Release, ...] = (
              "Overview and Device Routing are now a single page. Every toy "
              "is a row: click it to open its signal chains right there. "
              "Toys that are switched off stay listed, in grey.",
-             "home", icon="toys"),
+             "toys", icon="toys"),
         Item("Tell your avatar a toy is connected",
              "The app can set an avatar parameter while any toy is "
              "connected, and one per toy — for an icon on your avatar "

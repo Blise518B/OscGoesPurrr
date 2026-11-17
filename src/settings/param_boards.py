@@ -6,6 +6,9 @@
   * ``last_avatar`` — the avatar open on the page last time.
   * ``yolo``        — friends get every parameter of the worn avatar, not
     only its board (and locks don't hold for them).
+  * ``height``      — the Height box (avatar_height.py): its switch (on:
+    friends see it), its lock, your lowest and highest height and Grow's
+    speed. One for every avatar.
 
 Every avatar you wear has its parameter list remembered, so its board can
 be built while you wear something else. Those that are only that -- never
@@ -18,6 +21,7 @@ One file, so the settings backups carry the boards like everything else.
 import time
 from typing import Any, Dict, List, Optional, Tuple
 
+import avatar_height as ah
 import param_board as pb
 
 from ._base import JsonSettingsManager
@@ -33,13 +37,99 @@ def _is_scratch(profile: Dict[str, Any]) -> bool:
             and not any(p.get("controls") for p in profile.get("presets") or []))
 
 
+def _locked_categories(profile: Any) -> Dict[Tuple[str, str], str]:
+    out = {}
+    for preset in (profile or {}).get("presets") or []:
+        for cat in (preset or {}).get("categories") or []:
+            if isinstance(cat, dict) and cat.get("locked"):
+                out[(str(preset.get("id")), str(cat.get("id")))] = str(cat.get("name") or "")
+    return out
+
+
+def history_asks(current: Dict[str, Any], target: Dict[str, Any]) -> list:
+    """What an undo or redo from `current` to `target` must ask first
+    (settings_history.py): ⚡ YOLO on (it asks by hand too), a category
+    unlocked for friends, and the Height box letting friends do more --
+    switched on, unlocked, or a lower lowest / higher highest height (a
+    faster Grow doesn't ask)."""
+    from settings_history import Ask, turned_on
+    asks = []
+    if turned_on(current, target, ("yolo",)):
+        asks.append(Ask("confirm", "turns on ⚡ YOLO - friends get every parameter"))
+    h_a = ah.clean_settings(current.get("height"))
+    h_b = ah.clean_settings(target.get("height"))
+    if h_b["on"] and not h_a["on"]:
+        asks.append(Ask("confirm", "switches the Height box on - friends you allow see it"))
+    if h_a["locked"] and not h_b["locked"]:
+        asks.append(Ask("confirm", "unlocks the Height box for friends"))
+    if h_b["lo"] < h_a["lo"] or h_b["hi"] > h_a["hi"]:
+        asks.append(Ask("confirm", f"widens the Height box to {h_b['lo']:g}-{h_b['hi']:g} m"))
+    for aid, profile in (current.get("avatars") or {}).items():
+        new = ((target.get("avatars") or {}).get(aid))
+        if new is None:
+            continue
+        still = _locked_categories(new)
+        for key, name in _locked_categories(profile).items():
+            if key not in still and any(str(c.get("id")) == key[1]
+                                        for p in new.get("presets") or []
+                                        for c in p.get("categories") or []):
+                asks.append(Ask("confirm", f"unlocks “{name}” for friends"))
+    return asks
+
+
 class ParamBoardsSettingsManager(JsonSettingsManager):
     DEFAULTS = {
         "avatars": {},
         "last_avatar": "",
         "yolo": False,
+        "height": dict(ah.DEFAULTS),
     }
     FILE_PATH = PARAM_BOARDS_FILE
+    HISTORY_KEY = "params"
+    HISTORY_LABEL = "Avatar Remote"
+
+    # -- Ctrl+Z (settings_history.py) ------------------------------------------
+    # Out of it: which board and which preset are open (the page you're
+    # on), what VRChat said about an avatar when it was last worn (when,
+    # its parameter list, its name there), and an avatar's whole profile
+    # coming or going (remembered by wearing it, imported, or pruned) --
+    # the boards' own edits are in.
+
+    @staticmethod
+    def history_ignore(path, before, after) -> bool:
+        if not path or path[0] == "last_avatar":
+            return True
+        if path[0] == "avatars":
+            return len(path) <= 2 or path[2] in ("seen", "params", "vrc_name",
+                                                 "active_preset")
+        return False
+
+    @staticmethod
+    def history_asks(current: Dict[str, Any], target: Dict[str, Any]) -> list:
+        return history_asks(current, target)
+
+    def history_describe(self, path) -> str:
+        from settings_history import ById, lookup, MISSING
+        if not path:
+            return ""
+        if path[0] == "yolo":
+            return "⚡ YOLO"
+        if path[0] == "height":
+            return "the Height box" + ({"on": "", "locked": "'s lock", "lo": "'s lowest",
+                                        "hi": "'s highest", "double_s": "'s Grow speed"}
+                                       .get(str(path[1]), "") if len(path) >= 2 else "")
+        if path[0] == "avatars" and len(path) >= 2:
+            profile = self.settings["avatars"].get(str(path[1])) or {}
+            board = pb.display_name({**profile, "avatar_id": path[1]}) if profile else "a board"
+            for i, step in enumerate(path):
+                if isinstance(step, ById) and i >= 1 and path[i - 1] in ("controls", "categories"):
+                    thing = lookup(self.settings, path[:i + 1])
+                    if thing is not MISSING and isinstance(thing, dict):
+                        name = thing.get("label") or thing.get("name") or ""
+                        if name:
+                            return f"“{name}” on {board}"
+            return board
+        return ""
 
     def _post_load(self, loaded: Dict[str, Any]) -> None:
         avatars = {}
@@ -51,6 +141,7 @@ class ParamBoardsSettingsManager(JsonSettingsManager):
         self.settings["avatars"] = avatars
         self.settings["last_avatar"] = str(self.settings.get("last_avatar") or "")
         self.settings["yolo"] = bool(self.settings.get("yolo"))
+        self.settings["height"] = ah.clean_settings(self.settings.get("height"))
         # ■ STOP is gone (2026-10-27): a STOP left on must not block friends
         # forever with no button to lift it
         self.settings.pop("stop", None)
@@ -135,3 +226,15 @@ class ParamBoardsSettingsManager(JsonSettingsManager):
     def set_yolo(self, on: bool) -> None:
         self.settings["yolo"] = bool(on)
         self._save()
+
+    def get_height(self) -> Dict[str, Any]:
+        """The Height box's settings (a copy)."""
+        return dict(self.settings.get("height") or ah.clean_settings(None))
+
+    def set_height(self, settings: Dict[str, Any]) -> Dict[str, Any]:
+        """Cleaned and saved; what was kept."""
+        clean = ah.clean_settings(settings)
+        if clean != self.settings.get("height"):
+            self.settings["height"] = clean
+            self._save()
+        return dict(clean)

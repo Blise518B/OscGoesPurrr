@@ -426,6 +426,21 @@ class StatsHistory:
         self._live_dirty = True
         self._hours_dirty = True
 
+    def touch(self, epoch: float) -> None:
+        """Something the timeline marks happened at `epoch` -- a shock, a
+        vibrate or a beep reached one of your shockers (stats_events) --
+        maybe with nothing else going on: make sure its bucket exists, so a
+        session of only that is still filed and its timeline reaches that
+        moment. Adds no active time, thrust or hour."""
+        tl = self.live
+        offset = safe_num(epoch) - tl["started_ts"]
+        if not tl["id"] or offset < 0:
+            return
+        i = int(offset // tl["bucket_s"])
+        if i not in tl["buckets"]:
+            tl["buckets"][i] = _new_bucket()
+            self._live_dirty = True
+
     def flush(self, force: bool = False) -> None:
         """Write the live timeline and the hourly totals if they changed
         (`force`: write whatever exists). Atomic; an OSError leaves the

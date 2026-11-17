@@ -1,0 +1,31 @@
+{
+  "name": "oscgoespurrr-guide",
+  "version": "1.0.0",
+  "private": true,
+  "description": "OscGoesPurrr's user guide. Build it with tools/build_guide.py, which copies the result into docs/guide/.",
+  "license": "MIT",
+  "scripts": {
+    "docusaurus": "docusaurus",
+    "start": "docusaurus start",
+    "build": "docusaurus build",
+    "serve": "docusaurus serve",
+    "clear": "docusaurus clear"
+  },
+  "dependencies": {
+    "@docusaurus/core": "3.10.2",
+    "@docusaurus/preset-classic": "3.10.2",
+    "@easyops-cn/docusaurus-search-local": "0.55.3",
+    "@mdx-js/react": "3.1.1",
+    "clsx": "2.1.1",
+    "prism-react-renderer": "2.4.1",
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "browserslist": {
+    "production": [">0.5%", "not dead", "not op_mini all"],
+    "development": ["last 3 chrome version", "last 3 firefox version", "last 5 safari version"]
+  },
+  "engines": {
+    "node": ">=20.0"
+  }
+}

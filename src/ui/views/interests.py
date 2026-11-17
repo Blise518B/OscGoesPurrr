@@ -4,7 +4,8 @@ Opens once at launch (controllers/interests_facade.py decides) and from
 Settings → Features → "Choose what you use…". One tick per thing someone
 has or wants, starting from the switches as they are; Done sets the
 feature switches, Skip (Cancel, from Settings) leaves them alone. While it
-is open, "What's new" and an update offer wait their turn.
+is open, "What's new", an update offer and a new install's guided tour
+wait their turn.
 
 The content is `interests.py`; this module only draws it.
 """
@@ -20,12 +21,14 @@ from ui.layout_helpers import vbox as _vbox, hbox as _hbox
 
 # The window is this wide; its height follows from the text.
 _WIDTH_PX = 520
-# Each choice carries the icon its page has in the sidebar
-# (ui/icons.identity_icon / page_icon), so the titles stay in one column.
-_ICONS = {"feature_intiface": "toys", "feature_pishock": "shock",
-          "feature_bhaptics": "suits", "feature_owo": "suits",
-          "feature_friends": "friends", "feature_params": "params",
-          "feature_statistics": "stats", "feature_osc_inspector": "inspector"}
+# Each choice carries the icon its page has in the sidebar -- and its row
+# in Settings → Features (ui/icons.identity_icon / page_icon), so the
+# titles stay in one column.
+FEATURE_ICONS = {"feature_intiface": "toys", "feature_pishock": "shock",
+                 "feature_bhaptics": "suits", "feature_owo": "suits", "feature_trackers": "suits",
+                 "feature_psvr2": "psvr2",
+                 "feature_friends": "friends", "feature_params": "params",
+                 "feature_statistics": "stats", "feature_osc_inspector": "inspector"}
 _ICON_PX = 16
 # A choice's hint starts under its title's text, past the box and its gap
 # (QCheckBox::indicator in ui/theme.py, with its border and spacing), then
@@ -96,7 +99,7 @@ class InterestsMixin:
                 box.setObjectName("interestChoice")
                 box.setChecked(bool(on))
                 box.setCursor(Qt.PointingHandCursor)
-                box.setIcon(page_icon(_ICONS.get(feature, ""), _ICON_PX))
+                box.setIcon(page_icon(FEATURE_ICONS.get(feature, ""), _ICON_PX))
                 box.setIconSize(QSize(_ICON_PX, _ICON_PX))
                 lay.addWidget(box)
                 tip = _Hint(str(hint), lambda b=box: b.toggle())
@@ -146,6 +149,10 @@ class InterestsMixin:
             elif offer:
                 self._update_popup_waiting = None
                 QTimer.singleShot(0, lambda: self.show_update_popup(*offer))
+            # A new install's guided tour waited for the answer (ui/views/tour.py)
+            if getattr(self, "_tour_waiting", False):
+                self._tour_waiting = False
+                QTimer.singleShot(0, self.start_tour)
         dlg.finished.connect(_closed)
 
         # Wrapped texts: fix the width and take the height the layout

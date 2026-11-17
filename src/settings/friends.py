@@ -7,6 +7,15 @@ friends and what each friend may do to you.
     all (nobody can reach you, you reach nobody).
   * ``paused``    — "Pause all friends": nothing a friend sends reaches a
     toy or a shocker while it is on.
+  * ``instance_only`` — "Only friends in my instance": while it is on, a
+    friend whose linked VRChat account isn't in your instance (by your own
+    log) is refused like Pause -- off by default
+    (controllers/friends_instance.py).
+  * ``sync``      — Sync with others: everyone driving your toys shares one
+    set of toy cards and the newest change plays -- or, off, each drives
+    on their own and the highest wins. Yours alone to choose, for every
+    friend, the web remote and Me alike; on by default (Blise's call,
+    2026-11-17). A friend's old per-friend ``sync`` is kept but no longer used.
   * ``friends``   — one entry per friend: ``id`` (their link ID), ``nick``
     (the nickname they gave themselves, refreshed whenever they connect),
     ``toys`` (they may drive your toys and move your strength slider) and
@@ -15,7 +24,13 @@ friends and what each friend may do to you.
     while you have armed shocks on the Shockers page this session, and
     always within your caps there) and ``params`` (they see your worn
     avatar's board from the Avatar Remote page and may use it -- on for a new
-    friend too; a locked category stays look-only).
+    friend too; a locked category stays look-only), and ``vrc`` /
+    ``vrc_name``: the VRChat account you linked them to (its ``usr_`` id,
+    since display names change, and the name it had then; "" for none).
+    Yours alone: never sent over the link, to the web remote or anywhere
+    else. One VRChat account belongs to one friend. ``anywhere``: "Allow
+    from anywhere" -- this friend may drive you while "Only friends in my
+    instance" is on and they aren't in it (off for a new friend).
   * ``groups``    — named sets of friends you control at once: ``id``,
     ``name``, ``members`` (friend IDs, and ``ME`` for you -- a group with
     you and a friend in it drives both of you; a friend can be in several
@@ -39,7 +54,9 @@ friends and what each friend may do to you.
     ``on`` lets browsers in, ``toys`` / ``shock`` / ``params`` are what
     everyone on it may do -- toys on, shockers and your avatar's board off
     until you tick them (Blise's call: anyone with the link gets them) --
-    and ``blocked`` the browsers you kicked.
+    ``anyway``, "Allow the web remote anyway": a browser can't be in your
+    instance, so "Only friends in my instance" blocks it unless this is on
+    (off by default) -- and ``blocked`` the browsers you kicked.
 
 Cleaned on the way in and on the way out, like every settings file."""
 
@@ -48,6 +65,7 @@ import time
 from typing import Any, Dict, List, Optional
 
 import remote_protocol as proto
+from vrchat_log import clean_display_name, clean_user_id
 
 from ._base import JsonSettingsManager
 from ._paths import FRIENDS_SETTINGS_FILE
@@ -79,6 +97,7 @@ def _clean_friend(entry: Any) -> Optional[Dict[str, Any]]:
         added = float(entry.get("added", 0.0))
     except (TypeError, ValueError):
         added = 0.0
+    vrc = clean_user_id(entry.get("vrc"))
     return {
         "id": fid,
         "nick": proto.clean_nick(entry.get("nick")),
@@ -87,7 +106,15 @@ def _clean_friend(entry: Any) -> Optional[Dict[str, Any]]:
         "params": bool(entry.get("params", True)),
         # Sync with others on their toy cards (the friend's panel)
         "sync": bool(entry.get("sync", True)),
+        # (a "share" from before 2026-11-17 -- what they might do with your
+        # shockers -- is left behind: every friend gets each shocker's own)
         "added": added,
+        # their VRChat account (see the module docstring): never sent anywhere
+        "vrc": vrc,
+        "vrc_name": clean_display_name(entry.get("vrc_name")) if vrc else "",
+        # "Allow from anywhere": they drive you while "Only friends in my
+        # instance" is on and they aren't in it
+        "anywhere": bool(entry.get("anywhere", False)),
     }
 
 
@@ -109,15 +136,111 @@ def _clean_web(raw: Any) -> Dict[str, Any]:
         "toys": bool(raw.get("toys", True)),
         "shock": bool(raw.get("shock", False)),
         "params": bool(raw.get("params", False)),
+        # "Allow the web remote anyway" while only friends in your instance may
+        "anyway": bool(raw.get("anyway", False)),
         "blocked": blocked[-MAX_WEB_BLOCKED:],
     }
 
 
+_WHAT = {"toys": "drive your toys", "shock": "use your shockers",
+         "params": "use your avatar's board"}
+
+
+def history_asks(current: Dict[str, Any], target: Dict[str, Any]) -> list:
+    """What an undo or redo from `current` to `target` must ask first
+    (settings_history.py): anything that lets a friend -- or the web
+    remote -- do more than now: Pause all friends lifted, Only friends in my
+    instance switched off, a friend's Toys / Shockers / Avatar switched back
+    on or their Allow from anywhere on, the web remote's link or switches
+    back on or its Allow the web remote anyway on."""
+    from settings_history import Ask, turned_on
+    asks = []
+    if current.get("paused") and not target.get("paused"):
+        asks.append(Ask("confirm", "lets your friends drive you again (Pause all friends off)"))
+    if current.get("instance_only") and not target.get("instance_only"):
+        asks.append(Ask("confirm", "lets friends drive you from outside your VRChat instance "
+                        "again (Only friends in my instance off)"))
+    now = {f.get("id"): f for f in current.get("friends") or [] if isinstance(f, dict)}
+    for f in target.get("friends") or []:
+        old = now.get(f.get("id")) if isinstance(f, dict) else None
+        if old is None:
+            continue
+        nick = f.get("nick") or "a friend"
+        for what, words in _WHAT.items():
+            if turned_on(old, f, (what,), True):
+                asks.append(Ask("confirm", f"lets {nick} {words} again"))
+        if turned_on(old, f, ("anywhere",)):
+            asks.append(Ask("confirm", f"lets {nick} drive you from anywhere"))
+    web_a, web_b = current.get("web") or {}, target.get("web") or {}
+    if web_b.get("code") and turned_on(web_a, web_b, ("on",), True):
+        asks.append(Ask("confirm", "lets browsers in on your web remote link again"))
+    for what, words in _WHAT.items():
+        if turned_on(web_a, web_b, (what,), what == "toys"):
+            asks.append(Ask("confirm", f"lets the web remote {words}"))
+    if turned_on(web_a, web_b, ("anyway",)):
+        asks.append(Ask("confirm", "lets the web remote drive you while only friends in "
+                        "your instance may"))
+    return asks
+
+
 class FriendsSettingsManager(JsonSettingsManager):
+    HISTORY_KEY = "friends"
+    HISTORY_LABEL = "Friends"
+
+    # -- Ctrl+Z (settings_history.py) ------------------------------------------
+    # Out of it: who is on the list at all (adding or unfriending a friend
+    # talks to them -- that already happened), their own nicknames, invites,
+    # the web remote's link and kicks, and what the page shows.
+
+    @staticmethod
+    def history_ignore(path, before, after) -> bool:
+        if not path:
+            return True
+        head = path[0]
+        if head in ("unfriended", "invites", "selected"):
+            return True
+        if head == "web" and len(path) >= 2 and path[1] in ("code", "blocked"):
+            return True
+        if head == "friends":
+            return len(path) <= 2 or (len(path) >= 3 and path[2] in ("nick", "added"))
+        return False
+
+    @staticmethod
+    def history_asks(current: Dict[str, Any], target: Dict[str, Any]) -> list:
+        return history_asks(current, target)
+
+    def history_describe(self, path) -> str:
+        from settings_history import ById
+        if not path:
+            return ""
+        head = path[0]
+        if head == "friends" and len(path) >= 3 and isinstance(path[1], ById):
+            f = self.get_friend(path[1].id) or {}
+            nick = f.get("nick") or "a friend"
+            what = {"toys": "Toys", "shock": "Shockers", "params": "Avatar",
+                    "sync": "Sync with others",
+                    "anywhere": "Allow from anywhere",
+                    "vrc": "VRChat account", "vrc_name": "VRChat account"}.get(str(path[2]),
+                                                                           str(path[2]))
+            return f"{nick}'s {what}"
+        if head == "groups" and len(path) >= 2:
+            if isinstance(path[1], ById):
+                g = self.get_group(path[1].id) or {}
+                return f"group {g.get('name') or ''}".strip()
+            return "your groups"
+        if head == "web":
+            return "the web remote" + (f"'s {path[1]}" if len(path) >= 2 else "")
+        return {"nickname": "your nickname", "online": "Online",
+                "paused": "Pause all friends",
+                "instance_only": "Only friends in my instance",
+                "sync": "Sync with others"}.get(str(head), "")
+
     DEFAULTS = {
         "nickname": "",
         "online": True,
         "paused": False,
+        "instance_only": False,
+        "sync": True,
         "friends": [],
         "groups": [],
         "selected": {},
@@ -130,6 +253,8 @@ class FriendsSettingsManager(JsonSettingsManager):
     def _post_load(self, loaded: Dict[str, Any]) -> None:
         self.settings["nickname"] = proto.clean_nick(self.settings.get("nickname"))
         self.settings["paused"] = bool(self.settings.get("paused"))
+        self.settings["instance_only"] = bool(self.settings.get("instance_only"))
+        self.settings["sync"] = bool(self.settings.get("sync", True))
         self.settings["online"] = bool(self.settings.get("online", True))
         friends, seen = [], set()
         for entry in self.settings.get("friends") or []:
@@ -199,6 +324,22 @@ class FriendsSettingsManager(JsonSettingsManager):
 
     def set_paused(self, paused: bool) -> None:
         self.settings["paused"] = bool(paused)
+        self._save()
+
+    # only friends in my instance
+    def get_instance_only(self) -> bool:
+        return bool(self.settings.get("instance_only"))
+
+    def set_instance_only(self, on: bool) -> None:
+        self.settings["instance_only"] = bool(on)
+        self._save()
+
+    # sync with others: one set of toy cards for everyone driving you
+    def get_sync_all(self) -> bool:
+        return bool(self.settings.get("sync", True))
+
+    def set_sync_all(self, on: bool) -> None:
+        self.settings["sync"] = bool(on)
         self._save()
 
     # friends
@@ -273,11 +414,43 @@ class FriendsSettingsManager(JsonSettingsManager):
                 f[what] = bool(allowed)
                 self._save()
 
-    def set_sync(self, fid: str, on: bool) -> None:
+    def set_vrc_link(self, fid: str, user_id: str, name: str = "") -> bool:
+        """Link a friend to their VRChat account (`user_id`, the `usr_` id;
+        `name`, its display name when linked -- shown until something knows
+        it better). "" unlinks. One VRChat account belongs to one friend:
+        linking it here takes it off whoever had it. False when the friend
+        or the id isn't one."""
+        uid = clean_user_id(user_id)
+        if user_id and not uid:
+            return False
+        friends = self.settings.get("friends") or []
+        if not any(f["id"] == fid for f in friends):
+            return False
+        for f in friends:
+            if f["id"] == fid:
+                f["vrc"], f["vrc_name"] = uid, clean_display_name(name) if uid else ""
+            elif uid and f.get("vrc") == uid:
+                f["vrc"], f["vrc_name"] = "", ""
+        self._save()
+        return True
+
+    def vrc_links(self) -> Dict[str, str]:
+        """{friend id: their VRChat user id} for the friends linked."""
+        return {f["id"]: f["vrc"] for f in self.settings.get("friends") or [] if f.get("vrc")}
+
+    def set_anywhere(self, fid: str, on: bool) -> bool:
+        """A friend's "Allow from anywhere". False when they aren't a friend."""
         for f in self.settings.get("friends") or []:
-            if f["id"] == fid and f.get("sync", True) != bool(on):
-                f["sync"] = bool(on)
-                self._save()
+            if f["id"] == fid:
+                if f.get("anywhere", False) != bool(on):
+                    f["anywhere"] = bool(on)
+                    self._save()
+                return True
+        return False
+
+    def anywhere_ids(self) -> set:
+        """The friends allowed from anywhere."""
+        return {f["id"] for f in self.settings.get("friends") or [] if f.get("anywhere")}
 
     # groups
     def get_groups(self) -> List[Dict[str, Any]]:
@@ -471,6 +644,10 @@ class FriendsSettingsManager(JsonSettingsManager):
         """What everyone on the web remote may do: "toys", "shock" or "params"."""
         if what in ("toys", "shock", "params"):
             self._set_web(**{what: bool(on)})
+
+    def set_web_anyway(self, on: bool) -> None:
+        """"Allow the web remote anyway" while only friends in your instance may."""
+        self._set_web(anyway=bool(on))
 
     def web_block(self, browser_id: str) -> None:
         blocked = [b for b in self.get_web()["blocked"] if b != browser_id]

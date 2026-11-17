@@ -7,6 +7,8 @@
   og-card.png           1200 x 630 link preview (Discord, X, ...)
   download-badge.svg    the README's big "Download for Windows" button,
                         the same button every 518 app's README carries
+  guide-badge.svg       the "Read the guide" button beside it (Blise's call,
+                        2026-11-17: the guide right by Download)
 
 Everything is drawn from tools/make_app_icon.py's geometry and coloured from
 theme_tokens.py, so the site and the app can't drift apart. The images are
@@ -104,6 +106,25 @@ def write_download_badge() -> None:
     (OUT / "download-badge.svg").write_text(svg, encoding="utf-8")
 
 
+def write_guide_badge() -> None:
+    """The README's second button, beside Download: the same pill, framed
+    in the line colour so Download stays the first call -- the user guide,
+    and what's in it underneath."""
+    bg, green, line, muted = T.NEON["bg"], T.NEON["accent"], T.NEON["line"], T.NEON["muted"]
+    font = "Segoe UI, Arial, sans-serif"
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="320" height="56" role="img" '
+        'aria-label="Read the user guide">\n'
+        f'  <rect x="1.5" y="1.5" width="317" height="53" rx="12" fill="{bg}" '
+        f'stroke="{line}" stroke-width="3"/>\n'
+        f'  <text x="160" y="26" text-anchor="middle" font-family="{font}" font-size="17" '
+        f'font-weight="700" fill="{green}">📖&#160;&#160;READ THE GUIDE</text>\n'
+        f'  <text x="160" y="44" text-anchor="middle" font-family="{font}" font-size="11" '
+        f'fill="{muted}">every page in detail, with pictures</text>\n'
+        '</svg>\n')
+    (OUT / "guide-badge.svg").write_text(svg, encoding="utf-8")
+
+
 def _qimage(pil_img) -> QImage:
     data = pil_img.tobytes("raw", "BGRA")
     return QImage(data, pil_img.width, pil_img.height,
@@ -174,8 +195,9 @@ def main() -> int:
     icon.render(180, title).save(OUT / "apple-touch-icon.png")
     write_og_card(title, body)
     write_download_badge()
+    write_guide_badge()
     print(f"wrote ogp-icon.svg, favicon.ico, apple-touch-icon.png, og-card.png, "
-          f"download-badge.svg to {OUT}")
+          f"download-badge.svg, guide-badge.svg to {OUT}")
     del app
     return 0
 

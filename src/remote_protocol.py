@@ -11,7 +11,16 @@ be lost, so nothing here relies on one arriving:
     changes. Toys, the strength slider, what this friend is allowed to do,
     the shockers and their caps -- and the toys' live output (``out``), but
     only to a friend who may drive them and has your panel open (``lw``):
-    moving toys change it every tick, and nobody else looks at it.
+    moving toys change it every tick, and nobody else looks at it. The
+    caps (``slim``, ``lim``) are each shocker's own, the same for every
+    friend. ``sop`` is what they may send on each shocker (`OP_BITS`: the
+    shocker's own Shock / Vibrate / Beep switches and arming), ``soff`` the
+    ops switched off on each shocker's own card (so their panel can say why
+    a button is greyed: `shocker_why`). A copy from before these says none
+    of them: everything allowed, as it was -- the receiver refuses what
+    isn't. (``fw`` / ``nc``, a per-friend share's "always warn first" and
+    "taps only", are gone since 2026-11-17: a copy that still sends them is
+    ignored, and one that reads them finds neither -- everything allowed.)
   * ``lw``   — "I have your panel open", from the person controlling, while
     their page shows this friend's panel (``on``, repeated like a status),
     and once more without ``on`` when they look away. A watch not repeated
@@ -28,17 +37,21 @@ be lost, so nothing here relies on one arriving:
     (``[op, intensity]``). ``str`` is an event carried in every ``cmd``:
     ``[seq, value]``, applied once per new ``seq``, so it survives a lost
     datagram without replaying an old value over a newer local change.
-    ``syn`` — this controller shares one panel with the others who sync
-    (``Sync with others``, on by default): the version of its panel, a
-    counter that a change of its own raises past the newest it has seen.
+    ``syn`` — the version of this controller's panel for Sync with others,
+    a counter that a change of its own raises past the newest it has seen.
+    Whether everyone driving shares one panel is the receiver's choice
+    alone (``sep`` in its ``st``, `mark_separate`); a ``cmd`` without
+    ``syn`` (an older OGP whose own switch was off) still joins it.
   * ``oth``  — "who else drives me", from the person whose toys these are,
     to a friend who may drive them: the nicknames of the OTHER friends
     driving right now (``n``), so a panel can say "+1 other".
   * ``pnl``  — the shared panel, from the person whose toys these are, to
-    each friend who syncs: the newest change among those who sync (``seq``
-    and its ``lvl`` / ``ovr`` / ``pat``). Their OGP takes it as its own, so
-    every synced panel shows -- and sends -- the same; only that newest one
-    plays (controllers/friends_receive.py).
+    each friend who syncs: the newest change among those who sync (its
+    ``lvl`` / ``ovr`` / ``pat``) and ``seq``, the highest version any of
+    them sent, so the next change made on it is newer. Their OGP takes it
+    as its own, so every synced panel shows -- and sends -- the same; only
+    that newest one plays. Which one is newest the receiver decides on the
+    versions it can vouch for (controllers/friends_receive.py).
   * ``shk``  — one shocker operation (``op`` shock / vibrate / beep, an
     optional ``warn`` first), sent three times; the receiver acts on each
     ``id`` once. ``stp`` — stop those shockers now, the same way.
@@ -46,8 +59,11 @@ be lost, so nothing here relies on one arriving:
     A browser on the web remote (docs/assets/remote.js) adds ``web`` to its
     hello and only ever sends ``lw`` and ``cmd`` levels.
 
-Whatever arrives is cleaned before it is used: a friend's OGP is trusted to
-be OGP, not to be correct.
+Whatever arrives is cleaned before it is used: a friend's OGP isn't even
+trusted to be OGP. A reader never raises on what it is given -- a number
+that is no number (NaN, an infinity, one too big for a float) is none, a
+list that isn't one is empty -- and what a modified client sends past that
+is corrected on the receiving side (friends_receive.py, inbound_rate.py).
 """
 
 import json
@@ -74,6 +90,16 @@ OPS = ("shock", "vibrate", "beep")
 WARNINGS = ("vibrate", "beep")
 WARN_MS = 1000            # a warning's length when none is given
 WARN_MAX_MS = 9000        # PiShock's Long warning tops out at 9 s
+# the shortest warning OGP's panels send (PiShock's Small starts at 1 s): a
+# receiver stretches a shorter one to it (friends_receive)
+WARN_MIN_MS = 1000
+# ``sop``: what a friend may send on one of your shockers, one bit each
+OP_BITS = {"shock": 1, "vibrate": 2, "beep": 4}
+ALL_OPS_MASK = 7
+# A panel version (``syn``, ``pnl``'s ``seq``) is at most this: the largest
+# whole number a browser's JavaScript still counts exactly (the web remote
+# raises it by one per change). OGP's own counters never come near it.
+MAX_SEQ = 2 ** 53 - 1
 
 
 def clean_id(text: Any) -> str:
@@ -129,7 +155,7 @@ def clean_nick(text: Any) -> str:
 def _unit(value: Any) -> Optional[float]:
     try:
         v = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
     if not math.isfinite(v):
         return None
@@ -158,7 +184,10 @@ def make_status(toys: List[Tuple[str, int]], outputs: Dict[str, float],
                 max_vibrate: int = 0, max_hold_s: float = 0.0,
                 prm: Optional[Dict[str, Any]] = None,
                 batteries: Optional[Dict[str, float]] = None,
-                shocker_caps: Optional[List[Tuple[int, int, int]]] = None) -> Dict[str, Any]:
+                shocker_caps: Optional[List[Tuple[int, int, int]]] = None,
+                shocker_ops: Optional[List[int]] = None,
+                shocker_off: Optional[List[int]] = None,
+                not_here: bool = False) -> Dict[str, Any]:
     """Build an ``st`` that fits one datagram. Toy names are cut to
     TOY_NAME_MAX and the list to MAX_TOYS; shockers are only told to a
     friend who may use them. `prm` says you share an avatar board with
@@ -167,7 +196,13 @@ def make_status(toys: List[Tuple[str, int]], outputs: Dict[str, float],
     wire: it changes every few minutes, never every tick).
     `shocker_caps` is each shocker's own (max shock, max vibrate, longest
     pulse ms), in the order of `shockers` (``slim``); the ``lim`` beside it
-    is what a copy from before that reads (the highest of each)."""
+    is what a copy from before that reads (the highest of each).
+    `shocker_ops` is an `OP_BITS` mask per shocker (``sop``) -- what a
+    friend may send on it --; `shocker_off` an `OP_BITS` mask per shocker of what is switched off on
+    its own card (``soff``). `not_here` (``nh``): only friends in the
+    receiver's VRChat instance may drive them and you aren't in it, by
+    their own log -- sent with `paused`, which a copy from before it shows;
+    it never says where they are."""
     toys = [(str(n)[:TOY_NAME_MAX], max(1, int(m))) for n, m in toys[:MAX_TOYS]]
     names = {n for n, _ in toys}
     msg: Dict[str, Any] = {
@@ -182,6 +217,8 @@ def make_status(toys: List[Tuple[str, int]], outputs: Dict[str, float],
         "pause": bool(paused),
         "allow": {"toys": bool(allow_toys), "shock": bool(allow_shock)},
     }
+    if not_here:
+        msg["nh"] = 1
     bat = {n[:TOY_NAME_MAX]: max(0, min(100, round(float(v) * 100)))
            for n, v in (batteries or {}).items() if n[:TOY_NAME_MAX] in names and v is not None}
     if bat:
@@ -195,6 +232,10 @@ def make_status(toys: List[Tuple[str, int]], outputs: Dict[str, float],
         if shocker_caps:
             msg["slim"] = [[int(a), int(b), int(c)]
                            for a, b, c in shocker_caps[:len(msg["shk"])]]
+        if shocker_ops is not None:
+            msg["sop"] = [int(m) & ALL_OPS_MASK for m in shocker_ops[:len(msg["shk"])]]
+        if shocker_off is not None and any(shocker_off):
+            msg["soff"] = [int(m) & ALL_OPS_MASK for m in shocker_off[:len(msg["shk"])]]
     if prm is not None:
         msg["prm"] = dict(prm)
     # Belt and braces: never hand the link a datagram it can't send.
@@ -208,14 +249,12 @@ def make_status(toys: List[Tuple[str, int]], outputs: Dict[str, float],
 def read_status(msg: Dict[str, Any]) -> Dict[str, Any]:
     """A friend's ``st``, cleaned for the page."""
     toys = []
-    for item in (msg.get("toys") or [])[:MAX_TOYS]:
+    for item in as_list(msg.get("toys"))[:MAX_TOYS]:
         if isinstance(item, list) and len(item) == 2:
             name = str(item[0])[:TOY_NAME_MAX]
-            try:
-                motors = max(1, min(16, int(item[1])))
-            except (TypeError, ValueError):
-                motors = 1
+            motors = _int(item[1], 1, 1, 16)
             toys.append((name, motors))
+    shk = as_list(msg.get("shk"))
     out_raw = msg.get("out") if isinstance(msg.get("out"), dict) else {}
     outputs = {}
     for name, _ in toys:
@@ -231,9 +270,11 @@ def read_status(msg: Dict[str, Any]) -> Dict[str, Any]:
         "strength": 1.0 if strength is None else strength,
         "off": bool(msg.get("off")),
         "paused": bool(msg.get("pause")),
+        # paused because you aren't in their VRChat instance (their option)
+        "not_here": bool(msg.get("nh")),
         "allow_toys": bool(allow.get("toys")),
         "allow_shock": bool(allow.get("shock")),
-        "shockers": [str(s)[:TOY_NAME_MAX] for s in (msg.get("shk") or [])[:MAX_SHOCKERS]],
+        "shockers": [str(s)[:TOY_NAME_MAX] for s in shk[:MAX_SHOCKERS]],
         "armed": bool(msg.get("armed")),
         "max_intensity": _int(lim.get("int"), 0, 0, 100),
         "max_pulse_ms": _int(lim.get("ms"), 0, 0, 15000),
@@ -241,7 +282,12 @@ def read_status(msg: Dict[str, Any]) -> Dict[str, Any]:
         "max_hold_s": max(0.0, min(600.0, _float(lim.get("hold"), 0.0))),
         # each shocker's own caps, in the order of "shockers" ([] from a copy
         # that doesn't send them: the "max_*" above are every shocker's then)
-        "shocker_caps": _read_caps(msg.get("slim"), len(msg.get("shk") or [])),
+        "shocker_caps": _read_caps(msg.get("slim"), len(shk)),
+        # what you may send on each of their shockers (op names, in the
+        # order of "shockers"; [] from a copy that doesn't say: all of them)
+        "shocker_ops": _read_ops(msg.get("sop"), len(shk)),
+        # what is switched off on each shocker's own card ([]: nothing said)
+        "shocker_off": _read_ops(msg.get("soff"), len(shk)),
         # read by remote_params.read_prm: None when they share no board
         "prm": dict(msg["prm"]) if isinstance(msg.get("prm"), dict) else None,
         "batteries": {name: _int(bat_raw.get(name), 0, 0, 100) for name, _ in toys
@@ -257,6 +303,64 @@ def _read_caps(raw: Any, count: int) -> List[Tuple[int, int, int]]:
         caps.append((_int(item[0], 1, 1, 100), _int(item[1], 1, 1, 100),
                      _int(item[2], SHOCK_MIN_MS, SHOCK_MIN_MS, 15000)))
     return caps if len(caps) == min(count, MAX_SHOCKERS) else []
+
+
+def ops_mask(ops) -> int:
+    """`OP_BITS` of a set of op names."""
+    return sum(bit for op, bit in OP_BITS.items() if op in ops)
+
+
+def mask_ops(mask: int) -> List[str]:
+    """The op names in an `OP_BITS` mask, in OPS order."""
+    return [op for op in OPS if int(mask) & OP_BITS[op]]
+
+
+def _read_ops(raw: Any, count: int) -> List[List[str]]:
+    out: List[List[str]] = []
+    for item in (raw if isinstance(raw, list) else [])[:min(count, MAX_SHOCKERS)]:
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            return []                   # all of them or none, never out of step
+        out.append(mask_ops(_int(item, 0, 0, ALL_OPS_MASK)))
+    return out if len(out) == min(count, MAX_SHOCKERS) else []
+
+
+def shocker_ops(status: Dict[str, Any], slot: int) -> List[str]:
+    """What you may send on one of a friend's shockers: what their copy
+    says, else everything (a copy from before it said)."""
+    own = status.get("shocker_ops") or []
+    if 0 <= slot < len(own):
+        return list(own[slot])
+    return list(OPS)
+
+
+WARN_OFF_WHY = "Can't warn: vibrate and beep are both off on their side"
+
+
+def can_warn(status: Dict[str, Any], slot: int) -> bool:
+    """Can a warning play on one of a friend's shockers? It vibrates, or
+    beeps where Vibrate is off; with both switched off on that shocker's
+    card it can't -- and a shock asked to come after a warning is held back
+    there (Blise's call, 2026-11-14), so their panel greys Warning."""
+    own = status.get("shocker_off") or []
+    off = set(own[slot]) if 0 <= slot < len(own) else set()
+    return not {"vibrate", "beep"} <= off
+
+
+def shocker_why(status: Dict[str, Any], slot: int, op: str) -> str:
+    """Why you can't send `op` on one of a friend's shockers -- the line a
+    greyed button says (Blise's call, 2026-11-14: the sender sees it); ""
+    when you can. Their card's own switch first, then what arming makes of
+    it; anything else (an older OGP's per-friend share) is theirs to say."""
+    if op in shocker_ops(status, slot):
+        return ""
+    own = status.get("shocker_off") or []
+    off = set(own[slot]) if 0 <= slot < len(own) else set()
+    if op in off:
+        return f"{op.capitalize()} is switched off on their side"
+    if op == "shock" and "vibrate" in off and not status.get("armed"):
+        return ("Vibrate is switched off on their side - and a shock that isn't armed "
+                "goes out as a vibrate")
+    return f"They don't let you {op}"
 
 
 def shocker_caps(status: Dict[str, Any], slot: int) -> Tuple[int, int, int]:
@@ -288,7 +392,7 @@ def read_levels_watch(msg: Dict[str, Any]) -> bool:
 def _float(value: Any, default: float) -> float:
     try:
         v = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     return v if math.isfinite(v) else default
 
@@ -296,9 +400,14 @@ def _float(value: Any, default: float) -> float:
 def _int(value: Any, default: int, lo: int, hi: int) -> int:
     try:
         v = int(float(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):      # Infinity: none either
         return default
     return max(lo, min(hi, v))
+
+
+def as_list(value: Any) -> list:
+    """A list as sent, or [] for anything else (a number, a dict, text)."""
+    return value if isinstance(value, list) else []
 
 
 # --- cmd: what the controller wants ---------------------------------------------
@@ -373,7 +482,7 @@ def read_cmd(msg: Dict[str, Any]) -> Tuple[Dict[str, float], Optional[Tuple[int,
         v = _unit(s[1])
         try:
             seq = int(s[0])
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             seq = None
         if v is not None and seq is not None:
             strength = (seq, v)
@@ -397,7 +506,7 @@ def read_cmd_more(msg: Dict[str, Any]) -> Tuple[Set[str], Dict[str, Tuple[str, f
     for slot, value in list(raw.items())[:MAX_SHOCKERS]:
         try:
             slot = int(slot)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             continue
         if (0 <= slot < MAX_SHOCKERS and isinstance(value, list) and len(value) == 2
                 and value[0] in OPS):
@@ -413,8 +522,8 @@ def read_syn(msg: Dict[str, Any]) -> Optional[int]:
     if isinstance(raw, bool) or raw is None:
         return None
     try:
-        return max(0, int(raw))
-    except (TypeError, ValueError):
+        return max(0, min(MAX_SEQ, int(raw)))
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -427,6 +536,19 @@ def make_others(names: List[str]) -> Dict[str, Any]:
 def read_others(msg: Dict[str, Any]) -> List[str]:
     raw = msg.get("n") if isinstance(msg.get("n"), list) else []
     return [n for n in (clean_nick(x) for x in raw[:MAX_OTHERS]) if n]
+
+
+def mark_separate(st: Optional[Dict[str, Any]], separate: bool) -> Optional[Dict[str, Any]]:
+    """`st` saying how the receiver's owner has Sync with others: ``sep``
+    1 while each friend drives on their own (highest wins); absent while
+    everyone shares one panel -- the default, and what an OGP from before
+    the owner chose it means."""
+    return {**st, "sep": 1} if st is not None and separate else st
+
+
+def read_separate(st: Dict[str, Any]) -> bool:
+    """Their owner has each friend drive on their own (``sep``)."""
+    return bool(st.get("sep"))
 
 
 def make_panel(seq: int, levels: Dict[str, float], override=(),
@@ -479,7 +601,7 @@ def _slots(raw: Any) -> List[int]:
     for s in (raw if isinstance(raw, list) else [])[:MAX_SHOCKERS]:
         try:
             s = int(s)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             continue
         if 0 <= s < MAX_SHOCKERS and s not in slots:
             slots.append(s)

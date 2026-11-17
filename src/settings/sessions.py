@@ -4,6 +4,7 @@ import json
 import os
 from typing import Any, Dict
 
+import settings_history
 from utilities import atomic_write_json
 
 from ._paths import SESSIONS_SETTINGS_FILE
@@ -30,14 +31,22 @@ class SessionSettingsManager:
         # oldest-first. Default 20 holds roughly a week of "1 session
         # per day" use before rotation.
         "retention":  20,
+        # Debug: also record every contact packet as it arrives (VRChat's
+        # own names, arrival times) and the avatar's contact parameters
+        # at each load, so a replay runs the exact same input through
+        # OGP. Bigger files; off unless someone is chasing a bug.
+        "raw_contacts": False,
     }
 
     _RETENTION_MIN = 1
     _RETENTION_MAX = 1000
+    HISTORY_KEY = "sessions"
+    HISTORY_LABEL = "Sessions"
 
     def __init__(self):
         self.settings: Dict[str, Any] = {}
         self._load_or_create_defaults()
+        settings_history.track(self)       # Ctrl+Z (settings_history.py)
 
     def _load_or_create_defaults(self) -> None:
         if os.path.exists(SESSIONS_SETTINGS_FILE):
@@ -57,6 +66,7 @@ class SessionSettingsManager:
             atomic_write_json(SESSIONS_SETTINGS_FILE, self.settings, indent=2)
         except OSError as e:
             print(f"Session settings save error: {e}")
+        settings_history.saved(self)
 
     # ---- enabled (master) ----
 
@@ -93,13 +103,23 @@ class SessionSettingsManager:
         self.settings["retention"] = v
         self._save()
 
+    # ---- raw contact recording (debug) ----
+
+    def get_raw_contacts(self) -> bool:
+        return bool(self.settings.get("raw_contacts", False))
+
+    def set_raw_contacts(self, value: bool) -> None:
+        self.settings["raw_contacts"] = bool(value)
+        self._save()
+
     # ---- snapshot for UI ----
 
     def snapshot(self) -> Dict[str, Any]:
         """Read-only view of all three fields. Used by the UI panel to
         populate its toggles + spinbox in one round-trip."""
         return {
-            "enabled":    self.get_enabled(),
-            "auto_start": self.get_auto_start(),
-            "retention":  self.get_retention(),
+            "enabled":      self.get_enabled(),
+            "auto_start":   self.get_auto_start(),
+            "retention":    self.get_retention(),
+            "raw_contacts": self.get_raw_contacts(),
         }

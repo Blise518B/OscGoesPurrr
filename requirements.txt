@@ -30,3 +30,8 @@ requests>=2.31
 # one-file exe can't find it. Import is guarded: without it the Friends
 # page just says so.
 iroh>=1.2.0
+# Haptic trackers (tracker_engine.py): OpenVR's Python binding with Valve's
+# openvr_api library inside, loaded through ctypes -- the build scripts pass
+# --collect-binaries openvr. Loaded only when the trackers are switched on;
+# without it the Suits page just says so.
+openvr>=2.5

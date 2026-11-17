@@ -22,17 +22,20 @@ on can act at the same time:
     board from the Avatar Remote page and may use it (ParamsFacade, the
     owner's half); you see theirs under their panel (friends_params.py).
 
-"Pause all friends" and Off stop everything a friend sends. Every action a
-friend takes on you, and every one you take on them, lands in the page's
-log.
+"Pause all friends" and Off stop everything a friend sends; so does "Only
+friends in my instance" for a friend who isn't in it (friends_instance.py).
+Every action a friend takes on you, and every one you take on them, lands
+in the page's log.
 
 Five files: this one (the link, contacts, invites, groups, the log),
 `friends_control.py` (you driving friends), `friends_menu.py` (the avatar
 menu's Friends part), `friends_receive.py` (friends driving you) and
 `friends_params.py` (a friend's avatar board), with what they share in
 `friends_common.py`. Beside them: `friends_me.py` (you on your own list),
-`friends_versions.py` (whose OGP is newer) and `friends_web.py` (the web
-remote: browsers on one link, toys only).
+`friends_versions.py` (whose OGP is newer), `friends_web.py` (the web
+remote: browsers on one link, toys only), `friends_vrchat.py` (each
+friend linked to their VRChat account, yours alone) and
+`friends_instance.py` (only friends in your instance).
 
 Threads: `RemoteLink` calls `_friends_on_event` and builds its messages
 (`_friends_status_for`, `_friends_cmd_for`) on its own thread. Everything
@@ -54,30 +57,37 @@ from collections import deque
 from typing import Any, Dict, List, Optional
 
 import debug_log
+import event_log
 import friend_links
 import friends_demo
+import inbound_rate
 import link_handoff
 import link_scheme
 import remote_link
 import remote_protocol as proto
-from controllers.friends_common import FEATURE_KEY, ME, WEB, shocker_label
+from controllers.friends_common import FEATURE_KEY, ME, WEB, coming_through, shocker_label
+from event_log import LINK, SETTINGS, TOYS
+from pishock_engine import GROUP_FRIENDS
 from controllers.friends_control import FriendsControlMixin
+from controllers.friends_instance import FriendsInstanceMixin
 from controllers.friends_me import FriendsMeMixin, MeLink
 from controllers.friends_menu import FriendsMenuMixin, MenuState
 from controllers.friends_params import FriendsParamsMixin
 from controllers.friends_receive import FriendsReceiveMixin
 from controllers.friends_versions import FriendsVersionsMixin
+from controllers.friends_vrchat import FriendsVrchatMixin
 from controllers.friends_web import FriendsWebMixin
 from settings._paths import FRIENDS_KEY_FILE
 from settings.friends import FriendsSettingsManager
 
 _TICK_MS = 100
-_LOG_MAX = 200
-_COALESCE_S = 2.0            # strength drags make one log line, not fifty
+_LOG_MAX = 200               # lines on the Friends page's log card
+_BY_PERSON_FROM = 600        # the newest this many make the card's "by person"
 
 
 class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
-                    FriendsParamsMixin, FriendsMeMixin, FriendsVersionsMixin, FriendsWebMixin):
+                    FriendsParamsMixin, FriendsMeMixin, FriendsVersionsMixin, FriendsWebMixin,
+                    FriendsVrchatMixin, FriendsInstanceMixin):
     """Mixin: the Friends page's controller surface -- the link, contacts,
     invites, groups and the log here; driving friends, the avatar menu,
     what friends do to you and a friend's avatar board in its four
@@ -89,8 +99,10 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
 
     def _friends_init(self) -> None:
         self.friends_settings = FriendsSettingsManager()
-        self._friends_log: deque = deque(maxlen=_LOG_MAX)
-        self._friends_log_keys: deque = deque(maxlen=_LOG_MAX)
+        # The log is one store for the app (LogFacade, its files and the Log
+        # page); a host without one keeps it in memory only.
+        if getattr(self, "event_log", None) is None:
+            self.event_log = event_log.EventLog(None)
         self._friend_requests: Dict[str, str] = {}
         self._friend_status: Dict[str, Dict[str, Any]] = {}
         self._friend_drive: Dict[str, Any] = {}       # peer -> Drive
@@ -102,7 +114,18 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         self._friend_lock = threading.Lock()
         self._friend_str_seq: Dict[str, int] = {}
         self._friend_driving: Dict[str, bool] = {}
-        self._seen_shocks: deque = deque(maxlen=128)
+        # each sender's recent shock / Stop ids, apart: one sending many
+        # can't push another's out (and see that one's copies as new)
+        self._seen_shocks: Dict[str, deque] = {}
+        # how often each sender may make your shockers act (inbound_rate)
+        self._shock_budget = inbound_rate.Budget(*inbound_rate.SHOCKS)
+        self._stop_budget = inbound_rate.Budget(*inbound_rate.STOPS)
+        # ... and change the toy cards (Me excepted: friends_receive)
+        self._card_budget = inbound_rate.Budget(*inbound_rate.CARDS)
+        # a friend's strength change waiting for the GUI thread: only the
+        # newest one per friend is queued (friends_receive)
+        self._friend_str_pending: Dict[str, float] = {}
+        self._str_lock = threading.Lock()
         self._my_levels: Dict[str, Dict[str, float]] = {}
         self._my_override: Dict[str, set] = {}       # peer -> toys you override
         self._my_patterns: Dict[str, Dict[str, tuple]] = {}   # peer -> toy -> auto mode
@@ -114,6 +137,12 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         self._my_pseq: Dict[str, int] = {}
         self._friend_others: Dict[str, List[str]] = {}
         self._oth_told: set = set()     # friends told someone else drives (link thread)
+        # ... and as the one driven: each sender's last (version said,
+        # version vouched for, cards) -- kept past a drop -- and whether a
+        # real change has landed since going online (friends_receive's
+        # _sync_version; the link's thread)
+        self._sync_seen: Dict[str, tuple] = {}
+        self._sync_settled = False
         # Your toys' live levels go only to a friend whose page shows your
         # panel (`lw`): whose panel yours shows, and who shows yours
         self._lw_peer: Optional[str] = None
@@ -121,6 +150,8 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         self._level_watchers: Dict[str, float] = {}   # peer -> their last "watching"
         self._my_state: Dict[str, Any] = {}
         self._friend_perms: Dict[str, tuple] = {}
+        # (peer, slot) -> why their hold there is refused, once told (GUI tick)
+        self._hold_refused: Dict[tuple, str] = {}
         # Example friends next to the real ones (OGP_FRIENDS_DEMO=1): page
         # only, never the network, never a level for the router.
         self._demo = (friends_demo.FriendsDemo()
@@ -135,6 +166,8 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         self._friends_params_init()
         self._friends_versions_init()
         self._friends_web_init()
+        self._friends_vrchat_init()
+        self._friends_instance_init()
         self._friends_rebuild_perms()
         log = lambda m: self.thread_queue.put(("ui_update", m))
         self._friend_dropped: Dict[str, float] = {}   # peer -> when their drive went quiet
@@ -145,7 +178,7 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
             key_path=str(FRIENDS_KEY_FILE),
             log=log,
             on_event=self._friends_on_event,
-            status_for=self._friends_status_for,
+            status_for=self._friends_st_for,
             cmd_for=self._friends_cmd_for,
             invite_ok=self._friends_invite_ok,
             more_for=self._friends_more_for,
@@ -215,6 +248,7 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         self._my_levels = {}
         self._my_override, self._my_patterns, self._my_holds = {}, {}, {}
         self._my_pseq, self._friend_others = {}, {}
+        self._sync_seen, self._sync_settled = {}, False   # as after a restart
         self._level_watchers = {}
         for peer in set(self._their_boards) | set(self._my_param_holds):
             self._drop_their_board(peer)
@@ -259,23 +293,30 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         status = self._friend_status
         now = time.monotonic()
         friends = [self._me_entry(peers, selected, now)]
+        checks = link.check_state()               # the ↻: {peer: (checking, wait)}
+        vrc = self._friends_vrchat_status()        # VRChat's log, read once (friends_vrchat)
         for f in self.friends_settings.get_friends():
             p = peers.get(f["id"], {})
             st = status.get(f["id"]) if p.get("linked") else None
+            checking, check_wait = checks.get(f["id"], (False, 0.0))
             friends.append({
                 **f,
                 "nick": f["nick"] or p.get("nick") or "",
                 "linked": bool(p.get("linked")),
+                # being checked (↻), and when the next check may go
+                "checking": bool(checking) and not p.get("linked"),
+                "check_wait": check_wait,
                 "path": p.get("path", ""),
                 "rtt": p.get("rtt"),
                 "selected": selected == {"kind": "friend", "id": f["id"]},
                 "theirs": None if st is None else {k: v for k, v in st.items() if k != "t"},
                 "my_levels": dict(self._my_levels.get(f["id"], {})),
                 "driving_me": self._is_driving(f["id"], now),
-                # the others driving them too (their OGP says), and your Sync
+                # the others driving them too (their OGP says)
                 "others": list(self._friend_others.get(f["id"], [])) if p.get("linked") else [],
-                "sync": bool(f.get("sync", True)),
                 **self._friend_version_fields(f["id"]),        # their OGP against yours
+                **self._friend_vrc_fields(f["id"], **vrc),     # their VRChat account
+                **self._friend_here_fields(f["id"]),           # only friends in your instance
             })
         groups = self.friends_settings.get_groups()
         demo = getattr(self, "_demo", None)
@@ -304,6 +345,7 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
             "my_id": link.my_id,
             "nickname": self.friends_settings.get_nickname(),
             "paused": self.friends_settings.get_paused(),
+            "sync_all": self.friends_settings.get_sync_all(),   # Sync with others: yours
             "requests": [{"id": k, "nick": v} for k, v in self._friend_requests.items()],
             "asking": asking,
             "friends": friends,
@@ -316,13 +358,30 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
                               or ("someone" if self._pending_invite else ""),
             "invites": self.friends_settings.get_invites(),
             "params_on": bool(self.get_feature_enabled("feature_params")),
+            # your shockers exist here at all: what friends may do with them
+            "shockers_on": bool(self.get_feature_enabled("feature_pishock")),
+            # whose shocker buttons the panel shows (shocker_layout.py)
+            "shocker_layout": self.get_shocker_layout(),
             "behind": self._friends_behind(),       # a friend's OGP is newer than yours
             "web": self._web_entry(peers, now),     # the Web remote row (None: no link yet)
+            "vrchat": self._vrchat_entry(**vrc),    # who's in your instance (friends_vrchat)
+            "instance": self._instance_entry(),     # only friends in it (friends_instance)
         }
 
     def get_friends_log(self) -> List[Dict[str, Any]]:
-        """Newest first: {t (unix seconds), text}."""
-        return [{"t": t, "text": text} for t, text in reversed(self._friends_log)]
+        """The Friends page's log, newest first: each entry's record
+        (event_log.Event.as_dict -- t, text, who, name, kind, op ...).
+        Your own avatar's behaviours are on the Log page only."""
+        return [e.as_dict() for e in self.event_log.recent(_LOG_MAX, where=_friends_entry)]
+
+    def get_friends_log_people(self) -> List[Dict[str, Any]]:
+        """The log card's "by person": a row per person (friends, Me, web
+        remote guests, groups), the one active most recently first, each
+        with what they did last and their recent history."""
+        now = time.time()
+        recent = self.event_log.recent(_BY_PERSON_FROM, where=_friends_entry)
+        return [p.as_dict(now) for p in event_log.by_person(
+            recent, skip_roles=(event_log.ROLE_YOU,))]
 
     def set_friends_nickname(self, nick: str) -> str:
         """Required before the link goes online; can be changed, never
@@ -366,8 +425,25 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         if peer in self.friends_settings.friend_ids():
             return "You're already friends."
         self.friends_link.pair_with(peer)
-        self._friends_note(f"You asked {proto.display_name('', peer)} to be friends")
+        self._friends_note("You asked {who} to be friends", who=peer,
+                           name=proto.display_name("", peer), op="ask")
         return ""
+
+    def friends_check_now(self, peer: Optional[str] = None) -> List[str]:
+        """The Friends list's ↻: try reaching `peer` now -- with none, every
+        friend who shows offline -- instead of waiting for the link's next
+        try in the background. The link takes each friend at most once per
+        remote_link.CHECK_GAP_S. Returns who a try went out for."""
+        link = self.friends_link
+        if not link.running or not link.online:
+            return []
+        ids = self.friends_settings.friend_ids()
+        if peer is not None:
+            ids = [peer] if peer in ids else []
+        else:
+            peers = link.peers()
+            ids = [p for p in ids if not peers.get(p, {}).get("linked")]
+        return link.check_now(ids) if ids else []
 
     def set_friends_online(self, online: bool) -> None:
         """The Online switch: off, Friends uses no network at all."""
@@ -377,10 +453,11 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         self.friends_settings.set_online(online)
         if online:
             self._friends_maybe_start()
-            self._friends_note("You went online")
+            self._friends_note("You went online", op="online")
         else:
             self._friends_stop()
-            self._friends_note("You went offline - nobody can reach you until you're back")
+            self._friends_note("You went offline - nobody can reach you until you're back",
+                               op="offline")
         self._friends_refresh_ui()
 
     # --- invite links
@@ -395,7 +472,7 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         if kind not in _INVITE_WORDS:
             kind = "once"
         code = self.friends_settings.new_invite(kind)
-        self._friends_note(f"You made an invite link - {_INVITE_WORDS[kind]}")
+        self._friends_note(f"You made an invite link - {_INVITE_WORDS[kind]}", op="invite")
         return friend_links.invite_message(my_id, code, self.friends_settings.get_nickname())
 
     def friends_close_invites(self) -> None:
@@ -403,7 +480,7 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         n = len(self.friends_settings.get_invites())
         self.friends_settings.close_invites()
         self._friends_note(f"You closed your invite links ({n})" if n else
-                           "You closed your invite links")
+                           "You closed your invite links", op="invite")
         self._friends_refresh_ui()
 
     def friends_reset_id(self) -> None:
@@ -416,7 +493,8 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         self.friends_link.stop(timeout=5.0)
         self._friends_stop()
         if not self.friends_link.forget_identity():
-            self._friends_note("Your old ID couldn't be dropped right now - try New ID again")
+            self._friends_note("Your old ID couldn't be dropped right now - try New ID again",
+                               op="new-id")
         with self._invite_lock:
             self._used_invites = set()
         self._pending_invite = None
@@ -424,7 +502,7 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         self._friends_rebuild_perms()
         self._friends_maybe_start()
         self._friends_note(f"You have a new ID - {n} friend{'' if n == 1 else 's'} unlinked; "
-                           "your old ID and every invite link stopped working")
+                           "your old ID and every invite link stopped working", op="new-id")
         self._friends_refresh_ui()
 
     def friends_open_link(self, link: str) -> None:
@@ -442,14 +520,15 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
             ui.show_window()
         inv = friend_links.parse(link)
         if inv is None:
-            self._friends_note("That link isn't an OGP invite")
+            self._friends_note("That link isn't an OGP invite", op="invite")
             return
         who = proto.display_name(inv["nick"], inv["id"])
         if not self.get_feature_enabled(FEATURE_KEY) or not self.friends_settings.get_nickname():
             # One small window asks for the nickname (and switches Friends
             # on) -- answering it links you; nothing to find on the page.
             self._pending_invite = inv
-            self._friends_note(f"{who} invited you - pick a nickname and you're linked")
+            self._friends_note("{who} invited you - pick a nickname and you're linked",
+                               who=inv["id"], name=who, op="invite", dir=event_log.IN)
             prompt = getattr(ui, "prompt_friends_invite", None) if ui is not None else None
             if prompt is not None:
                 prompt(who, self.friends_settings.get_nickname(),
@@ -459,7 +538,7 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
             self._pending_invite = inv
             if not self.friends_settings.get_online():
                 self.friends_settings.set_online(True)
-                self._friends_note("You went online for the invite")
+                self._friends_note("You went online for the invite", op="online")
             self._friends_maybe_start()
             if self.friends_link.running:
                 self._pending_invite = None
@@ -488,11 +567,11 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
             return "That's your own invite link - send it to a friend instead."
         if inv["id"] in self.friends_settings.friend_ids():
             self.set_friends_selected("friend", inv["id"])
-            self._friends_note(f"You're already friends with {self._friend_nick(inv['id'])}")
+            self._friends_note("You're already friends with {who}", who=inv["id"], op="invite")
             return ""
         self._invite_nicks[inv["id"]] = inv["nick"]       # also: open their panel once linked
         self.friends_link.pair_with(inv["id"], inv["code"])
-        self._friends_note(f"Joining {who}'s invite…")
+        self._friends_note("Joining {who}'s invite…", who=inv["id"], name=who, op="invite")
         return ""
 
     def _friends_invite_ok(self, peer: str, code: str, nick: str) -> bool:
@@ -517,20 +596,23 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         if accept:
             self.friends_settings.add_friend(peer, nick)
             self._friends_contacts_changed()
-            self._friends_note(f"You accepted {proto.display_name(nick, peer)} as a friend")
+            self._friends_note("You accepted {who} as a friend", who=peer,
+                               name=proto.display_name(nick, peer), op="accept")
         else:
-            self._friends_note(f"You declined {proto.display_name(nick, peer)}")
+            self._friends_note("You declined {who}", who=peer,
+                               name=proto.display_name(nick, peer), op="decline")
         self.friends_link.answer(peer, accept)
 
     def friends_remove(self, peer: str) -> None:
         if self._demo_of("friend", peer):
-            self._friends_note("Example friends stay while OGP runs with OGP_FRIENDS_DEMO=1")
+            self._friends_note("Example friends stay while OGP runs with OGP_FRIENDS_DEMO=1",
+                               kind=SETTINGS)
             return
         nick = self._friend_nick(peer)
         self._menu_retarget(lambda: self.friends_settings.remove_friend(peer))
         self._friends_contacts_changed()
         self._drop_friend_state(peer)
-        self._friends_note(f"You unfriended {nick}")
+        self._friends_note("You unfriended {who}", who=peer, name=nick, op="unfriend")
         self._friends_refresh_ui()
 
     def set_friend_permission(self, peer: str, what: str, allowed: bool) -> None:
@@ -540,8 +622,9 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         demo = self._demo_of("friend", peer)
         if demo is not None:
             demo.perms[peer][_PERM_AT.get(what, 0)] = bool(allowed)
-            self._friends_note(f"{demo.nick(peer)} (example) may {'now' if allowed else 'no longer'} "
-                               f"control {label}")
+            self._friends_note(f"{{who}} (example) may {'now' if allowed else 'no longer'} "
+                               f"control {label}", who=peer, name=demo.nick(peer),
+                               kind=SETTINGS, op="allow" if allowed else "deny")
             return
         self.friends_settings.set_permission(peer, what, allowed)
         self._friends_rebuild_perms()
@@ -554,8 +637,8 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
                 drop = getattr(self, "_params_drop_friend", None)
                 if drop is not None:
                     drop(peer)                # held buttons let go
-        self._friends_note(f"{self._friend_nick(peer)} may {'now' if allowed else 'no longer'} "
-                           f"control {label}")
+        self._friends_note(f"{{who}} may {'now' if allowed else 'no longer'} control {label}",
+                           who=peer, kind=SETTINGS, op="allow" if allowed else "deny")
 
     def set_friend_permission_all(self, what: str) -> Optional[bool]:
         """A column header: one permission for every friend at once -- off
@@ -580,7 +663,8 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
                         drop(peer)
         label = {"toys": "your toys", "shock": "your shockers",
                  "params": "your avatar's board"}[what]
-        self._friends_note(f"Every friend may {'now' if on else 'no longer'} control {label}")
+        self._friends_note(f"Every friend may {'now' if on else 'no longer'} control {label}",
+                           kind=SETTINGS, op="allow" if on else "deny")
         return on
 
     def set_friends_paused(self, paused: bool) -> None:
@@ -593,7 +677,8 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         if paused and release is not None:
             release()                       # avatar buttons they hold let go
         self._friends_note("All friends paused - nothing they send reaches you" if paused
-                           else "Friends resumed")
+                           else "Friends resumed", kind=SETTINGS,
+                           op="pause" if paused else "resume")
 
     # --- what the page's panel shows and the VRChat menu acts on: one
     # friend, or a group of them
@@ -626,7 +711,8 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
     def friends_add_group(self, name: str) -> Optional[str]:
         gid = self.friends_settings.add_group(name)
         if gid:
-            self._friends_note(f"You made the group {self._group_name(gid)}")
+            self._friends_note("You made the group {who}", who=event_log.group_key(gid),
+                               kind=SETTINGS, op="group")
             self.set_friends_selected("group", gid)
         return gid
 
@@ -640,7 +726,8 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         old = self._group_name(gid)
         self.friends_settings.rename_group(gid, name)
         if self._group_name(gid) != old:
-            self._friends_note(f"Group {old} is now {self._group_name(gid)}")
+            self._friends_note(f"Group {old} is now {{who}}", who=event_log.group_key(gid),
+                               kind=SETTINGS, op="rename")
 
     def friends_delete_group(self, gid: str) -> None:
         demo = self._demo_of("group", gid)
@@ -650,7 +737,8 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
             return
         name = self._group_name(gid)
         self._menu_retarget(lambda: self.friends_settings.delete_group(gid))
-        self._friends_note(f"You deleted the group {name}")
+        self._friends_note("You deleted the group {who}", who=event_log.group_key(gid),
+                           name=name, kind=SETTINGS, op="group")
 
     def set_group_member(self, gid: str, peer: str, on: bool) -> None:
         demo = self._demo_of("group", gid)
@@ -658,8 +746,8 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
             demo.set_member(gid, peer, on)
             return
         self._menu_retarget(lambda: self.friends_settings.set_member(gid, peer, on))
-        self._friends_note(f"{self._friend_nick(peer)} {'joins' if on else 'leaves'} "
-                           f"{self._group_name(gid)}")
+        self._friends_note(f"{{who}} {'joins' if on else 'leaves'} {self._group_name(gid)}",
+                           who=peer, kind=SETTINGS, op="join" if on else "leave")
 
     def _friends_targets(self) -> List[str]:
         """Whoever is picked: one friend, or a group's members."""
@@ -694,9 +782,17 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
             return
         if kind == "message":
             t = data.get("t")
+            if t in _NEVER_FROM_A_BROWSER and peer in self._web_guests:
+                # a browser is never driven by you: it has no status, shared
+                # panel, "who else" or board to send -- one that does isn't
+                # the web remote page, and none of it is taken
+                self._web_refused(peer, t)
+                return
             if t == "st":
+                # with Sync with others as they have it (``sep``: their call)
                 self._friend_status = {**self._friend_status,
-                                       peer: {**proto.read_status(data), "t": time.monotonic()}}
+                                       peer: {**proto.read_status(data), "t": time.monotonic(),
+                                              "separate": proto.read_separate(data)}}
             elif t == "cmd":
                 self._friend_cmd_in(peer, data)
             elif t == "pnl":
@@ -720,7 +816,8 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
             return
         if kind == "request":
             self._friend_requests = {**self._friend_requests, peer: data or ""}
-            self._friends_note(f"{proto.display_name(data, peer)} asks to be your friend")
+            self._friends_note("{who} asks to be your friend", who=peer,
+                               name=proto.display_name(data, peer), op="ask", dir=event_log.IN)
         elif kind == "request_over":
             self._friend_requests = {k: v for k, v in self._friend_requests.items() if k != peer}
         elif kind in ("linked", "nick", "removed", "version"):
@@ -730,12 +827,12 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
             still = peer in self._friend_perms or self._demo_of("friend", peer) is not None
             if data != "removed" and still:     # unfriending says so itself, both ways
                 word = {"bye": "closed OGP", "timeout": "connection lost"}.get(data, "disconnected")
-                self._friends_note(f"{self._friend_nick(peer)} went offline ({word})")
+                self._friends_note(f"{{who}} went offline ({word})", who=peer, op="offline")
         elif kind == "declined":
-            self._friends_note(f"{self._friend_nick(peer)} declined")
+            self._friends_note("{who} declined", who=peer, op="decline")
         elif kind == "gave_up":
-            self._friends_note(f"{self._friend_nick(peer)} never answered - ask again "
-                               "when they're online")
+            self._friends_note("{who} never answered - ask again when they're online",
+                               who=peer, op="ask")
         self.thread_queue.put(("friends", ("refresh", None)))
 
     def _friends_status_for(self, peer: str) -> Optional[Dict[str, Any]]:
@@ -744,15 +841,22 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         if not perms or not st:
             return None
         prm_for = getattr(self, "_params_prm_for", None)
+        # Their panel shows each shocker's own caps and switches -- the same
+        # for every friend (the Shockers page's)
+        # not in your instance: refused like Pause, and told that's why --
+        # never where you are (friends_instance.py)
+        not_here = peer in self._not_here
         return proto.make_status(
             st["toys"], st["outputs"] if self._sends_levels(peer, perms) else {},
             st["strength"], st["off"],
-            self.friends_settings.get_paused(), perms[0],
+            self.friends_settings.get_paused() or not_here, perms[0],
             perms[1] and self._shockers_shared(),
             st["shockers"], st["armed"], st["max_intensity"], st["max_pulse_ms"],
-            st.get("max_vibrate", 0), st.get("max_hold_s", 0.0),
+            st.get("max_vibrate", 0) or st["max_intensity"], st.get("max_hold_s", 0.0),
             prm=prm_for(peer) if prm_for is not None else None,
-            batteries=st.get("batteries"), shocker_caps=st.get("shocker_caps"))
+            batteries=st.get("batteries"), shocker_caps=st.get("shocker_caps") or [],
+            shocker_ops=st.get("shocker_ops") or [],
+            shocker_off=st.get("shocker_off"), not_here=not_here)
 
     def _sends_levels(self, peer: str, perms: tuple) -> bool:
         """Your toys' live levels: moving toys change them every tick, which
@@ -802,16 +906,18 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
                 self._friends_contacts_changed()
                 if peer in self._invite_nicks:
                     self.set_friends_selected("friend", peer)    # their panel, ready to go
-                self._friends_note(f"You and {proto.display_name(nick, peer)} are friends now")
+                self._friends_note("You and {who} are friends now", who=peer,
+                                   name=proto.display_name(nick, peer), op="accept")
             elif nick:
                 self.friends_settings.set_nick_of(peer, nick)
-            self._friends_note(f"{self._friend_nick(peer)} is online")
+            self._friends_note("{who} is online", who=peer, op="online")
         elif kind == "nick":
             peer, nick = data
             old = self._friend_nick(peer)
             self.friends_settings.set_nick_of(peer, nick)
             if nick and nick != old:
-                self._friends_note(f"{old} is now called {nick}")
+                self._friends_note(f"{old} is now called {{who}}", who=peer, name=nick,
+                                   op="rename")
         elif kind == "version":
             self._friend_version_heard(*data)
         elif kind == "removed":
@@ -821,13 +927,15 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
                 self._menu_retarget(lambda: self.friends_settings.remove_friend(peer, unfriended=False))
                 self._friends_contacts_changed()
                 self._drop_friend_state(peer)
-                self._friends_note(f"{nick} unfriended you")
+                self._friends_note("{who} unfriended you", who=peer, name=nick, op="unfriend",
+                                   dir=event_log.IN)
         elif kind == "open_link":
             self.friends_open_link(data)
         elif kind == "elsewhere_gone" and self._friends_elsewhere:
             self._friends_claim_pipe()          # nobody listens now: no wait
             if not self._friends_elsewhere:
-                self._friends_note("Your other OGP window closed - Friends runs here now")
+                self._friends_note("Your other OGP window closed - Friends runs here now",
+                                   op="online")
                 self._friends_maybe_start()
         elif kind == "invite_used":
             peer, code, nick = data
@@ -835,15 +943,21 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
             if peer not in self.friends_settings.friend_ids():
                 self.friends_settings.add_friend(peer, nick)
                 self._friends_contacts_changed()
-                self._friends_note(f"{proto.display_name(nick, peer)} joined with your invite "
-                                   "link - you're friends now")
+                self._friends_note("{who} joined with your invite link - you're friends now",
+                                   who=peer, name=proto.display_name(nick, peer), op="accept",
+                                   dir=event_log.IN)
         elif kind == "strength":
             peer, value = data
+            with self._str_lock:     # the newest that came meanwhile (friends_receive)
+                value = self._friend_str_pending.pop(peer, value)
             perms = self._friend_perms.get(peer)
-            if perms and perms[0] and not self.friends_settings.get_paused():
+            if (perms and perms[0] and not self.friends_settings.get_paused()
+                    and peer not in self._not_here):
                 self.set_strength(value, source="friend")
-                self._friends_note(f"{self._friend_nick(peer)} set your strength to "
-                                   f"{round(value * 100)} %", key=("str-in", peer))
+                pct = round(value * 100)
+                self._friends_note(f"{{who}} set your strength to {pct} %", key=("str-in", peer),
+                                   who=peer, kind=TOYS, op="strength", dir=event_log.IN,
+                                   level=pct)
         self._friends_refresh_ui()
 
     def _friends_debug(self, text: str) -> None:
@@ -864,6 +978,7 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
             if gap >= 1.0 and now - self._tick_said >= 10.0:
                 self._tick_said = now
                 self._friends_debug(f"Friends: the app was busy for {gap:.1f} s")
+            self._instance_refresh()        # who is in your instance (friends_instance)
             self._pump_friend_holds(now)
             self._me_tick()
             self._note_avatar_menu()
@@ -892,8 +1007,9 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         if not driving and d is not None and (d.pat or any(v > 0 for v in d.levels.values())):
             # still driving as far as they know: nothing came for DRIVE_STALE_S
             self._friend_dropped[peer] = d.t
-            self._friends_note(f"{nick}'s control dropped out - nothing came for "
-                               f"{proto.DRIVE_STALE_S:.0f} s (connection)", key=("drop", peer))
+            self._friends_note(f"{{who}}'s control dropped out - nothing came for "
+                               f"{proto.DRIVE_STALE_S:.0f} s (connection)", key=("drop", peer),
+                               who=peer, name=nick, kind=TOYS, op="dropout", dir=event_log.IN)
             self._friends_debug(f"Friends: {nick}'s drive went quiet ({now - d.t:.1f} s "
                                 "since their last update)")
             return
@@ -901,10 +1017,14 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         if driving and quiet_since is not None and d is not None:
             # the first update after the gap set d.t: the gap is d.t - quiet_since
             back = max(0.0, d.t - quiet_since)
-            self._friends_note(f"{nick}'s control is back after {back:.1f} s", key=("drop", peer))
+            self._friends_note(f"{{who}}'s control is back after {back:.1f} s",
+                               key=("drop", peer), who=peer, name=nick, kind=TOYS, op="back",
+                               dir=event_log.IN, ms=round(back * 1000))
             self._friends_debug(f"Friends: {nick}'s drive is back after {back:.1f} s quiet")
             return
-        self._friends_note(f"{nick} {'started' if driving else 'stopped'} driving your toys")
+        self._friends_note(f"{{who}} {'started' if driving else 'stopped'} driving your toys",
+                           who=peer, name=nick, kind=TOYS, op="start" if driving else "stop",
+                           dir=event_log.IN)
 
     def _build_my_state(self) -> Dict[str, Any]:
         engine = getattr(self, "haptic_engine", None)
@@ -922,6 +1042,8 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
                 outputs[name] = max(outputs.get(name, 0.0), float(value or 0.0))
         shockers: List[str] = []
         caps: List[tuple] = []
+        ops: List[int] = []         # what each one's switches let through now
+        off: List[int] = []         # what is switched off on each one's card
         armed, max_int, max_ms, max_vib, max_hold = False, 0, 0, 0, 0.0
         eng = getattr(self, "pishock_engine", None)
         if eng is not None and self.get_feature_enabled("feature_pishock") and eng.is_connected:
@@ -929,13 +1051,20 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
             shockers = [shocker_label(s) for s in listed]
             armed = bool(eng.is_armed)
             lim = eng.limits()
-            max_hold = float(lim.get("max_hold_s", 0.0))
-            # each shocker's own caps; the hub-wide "max_*" a copy from
-            # before per-shocker caps reads are the highest of them
+            # the friends' own longest hold while limits are separate
+            timing = getattr(eng, "timing_for", None)
+            max_hold = float((timing(GROUP_FRIENDS) if callable(timing) else lim)
+                             .get("max_hold_s", 0.0))
+            # each shocker's caps as friends get them (its own, lowered to
+            # the friends' while limits are separate); the hub-wide "max_*"
+            # a copy from before per-shocker caps reads are the highest
             for s in listed:
-                own = eng.limits_for(s["id"])
+                own = eng.limits_for(s["id"], group=GROUP_FRIENDS)
                 caps.append((int(own["max_intensity"]), int(own["max_vibrate"]),
                              int(own["max_pulse_ms"])))
+                ops.append(proto.ops_mask([op for op in proto.OPS
+                                           if eng.op_allowed(s["id"], op)]))
+                off.append(proto.ops_mask(eng.ops_off().get(s["id"], ())))
             pick = caps or [(int(lim["max_intensity"]), int(lim.get("max_vibrate", 1)),
                              int(lim["max_pulse_ms"]))]
             max_int, max_vib, max_ms = (max(c[i] for c in pick) for i in range(3))
@@ -957,6 +1086,8 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
             "max_vibrate": max_vib,
             "max_hold_s": max_hold,
             "shocker_caps": caps,
+            "shocker_ops": ops,
+            "shocker_off": off,
         }
 
     # ------------------------------------------------------------------
@@ -964,12 +1095,14 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
     # ------------------------------------------------------------------
 
     def _friends_rebuild_perms(self) -> None:
-        perms = {f["id"]: (f["toys"], f["shock"], f["params"])
-                 for f in self.friends_settings.get_friends()}
+        friends = self.friends_settings.get_friends()
+        perms = {f["id"]: (f["toys"], f["shock"], f["params"]) for f in friends}
         perms[ME] = (True, True, True)          # you allow yourself everything
         with self._web_lock:
             perms.update(self._web_perms())     # browsers on the web remote: toys only
             self._friend_perms = perms
+        # who may drive you may have changed: who is not here too
+        self._instance_refresh()
 
     def _friends_contacts_changed(self) -> None:
         self._friends_rebuild_perms()
@@ -1015,18 +1148,51 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
         nick = self.friends_link.peers().get(peer, {}).get("nick") if hasattr(self, "friends_link") else ""
         return proto.display_name(nick or self._friend_requests.get(peer), peer)
 
-    def _friends_note(self, text: str, key: Any = None) -> None:
-        """One line in the Friends log (and the system log). A line with the
-        same `key` within _COALESCE_S replaces the previous one, so a slider
-        drag is one entry."""
-        now = time.time()
-        if (key is not None and self._friends_log and self._friends_log_keys
-                and self._friends_log_keys[-1] == key and now - self._friends_log[-1][0] < _COALESCE_S):
-            self._friends_log[-1] = (now, text)
+    def _friends_note(self, text: str, key: Any = None, *, who: Optional[str] = None,
+                      name: Optional[str] = None, role: Optional[str] = None,
+                      kind: str = LINK, op: str = "", dir: str = "",
+                      level: Optional[int] = None, ms: Optional[int] = None,
+                      on: Any = (), held: str = "", asked: str = "",
+                      via: Optional[str] = None, asked_level: Optional[int] = None,
+                      asked_ms: Optional[int] = None, fixed: str = "") -> None:
+        """One entry in the log (and a line in the system log): who did it
+        (a peer's ID, Me, a web guest, event_log.group_key(gid); None: you
+        on the page), what (`kind`, `op`, `dir` -- IN to you, OUT by you --
+        `level`, `ms`, the shockers `on`), why it was held back, and what it
+        came through (`via`; None: friends_common.came_through's, if any).
+        A value corrected on its way out: `level` / `ms` are what went out,
+        `asked_level` / `asked_ms` what was asked (the line says those) and
+        `fixed` why (event_log.Event.correction).
+
+        `text` is the line, with `{who}` where the person's name goes: the
+        name comes from the record (`name`, else their nickname now). An
+        entry with the same `key` within event_log.COALESCE_S replaces the
+        one before it, so a slider drag is one entry."""
+        if who is None or who == event_log.YOU:
+            who, name, role = event_log.YOU, event_log.YOU_NAME, event_log.ROLE_YOU
         else:
-            self._friends_log.append((now, text))
-            self._friends_log_keys.append(key)
-            self.thread_queue.put(("ui_update", f"Friends: {text}"))
+            role = role or self._log_role(who)
+            if name is None:
+                name = (self._group_name(who[len(event_log.GROUP_PREFIX):])
+                        if role == event_log.ROLE_GROUP else self._friend_nick(who))
+        line = text.replace("{who}", name)
+        ev = event_log.Event(time.time(), line, who, name, role, kind, op, dir, level, ms,
+                             tuple(on or ()), held, asked,
+                             coming_through() if via is None else via,
+                             asked_level, asked_ms, fixed)
+        if self.event_log.add(ev, key):
+            fix = ev.correction
+            self.thread_queue.put(("ui_update", f"Friends: {line}" + (f" ({fix})" if fix else "")))
+
+    def _log_role(self, who: str) -> str:
+        """What kind of person `who` is, for the log."""
+        if who == ME:
+            return event_log.ROLE_ME
+        if who.startswith(event_log.GROUP_PREFIX):
+            return event_log.ROLE_GROUP
+        if who in getattr(self, "_web_guests", {}):
+            return event_log.ROLE_WEB
+        return event_log.ROLE_FRIEND
 
     def _friends_refresh_ui(self) -> None:
         ui = getattr(self, "ui", None)
@@ -1035,9 +1201,20 @@ class FriendsFacade(FriendsControlMixin, FriendsMenuMixin, FriendsReceiveMixin,
             refresh()
 
 
-# A friend's messages about YOUR board, handled by ParamsFacade.
-_OWNER_KINDS = {"pw": "_params_on_watch", "pst": "_params_on_set", "ph": "_params_on_holds"}
+def _friends_entry(ev: "event_log.Event") -> bool:
+    """On the Friends page's log: everyone but your own avatar's behaviours
+    (those are on the Log page)."""
+    return ev.role != event_log.ROLE_AVATAR
+
+
+# A friend's messages about YOUR board, handled by ParamsFacade (``pht``:
+# your height, its Height box -- height_facade.py).
+_OWNER_KINDS = {"pw": "_params_on_watch", "pst": "_params_on_set", "ph": "_params_on_holds",
+                "pht": "_height_on_set"}
 _PERM_AT = {"toys": 0, "shock": 1, "params": 2}
+# What only an OGP whose toys you drive sends -- never the web remote page
+# (docs/assets/remote.js sends hello, lw, cmd, shk, stp, pw, pst, ph, pht).
+_NEVER_FROM_A_BROWSER = frozenset({"st", "pnl", "oth", "pbd", "pv"})
 
 _INVITE_WORDS = {
     "once": "it works once, within a day",

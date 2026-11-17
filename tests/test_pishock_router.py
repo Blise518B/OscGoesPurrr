@@ -4,6 +4,7 @@ thread, no hardware."""
 
 import pytest
 
+import pishock_engine
 import pishock_router
 import router_base
 from parameter_store import ParameterStore
@@ -17,19 +18,26 @@ class RecEngine:
         self.is_connected = True
         self.is_paused = False
         self.calls = []
+        self.sources = set()        # how the router named its holds
+        self.ops_off = {}           # sid -> ops switched off on its card
 
     def shocker_ids(self):
         return list(self.ids)
+
+    def op_allowed(self, sid, op):
+        return op not in self.ops_off.get(sid, ())
 
     def pulse(self, sid, op, intensity, duration_ms):
         self.calls.append(("pulse", sid, op, intensity, duration_ms))
         return True
 
-    def hold(self, sid, op, intensity):
+    def hold(self, sid, op, intensity, source=""):
         self.calls.append(("hold", sid, op, intensity))
+        self.sources.add(source)
 
-    def release(self, sid):
+    def release(self, sid, source=""):
         self.calls.append(("release", sid))
+        self.sources.add(source)
 
     def end(self, sid):
         self.calls.append(("end", sid))
@@ -264,3 +272,150 @@ def test_touch_zones_fire_each_contacts_own_shockers(store):
     store.update_parameter("Thigh", False)
     router.tick()
     assert eng.active("pulse") == [("pulse", 2, "vibrate", 15, 300)]
+
+
+def test_the_rules_hold_as_a_source_of_their_own(store):
+    router, eng, _ = make({"continuous": [{"param": "Prox", "threshold": 0.2, "shocker": 1}]})
+    store.update_parameter("Prox", 0.6)
+    router.tick()
+    store.update_parameter("Prox", 0.1)
+    router.tick()
+    assert eng.active("hold") and eng.active("release")
+    assert eng.sources == {pishock_router.SOURCE}
+
+
+class _Hub:
+    """A fake USB hub under the real engine."""
+
+    def __init__(self):
+        self.sent, self.port, self.is_open, self.kind = [], "COM9", True, "pishock"
+
+    def set_openshock_shockers(self, _shockers):
+        pass
+
+    def open(self, _port, handshake_timeout_s=6.0):
+        return {"version": "3.1", "type": 3,
+                "shockers": [{"id": 1, "paused": False}, {"id": 2, "paused": False}]}
+
+    def operate(self, sid, op, intensity, ms):
+        self.sent.append((sid, op, intensity, ms))
+        return True
+
+    def end(self, sid):
+        self.sent.append((sid, "end"))
+        return True
+
+    def close(self):
+        self.is_open = False
+
+
+def test_the_rules_and_a_friend_on_one_shocker_the_stronger_plays(store):
+    # The real engine: a friend holds shocker 1 at 45 while a rule holds it
+    # at 30. The friend's stays on (no flip-flop), and the rule letting go
+    # never cuts it.
+    import pishock_engine
+    from pishock_engine import PiShockEngine
+    clock, hub = {"t": 100.0}, _Hub()
+    engine = PiShockEngine(link_factory=lambda **_k: hub, clock=lambda: clock["t"])
+    engine.set_port("COM9")
+    engine._want_connected = True
+    engine._try_connect()
+    engine.set_limits(max_intensity=50, max_pulse_ms=1000, cooldown_s=0.5,
+                      max_hold_s=10.0, hold_rest_s=2.0)
+    friend = ("friend", "a" * 64, 0)
+    router, _eng, _ = make({"continuous": [
+        {"param": "Prox", "threshold": 0.2, "min_int": 10, "max_int": 50, "shocker": 1}]},
+        engine=engine)
+    store.update_parameter("Prox", 0.6)          # the rule: 30
+    for _ in range(10):
+        engine.hold(1, "vibrate", 45, source=friend)
+        router.tick()
+        clock["t"] += 0.05
+    levels = [s[2] for s in hub.sent if s[0] == 1]
+    assert set(levels) == {45}
+    store.update_parameter("Prox", 0.1)          # the rule lets go
+    router.tick()
+    clock["t"] += 0.25
+    engine.hold(1, "vibrate", 45, source=friend)
+    assert (1, "end") not in hub.sent
+    assert hub.sent[-1] == (1, "vibrate", 45, pishock_engine.HOLD_CHUNK_MS)
+
+
+def test_a_behaviour_skips_a_shocker_whose_op_is_switched_off(store):
+    """The engine would refuse it there; another behaviour's op that is on
+    wins that shocker instead."""
+    engine = RecEngine()
+    engine.ops_off = {1: {"shock"}}
+    router, eng, _ = make({"triggers": [
+        {"param": "Neck", "mode": "hold", "intensity": 40, "op": "shock"},
+        {"param": "Thigh", "mode": "hold", "intensity": 20, "op": "vibrate"}]}, engine=engine)
+    store.update_parameter("Neck", True)
+    store.update_parameter("Thigh", True)
+    router.tick()
+    holds = {c[1]: (c[2], c[3]) for c in eng.active("hold")}
+    assert holds == {1: ("vibrate", 20), 2: ("shock", 40)}
+
+
+# --- your behaviours pick kind first (Blise's call, 2026-11-16) --------------------
+
+def test_a_weak_shock_beats_a_strong_vibrate_among_your_behaviours(store):
+    router, eng, _ = make({
+        "triggers": [{"param": "Tap", "intensity": 10, "op": "shock"},
+                     {"param": "Tap", "intensity": 90, "op": "vibrate"}],
+    }, engine=RecEngine(shockers=(1,)))
+    router.tick()
+    store.update_parameter("Tap", True)
+    router.tick()
+    assert [(p[2], p[3]) for p in eng.active("pulse")] == [("shock", 10)]
+
+
+def test_a_weak_shock_beats_a_strong_vibrate_held_too(store):
+    router, eng, _ = make({
+        "continuous": [{"param": "Prox", "min_int": 90, "max_int": 90, "op": "vibrate"}],
+        "triggers": [{"param": "Grab", "mode": "hold", "intensity": 5, "op": "shock"}],
+    }, engine=RecEngine(shockers=(1,)))
+    store.update_parameter("Prox", 1.0)
+    store.update_parameter("Grab", True)
+    router.tick()
+    assert eng.active("hold") == [("hold", 1, "shock", 5)]
+
+
+def test_a_vibrate_beats_any_beep_among_your_behaviours(store):
+    router, eng, _ = make({
+        "triggers": [{"param": "Tap", "intensity": 100, "op": "beep"},
+                     {"param": "Tap", "intensity": 1, "op": "vibrate"}],
+    }, engine=RecEngine(shockers=(1,)))
+    router.tick()
+    store.update_parameter("Tap", True)
+    router.tick()
+    assert [p[2] for p in eng.active("pulse")] == ["vibrate"]
+
+
+def test_an_unarmed_shock_ranks_as_the_vibrate_it_goes_out_as(store):
+    eng = RecEngine(shockers=(1,))
+    eng.is_armed = False
+    router, eng, _ = make({
+        "triggers": [{"param": "Tap", "intensity": 10, "op": "shock"},
+                     {"param": "Tap", "intensity": 90, "op": "vibrate"}],
+    }, engine=eng)
+    router.tick()
+    store.update_parameter("Tap", True)
+    router.tick()
+    assert [(p[2], p[3]) for p in eng.active("pulse")] == [("vibrate", 90)]
+
+
+def test_the_router_hands_the_log_what_went_out(store):
+    told = []
+    eng = RecEngine(shockers=(1,))
+    eng.pulse = lambda sid, op, i, ms: pishock_engine.Sent(op, 7, 250, capped=True,
+                                                          cut=pishock_engine.CUT_RUN)
+    router = PiShockRouter(eng, get_rules=lambda: {"triggers": [clean_trigger(
+        {"param": "Tap", "intensity": 40, "duration_ms": 900, "op": "shock",
+         "shockers": "all"})]},
+        is_output_off=lambda: False, report=lambda *a, **k: told.append((a, k)))
+    router.tick()
+    store.update_parameter("Tap", True)
+    router.tick()
+    [(args, kw)] = told
+    assert args[:5] == ("pulse", 1, "shock", 40, 900)            # what the behaviour asked
+    assert (kw["sent"].intensity, kw["sent"].duration_ms) == (7, 250)   # what went out

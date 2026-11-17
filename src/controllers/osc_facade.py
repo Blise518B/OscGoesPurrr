@@ -7,6 +7,7 @@ OscGoesPurrrApp. Relies on `self.osc_manager`, `self.log_message`,
 import threading
 from typing import Any, Dict, List
 
+from avatar_height import KEYS as _HEIGHT_KEYS
 from constants import (
     OGP_MODE_PARAMETER,
     OGP_OFF_PARAMETER,
@@ -175,6 +176,15 @@ class OscFacade:
         suits = getattr(self, "_suits_on_osc", None)
         if suits is not None:
             suits(address)
+        # ...and the PSVR2 headset's contact.
+        psvr2 = getattr(self, "_psvr2_on_osc", None)
+        if psvr2 is not None:
+            psvr2(address)
+        # ...and ShockOSC's settings, kept in step with the Shockers'
+        # behaviours (a queue put; shockosc_sync)
+        shockosc = getattr(self, "_shockosc_on_osc", None)
+        if shockosc is not None:
+            shockosc(address, value)
         # The menu's Friends submenu goes out to the friend on this packet.
         friends = getattr(self, "_friends_on_osc", None)
         if friends is not None:
@@ -183,10 +193,21 @@ class OscFacade:
         slots = getattr(self, "_params_menu_on_osc", None)
         if slots is not None:
             slots(address, value)
+        # AFK (or a picked parameter) holding everything off: one set
+        # lookup here, the hold itself on the GUI thread (away_facade).
+        away = getattr(self, "_away_on_osc", None)
+        if away is not None:
+            away(address, value)
         # VRChat reports the freshly-loaded avatar's ID via /avatar/change.
         # The OSC layer strips the leading slash, so we see "avatar/change".
         if address == "avatar/change":
             self.thread_queue.put(("avatar_change", str(value) if value is not None else ""))
+        # Your height and the world's say on it (/avatar/eyeheight...): the
+        # Avatar Remote page's Height box keeps it (height_facade).
+        elif address in _HEIGHT_KEYS:
+            height = getattr(self, "_height_on_osc", None)
+            if height is not None:
+                height(address, value)
         # Expression-menu control parameters (see constants OGP_*).
         elif address == OGP_MODE_PARAMETER:
             self.thread_queue.put(("ogp_mode", value))
@@ -210,6 +231,11 @@ class OscFacade:
                 pass
             self.osc_manager.is_connected = False
             self.ui.update_osc_status(False)
+            # Not listening any more: an AFK hold could never end, so it
+            # lets go here as when VRChat closes (away_facade).
+            gone = getattr(self, "_away_vrchat_gone", None)
+            if gone is not None:
+                gone()
         else:
             # --- Connect Path ---
             self.log_message("Starting VRChat OSC server...")

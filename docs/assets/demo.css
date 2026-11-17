@@ -152,7 +152,7 @@
 
 /* ---- Home ------------------------------------------------------------------ */
 .o-home { display: flex; flex-direction: column; height: 100%; }
-.o-homehead { display: flex; align-items: center; justify-content: space-between; height: 30px; margin-bottom: 10px; flex: none; }
+.o-homehead { display: flex; align-items: center; justify-content: space-between; height: 32px; margin-bottom: 10px; flex: none; }
 .o-homehead h4 { margin: 0; font: 600 17px/1 "Aldrich Site", "Aldrich", "Segoe UI", sans-serif; letter-spacing: 1px; color: var(--accent); }
 .o-toys { flex: 1 1 auto; min-height: 200px; margin-right: -10px; padding-right: 10px; }
 .o-toy {
@@ -170,7 +170,7 @@
 .o-ticon { width: 30px; height: 30px; flex: none; display: flex; align-items: center; justify-content: center; color: var(--muted); }
 .o-ticon img { width: 26px; height: 26px; object-fit: contain; }
 .o-toy.offline .o-ticon img { opacity: .45; }
-.o-dot { width: 12px; height: 12px; border-radius: 6px; background: var(--accent); flex: none; margin: 0 2px 0 4px; }
+.o-dot { width: 12px; height: 12px; border-radius: 6px; background: var(--accent); flex: none; }
 .o-toy.offline .o-dot { background: transparent; border: 2px solid var(--dim); }
 .o-tname { font-size: 14px; font-weight: 600; color: var(--hue); }
 .o-toy.offline .o-tname { color: var(--muted); }
@@ -183,8 +183,20 @@
 .o-meter { flex: 1; height: 10px; border: 1px solid var(--line); border-radius: 5px; background: var(--well); overflow: hidden; }
 .o-meter i { display: block; height: 100%; width: 0; border-radius: 4px; background: var(--accent); }
 .o-caret { width: 18px; text-align: center; color: var(--muted); font-size: 11px; flex: none; }
-.o-toybody { display: none; padding: 12px; }
+.o-toybody { display: none; padding: 4px 10px 6px 10px; }
 .o-toy.open .o-toybody { display: block; }
+/* The Toys page's cards: a little more room between two toys than inside
+   one, and a hairline in the toy's hue under its bar while it is open, so
+   each card plainly starts at its bar (toys.py _TOY_GAP_PX,
+   ui.widgets.ToyFrame.set_head) */
+.o-cards .o-toy { margin-bottom: 14px; }
+.o-cards .o-toybody { position: relative; padding-top: 8px; }
+.o-cards .o-toybody::before {
+  content: ""; position: absolute; left: 10px; right: 10px; top: 3px; height: 1px;
+  background: var(--hue-mid);
+}
+.o-cards .o-toy.offline .o-toybody::before { background: var(--dim); }
+:root[data-theme="midnight"] .o-cards .o-toy.offline .o-toybody::before { background: var(--grey-mid); }
 
 /* a chain: fold bar, then the node graph */
 .o-fold {
@@ -307,7 +319,7 @@
 .o-nav .n .ic { width: 16px; height: 16px; flex: none; margin-right: 8px; display: inline-flex; color: var(--muted); }
 .o-nav .n .ic svg { width: 16px; height: 16px; }
 .o-setup {
-  display: flex; align-items: center; gap: 8px; height: 30px; padding: 0 12px; margin-bottom: 10px; flex: none;
+  display: flex; align-items: center; gap: 8px; height: 29px; padding: 0 12px; margin-bottom: 10px; flex: none;
   border: 1px solid var(--line); border-radius: 10px; background: var(--card); cursor: pointer;
 }
 .o-setup .o-ok { width: 11px; height: 11px; border-radius: 6px; background: var(--accent); margin-left: 6px; }
@@ -326,6 +338,94 @@
 .o-btn.danger { color: var(--err); border-color: var(--err-mid); font-weight: 700; }
 .o-btn.danger:hover { background: var(--err-tint); border-color: var(--err); color: var(--err); }
 .o-toysoff { display: none; margin-top: 6px; }
+
+/* ---- 0.16: a toy's bar in two places, its chips; Arm shocks; the Toys page -- */
+/* A toy's bar on one line at this width, everything centred on it
+   (device_frame._build_toy_bar's widest arrangement): the chips as a block
+   of two rows, Touch above Penetration, the captions in their own column */
+.o-toybar.wide { height: auto; min-height: 38px; }
+.o-chips {
+  display: inline-grid; grid-template-columns: auto auto auto; column-gap: 8px; row-gap: 4px;
+  align-items: center; justify-items: start; margin-left: 4px;
+}
+.o-chips .o-cchip + .o-ccap { margin-left: 0; }
+/* A toy card's last line (device_frame._build_toy_foot): Avatar parameters
+   folded, Delete device as words in the danger colour at its end */
+.o-tfoot { display: flex; align-items: center; gap: 8px; margin-top: 6px; }
+.o-tfoot .o-btn.ghost { padding: 3px 6px; }
+.o-dangertext { color: var(--err); font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 6px; cursor: pointer; }
+.o-dangertext:hover { background: var(--err-tint); }
+.o-tparams { display: none; padding: 2px 0 2px 12px; }
+.o-toy.params .o-tparams { display: block; }
+.o-trow { display: flex; align-items: center; gap: 8px; height: 36px; }
+.o-trowl { font-size: 13px; color: var(--txt); width: 262px; }
+.o-tname-in { width: 240px; color: var(--txt); font-size: 13px; overflow: hidden; white-space: nowrap; }
+.o-tname-in i { color: var(--dim); font-style: normal; }
+/* Who a toy hears: Touch / Penetration x Self / Others (theme.py contactChip) */
+.o-ccap { color: var(--muted); font-size: 11px; }
+.o-cchip + .o-ccap { margin-left: 6px; }
+.o-cchip {
+  padding: 1px 8px; border-radius: 9px; font-size: 11px; line-height: 14px; cursor: pointer;
+  color: var(--muted); border: 1px solid var(--line); background: transparent; white-space: nowrap;
+}
+.o-cchip:hover { border-color: var(--accent); color: var(--accent); }
+.o-cchip.on { background: var(--tint); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.o-toy.offline .o-cchip { color: var(--dim); }
+.o-toy.offline .o-cchip.on { color: var(--accent); }
+.o-toy.offline .o-ccap { color: var(--dim); }
+/* A toy's own Sleep over its Anti-stuck, beside the contact chips
+   (device_frame._build_safety_chips): lit and greyed while the sidebar's
+   Sleep has every toy asleep, greyed while the toys' anti-stuck is off */
+.o-schips {
+  display: inline-grid; grid-template-rows: auto auto; row-gap: 4px;
+  justify-items: start; align-items: center; margin-left: 6px;
+}
+.o-cchip.held { background: var(--tint); border-color: var(--green-mid); color: var(--muted); cursor: default; }
+.o-cchip.dis, .o-cchip.dis:hover { background: transparent; border-color: var(--green-mid); color: var(--dim); cursor: default; }
+/* The toys' anti-stuck under Toy server (toys.py): the switch, then its two
+   times as the app's ValueSliders, side by side */
+.o-asbox {
+  padding: 8px 12px; margin: -4px 0 12px; flex: none;
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+}
+.o-asbox .line { display: flex; align-items: center; gap: 8px; }
+.o-astimes { display: flex; gap: 14px; padding: 4px 0 2px 44px; }
+.o-astimes[hidden] { display: none; }
+.o-asrow { width: 250px; }
+.o-asrow .h { display: flex; justify-content: space-between; font-size: 12px; color: var(--muted); }
+.o-asrow .h b { color: var(--txt); font-size: 12px; }
+.o-asrow input[type=range] { width: 100%; }
+/* the toys' identity pink, as the app's sliders there */
+.ogp .o-asrow input[type=range]::-webkit-slider-runnable-track {
+  background: linear-gradient(90deg, var(--pink) var(--v), var(--well) var(--v)); border-color: var(--pink-mid);
+}
+.ogp .o-asrow input[type=range]::-moz-range-track {
+  background: linear-gradient(90deg, var(--pink) var(--v), var(--well) var(--v)); border-color: var(--pink-mid);
+}
+.ogp .o-asrow input[type=range]::-webkit-slider-thumb { background: var(--pink); }
+.ogp .o-asrow input[type=range]::-moz-range-thumb { background: var(--pink); }
+/* Arm shocks (shocker_switches.ArmSwitch): the switch, or its question in
+   the same place; the red words keep room for the wider of the two */
+.o-arm { display: inline-flex; align-items: center; gap: 6px; flex: none; }
+.o-armsw, .o-armask { display: inline-flex; align-items: center; gap: 8px; }
+.o-armask { display: none; gap: 6px; }
+.o-arm.asking .o-armsw, .o-arm.asking .o-armw { display: none; }
+.o-arm.asking .o-armask { display: inline-flex; }
+.o-armask .o-swl { margin-right: 0; }
+.o-armw { color: var(--err); font-weight: 700; margin: 0 8px 0 6px; min-width: 112px; white-space: nowrap; }
+.o-armw.not { font-weight: 400; }
+/* Toys: the toy server line, the cards, the folds at the foot */
+.o-server {
+  display: flex; align-items: center; gap: 10px; height: 44px; padding: 0 8px 0 12px; margin-bottom: 12px; flex: none;
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+}
+.o-server b { color: var(--accent); font-weight: 700; }
+.o-srvok { color: var(--accent); font-size: 11px; }
+.o-tools + .o-tools { margin-top: 12px; }
+.o-page[data-page="Home"] .o-toysoff { margin: 0 0 10px 0; }
+/* Settings -> Features: each with its page's icon */
+.o-fic { width: 16px; height: 16px; flex: none; display: inline-flex; color: var(--muted); margin-right: 4px; }
+.o-fic svg { width: 16px; height: 16px; }
 
 /* the pages built in their own files: the page's margins, scrolling */
 .o-page.o-built { padding: 0; }

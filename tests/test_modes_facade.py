@@ -196,10 +196,13 @@ class TestOgpModeIn:
         assert h.mode_manager.get_active_mode_index() == before
         assert h.osc_manager.sent[-1][1] == before
 
-    def test_garbage_value_ignored(self, isolated):
+    @pytest.mark.parametrize("junk", ["purr", float("inf"), float("-inf"), float("nan"),
+                                      10 ** 400])
+    def test_garbage_value_ignored(self, isolated, junk):
+        # an infinity or a number too big for a float used to raise
         h = _host(isolated)
         before = h.mode_manager.get_active_mode_index()
-        h._on_ogp_mode_osc("purr")
+        h._on_ogp_mode_osc(junk)
         assert h.mode_manager.get_active_mode_index() == before
 
     def test_out_of_range_reasserts_instead_of_desyncing(self, isolated):
@@ -259,7 +262,9 @@ class TestStrengthControl:
         h._on_ogp_strength_osc(0.25)
         assert h.get_strength() == 0.25
 
-    @pytest.mark.parametrize("junk", ["purr", None, float("nan")])
+    # an infinity is no dial's place: ignored, never full strength
+    @pytest.mark.parametrize("junk", ["purr", None, float("nan"), float("inf"),
+                                      float("-inf"), 10 ** 400])
     def test_incoming_junk_ignored(self, isolated, junk):
         h = _host(isolated)
         before = h.get_strength()

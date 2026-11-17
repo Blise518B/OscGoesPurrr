@@ -112,7 +112,7 @@ rm -rf "$WORK/pyi-dist"
     --distpath "$WORK/pyi-dist" --workpath "$WORK/pyi-work" --specpath "$WORK" \
     --exclude-module pystray --exclude-module readline \
     --exclude-module curses --exclude-module _curses \
-    --collect-binaries iroh \
+    --collect-binaries iroh     --collect-binaries openvr \
     --add-data "$ROOT/src/Images:Images" \
     --add-data "$ROOT/LICENSE:." \
     --add-data "$ROOT/THIRD_PARTY_NOTICES.md:." \

@@ -198,7 +198,9 @@ def test_unfriended_ids_are_kept_until_you_add_them_again():
 def test_no_web_remote_until_its_first_link():
     s = FriendsSettingsManager()
     assert s.get_web() == {"code": "", "on": True, "toys": True, "shock": False,
-                           "params": False, "blocked": []}     # anyone with the link: ticked by hand
+                           "params": False,
+                           "anyway": False,   # blocked while only friends in your instance may
+                           "blocked": []}     # anyone with the link: ticked by hand
     assert s.web_code() == ""                     # asking doesn't make one
     code = s.web_code(make=True)
     assert len(code) == 16 and s.web_code() == code and s.web_code(make=True) == code
@@ -227,7 +229,8 @@ def test_a_damaged_web_entry_is_cleaned():
     s.settings["web"] = {"code": "nope", "on": 0, "blocked": ["x", A, A, B]}
     s._post_load({})
     assert s.get_web() == {"code": "", "on": False, "toys": True, "shock": False,
-                           "params": False, "blocked": [A, B]}
+                           "params": False, "anyway": False,
+                           "blocked": [A, B]}
 
 
 def test_a_new_id_forgets_the_web_remote():
@@ -235,3 +238,31 @@ def test_a_new_id_forgets_the_web_remote():
     s.web_code(make=True)
     s.forget_everyone()
     assert s.get_web()["code"] == ""
+
+
+# --- no per-friend shocker share any more (Blise's call, 2026-11-17) -------
+
+def test_an_old_files_share_is_dropped_quietly_on_load():
+    """A friends.json from before: a "share" per friend and on the web remote
+    loads without error and is left behind -- every friend gets each
+    shocker's own limits."""
+    path = FriendsSettingsManager.FILE_PATH
+    old = {"shock": False, "vibrate": True, "beep": False, "cont": False, "warn": True,
+           "max": 12, "ms": 400}
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({"friends": [{"id": A, "nick": "Alex", "share": old},
+                               {"id": B, "share": "junk"}],
+                   "web": {"code": "0123456789abcdef", "shock": True, "share": old}}, fh)
+    s = FriendsSettingsManager()
+    assert s.friend_ids() == [A, B]
+    assert all("share" not in s.get_friend(fid) for fid in (A, B))
+    assert "share" not in s.get_web() and s.get_web()["shock"] is True
+    s.set_permission(A, "toys", False)                 # saved again: still no share
+    with open(path, encoding="utf-8") as fh:
+        saved = json.load(fh)
+    assert all("share" not in f for f in saved["friends"]) and "share" not in saved["web"]
+
+
+def test_the_share_setters_are_gone():
+    s = FriendsSettingsManager()
+    assert not hasattr(s, "set_share") and not hasattr(s, "set_web_share")

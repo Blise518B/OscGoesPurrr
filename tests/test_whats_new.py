@@ -520,6 +520,22 @@ class TestWindow:
         assert host.reveal("toy_safety") is True     # page there, card not
         assert host.selected == ["Settings"]
 
+    def test_a_switched_off_features_page_gets_no_jump(self, host):
+        """Shockers off in Settings → Features: its page is out of the
+        sidebar, so news about it opens nothing rather than a hidden page."""
+        from PySide6.QtWidgets import QWidget
+        host.views["Shockers"] = QWidget()
+        host._feature_allows_view = lambda page: page != "Shockers"
+        notes = [("0.16.0", [("Shocks", "Bolt.", "shockers", "shock"),
+                             ("Colours", "Pick one.", "appearance", "settings")])]
+        host.show_whats_new(notes)
+        assert len(_buttons(host._whats_new_dialog, "Take me there")) == 1
+        host._whats_new_dialog.reject()
+        assert host.reveal("shockers") is False
+        host._feature_allows_view = lambda page: True
+        assert host.reveal("shockers") is True
+        assert host.selected == ["Shockers"]
+
     def test_an_update_offer_waits_for_the_window_to_close(self, host):
         host.show_whats_new(NOTES)
         host._update_popup_waiting = ("0.13.0", "0.12.0", "url", True)

@@ -15,12 +15,18 @@ load/save plumbing moves here. The contract a subclass relies on:
     on-disk dict, so the subclass can backfill nested defaults or migrate
     legacy keys. Mutate `self.settings` in place; call `self._save()` if you
     changed something that should persist immediately.
+
+Every manager here is in the app's Ctrl+Z history (settings_history.py) by
+itself: tracked once loaded, its saves reported. A subclass may name itself
+there (`HISTORY_KEY`, `HISTORY_LABEL`) and say what is no setting
+(`history_ignore`) or what an undo must ask first (`history_asks`).
 """
 
 import json
 import os
 from typing import Any, Dict
 
+import settings_history
 from utilities import atomic_write_json
 
 
@@ -39,6 +45,9 @@ class JsonSettingsManager:
     def __init__(self) -> None:
         self.settings: Dict[str, Any] = {}
         self._load_or_create_defaults()
+        # Ctrl+Z (settings_history.py): what it holds now is where its
+        # changes start from; every save below reports to it.
+        settings_history.track(self)
 
     # ------------------------------------------------------------------
     # Load / save
@@ -132,6 +141,7 @@ class JsonSettingsManager:
             atomic_write_json(self.FILE_PATH, self.settings, indent=2)
         except OSError as e:
             print(f"{type(self).__name__} save error: {e}")
+        settings_history.saved(self)
 
     # ------------------------------------------------------------------
     # Generic flat accessors

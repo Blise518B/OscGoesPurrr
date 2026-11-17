@@ -3,9 +3,14 @@ friend -- one button that folds out an invite link (pick how long it works,
 Copy), your ID with its own Copy and a box for their link or ID -- and under
 it Copy web remote link, for someone without OGP; your friends with their
 toys / shocks / avatar boxes (you
-always first, then the Web remote row once you have its link), and groups
+always first, then the Web remote row once you have its link) -- a ↻ on a
+friend who shows offline, and ↻ Check all over the list, look for them now
+(remote_link.check_now) -- and groups
 (drag a friend -- or yourself -- onto one, or onto its members in the panel,
-to add them; right-click to rename or delete it).
+to add them; right-click to rename or delete it). Under the friends, In
+your VRChat instance -- its chips dragged onto a friend's row link them to
+that VRChat account, whose name is then the row's second line
+(friends_account.py).
 Part of FriendsMixin (friends.py)."""
 
 from typing import Any, Callable, Dict
@@ -23,7 +28,9 @@ from ui.layout_helpers import clear_layout, vbox as _vbox, hbox as _hbox
 from controllers.friends_common import ME, WEB
 from ui.theme import FRIEND_SHOCK_HUE as _SHOCK, FRIEND_TOYS_HUE as _TOYS, FRIENDS_HUE, friend_hue
 from ui.motor_signal_chain import _ElidedLabel
+from ui.tooltips import tip_html
 from ui.views.card_parts import segmented
+from ui.views.friends_account import NOT_HERE, WEB_NOT_HERE_TIP, FriendsAccountMixin
 from ui.widgets import Card as _Card, IdentityMark, ToggleSwitch
 
 LIST_W = 350         # the left column (room for the permission columns)
@@ -44,6 +51,17 @@ _ADD_FRIEND = "Add a friend (they need OGP too)"
 _COPY_WEB = "Copy web remote link (no OGP needed)"
 _COPY_ID = "Copy"
 _ADD_HINT = "An invite link links you at once; with a bare ID they click Accept in their OGP."
+# Checking whether friends are online now (remote_link.check_now): the
+# list's button, and its words while a check runs
+_CHECK_ALL = "↻ Check all"
+_CHECKING = "checking…"
+_CHECK_TIPS = {      # a row's ↻: ready / checked moments ago
+    True: tip_html("Check now", "Looks for this friend right now instead of waiting for "
+                                "OGP's next look in the background. At most once every "
+                                "10 seconds."),
+    False: tip_html("Check now", "Looked moments ago - you can look again in a few "
+                                 "seconds. A friend who opens OGP links up with you anyway."),
+}
 # The Web remote row's boxes: (hue, what the box lets everyone on the link do)
 _WEB_BOXES = {
     "toys": (_TOYS, "Everyone on your web remote may drive your toys and move your "
@@ -163,7 +181,7 @@ class _GroupDrop(QObject):
         return False
 
 
-class FriendsListMixin:
+class FriendsListMixin(FriendsAccountMixin):
 
     _friend_rows: Dict[str, Dict[str, Any]] = {}
     _group_rows: Dict[str, QPushButton] = {}
@@ -207,6 +225,25 @@ class FriendsListMixin:
                       "your strength slider or your shockers. They stay linked "
                       "and see that you paused. Off (top left) silences friends "
                       "too.")
+        lay.addLayout(row)
+        # its own row, under Pause all: the list column is LIST_W wide
+        row = _hbox(0, 8)
+        row.addStretch(1)
+        # Sync with others: yours alone to choose (Blise's call, 2026-11-17)
+        self._friends_sync = ToggleSwitch("Sync friends")
+        self._friends_sync.setChecked(True)
+        self._friends_sync.toggled.connect(
+            lambda on: self.controller.set_friends_sync(bool(on)))
+        self._explain(self._friends_sync, "Sync with others",
+                      "On: everyone driving your toys shares one set of toy cards - "
+                      "friends, the web remote and you (Me).<br><br>When one of them "
+                      "moves a level, starts an auto mode or picks Override, it moves "
+                      "on everyone's cards, and your toys play that one change (the "
+                      "newest wins). Off: each drives on their own - their cards are "
+                      "just theirs, and your toys follow whichever of them is "
+                      "higher.<br><br>Yours alone to choose: their panels say SYNCED "
+                      "or SEPARATE beside +1 OTHER and can't change it. On by default.")
+        row.addWidget(self._friends_sync)
         lay.addLayout(row)
         # Add a friend: a header with its own +/- box at the left, and the
         # invite link, your ID and the box for theirs in a frame hanging from
@@ -340,6 +377,19 @@ class FriendsListMixin:
         lay.addSpacing(6)
         row = _hbox(0, 6)
         row.addWidget(self._friends_micro("FRIENDS"))
+        # every friend who shows offline, dialled now (the rows have a ↻ each)
+        self._friends_check_all = QPushButton(_CHECK_ALL)
+        self._friends_check_all.setProperty("role", "mini")
+        self._friends_check_all.setProperty("wide", "true")
+        self._friends_check_all.setCursor(Qt.PointingHandCursor)
+        self._friends_check_all.clicked.connect(lambda _=False: self._on_friends_check(None))
+        self._friends_check_all.setVisible(False)
+        row.addWidget(self._friends_check_all)
+        self._explain(self._friends_check_all, "Check everyone now",
+                      "Looks right now for every friend who shows offline. OGP "
+                      "also looks by itself every so often, and a friend who opens "
+                      "OGP links up with you anyway - this is for when you don't "
+                      "want to wait. Each friend at most once every 10 seconds.")
         row.addStretch(1)
         # the column labels, each centred over its column of boxes; a click
         # sets that column for everyone (off first while any has it)
@@ -382,6 +432,8 @@ class FriendsListMixin:
         lay.addWidget(self._friends_rows_box)
         self._friends_none = self._muted_label("No friends yet - ＋ Add a friend above.")
         lay.addWidget(self._friends_none)
+        # who's in your VRChat instance, to drag onto a friend (friends_account.py)
+        self._build_friends_instance(lay)
 
         # Groups
         lay.addSpacing(6)
@@ -440,6 +492,9 @@ class FriendsListMixin:
         self._friends_pause.blockSignals(True)
         self._friends_pause.setChecked(bool(st["paused"]))
         self._friends_pause.blockSignals(False)
+        self._friends_sync.blockSignals(True)
+        self._friends_sync.setChecked(bool(st.get("sync_all", True)))
+        self._friends_sync.blockSignals(False)
         self._friends_online.blockSignals(True)
         self._friends_online.setChecked(bool(st.get("online_switch", True)))
         self._friends_online.blockSignals(False)
@@ -641,6 +696,12 @@ class FriendsListMixin:
         self.controller.set_friends_selected(kind, sid)
         self.refresh_friends()
 
+    def _on_friends_check(self, fid) -> None:
+        """↻ on a row (`fid`), or Check all (None): dial now; the row says
+        checking… until they answer or the try gives up."""
+        self.controller.friends_check_now(fid)
+        self.refresh_friends()
+
     # ---- the rows ----------------------------------------------
 
     def _rebuild_friend_rows(self, st: Dict[str, Any]) -> None:
@@ -671,8 +732,10 @@ class FriendsListMixin:
             btn.setContextMenuPolicy(Qt.CustomContextMenu)
             btn.customContextMenuRequested.connect(
                 lambda pos, i=fid, n=nick, b=btn, m=me: self._friend_row_menu(i, n, b, pos, m))
-            h = _hbox(2, 6)
-            btn.setLayout(h)
+            rows = _vbox(2, 0)                 # the row, and under it once linked
+            btn.setLayout(rows)                # their VRChat account (friends_account.py)
+            h = _hbox(0, 6)
+            rows.addLayout(h)
             badge = self._friends_avatar(nick)
             h.addWidget(badge)
             # a long name ends in "…" rather than pushing the columns over
@@ -690,6 +753,13 @@ class FriendsListMixin:
             ping = QLabel("")
             ping.setProperty("muted", "true")
             h.addWidget(ping)
+            # offline: look for them now (remote_link.check_now)
+            check = QPushButton("↻")
+            check.setProperty("role", "mini")
+            check.setCursor(Qt.PointingHandCursor)
+            check.clicked.connect(lambda _=False, i=fid: self._on_friends_check(i))
+            check.setVisible(False)
+            h.addWidget(check)
             driving = QLabel("●")
             driving.setProperty("role", "live")
             driving.setToolTip("Driving your toys right now")
@@ -721,10 +791,15 @@ class FriendsListMixin:
                 cell_lay.addWidget(cb, 0, Qt.AlignCenter)
                 boxes[what] = cb
             h.addWidget(cells)
+            vrc = None
+            if not me and not f.get("demo"):
+                vrc = self._friend_row_vrc_line(f)
+                rows.addWidget(vrc)
+                self._friend_row_vrc_drop(btn, fid)
             self._friends_rows_lay.addWidget(btn)
             _FriendDrag(btn, fid)
-            self._friend_rows[fid] = {"btn": btn, "name": name, "ping": ping,
-                                      "driving": driving, "old": old, **boxes}
+            self._friend_rows[fid] = {"btn": btn, "name": name, "ping": ping, "check": check,
+                                      "driving": driving, "old": old, "vrc": vrc, **boxes}
         if web_due:
             self._add_web_row(st)
         self._friends_none.setVisible(not n)
@@ -778,6 +853,13 @@ class FriendsListMixin:
         name = QLabel("Web remote")
         name.setObjectName("friendName")
         h.addWidget(name, 1)
+        # only friends in my instance: a browser can't be in one (friends_instance.py)
+        not_here = QLabel(NOT_HERE)
+        not_here.setProperty("muted", "true")
+        not_here.setProperty("role", "warning")
+        not_here.setToolTip(WEB_NOT_HERE_TIP)
+        not_here.setVisible(False)
+        h.addWidget(not_here)
         ping = QLabel("")
         ping.setProperty("muted", "true")
         h.addWidget(ping)
@@ -805,7 +887,8 @@ class FriendsListMixin:
             boxes[what] = cb
         h.addWidget(cells)
         self._friends_rows_lay.addWidget(btn)
-        self._web_row = {"btn": btn, "ping": ping, "driving": driving, **boxes}
+        self._web_row = {"btn": btn, "ping": ping, "driving": driving, "not_here": not_here,
+                         **boxes}
 
     def _web_row_menu(self, anchor: QWidget, pos) -> None:
         menu = QMenu(anchor)
@@ -832,6 +915,7 @@ class FriendsListMixin:
             r["ping"].setProperty("muted", "false" if state == "on" else "true")
             self._repolish(r["ping"])
         r["driving"].setVisible(bool(web["driving"]))
+        r["not_here"].setVisible(bool((st.get("instance") or {}).get("web_blocked")))
         for what in _WEB_BOXES:
             if what in r and r[what].isChecked() != bool(web[what]):
                 r[what].blockSignals(True)
@@ -839,18 +923,44 @@ class FriendsListMixin:
                 r[what].blockSignals(False)
         self._friends_set_active(r["btn"], st["selected"] == {"kind": "web", "id": WEB})
 
+    def _update_friends_check_all(self, st: Dict[str, Any]) -> None:
+        """Check all: there while the link is online and a friend shows
+        offline; says checking… while any check runs."""
+        offline = [f for f in st["friends"] if not f.get("me") and not f["linked"]]
+        btn = self._friends_check_all
+        btn.setVisible(bool(st.get("online")) and bool(offline))
+        checking = any(f.get("checking") for f in offline)
+        ready = any(f.get("check_wait", 0) <= 0 for f in offline)
+        text = _CHECKING.capitalize() if checking else _CHECK_ALL
+        if btn.text() != text:
+            btn.setText(text)
+        btn.setEnabled(ready and not checking)
+
     def _update_friend_rows(self, st: Dict[str, Any]) -> None:
         self._update_web_row(st)
+        self._update_friends_check_all(st)
+        self._update_friends_instance(st)
+        link_up = bool(st.get("online"))
         sel = st["selected"]
+        instance_only = bool((st.get("instance") or {}).get("on"))
         for f in st["friends"]:
             r = self._friend_rows.get(f["id"])
             if r is None:
                 continue
-            ping = (f"{f['rtt']:.0f} ms" if f["rtt"] is not None else "online") if f["linked"] else "offline"
+            checking = bool(f.get("checking")) and not f["linked"]
+            ping = ((f"{f['rtt']:.0f} ms" if f["rtt"] is not None else "online") if f["linked"]
+                    else _CHECKING if checking else "offline")
             if f.get("me"):
                 ping = "this PC"
             if r["ping"].text() != ping:
                 r["ping"].setText(ping)
+            # ↻ on an offline friend's row, greyed for a few seconds after a look
+            can_check = link_up and not f.get("me") and not f["linked"] and not checking
+            r["check"].setVisible(can_check)
+            ready = f.get("check_wait", 0) <= 0
+            if r["check"].toolTip() != _CHECK_TIPS[ready]:
+                r["check"].setToolTip(_CHECK_TIPS[ready])
+            r["check"].setEnabled(ready)
             state = "on" if f["linked"] else "off"
             if r["ping"].property("state") != state:
                 r["ping"].setProperty("state", state)
@@ -866,6 +976,7 @@ class FriendsListMixin:
                 if r["old"].toolTip() != tip:
                     r["old"].setToolTip(tip)
             r["old"].setVisible(older)
+            self._update_friend_row_vrc(r, f, instance_only)
             for what in ("toys", "shock", "params"):
                 if what not in r:
                     continue

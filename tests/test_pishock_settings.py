@@ -227,3 +227,70 @@ def test_a_shocker_switched_off_is_remembered_and_junk_is_dropped():
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(data, fh)
     assert PiShockSettingsManager().get_shockers_off() == [7, 24326]
+
+
+def test_each_shockers_shock_vibrate_and_beep_are_remembered():
+    s = PiShockSettingsManager()
+    assert s.get_shocker_ops_off() == {}                 # all three on, every shocker
+    s.set_shocker_op(24325, "shock", False)
+    s.set_shocker_op("24325", "beep", False)
+    s.set_shocker_op(24326, "vibrate", False)
+    s.set_shocker_op(24326, "vibrate", True)             # back on: no entry left
+    s.set_shocker_op(24325, "zap", False)                # not an op
+    assert s.get_shocker_ops_off() == {"24325": ["shock", "beep"]}
+    assert PiShockSettingsManager().get_shocker_ops_off() == {"24325": ["shock", "beep"]}
+    path = PiShockSettingsManager.FILE_PATH
+    with open(path, encoding="utf-8") as fh:
+        data = json.load(fh)
+    data["shocker_ops_off"] = {"24325": ["beep", "x", "shock"], "bad": ["shock"], "7": "shock"}
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(data, fh)
+    assert PiShockSettingsManager().get_shocker_ops_off() == {"24325": ["shock", "beep"]}
+
+
+def test_separate_limits_for_friends_start_off_and_as_a_copy_of_the_hubs():
+    s = PiShockSettingsManager()
+    assert s.get_separate_limits() is False
+    s.set_limit("max_hold_s", 25.0)
+    s.set_shocker_limit(24325, "max_intensity", 60)         # one shocker above the hub's 30
+    s.set_separate_limits(True)                            # first time: a copy of now
+    # the timing the hub's, each cap the highest any shocker has: nobody lowered
+    assert s.get_friend_limits() == {"max_intensity": 60, "max_vibrate": 30,
+                                     "max_pulse_ms": 1000, "cooldown_s": 0.5,
+                                     "max_hold_s": 25.0, "hold_rest_s": 2.0}
+    s.set_shocker_limit(24325, "max_intensity", 90)        # a copy: it doesn't follow
+    assert s.get_friend_limits()["max_intensity"] == 60
+    s.set_friend_limit("max_hold_s", 60.0)
+    s.set_limit("max_hold_s", 5.0)                         # the hub's own moves on its own
+    s.set_separate_limits(False)
+    s.set_separate_limits(True)                            # back on: theirs are kept
+    again = PiShockSettingsManager()
+    assert again.get_separate_limits() is True and again.get_friend_limits()["max_hold_s"] == 60.0
+
+
+def test_the_friends_set_is_clamped_and_takes_the_caps_and_the_timing():
+    s = PiShockSettingsManager()
+    s.set_separate_limits(True)
+    s.set_friend_limit("max_hold_s", 1e9)
+    s.set_friend_limit("cooldown_s", float("inf"))
+    s.set_friend_limit("max_intensity", 1e9)
+    s.set_friend_limit("max_pulse_ms", 1234.7)
+    s.set_friend_limit("armed", True)                      # nothing but the limits
+    lim = s.get_friend_limits()
+    assert lim["max_hold_s"] == pishock_limits.RANGES["max_hold_s"][1]
+    assert lim["cooldown_s"] == pishock_limits.RANGES["cooldown_s"][1]
+    assert lim["max_intensity"] == pishock_limits.RANGES["max_intensity"][1]
+    assert lim["max_pulse_ms"] == 1234 and isinstance(lim["max_pulse_ms"], int)
+    assert set(lim) == set(pishock_limits.FRIEND_KEYS)
+    assert s.get_armed() is False
+
+
+def test_a_friends_set_from_before_the_caps_gets_them_when_switched_on():
+    s = PiShockSettingsManager()
+    s.settings["friend_limits"] = {"max_hold_s": 40.0}    # timing only, as on 2026-11-17
+    s.settings["separate_limits"] = False
+    s.set_limit("max_intensity", 45)
+    s.set_separate_limits(True)
+    stored = s.settings["friend_limits"]
+    assert stored["max_hold_s"] == 40.0 and stored["max_intensity"] == 45
+    assert set(stored) == set(pishock_limits.FRIEND_KEYS)

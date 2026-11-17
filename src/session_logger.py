@@ -79,6 +79,16 @@ def ogb_diff(prev: Dict[str, Any], curr: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
+def _raw_value(value: Any) -> Any:
+    """A packet's value for a `raw` line: floats keep six decimals (a
+    separation in metres to the micrometre), everything else as is."""
+    if isinstance(value, float):
+        return round(value, 6) if value == value and abs(value) != float("inf")             else str(value)
+    if isinstance(value, (bool, int, str)) or value is None:
+        return value
+    return str(value)
+
+
 class SessionLogger:
     """Append-only JSONL session writer. One instance per app process;
     `start()` opens a new session file, `stop()` closes it. Multiple
@@ -283,6 +293,37 @@ class SessionLogger:
             "snapshot":       dict(current_ogb_snapshot),
         })
 
+    def log_raw(self, t_ms: float, address: str, value: Any) -> None:
+        """One contact packet exactly as it arrived (debug recording:
+        Settings -> Sessions -> Record raw contacts). `address` is VRChat's
+        own name, before any renaming; `t_ms` to the hundredth, so the
+        order and spacing of one frame's messages survive."""
+        if not self._running:
+            return
+        self._enqueue({
+            "type": "raw",
+            "t_ms": round(float(t_ms), 2),
+            "a":    str(address),
+            "v":    _raw_value(value),
+        })
+
+    def log_raw_snapshot(self, t_ms: float, params: Dict[str, Any],
+                         types: Dict[str, str], source: str) -> None:
+        """The avatar's contact parameters at once -- `source` "oscquery"
+        when an avatar loaded (VRChat's names), "store" when recording
+        started with one already loaded (OGP's stored names). The
+        constants among them (DepthRadius, LengthMult2 ...) never come as
+        packets, so a replay needs this."""
+        if not self._running:
+            return
+        self._enqueue({
+            "type":   "raw_snapshot",
+            "t_ms":   round(float(t_ms), 2),
+            "source": str(source),
+            "params": {str(k): _raw_value(v) for k, v in params.items()},
+            "types":  {str(k): str(v) for k, v in (types or {}).items()},
+        })
+
     # ---- internal ----
 
     def _enqueue(self, event: Dict[str, Any]) -> None:
@@ -440,7 +481,8 @@ class SessionLogger:
                         h = json.loads(first)
                         if isinstance(h, dict) and h.get("type") == "header":
                             for k in ("started_at", "started_at_unix",
-                                       "profile", "avatar_name", "router_hz"):
+                                       "profile", "avatar_name", "router_hz",
+                                       "raw_contacts", "app_version"):
                                 if k in h:
                                     meta[k] = h[k]
                     except json.JSONDecodeError:

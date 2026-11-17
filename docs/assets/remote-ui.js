@@ -106,6 +106,12 @@ const GLYPHS = {
   gauge: `<g ${ST} stroke-width="1.6"><path d="M3.1 13.9A6.5 6.5 0 1 1 12.9 13.9"/><path d="M8 9l3.4-3.6"/></g>`
     + '<circle fill="currentColor" cx="8" cy="9" r="1.4"/>',
   lock: `<g ${ST} stroke-width="1.5"><rect x="3.5" y="7" width="9" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></g>`,
+  // OpenShock's card (remote-openshock.js): Sound and Vibrate's waves
+  sound: `<g ${ST} stroke-width="1.5"><path d="M1.8 6h2.8l3.8-3.4v10.8L4.6 10H1.8z"/>`
+    + '<path d="M11.17 6.01A2.6 2.6 0 0 1 11.17 9.99M12.71 4.17A5 5 0 0 1 12.71 11.83"/></g>',
+  waves: `<g ${ST} stroke-width="1.4">`
+    + [3.8, 8, 12.2].map((y) => `<path d="M1.5 ${y}c2.2-1.8 4.3-1.8 6.5 0s4.3 1.8 6.5 0"/>`).join("")
+    + "</g>",
 };
 export function glyph(kind, size = 16) {
   return svg("0 0 16 16", GLYPHS[kind] || "", size);

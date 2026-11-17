@@ -1,8 +1,8 @@
 # OscGoesPurrr - Per-feature send gating for the Buttplug dispatch loop
 """FeatureSendGate — the pure decision core of HapticEngine.async_worker.
 
-The engine loop ticks fast (HAPTIC_POLL_RATE) for low latency, but no
-single motor may be commanded faster than its cap, out of order, or
+The engine loop runs a pass the moment a target changes, for low latency,
+but no single motor may be commanded faster than its cap, out of order, or
 redundantly. Those rules used to live inline in the loop's three dispatch
 branches (legacy device-wide vibrate, linear, continuous), each hand-rolling
 the same check-then-record bookkeeping across three dicts. This class owns
@@ -104,6 +104,13 @@ class FeatureSendGate:
         self.last_sent[key] = position
         self.last_send_ms[key] = now_ms
         return duration
+
+    def is_pending(self, key: FeatureKey, target: float) -> bool:
+        """True while a continuous feature's newest target hasn't been sent
+        -- what try_continuous holds back for the cap or an in-flight send.
+        The engine keeps passing while one is (a stop must still go out when
+        nothing changes again); same never-sent-is-0.0 rule."""
+        return target != self.last_sent.get(key, 0.0)
 
     # ------------------------------------------------------------ in-flight
     def set_inflight(self, key: FeatureKey, flag: bool) -> None:

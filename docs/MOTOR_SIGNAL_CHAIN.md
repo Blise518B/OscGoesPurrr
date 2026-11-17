@@ -102,10 +102,34 @@ depth and velocity behind it versus a hand brushing past — and sharing
 one chain meant every setting was a compromise between them.
 
 `chain["type"]` is `"penetration"` | `"touch"` | `"custom"`, and it
-decides the touch/pen interaction filters, so the two can never drift
-out of sync by hand. **Absent reads as `custom`**, which honours the
-explicit filter keys — exactly how every chain behaved before types
-existed, so a hand-written config never changes feel on its own.
+decides which kind of contact the chain hears, so the two can never
+drift out of sync by hand. **Absent reads as `custom`**, which hears
+both — exactly how every chain behaved before types existed, so a
+hand-written config never changes feel on its own.
+
+### Who a chain hears — the contact 2x2
+
+Four switches per chain (2026-11-14, from friends' reviews): touch from
+yourself, touch from others, penetration from yourself, penetration from
+others — `motor_<m>_c<c>_touch_self / touch_others / pen_self /
+pen_others`, defaults off / on / off / on (`contact_filters.py`). They
+replaced two independent pairs (Touch / Penetration, Self / Others),
+which could not say "touch from me, penetration only from others". A
+typed chain reads only its own kind's two; the other two stay stored
+(they take over if it becomes Custom) and play no part. The router reads
+them per chain in `MotorRouter._chain_filters` — two key lookups for a
+typed chain, four for a custom one, what the old pairs cost.
+
+The old keys are turned into the 2x2 **once, at load**
+(`ModeManager._migrate_contact_filters` → `contact_filters.migrate_routing`,
+every mode, a copy of `modes.json` kept as
+`modes.json.before-contact-2x2-<epoch>.bak`): touch-self = touch ∧ self,
+and so on, each chain resolved the old way (its key, the motor's, the
+default) and a typed chain's own kind counted as on — so every chain
+hears exactly what it heard. The Input stage shows the four as a 2x2 of
+switches (the other kind's row greyed on a typed chain); Home's toy bar
+has them as chips that set every chain of the toy at once, half lit
+while the chains disagree.
 
 The shipped presets differ deliberately:
 
@@ -135,7 +159,7 @@ it needs no schema version to hang off.
 
 ### Per-chain routing
 
-Zones and the interaction filters are resolved **per chain**, under
+Zones and the contact 2x2 are resolved **per chain**, under
 `motor_<m>_c<c>_<suffix>` (e.g. `motor_0_c1_zones`). The shape still
 starts with `motor_` and ends with a known suffix, so `is_routing_key()`
 keeps classifying them as mode-local without changes — a chain's input

@@ -116,6 +116,20 @@ class SessionsMixin:
         )
         play.addWidget(self.sessions_autostart_check)
 
+        self.sessions_raw_check = ToggleSwitch(
+            "Record raw contacts (debug)"
+        )
+        self.sessions_raw_check.setToolTip(
+            "For chasing a bug: a recording session also keeps every contact "
+            "packet exactly as VRChat sent it, with its arrival time, and the "
+            "avatar's contact parameters each time one loads. Replay then "
+            "runs that exact input through OGP again. Files get bigger."
+        )
+        self.sessions_raw_check.toggled.connect(
+            lambda v: self._on_sessions_pref_changed(raw_contacts=bool(v))
+        )
+        play.addWidget(self.sessions_raw_check)
+
         ret_row = _hbox(0, 8)
         ret_row.addWidget(QLabel("Retention (files kept):"))
         self.sessions_retention_spin = QSpinBox()
@@ -232,6 +246,9 @@ class SessionsMixin:
         au = bool(settings.get("auto_start", False))
         if self.sessions_autostart_check.isChecked() != au:
             self.sessions_autostart_check.setChecked(au)
+        rc = bool(settings.get("raw_contacts", False))
+        if self.sessions_raw_check.isChecked() != rc:
+            self.sessions_raw_check.setChecked(rc)
         rt = int(settings.get("retention", 20))
         if self.sessions_retention_spin.value() != rt:
             self.sessions_retention_spin.setValue(rt)
@@ -346,6 +363,13 @@ class SessionsMixin:
         size.setMinimumWidth(80)
         rlay.addWidget(size)
 
+        if s.get("raw_contacts"):
+            raw = QLabel("raw contacts")
+            raw.setProperty("role", "muted")
+            raw.setToolTip("Recorded with Record raw contacts: replays "
+                           "every contact packet as VRChat sent it.")
+            rlay.addWidget(raw)
+
         rlay.addStretch(1)
 
         del_btn = QPushButton("Delete")
@@ -363,12 +387,14 @@ class SessionsMixin:
 
     def _on_sessions_pref_changed(self, enabled: Optional[bool] = None,
                                   auto_start: Optional[bool] = None,
-                                  retention: Optional[int] = None) -> None:
+                                  retention: Optional[int] = None,
+                                  raw_contacts: Optional[bool] = None) -> None:
         if self._is_updating_sessions:
             return
         try:
             self.controller.set_session_settings(
                 enabled=enabled, auto_start=auto_start, retention=retention,
+                raw_contacts=raw_contacts,
             )
         except Exception as e:
             self.log_message(f"Session settings save failed: {e}")
@@ -444,6 +470,107 @@ class SessionsMixin:
                 "Could not open the sessions folder. Check the path in "
                 "the Saved to: line above."
             )
+
+    # ----------------------------------------------------------
+    # Debug recording card (OSC Inspector page)
+    # ----------------------------------------------------------
+
+    def _build_debug_recording_card(self) -> QWidget:
+        """One button for "record this so it can be looked at later"
+        (Blise's ask, 2026-11-13): a session with every contact packet in
+        it. On the OSC Inspector page, under the avatar's SPS zones; the
+        Settings -> Sessions tab keeps the files, the replay and the finer
+        switches."""
+        card = _Card()
+        lay = _vbox(14, 6)
+        card.setLayout(lay)
+        hdr = _hbox(0, 6)
+        title = QLabel("Debug recording")
+        title.setObjectName("sectionTitle")
+        hdr.addWidget(title)
+        self._explain(hdr,
+            "Debug recording",
+            "Records what your avatar's contacts send, exactly as VRChat "
+            "sends it, and what the toys get, until you stop it. Start it "
+            "before doing the thing that goes wrong and stop it after: the "
+            "file can be replayed in Settings -> Sessions, or read with "
+            "tools/contact_debug.py. It grows by about 1 GB an hour."
+        )
+        hdr.addStretch(1)
+        lay.addLayout(hdr)
+
+        row = _hbox(0, 8)
+        self.debug_rec_btn = QPushButton("\u25cf Start recording")
+        self.debug_rec_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+        self.debug_rec_btn.clicked.connect(self._on_debug_rec_clicked)
+        row.addWidget(self.debug_rec_btn)
+        self.debug_rec_label = QLabel("Not recording")
+        self.debug_rec_label.setProperty("role", "muted")
+        self.debug_rec_label.setWordWrap(True)
+        row.addWidget(self.debug_rec_label, 1)
+        open_btn = QPushButton("Open folder")
+        open_btn.setMinimumHeight(BTN_HEIGHT_SMALL)
+        open_btn.setToolTip("Open the folder the recordings are saved in.")
+        open_btn.clicked.connect(self._on_sessions_open_folder)
+        row.addWidget(open_btn)
+        lay.addLayout(row)
+
+        self._debug_rec_refresh()
+        self._debug_rec_timer = QTimer(self.window)
+        self._debug_rec_timer.setInterval(1000)
+        self._debug_rec_timer.timeout.connect(
+            when_on_screen(self, self._debug_rec_tick))
+        self._debug_rec_timer.start()
+        return card
+
+    def _debug_rec_state(self):
+        """`(status, recording, with_contacts)` from the controller."""
+        status = self.controller.get_session_logging_status() or {}
+        raw = bool((status.get("settings") or {}).get("raw_contacts"))
+        return status, bool(status.get("active")), raw
+
+    def _debug_rec_tick(self) -> None:
+        try:
+            if not self.debug_rec_label.isVisible():
+                return
+        except (AttributeError, RuntimeError):
+            return
+        self._debug_rec_refresh()
+
+    def _debug_rec_refresh(self) -> None:
+        try:
+            status, recording, raw = self._debug_rec_state()
+        except Exception:
+            return
+        active = status.get("active") or {}
+        if recording and raw:
+            self.debug_rec_btn.setText("\u25a0 Stop recording")
+            self.debug_rec_label.setText(
+                f"Recording  \u2022  {_fmt_duration(active.get('duration_s', 0))}"
+                f"  \u2022  {_fmt_bytes(int(active.get('file_size_bytes', 0) or 0))}"
+                f"  \u2022  {active.get('id', '')}")
+        elif recording:
+            # A session without the contacts (auto-start or the Sessions
+            # tab's Start): one click adds them from now on.
+            self.debug_rec_btn.setText("\u25cf Record contacts too")
+            self.debug_rec_label.setText(
+                "A session is recording, without the contacts.")
+        else:
+            self.debug_rec_btn.setText("\u25cf Start recording")
+            self.debug_rec_label.setText("Not recording")
+
+    def _on_debug_rec_clicked(self) -> None:
+        try:
+            _status, recording, raw = self._debug_rec_state()
+            if recording and raw:
+                self.controller.stop_session_logging()
+            else:
+                self.controller.start_debug_recording()
+        except Exception as e:
+            self.log_message(f"Debug recording failed: {e}")
+        self._debug_rec_refresh()
+        if hasattr(self, "sessions_state_label"):
+            self._refresh_sessions_view(force_list_rebuild=True)
 
     # ----------------------------------------------------------
     # Replay

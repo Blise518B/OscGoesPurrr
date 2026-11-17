@@ -156,3 +156,10 @@ Thumbs.db
 # A local CMake build of the SteamVR toy driver (its source is
 # src/steamvr_toy_driver/): build folder and output, never source.
 /steamvr_toy_driver/
+
+# The user guide's Docusaurus workspace: packages, caches, the raw build and
+# its log (tools/build_guide.py copies the build into docs/guide/, which is
+# committed; guide/.gitignore says the same for a build run inside guide/)
+/guide/node_modules/
+/guide/.docusaurus/
+/guide/build/

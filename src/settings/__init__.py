@@ -15,10 +15,12 @@ from ._paths import (
     MODES_FILE,
     PARAM_BOARDS_FILE,
     PISHOCK_SETTINGS_FILE,
+    PSVR2_SETTINGS_FILE,
     SESSIONS_DIR,
     SESSIONS_SETTINGS_FILE,
     SPS_SOURCES_FILE,
     STATS_FILE,
+    STATS_EVENTS_FILE,
     STATS_HOURS_FILE,
     STATS_PEOPLE_FILE,
     STATS_SESSIONS_DIR,
@@ -29,6 +31,7 @@ from .friends import FriendsSettingsManager
 from .known_devices import KnownDevicesRegistry
 from .param_boards import ParamBoardsSettingsManager
 from .pishock import PiShockSettingsManager
+from .psvr2 import PSVR2SettingsManager
 from .sessions import SessionSettingsManager
 from .sps_sources import SpsSourceManager
 from .suits import SuitsSettingsManager
@@ -42,10 +45,12 @@ __all__ = [
     "MODES_FILE",
     "PARAM_BOARDS_FILE",
     "PISHOCK_SETTINGS_FILE",
+    "PSVR2_SETTINGS_FILE",
     "SESSIONS_DIR",
     "SESSIONS_SETTINGS_FILE",
     "SPS_SOURCES_FILE",
     "STATS_FILE",
+    "STATS_EVENTS_FILE",
     "STATS_HOURS_FILE",
     "STATS_PEOPLE_FILE",
     "STATS_SESSIONS_DIR",
@@ -56,6 +61,7 @@ __all__ = [
     "KnownDevicesRegistry",
     "ParamBoardsSettingsManager",
     "PiShockSettingsManager",
+    "PSVR2SettingsManager",
     "SessionSettingsManager",
     "SpsSourceManager",
     "SuitsSettingsManager",

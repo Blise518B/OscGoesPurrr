@@ -113,7 +113,7 @@ class Host(FriendsFacade, ParamsFacade):
         self.logs.append(msg)
 
     def notes(self):
-        return [text for _t, text in self._friends_log]
+        return [e.text for e in reversed(self.event_log.recent())]
 
 
 def wire(owner, watcher, rounds=3):

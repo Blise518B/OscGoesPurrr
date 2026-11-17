@@ -15,9 +15,11 @@ The lines that matter, as VRChat writes them today::
 instance (you included, VRChat logs your own join too). `LogWatcher` runs
 it on a small background thread that follows the newest log file, so
 reading a log of a few hundred MB at launch never stalls the GUI thread —
-the routing tick lives there. Nothing is written anywhere; the only
-consumer is the people facade, and only while the user has switched the
-option on.
+the routing tick lives there. Nothing is written anywhere. Two consumers
+share the one watcher, each only while the user has switched its own
+option on: the people facade (Statistics → People, tagging who you're
+with) and the Friends page (who's in your instance, to link a friend to
+their VRChat account -- `in_instance`).
 
 Older VRChat builds wrote ``OnPlayerJoined Name`` without the user id;
 then the name is the key.
@@ -40,6 +42,23 @@ _LOCAL_RE = re.compile(r'\[Behaviour\] Initialized PlayerAPI "(.+)" is local')
 _ROOM_MARKERS = ("[Behaviour] Joining wrld_", "[Behaviour] OnLeftRoom")
 
 _LOG_GLOB = "output_log_*.txt"
+
+# A VRChat user id: "usr_" and a UUID (what a friend's VRChat account
+# link stores, settings/friends.py).
+_UID_RE = re.compile(r"^usr_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+NAME_MAX = 48
+
+
+def clean_user_id(uid: Any) -> str:
+    """A VRChat user id as stored (lower case), or "" when it isn't one."""
+    uid = str(uid or "").strip().lower()
+    return uid if _UID_RE.match(uid) else ""
+
+
+def clean_display_name(name: Any) -> str:
+    """A VRChat display name as shown: trimmed, inner whitespace collapsed,
+    capped."""
+    return " ".join(str(name or "").split())[:NAME_MAX].strip()
 
 # Read at most this much per pass, then let other threads run.
 _CHUNK_BYTES = 1 << 20
@@ -257,6 +276,35 @@ class LogWatcher:
                 self._stop.wait(self._poll_s)
             else:
                 time.sleep(0)    # a long backlog: let the GUI thread in
+
+
+def in_instance(snap: Optional[Dict[str, Any]], user_id: str,
+                vrchat_up: bool = True) -> bool:
+    """Whether the VRChat user `user_id` is in your instance right now, by
+    your own log alone (a `LogWatcher` snapshot) -- nothing asked of
+    anyone, nothing sent anywhere.
+
+    No: no id (a friend with no VRChat account linked), no snapshot (the
+    log isn't read), the log not caught up yet, you in no room, or VRChat
+    not running (`vrchat_up` False: its last log would still list the
+    people it saw last). The Friends page's "in your instance" and the
+    "only friends in my instance" option both stand on this."""
+    uid = str(user_id or "").strip().lower()
+    if not uid or not vrchat_up or not snap or snap.get("state") != "ok":
+        return False
+    if not snap.get("in_room"):
+        return False
+    return any(str(key).lower() == uid for key, _name in snap.get("others") or ())
+
+
+def here_ids(snap: Optional[Dict[str, Any]], vrchat_up: bool = True) -> frozenset:
+    """Everyone in your instance right now, as lowercase keys (`usr_` ids,
+    or a name from an old log) -- empty whenever `in_instance` would say no
+    to anyone. One pass for a whole friend list: `uid in here_ids(...)` is
+    `in_instance(snap, uid, vrchat_up)` for a cleaned id."""
+    if not vrchat_up or not snap or snap.get("state") != "ok" or not snap.get("in_room"):
+        return frozenset()
+    return frozenset(str(key).lower() for key, _name in snap.get("others") or ())
 
 
 def companion(snap: Dict[str, Any]) -> Optional[Tuple[str, str, Optional[float]]]:

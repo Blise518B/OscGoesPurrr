@@ -1,28 +1,29 @@
-"""Home -- the landing page: every toy, live, and nothing you have to set
-up first.
+"""Home -- the landing page: the overview for everything, with each
+device's quick switches, and nothing you have to set up first.
 
-One page does what Overview and Device Routing used to split between
-them. A toy's collapsed bar IS its overview (connection, battery, what
-drives it, a meter per motor, Mute, Test); clicking the bar opens the
-signal-chain editor in place. Toys that are remembered but switched off
-stay listed in a grey outline.
+Since 2026-11-14 (Blise's call: "we're kind of turning the home menu into
+just the overview for everything, and then the detailed settings will move
+somewhere else") the detail lives on each device's own page: a toy's
+signal chains, SPS Sources, the toy server and the tuning tools on the
+Toys page (ui/views/toys.py), the shockers', suits' and headset's on
+theirs. A row here is where a device stands at a glance, plus its quick
+switches; a click on it opens its page -- a toy opens at its card.
 
 Top to bottom:
 - Getting started -- three ticks, hidden once all three are green; "Don't
                      show again" folds it for good to one slim line, a
-                     light per step.
-- Toys            -- the toy cards (ui/views/device_frame.py) + Test all,
-                     and in the same list a row for the shocker hub and
-                     each haptic suit while their feature is on
-                     (ui/views/home_devices.py): switched on and
+                     light per step. Take the tour starts the guided tour.
+- Devices         -- one row per toy (its bar: connection, what drives it,
+                     the Touch / Penetration chips, battery, a meter per
+                     motor, Mute, Test -- ui/views/device_frame.py) + Test
+                     all, and in the same list a row for the shocker hub,
+                     each haptic suit and the headset while their feature
+                     is on (ui/views/home_devices.py): switched on and
                      connected ones under the connected toys, the rest
                      greyed at the bottom under a small divider.
-- Tuning tools    -- the input simulator and the signal graph, folded away
-                     until you tune (ui/views/dashboard.py builds the bar
-                     itself).
 
-The VRChat link, the active mode and the toy server are not repeated
-here: the sidebar shows all three on every page.
+The VRChat link, the active mode, total output strength and the toy server
+are not repeated here: the sidebar shows them on every page.
 
 Live updates: motor meters and batteries are pushed by DeviceFrameMixin.
 A 2 Hz timer covers the two things without a push channel -- the
@@ -31,7 +32,7 @@ page is on screen."""
 
 from typing import Dict
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QFrame, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
@@ -43,12 +44,14 @@ from constants import (
 from ui import theme as _theme
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
 from ui.views.avatar_menu import has_menu as _has_menu, links_html as _menu_links
-from ui.motor_signal_chain import ChainOverviewPanel as _ChainOverviewPanel
 from ui.views.home_devices import (
     HomeDeviceRow as _HomeDeviceRow, ListDivider as _ListDivider,
     bhaptics_row as _bhaptics_row, owo_row as _owo_row,
-    shockers_row as _shockers_row,
+    psvr2_row as _psvr2_row, shockers_row as _shockers_row,
 )
+from ui.views import shocker_switches as _switches
+from ui.views.tour import TAKE_TOUR_TIP as _TAKE_TOUR_TIP, TAKE_TOUR_TITLE as _TAKE_TOUR_TITLE
+from ui.views.click_bars import ClickBar as _ClickBar
 from ui.widgets import (
     Card as _Card,
     install_rainbow_scrollbars as _install_rainbow_scrollbars,
@@ -60,62 +63,9 @@ from ui.frame_clock import when_on_screen
 # live for a tick mark and costs a few dict reads.
 _HOME_REFRESH_MS = 500
 
-# The toy list scrolls inside its card; below this height the page scrolls
-# instead, so an open Tuning tools fold can never squeeze the list away.
-_TOY_LIST_MIN_H = 200
-
-
-class _ClickBar(QFrame):
-    """A bar in the fold bars' look that does one thing when clicked.
-    Reachable by Tab, pressed by Space/Return."""
-
-    clicked = Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setObjectName("toolsFoldBar")
-        self.setCursor(Qt.PointingHandCursor)
-        self.setFocusPolicy(Qt.TabFocus)
-
-    def mousePressEvent(self, ev) -> None:  # noqa: N802
-        if ev.button() == Qt.LeftButton:
-            self.clicked.emit()
-            ev.accept()
-        else:
-            super().mousePressEvent(ev)
-
-    def keyPressEvent(self, ev) -> None:  # noqa: N802
-        if (not ev.isAutoRepeat()
-                and ev.key() in (Qt.Key_Space, Qt.Key_Return, Qt.Key_Enter)):
-            self.clicked.emit()
-            ev.accept()
-        else:
-            super().keyPressEvent(ev)
-
-
-class _FoldHeader(_ClickBar):
-    """The clickable bar of a fold: caret, title, and a dim one-line
-    summary of what is inside."""
-
-    def __init__(self, title: str, parent=None):
-        super().__init__(parent)
-        lay = _hbox(0, 8)
-        lay.setContentsMargins(12, 7, 12, 7)
-        self.setLayout(lay)
-        self._caret = QLabel("▸")
-        self._caret.setObjectName("expandCaret")
-        self._caret.setFixedWidth(14)
-        lay.addWidget(self._caret)
-        name = QLabel(title)
-        name.setObjectName("cardHeader")
-        lay.addWidget(name)
-        self.summary = QLabel("")
-        self.summary.setProperty("hint", "true")
-        self.summary.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        lay.addWidget(self.summary, 1)
-
-    def set_open(self, is_open: bool) -> None:
-        self._caret.setText("▾" if is_open else "▸")
+# The device list scrolls inside its box; below this height the page
+# scrolls instead.
+_DEVICE_LIST_MIN_H = 200
 
 
 class _SetupStrip(_ClickBar):
@@ -149,13 +99,16 @@ class _SetupStrip(_ClickBar):
 
 class HomeMixin:
 
+    # The page the PSVR2 headset's row opens.
+    _PSVR2_PAGE = "PSVR2"
+
     # ----------------------------------------------------------
     # View construction
     # ----------------------------------------------------------
 
     def _build_home_view(self, parent_layout: QVBoxLayout):
         # No page title of its own: the sidebar's Home entry says where
-        # you are, and the Toys heading below doubles as the title.
+        # you are, and the Devices heading below doubles as the title.
 
         # ===== Getting started =====
         # The app's home page is also where a first-time user finds out
@@ -172,55 +125,32 @@ class HomeMixin:
         parent_layout.addWidget(self._home_toys_off_note)
         self._style_root(self._home_toys_off_note)
 
-        # ===== Toys =====
-        # The list sits straight on the page -- no card around the cards.
+        # ===== Devices =====
+        # The list sits straight on the page -- no card around the rows.
         self.devices_container_frame = QWidget()
         container_lay = _vbox(0, 10)
         self.devices_container_frame.setLayout(container_lay)
         parent_layout.addWidget(self.devices_container_frame, 1)
 
-        toys_hdr_row = QWidget()
+        hdr_row = QWidget()
         thl = _hbox(0, 6)
-        toys_hdr_row.setLayout(thl)
-        header = QLabel("Toys")
+        hdr_row.setLayout(thl)
+        header = QLabel("Devices")
         header.setObjectName("homeTitle")
         thl.addWidget(header)
-        thl.addSpacing(8)
         self._explain(header,
-            "Toys",
-            "Every toy you have connected, plus the ones you've used before "
-            "that are switched off right now (grey). The bar shows what "
-            "drives the toy in the active mode, its battery and a live "
-            "meter per motor.<br><br>"
-            "<b>Click a bar</b> to set the toy up: its per-motor signal "
-            "chains (Input → Depth/Speed/Punch → Combine → "
-            "Wake → Envelope → Zero cut → Output — click "
-            "any stage to edit it). <b>Mute</b> silences the toy without "
-            "touching its setup; <b>Test</b> gives it a short buzz."
+            "Devices",
+            "Everything you have, at a glance: every toy you have connected "
+            "(the ones you've used before stay listed, grey while they're "
+            "off), and your shocker hub, suits and headset while they're "
+            "switched on in Settings → Features.<br><br>"
+            "<b>Click a row</b> to open it on its own page - a toy opens at "
+            "its card on the Toys page, where its signal chains are. The "
+            "switches on a row work right here: a toy's Touch / Penetration "
+            "chips, Mute and Test; the shockers' Arm shocks, Share with "
+            "friends and On / Off."
         )
-        # Right beside the heading (Blise's ask, 2026-10-28): a button to
-        # look now, and when the app looks by itself next
-        scan_now = QPushButton("Scan now")
-        scan_now.setProperty("role", "secondary")
-        scan_now.setFixedHeight(BTN_HEIGHT_SMALL)
-        scan_now.setCursor(Qt.PointingHandCursor)
-        scan_now.clicked.connect(lambda _=False: self._on_scan_now())
-        self._explain(
-            scan_now, "Scan now",
-            "Look for toys right now - for a toy you just switched on. The "
-            "app also looks by itself: every few seconds while no toy is "
-            "connected (Settings → Connection Settings sets how often), "
-            "every 30 seconds while one is.")
-        thl.addWidget(scan_now)
-        self._toy_scan_btn = scan_now
-        self._toy_scan_lbl = QLabel("")
-        self._toy_scan_lbl.setProperty("muted", "true")
-        thl.addWidget(self._toy_scan_lbl)
         thl.addStretch(1)
-        self._toy_scan_timer = QTimer(toys_hdr_row)
-        self._toy_scan_timer.setInterval(500)
-        self._toy_scan_timer.timeout.connect(when_on_screen(self, self._refresh_toy_scan))
-        self._toy_scan_timer.start()
         test_all = QPushButton("Test all")
         test_all.setProperty("role", "secondary")
         test_all.setFixedHeight(BTN_HEIGHT_SMALL)
@@ -236,31 +166,27 @@ class HomeMixin:
         thl.addWidget(test_all)
         # Enabled by update_stored_devices_ui while a toy is connected.
         self._test_all_button = test_all
-        container_lay.addWidget(toys_hdr_row)
+        container_lay.addWidget(hdr_row)
         # Home's sections for the live colour sweep are its pieces, not the
         # page: the page holds every toy, and a toy registers its own.
-        self._style_root(toys_hdr_row)
+        self._style_root(hdr_row)
 
-        # Scrollable list of toy cards.
+        # Scrollable list: a row per toy (DeviceFrameMixin), the shocker
+        # hub's, the suits' and the headset's (_build_home_devices).
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
-        scroll.setMinimumHeight(_TOY_LIST_MIN_H)
+        scroll.setMinimumHeight(_DEVICE_LIST_MIN_H)
         _install_rainbow_scrollbars(scroll)
         inner = QWidget()
-        self.unified_devices_layout = _vbox(0, 8)
-        self.unified_devices_layout.addStretch(1)
-        inner.setLayout(self.unified_devices_layout)
+        self.home_list_layout = _vbox(0, 8)
+        self.home_list_layout.addStretch(1)
+        inner.setLayout(self.home_list_layout)
         scroll.setWidget(inner)
-        self.unified_devices_frame = inner
+        self.home_list_frame = inner
         container_lay.addWidget(scroll, 1)
 
-        # ===== Shockers and suits =====
+        # ===== Shockers, suits, the headset =====
         self._build_home_devices(parent_layout)
-
-        # ===== Tuning tools =====
-        self._tuning_tools = self._build_tuning_tools()
-        parent_layout.addWidget(self._tuning_tools)
-        self._style_root(self._tuning_tools)
 
         # Refresh timer for what has no push channel.
         if getattr(self, "_home_refresh_timer", None) is None:
@@ -269,30 +195,6 @@ class HomeMixin:
             t.timeout.connect(when_on_screen(self, self._refresh_home_dynamic))
             t.start()
             self._home_refresh_timer = t
-
-    def _refresh_toy_scan(self) -> None:
-        """"Next scan in 4 s" / "Scanning…" beside Scan now -- only while
-        Home is the page shown."""
-        stack = getattr(self, "main_stack", None)
-        if stack is not None and stack.currentWidget() is not self.views.get("Home"):
-            return
-        get = getattr(self.controller, "get_toy_scan_status", None)
-        st = get() if callable(get) else None
-        if not st or not st["up"]:
-            text = ""
-        elif st["scanning"]:
-            text = "Scanning…"
-        elif st["next_in"] is not None:
-            text = f"Next scan in {st['next_in']} s"
-        else:
-            text = "" if st["auto"] else "Looking for toys is off"
-        if self._toy_scan_lbl.text() != text:
-            self._toy_scan_lbl.setText(text)
-        self._toy_scan_btn.setEnabled(bool(st and st["up"]))
-
-    def _on_scan_now(self) -> None:
-        self.controller.scan_for_toys()
-        self._toy_scan_lbl.setText("Scanning…")
 
     def _refresh_home_dynamic(self) -> None:
         """The checklist and the toy summaries. Skipped while the page is
@@ -318,7 +220,7 @@ class HomeMixin:
         list, which places them (_toy_list_rows); each shows while its
         feature is on (_refresh_home_devices)."""
         c = self.controller
-        inner = self.unified_devices_frame
+        inner = self.home_list_frame
 
         def after(fn):
             """Run a quick action, then show its result at once."""
@@ -327,12 +229,16 @@ class HomeMixin:
                 self._refresh_home_devices()
             return run
 
+        # On / Off, Arm shocks and Share with friends are the Shockers
+        # page's own switches: one setting each (shocker_switches.py)
         shockers = _HomeDeviceRow(
-            "Shockers", _theme.SHOCKERS_HUE, "pishock", "Share with friends",
+            "Shockers", _theme.SHOCKERS_HUE, "pishock", _switches.SHARE_TEXT,
             on_open=lambda: self.select_view("Shockers"),
             on_power=after(lambda on: c.pishock_resume() if on
                            else c.pishock_stop_all()),
             on_share=after(lambda on: c.set_pishock_friends_may_use(on)),
+            arm=_switches.ArmSwitch(
+                "home", after(lambda on: c.set_pishock_armed(on))),
             apply_dot=self._apply_connect_dot, parent=inner)
         bhaptics = _HomeDeviceRow(
             "bHaptics", _theme.SUITS_HUE, "bhaptics", "Also feel OWO's contacts",
@@ -348,24 +254,24 @@ class HomeMixin:
                            else c.owo_stop_all()),
             on_share=after(lambda on: c.set_owo_option("follow_bhaptics", on)),
             apply_dot=self._apply_connect_dot, parent=inner)
+        psvr2 = _HomeDeviceRow(
+            "PSVR2", _theme.PSVR2_HUE, "psvr2", "",
+            on_open=lambda: self.select_view(self._PSVR2_PAGE),
+            on_power=after(lambda on: c.psvr2_resume() if on
+                           else c.psvr2_stop_all()),
+            on_share=lambda _on: None,
+            apply_dot=self._apply_connect_dot, parent=inner)
 
         self._explain(shockers.bar, "Shockers",
             "Your shocker hub and the shockers it reports. Click the bar to "
-            "open the Shockers page, where you connect, arm and set the "
-            "limits. ARMED means shocks go out as shocks; otherwise they "
-            "go out as vibrates.")
-        self._explain(shockers.share, "Share with friends",
-            "Sharing only, for all your friends at once: off, your friends "
-            "don't see your shockers at all and nothing they send reaches "
-            "them, whatever their own Shockers switch on the Friends page "
-            "says. Your own rules and the Shockers page still work.")
-        self._explain(shockers.power, "On / Off",
-            "Your shockers, all of it. Off ends whatever they are doing now "
-            "and keeps them quiet - your rules, friends, tests - until you "
-            "switch them on again, even after a restart; friends don't see "
-            "them meanwhile. The hub stays connected, and who may use them "
-            "stays as you set it. The same as Stop all / Resume on the "
-            "Shockers page.")
+            "open the Shockers page, where you connect and set the limits. "
+            "The red words say whether shocks are armed; unarmed, they go out "
+            "as vibrates.")
+        self._explain(shockers.share, _switches.SHARE_TEXT, _switches.SHARE_TIP)
+        self._explain(shockers.arm.switch, _switches.ARM_TEXT, _switches.arm_tip("home"))
+        self._explain(shockers.arm.ask, _switches.ARM_TEXT + "?", _switches.ASK_TIP)
+        self._explain(shockers.arm.status, _switches.STATUS_TITLE, _switches.STATUS_TIP)
+        self._explain(shockers.power, "On / Off", _switches.POWER_TIP)
         for row, name in ((bhaptics, "bHaptics"), (owo, "OWO")):
             other = "OWO" if row is bhaptics else "bHaptics"
             self._explain(row.bar, name,
@@ -381,11 +287,20 @@ class HomeMixin:
                 "restart. It stays connected, and its other settings stay as "
                 "they are.")
 
+        self._explain(psvr2.bar, "PSVR2",
+            "Your PlayStation VR2 headset's rumble motor, through "
+            "PSVR2Toolkit. Click the bar to open the page where you connect "
+            "it, set its rumble band and test it.")
+        self._explain(psvr2.power, "On / Off",
+            "Your headset's motor for everyone. Off stops it now and keeps "
+            "it still until you switch it on again, even after a restart. "
+            "It stays connected, and its other settings stay as they are.")
+
         # The small dividers above the ones that aren't connected, at the
         # bottom of the list.
         self._home_shockers_divider = _ListDivider("Shockers", parent=inner)
         self._home_suits_divider = _ListDivider("Haptic suits", parent=inner)
-        for w in (shockers, bhaptics, owo,
+        for w in (shockers, bhaptics, owo, psvr2,
                   self._home_shockers_divider, self._home_suits_divider):
             w.setVisible(False)
             self._style_root(w)
@@ -402,6 +317,7 @@ class HomeMixin:
         self._home_shockers_row = shockers
         self._home_bhaptics_row = bhaptics
         self._home_owo_row = owo
+        self._home_psvr2_row = psvr2
         self._home_rows_on = set()
         self._home_rows_key = None
 
@@ -425,14 +341,26 @@ class HomeMixin:
         if owo_on:
             self._home_owo_row.set_state(_owo_row(st["owo"], bh_on))
             rows_on.add(self._home_owo_row)
+        psvr2 = getattr(c, "get_psvr2_status", None)
+        if callable(psvr2) and on("feature_psvr2"):
+            self._home_psvr2_row.set_state(_psvr2_row(psvr2()))
+            rows_on.add(self._home_psvr2_row)
         self._home_rows_on = rows_on
         # Move rows only when one comes, goes or (dis)connects; the toy
         # list re-asks _toy_list_rows itself whenever it changes.
         if self._home_rows_state() != self._home_rows_key:
             self._place_home_devices()
 
+    def refresh_home_devices(self) -> None:
+        """Controller facade: a shocker setting changed somewhere else --
+        the Shockers page's Arm shocks, Share with friends or Stop all, the
+        hub's link -- so Home's row shows it now, not at its next tick."""
+        if getattr(self, "_home_shockers_row", None) is not None:
+            self._refresh_home_devices()
+
     def _home_rows(self) -> tuple:
-        return (self._home_shockers_row, self._home_bhaptics_row, self._home_owo_row)
+        return (self._home_shockers_row, self._home_bhaptics_row, self._home_owo_row,
+                self._home_psvr2_row)
 
     def _home_toys_on(self) -> bool:
         get = getattr(self.controller, "get_feature_enabled", None)
@@ -616,8 +544,18 @@ class HomeMixin:
         foot = _hbox(0, 12)
         foot.addWidget(self._muted_label(
             "Then press Test all below — every connected toy buzzes for a "
-            "second. Feel it? You're set. Click a toy to choose which parts "
-            "of your avatar drive it."), 1)
+            "second. Feel it? You're set. Click a toy to open it on the Toys "
+            "page and choose which parts of your avatar drive it."), 1)
+        # The guided tour (ui/tour.py), again from its first step
+        if callable(getattr(self, "start_tour", None)):
+            tour = QPushButton(_TAKE_TOUR_TITLE)
+            tour.setProperty("role", "secondary")
+            tour.setFixedHeight(BTN_HEIGHT_SMALL)
+            tour.setCursor(Qt.PointingHandCursor)
+            tour.clicked.connect(lambda _=False: self.start_tour())
+            self._explain(tour, _TAKE_TOUR_TITLE, _TAKE_TOUR_TIP)
+            foot.addWidget(tour, 0, Qt.AlignBottom)
+            self._setup_tour_btn = tour
         hide = QPushButton("Don't show again")
         hide.setProperty("role", "secondary")
         hide.setFixedHeight(BTN_HEIGHT_SMALL)
@@ -730,77 +668,3 @@ class HomeMixin:
                         and (not done or self._setup_reopened))
         if strip is not None:
             strip.setVisible(state["compact"])
-
-    # ----------------------------------------------------------
-    # Tuning tools fold
-    # ----------------------------------------------------------
-
-    def _build_tuning_tools(self) -> QWidget:
-        """The simulator and the signal graph behind one bar. Neither is
-        needed to play, so the landing page keeps them folded; the bar's
-        right edge says what is switched on inside, so a playing simulator
-        is never out of sight. Open/closed is remembered."""
-        host = QWidget()
-        lay = _vbox(0, 6)
-        host.setLayout(lay)
-
-        head = _FoldHeader("Tuning tools")
-        self._explain(head,
-            "Tuning tools",
-            "For when you are shaping how a toy responds: the <b>input "
-            "simulator</b> (a synthetic stroke to tune against without a "
-            "partner) and the <b>signal graph</b> of one chain. Click to "
-            "open or close."
-        )
-        lay.addWidget(head)
-
-        body = QWidget()
-        body_lay = _vbox(0, 6)
-        body.setLayout(body_lay)
-        body_lay.addWidget(self._build_routing_top_bar())
-        # The graph lives directly under the bar, framed like it, and only
-        # exists on screen while its toggle is on.
-        self._signal_graph_panel = _ChainOverviewPanel(self.controller)
-        self._signal_graph_panel.setObjectName("card")
-        self._signal_graph_panel.setVisible(False)
-        body_lay.addWidget(self._signal_graph_panel)
-        lay.addWidget(body)
-
-        self._tuning_head = head
-        self._tuning_body = body
-
-        def set_open(is_open: bool, persist: bool = True) -> None:
-            body.setVisible(bool(is_open))
-            head.set_open(bool(is_open))
-            if persist:
-                self.controller.set_app_setting(
-                    "home_tuning_tools_open", bool(is_open))
-
-        # isHidden, not isVisible: the fold's own state, whatever the page
-        # around it is doing.
-        head.clicked.connect(lambda: set_open(body.isHidden()))
-        set_open(bool(self.controller.get_app_setting(
-            "home_tuning_tools_open", False)), persist=False)
-
-        for signal in (self._sim_play_btn.toggled,
-                       self._signal_graph_toggle.toggled):
-            signal.connect(self._refresh_tuning_summary)
-        self._refresh_tuning_summary()
-        return host
-
-    def _refresh_tuning_summary(self, *_a) -> None:
-        """What is running inside the fold; while nothing is, what it
-        holds."""
-        head = getattr(self, "_tuning_head", None)
-        if head is None:
-            return
-        parts = []
-        if self._sim_play_btn.isChecked():
-            parts.append("Simulator playing")
-        if self._signal_graph_toggle.isChecked():
-            parts.append("signal graph on" if parts else "Signal graph on")
-        try:
-            head.summary.setText(" · ".join(parts)
-                                 or "Simulator · signal graph")
-        except RuntimeError:
-            pass

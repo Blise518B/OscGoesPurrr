@@ -134,13 +134,14 @@ if defined ENGINE_DATA (echo Bundling built-in intiface-engine.) else (echo inti
 REM PyInstaller's own import analysis covers everything the app imports --
 REM including bleak's WinRT backend and the winrt extension modules behind
 REM it (the bHaptics suit; checked in a built exe) -- except iroh (the
-REM Friends link): its Rust library is a DLL loaded through ctypes from the
-REM package folder, which import analysis can't see, hence
-REM --collect-binaries iroh.
+REM Friends link) and openvr (the haptic trackers): each loads its library
+REM (a DLL) through ctypes from the package folder, which import analysis
+REM can't see, hence --collect-binaries iroh / openvr.
 "%VENV_PY%" -m PyInstaller --noconfirm ^
     --onefile ^
     --windowed ^
     --collect-binaries iroh ^
+    --collect-binaries openvr ^
     --icon "src\Images\OGP_Icon.ico" ^
     --add-data "src\Images;Images" ^
     --add-data "LICENSE;." ^

@@ -151,3 +151,62 @@ def test_newest_log_picks_the_latest(tmp_path):
     (tmp_path / "other.txt").write_text("", encoding="utf-8")
     assert vl.newest_log([tmp_path]) == b
     assert vl.newest_log([tmp_path / "nope"]) is None
+
+
+# ---- in_instance: is a friend's linked VRChat account here? ----------------
+
+RIN = "usr_0000000a-0000-4000-8000-00000000000a"
+SAM = "usr_0000000b-0000-4000-8000-00000000000b"
+
+
+def _snap(**kw):
+    snap = {"state": "ok", "file": "output_log.txt", "others": [(RIN, "Rin"), (SAM, "Sam")],
+            "since": None, "in_room": True}
+    snap.update(kw)
+    return snap
+
+
+def test_in_instance_yes_while_the_log_says_they_are_here():
+    assert vl.in_instance(_snap(), RIN)
+    assert vl.in_instance(_snap(), RIN.upper())          # ids match whatever the case
+
+
+def test_in_instance_unlinked_is_no():
+    assert not vl.in_instance(_snap(), "")
+    assert not vl.in_instance(_snap(), None)
+
+
+def test_in_instance_no_when_they_left_or_never_came():
+    assert not vl.in_instance(_snap(others=[(SAM, "Sam")]), RIN)
+    # an old log without ids: a name is never taken for an account
+    assert not vl.in_instance(_snap(others=[("Rin", "Rin")]), RIN)
+
+
+def test_in_instance_no_without_a_live_log():
+    assert not vl.in_instance(None, RIN)                     # the log isn't read
+    for state in ("starting", "no_log", "reading"):
+        assert not vl.in_instance(_snap(state=state), RIN)
+    assert not vl.in_instance(_snap(in_room=False), RIN)       # between worlds
+    # VRChat closed: its last log still lists who was there
+    assert not vl.in_instance(_snap(), RIN, vrchat_up=False)
+
+
+def test_in_instance_follows_the_tracker():
+    tr = InstanceTracker()
+    for line in ("2026.10.07 11:33:12 Debug      -  User Authenticated: Me (usr_0000000c-0000-4000-8000-00000000000c)",
+                 "2026.10.07 11:33:16 Debug      -  [Behaviour] Joining wrld_x:1~private(usr_y)",
+                 f"2026.10.07 11:33:27 Debug      -  [Behaviour] OnPlayerJoined Rin ({RIN})"):
+        tr.feed(line)
+    snap = {"state": "ok", "others": tr.others(), "in_room": tr.in_room}
+    assert vl.in_instance(snap, RIN)
+    tr.feed(f"2026.10.07 11:36:01 Debug      -  [Behaviour] OnPlayerLeft Rin ({RIN})")
+    assert not vl.in_instance({"state": "ok", "others": tr.others(), "in_room": tr.in_room}, RIN)
+
+
+def test_clean_user_id_and_name():
+    assert vl.clean_user_id(RIN.upper()) == RIN
+    assert vl.clean_user_id(" " + RIN + " ") == RIN
+    for bad in ("", None, "usr_", "usr_123", "Rin", RIN + "x", "grp_" + RIN[4:]):
+        assert vl.clean_user_id(bad) == ""
+    assert vl.clean_display_name("  Rin   the  Cat ") == "Rin the Cat"
+    assert len(vl.clean_display_name("x" * 200)) == vl.NAME_MAX

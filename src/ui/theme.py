@@ -209,6 +209,10 @@ BHAPTICS_HUE = SUITS_HUE
 OWO_HUE = "purple"
 # ... and Vive trackers blue (the second toy's; no toy there either).
 TRACKERS_HUE = "blue"
+# The PSVR2 headset (its page, its icon, its Home row): blue too -- VR gear,
+# like the trackers, and PlayStation's own colour. Every other hue already
+# means something (and red, amber and grey mean errors, warnings, neutral).
+PSVR2_HUE = TRACKERS_HUE
 
 
 def friend_hue(index: int) -> str:
@@ -236,6 +240,19 @@ def toy_frame_colors(hue_name: str, mode_name: str = ""):
         return (dim if neon else PALETTE["grey"][1]), None
     line = CHROME["line"] if mode_name == MODE else chrome(mode_name)["line"]
     return line, ground
+
+
+def toy_divider_color(hue_name: str, mode_name: str = "") -> str:
+    """The hairline under a toy card's bar on the Toys page, between the bar
+    and its chains (ui.widgets.ToyFrame.set_head), so each card reads as
+    starting at its bar. The toy's hue at its mid tone -- the frame itself
+    in Midnight, a step under Neon's bright frame (design-518 rule 5: dim
+    the structure inside a frame, keep the frame). Offline: the frame's own
+    quiet outline. Read at paint time, like toy_frame_colors."""
+    mode_name = mode_name or MODE
+    if hue_name in TOY_HUES or hue_name in DEVICE_ROW_HUES:
+        return PALETTE[hue_name][1]
+    return toy_frame_colors(hue_name, mode_name)[0]
 
 # One hue per stage trace, by what the signal IS. Depth is the blue family,
 # speed amber, punch pink (it is the live accent's spike), the outward
@@ -492,8 +509,9 @@ def title_tag(version: str, build) -> str:
     return T.title_tag(version, build)
 
 
-# Where the status bar's two names lead (Blise's call, 2026-10-28): the
-# app's to its repository, his to his GitHub profile
+# Where the status bar's links lead (Blise's call, 2026-10-28): the app's
+# name -- and since 2026-11-14 its version -- to its repository, his to his
+# GitHub profile
 GITHUB_URL = "https://github.com/Blise518B/OscGoesPurrr"
 AUTHOR_URL = "https://github.com/Blise518B"
 
@@ -501,11 +519,12 @@ AUTHOR_URL = "https://github.com/Blise518B"
 def status_tag_html(app_name: str, version: str, accent: str = "") -> str:
     """The bottom-right identity tag as rich text: only `Blise518B` is
     accent-coloured and bold, everything else stays dim. The app's name
-    links to its repository, `Blise518B` to his profile."""
+    and its version link to the repository, `Blise518B` to his profile."""
     accent = accent or CHROME["accent"]
     dim = CHROME["dim"]
-    return (f'<a href="{GITHUB_URL}" style="color:{dim}; text-decoration:none">{app_name}</a>'
-            f" v{version} · made by "
+    link = f'style="color:{dim}; text-decoration:none"'
+    return (f'<a href="{GITHUB_URL}" {link}>{app_name}</a> '
+            f'<a href="{GITHUB_URL}" {link}>v{version}</a> · made by '
             f'<a href="{AUTHOR_URL}" style="color:{accent}; text-decoration:none">'
             f'<b>Blise518B</b></a>')
 
@@ -544,6 +563,12 @@ QStatusBar {
 QStatusBar::item { border: none; }
 QLabel#statusTag { color: %(dim)s; font-size: 11px; padding-right: 10px; }
 QLabel#statusMessage { color: %(muted)s; font-size: 11px; padding-left: 6px; }
+/* Ctrl+Z's question (ui/history_keys.py): it waits for you, so it reads;
+   its Yes / No sized to the bar */
+QLabel#historyText { color: %(txt)s; font-size: 11px; padding-left: 6px; }
+QStatusBar QPushButton[role="danger"], QStatusBar QPushButton[role="secondary"] {
+    padding: 1px 10px; min-height: 0px; font-size: 12px;
+}
 
 /* ---- surfaces -------------------------------------------------------- */
 QFrame#card {
@@ -585,6 +610,31 @@ QWidget#toyBar:hover { background-color: %(hover)s; }
 QWidget#toyBar QLabel { background: transparent; }
 QWidget#toyBar QPushButton { padding: 3px 12px; }
 QWidget#toyBar QLabel#toyZones { color: %(muted)s; font-size: 11px; }
+/* Who a toy hears, on its bar: Touch / Penetration x Self / Others
+   (device_frame). Lit like a segmented button that is on; half lit while
+   the toy's chains disagree; greyed when no chain of the toy hears it. */
+QWidget#toyBar QLabel#contactCaption { color: %(muted)s; font-size: 11px; }
+QWidget#toyBar QPushButton#contactChip {
+    padding: 1px 8px; border-radius: 9px; font-size: 11px;
+    background-color: transparent; color: %(muted)s;
+    border: 1px solid %(line)s;
+}
+QWidget#toyBar QPushButton#contactChip:hover { border-color: %(accent)s; color: %(accent)s; }
+QWidget#toyBar QPushButton#contactChip[state="on"] {
+    background-color: %(tint)s; border-color: %(accent)s;
+    color: %(accent)s; font-weight: 600;
+}
+QWidget#toyBar QPushButton#contactChip[state="half"] {
+    background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 %(tint)s, stop:0.5 %(tint)s, stop:0.501 transparent, stop:1 transparent);
+    border-color: %(accent)s; color: %(txt)s;
+}
+QWidget#toyBar QPushButton#contactChip:disabled {
+    background-color: transparent; color: %(dim)s; border-color: %(green_mid)s;
+}
+QWidget#toyBar QPushButton#contactChip[state="held"]:disabled {
+    background-color: %(tint)s; border-color: %(green_mid)s; color: %(muted)s;
+}
 QFrame#listDividerLine { background-color: %(line)s; border: none; }
 QFrame#motorBlock {
     background-color: %(panel)s;
@@ -638,7 +688,7 @@ QLabel#cardHeader {
     font-size: 13px; font-weight: 600; letter-spacing: 0.3px;
     color: %(accent)s;
 }
-/* Home's one heading: the page title and the list's title in one line. */
+/* Home's and the Toys page's one heading: the page title and the list's title in one line. */
 QLabel#homeTitle {
     font-family: "Aldrich", "Segoe UI";
     font-size: 17px; font-weight: 600; letter-spacing: 1px;
@@ -666,6 +716,7 @@ QLabel[role="success"]   { color: %(ok)s; }
 QLabel[role="alert"]     { color: %(err)s; }
 QLabel[role="warning"]   { color: %(warn)s; }
 QLabel[role="live"]      { color: %(live)s; }
+QLabel#armStatus[armed="true"] { font-weight: 700; }
 
 /* ---- pills / chips --------------------------------------------------- */
 QLabel[role="pill"] {
@@ -716,6 +767,22 @@ QPushButton[role="ghost"] {
     color: %(muted)s; text-align: left; padding: 6px 12px;
 }
 QPushButton[role="ghost"]:hover { border-color: %(line)s; background-color: %(hover)s; color: %(txt)s; }
+/* A rarely wanted, destructive action as words in the danger colour, no box
+   (a toy card's Delete device, at the end of its last line). */
+QPushButton[role="dangerText"] {
+    background-color: transparent; border-color: transparent; color: %(err)s;
+    font-size: 12px; font-weight: 600; padding: 2px 8px;
+}
+QPushButton[role="dangerText"]:hover { background-color: %(err_tint)s; border-color: %(err_mid)s; color: %(err)s; }
+/* The Add Variable picker's filter chips: lit = that group is hidden. */
+QPushButton[role="chip"][filter="true"] {
+    background-color: transparent; color: %(muted)s; border: 1px solid %(line)s;
+    border-radius: 11px; padding: 2px 10px; min-height: 18px; font-size: 12px;
+}
+QPushButton[role="chip"][filter="true"]:hover { background-color: %(hover)s; color: %(txt)s; }
+QPushButton[role="chip"][filter="true"]:checked {
+    background-color: %(tint)s; color: %(accent)s; border-color: %(accent)s;
+}
 QPushButton[role="nav"] {
     background-color: transparent; border: 1px solid transparent;
     color: %(muted)s; text-align: left;
@@ -970,6 +1037,8 @@ def _hue_variants(mode_name: str, v: Dict[str, str]) -> str:
     out.append(params_qss(mode_name, v))
     from ui.theme_suits import suits_qss          # imports this module
     out.append(suits_qss(mode_name, v))
+    from ui.theme_log import log_qss              # imports this module
+    out.append(log_qss(mode_name, v))
     # OGP open twice: a banner nobody can miss
     out.append(
         f'QLabel#secondWindowBanner {{ background-color: {v["err_tint"]}; color: {v["err"]};'

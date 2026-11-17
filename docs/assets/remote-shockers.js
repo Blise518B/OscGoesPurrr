@@ -135,6 +135,10 @@ export class ShockerCard {
     this.warn = 0;
     this.random = false;
     this.blocked = false;
+    this.ops = new Set(["shock", "vibrate", "beep"]);   // what their switches let you send
+    this.why = {};                                       // ... and why not
+    this.warnOk = true;                                  // a warning can play there
+    this.warnKept = 0;                                   // the Warning picked, while it can't
     this.dur = { shock: 300, vibrate: 1000 };
     this.beforeCont = null;
     this.warnTimer = null;
@@ -161,6 +165,7 @@ export class ShockerCard {
     this.t.stop.title = "Emergency Stop: this shocker stops now - a running pulse, a hold, a "
       + "shock waiting after its warning";
     this.t.beep.title = "A beep (Remote: while you hold it)";
+    this.tips = { shock: this.t.shock.title, vibrate: this.t.vibrate.title, beep: this.t.beep.title };
     for (const op of ["shock", "vibrate", "beep"]) this.wire(this.t[op], op);
     this.t.shock_dur.onclick = () => this.openPicker("shock_dur");
     this.t.vibrate_dur.onclick = () => this.openPicker("vibrate_dur");
@@ -189,12 +194,14 @@ export class ShockerCard {
     };
     this.dice = mini("dice", "Random Intensity: two handles on the slider, and every shock picks a "
                      + "strength between them", () => this.toggleRandom(), "yellow");
-    const nudgesShock = el("div.nudges", {},
-      mini("up", "Stronger", () => this.nudge("shock", +1), "yellow"), this.dice,
-      mini("down", "Weaker", () => this.nudge("shock", -1), "yellow"));
-    const nudgesVib = el("div.nudges", {},
-      mini("up", "Stronger", () => this.nudge("vibrate", +1), "pink"),
-      mini("down", "Weaker", () => this.nudge("vibrate", -1), "pink"));
+    this.nudges = {
+      shock: [mini("up", "Stronger", () => this.nudge("shock", +1), "yellow"),
+              mini("down", "Weaker", () => this.nudge("shock", -1), "yellow")],
+      vibrate: [mini("up", "Stronger", () => this.nudge("vibrate", +1), "pink"),
+                mini("down", "Weaker", () => this.nudge("vibrate", -1), "pink")],
+    };
+    const nudgesShock = el("div.nudges", {}, this.nudges.shock[0], this.dice, this.nudges.shock[1]);
+    const nudgesVib = el("div.nudges", {}, ...this.nudges.vibrate);
 
     const block = (title, hue, ...kids) => {
       const b = el("div.opblock", {}, el("div.opblock-h", {}, title), el("div.opblock-b", {}, ...kids));
@@ -215,9 +222,13 @@ export class ShockerCard {
       this.partyBoxLabel = el("label.partybox", { title: "Party Mode: drive this shocker together with "
         + "the others you tick - all at once, one at random or one after the other" }, this.partyBox, "Party");
     }
+    // why a button is greyed (their shocker's switches): said under the name
+    this.whyLine = el("p.small.why");
+    this.whyLine.hidden = true;
     this.root = el("div.fcard.shocker", {},
       title ? el("div.card-head", {}, el("span.card-name", {}, title), el("span.grow"),
                  this.partyBoxLabel || null) : null,
+      this.whyLine,
       el("div.sk-body", {}, shock, nudgesShock, this.center, nudgesVib, vibrate));
     this.showControls();
   }
@@ -276,11 +287,28 @@ export class ShockerCard {
     t.use.setValue(USE_NAMES[USES.indexOf(this.use)]);
   }
   showControls() {
-    const cont = this.use === "continuous", tap = this.use === "tap", t = this.t;
-    for (const k of ["shock", "vibrate", "beep"]) t[k].disabled = cont || this.blocked;
-    t.shock_dur.disabled = !tap;
-    t.vibrate_dur.disabled = !tap;
-    this.dice.disabled = cont;
+    const cont = this.use === "continuous", tap = this.use === "tap", t = this.t, ops = this.ops;
+    for (const k of ["shock", "vibrate", "beep"]) {
+      t[k].disabled = cont || this.blocked || !ops.has(k);
+      t[k].title = (!ops.has(k) && this.why[k]) || this.tips[k];
+    }
+    const lines = [...new Set(["shock", "vibrate", "beep"].filter((o) => !ops.has(o) && this.why[o])
+                                                           .map((o) => this.why[o]))];
+    if (!this.warnOk && ops.has("shock") && this.why.warn) lines.push(this.why.warn);
+    this.whyLine.textContent = lines.length ? `${lines.join(". ")}.` : "";
+    this.whyLine.hidden = !lines.length;
+    t.shock_dur.disabled = !tap || !ops.has("shock");
+    t.vibrate_dur.disabled = !tap || !ops.has("vibrate");
+    t.warn.disabled = !ops.has("shock") || !this.warnOk;
+    for (const op of ["shock", "vibrate"]) {
+      this.sliders[op].setDisabled(!ops.has(op));
+      for (const b of this.nudges[op]) b.disabled = !ops.has(op);
+    }
+    this.rangeS.setDisabled(!ops.has("shock"));
+    this.dice.disabled = cont || !ops.has("shock");
+    t.warn.title = "Vibration before a shock: Small 1-3 s, Mid 3-6 s, Long 6-9 s - how long "
+      + "exactly is random, at the vibrate strength. Works in every Use Mode.";
+    if (!this.warnOk && this.why.warn) t.warn.title = this.why.warn;
     this.dice.classList.toggle("on", this.random);
     const randomOn = this.random && !cont;
     this.sliders.shock.root.hidden = randomOn;
@@ -323,8 +351,35 @@ export class ShockerCard {
     }
     this.showControls();
   }
+  /** The Warning as the rules allow: none while a warning can't play there
+   *  (the pick comes back when it can) -- the app's _fit_warning. */
+  fitWarning() {
+    if (!this.warnOk) {
+      if (this.warn) { this.warnKept = this.warn; this.warn = 0; }
+      return;
+    }
+    if (this.warn === 0 && this.warnKept) { this.warn = this.warnKept; this.warnKept = 0; }
+  }
   setBlocked(blocked) {
     if (blocked !== this.blocked) { this.blocked = blocked; this.showControls(); }
+  }
+  /** What that shocker's own switches let you do: the ops you may send,
+   *  whether a warning can play there, and why an op isn't there -- the
+   *  app's ShockerCard.set_rules. A party's card takes what any of its
+   *  shockers lets through. */
+  setRules(ops, why = {}, warnOk = true) {
+    ops = new Set(ops);
+    why = Object.fromEntries(Object.entries(why || {}).filter(([k, text]) =>
+      text && (k === "warn" ? !warnOk : !ops.has(k))));
+    const same = ops.size === this.ops.size && [...ops].every((o) => this.ops.has(o))
+      && JSON.stringify(why) === JSON.stringify(this.why);
+    if (same && !!warnOk === this.warnOk) return;
+    this.ops = ops;
+    this.why = why;
+    this.warnOk = !!warnOk;
+    this.fitWarning();
+    if (this.holding && !this.ops.has(this.holding)) this.release();
+    this.showControls();
   }
 
   // -- the pickers: over the card, never a window of their own
@@ -334,7 +389,9 @@ export class ShockerCard {
     if (which === "warn") {
       options = WARNING_PICKS.map((n) => [n, true]);
       current = this.warn;
-      onPick = (i) => { this.warn = i; this.showValues(); };
+      onPick = (i) => {
+        if (i === 0 || this.warnOk) { this.warn = i; this.showValues(); }
+      };
       hue = "yellow";
     } else if (which === "use") {
       options = USE_PICKS.map((n) => [n, true]);
@@ -417,6 +474,7 @@ export class ShockerCard {
   }
   strengthMoved(op) {
     this.showValues();
+    if (!this.ops.has(op)) return;                    // they don't let you send it
     const v = this.sliders[op].value;
     if (this.use === "continuous") {
       // the slider is the control: above 0 it runs, at 0 it stops
@@ -466,14 +524,14 @@ export class ShockerCard {
     if (v > 0) { this.holding = "shock"; this.cb.onHold("shock", this.toFraction("shock", v)); }
   }
   tap(op) {
-    if (this.use !== "tap" || this.blocked) return;
+    if (this.use !== "tap" || this.blocked || !this.ops.has(op)) return;
     const warnMs = op === "shock" ? this.warnMs() : 0;
     const strength = op !== "beep" ? this.strength(op) : 1;
     this.cb.onFire(op, op !== "beep" ? this.toFraction(op, strength) : 0,
                    this.length(op !== "beep" ? op : "vibrate"), warnMs, this.warnFraction());
   }
   press(op) {
-    if (this.use !== "remote" || this.blocked) return;
+    if (this.use !== "remote" || this.blocked || !this.ops.has(op)) return;
     if (op === "shock" && this.warn) { this.startWarning(this.strength("shock")); return; }
     this.holding = op;
     const strength = op !== "beep" ? this.strength(op) : 1;
@@ -501,6 +559,8 @@ export class ShockerCard {
   restore(st) {
     this.use = st.use;
     this.warn = st.warn;
+    this.warnKept = 0;
+    this.fitWarning();
     this.random = st.random;
     Object.assign(this.dur, st.dur);
     this.beforeCont = st.before ? { ...st.before } : null;
@@ -518,9 +578,12 @@ export class ShockerCard {
 /** PiShock's Party Mode: one card in percent and real seconds over the
  *  shockers ticked in its list -- Sync (all at once), Random (one, picked
  *  anew every press) or Round Robin (one after the other; the next is
- *  marked, a click on a name makes it next). Pairs here are slot numbers. */
+ *  marked, a click on a name makes it next). Pairs here are slot numbers.
+ *  Its card is whichever shocker buttons the panel shows (`Card`: this
+ *  ShockerCard, or OpenShock's -- remote-openshock.js); both take the same
+ *  callbacks (the app's shock_party.ShockParty `card_cls`). */
 export class ShockParty {
-  constructor(cb) {
+  constructor(cb, { Card = ShockerCard } = {}) {
     this.cb = cb;                            // onFire(slots, op, it, ms, wms, wi), onHold, onRelease, onStop, onTicks
     this.mode = "sync";
     this.targets = [];                       // [slot, label]
@@ -528,7 +591,7 @@ export class ShockParty {
     this.next = 0;
     this.held = [];
     this.title = el("span.card-name");
-    this.card = new ShockerCard("", {
+    this.card = new Card("", {
       onFire: (op, it, len, wms, wi) => this.fire(op, it, len, wms, wi),
       onHold: (op, it) => this.hold(op, it),
       onRelease: () => this.releaseHeld(),

@@ -1,8 +1,11 @@
 """A session's timeline on the Statistics page: an intensity lane per toy,
-thrusts per minute, a contact lane per zone and the people lane, on one
-clock-time axis -- with hover values and a drag that selects a stretch to
-tag. Its colours and painting helpers are stats_charts'."""
+thrusts per minute, a mark for each shock, vibrate and beep on your
+shockers, a contact lane per zone and the people lane, on one clock-time
+axis -- with hover values (who sent each shock among them) and a drag that
+selects a stretch to tag. Its colours and painting helpers are
+stats_charts'."""
 
+import html
 import math
 import time
 from typing import Any, Dict, List, Mapping, NamedTuple, Optional, Sequence, Tuple
@@ -16,6 +19,26 @@ from ui.stats_charts import (
     chart_font, chrome_color, draw_text, fmt_clock, qcolor, runs, toy_color, zone_color,
     zone_label,
 )
+
+# Marks listed in one hover, at most
+_HOVER_MARKS = 6
+
+
+def mark_text(m: Mapping[str, Any]) -> str:
+    """One mark as the hover says it: "21:04:13 shock 30 · 1.0 s on Collar
+    -- from Mika" (a hold: "held 3.2 s")."""
+    when = time.strftime("%H:%M:%S", time.localtime(float(m.get("t") or 0.0)))
+    op = str(m.get("op") or "")
+    what = op if m.get("level") is None else f"{op} {m['level']}"
+    ms = m.get("ms")
+    if m.get("hold"):
+        what += f" · held {ms / 1000:.1f} s" if ms is not None else " · holding"
+    elif ms:
+        what += f" · {ms / 1000:.1f} s"
+    on = ", ".join(m.get("on") or ())
+    if on:
+        what += f" on {on}"
+    return f"{when} {what} — from {m.get('who') or 'someone'}"
 
 
 class _Frame(NamedTuple):
@@ -46,6 +69,7 @@ class SessionTimeline(QWidget):
     _CAPTION_H = 16
     _ZONE_H, _ZONE_GAP = 14, 6
     _PEOPLE_H, _PEOPLE_GAP = 16, 4
+    _MARK_H, _MARK_GAP = 26, 12
     _AXIS_H = 20
     _MIN_COL_PX = 3.0
     # A press that moves less than this is a click, not a selection.
@@ -62,6 +86,9 @@ class SessionTimeline(QWidget):
         # Tagged stretches: (start epoch, end epoch, label, row).
         self._tags: List[Tuple[float, float, str, int]] = []
         self._tag_rows = 0
+        # Shocks, vibrates and beeps on your shockers (the log's marks:
+        # t, op, level, ms, on, who, hold), oldest first
+        self._marks: List[Dict[str, Any]] = []
         # The selection, in epochs (so it holds still while a running
         # session's axis grows), and the drag making it.
         self._sel: Optional[Tuple[float, float]] = None
@@ -80,6 +107,8 @@ class SessionTimeline(QWidget):
         zones = detail.get("zones") or {}
         self._zones = sorted(self._d.get("zones", {}),
                              key=lambda z: (-float(zones.get(z, 0.0)), z.lower()))
+        self._marks = [m for m in (detail.get("shocks") or {}).get("marks") or ()
+                       if m.get("t")]
         self._resize()
 
     def set_tags(self, stretches: Sequence[Tuple[float, float, str]]) -> None:
@@ -108,6 +137,7 @@ class SessionTimeline(QWidget):
         h = (self._TOP
              + len(self._toys) * (self._TOY_H + self._TOY_GAP)
              + self._THR_H + self._THR_GAP
+             + (self._CAPTION_H + self._MARK_H + self._MARK_GAP if self._marks else 0)
              + (self._CAPTION_H + len(self._zones) * (self._ZONE_H + self._ZONE_GAP)
                 if self._zones else 0)
              + (self._CAPTION_H + self._tag_rows * (self._PEOPLE_H + self._PEOPLE_GAP)
@@ -176,6 +206,7 @@ class SessionTimeline(QWidget):
         y = float(self._TOP)
         y = self._paint_toys(p, g, y)
         y = self._paint_thrusts(p, g, y)
+        y = self._paint_marks(p, g, y)
         y = self._paint_zones(p, g, y)
         self._paint_people(p, g, y)
         self._paint_selection(p, g)
@@ -295,6 +326,49 @@ class SessionTimeline(QWidget):
                 p.drawRoundedRect(QRectF(x0, base - bh, w, bh),
                                   min(2.0, w / 2), min(2.0, w / 2))
         return y + self._THR_H + self._THR_GAP
+
+    def _paint_marks(self, p: QPainter, g: "_Frame", y: float) -> float:
+        """The shockers lane: a mark per shock (full yellow), vibrate (paler)
+        and beep (a dot), as tall as it was strong; a hold also shows how
+        long it was held."""
+        if not self._marks:
+            return y
+        txt = chrome_color("txt")
+        hue = _theme.hue(_theme.SHOCKERS_HUE)
+        # per shocker, as the counts are: one shock on two shockers is two
+        shocks = sum(max(1, len(m.get("on") or ())) for m in self._marks
+                     if m.get("op") == "shock")
+        draw_text(p, 0, y + 11, "Shockers", txt, bold=True)
+        draw_text(p, 0, y + self._CAPTION_H + 15,
+                  f"{shocks} shock{'s' if shocks != 1 else ''}" if shocks
+                  else f"{len(self._marks)} on them", chrome_color("dim"))
+        y += self._CAPTION_H
+        lane = QRectF(g.left, y, g.pw, self._MARK_H)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(chrome_color("well")))
+        p.drawRoundedRect(lane, 3, 3)
+        base = y + self._MARK_H - 2
+        for m in self._marks:
+            x = min(g.right, max(g.left, self._x_of_epoch(float(m["t"]))))
+            op = m.get("op")
+            if m.get("hold") and m.get("ms"):
+                x1 = min(g.right, self._x_of_epoch(float(m["t"]) + m["ms"] / 1000.0))
+                if x1 - x > 1:
+                    p.setBrush(qcolor(hue, 0.3))
+                    p.drawRect(QRectF(x, y + 2, x1 - x, self._MARK_H - 4))
+            if op == "beep":
+                p.setBrush(qcolor(hue, 0.9))
+                p.drawEllipse(QPointF(x, y + self._MARK_H / 2), 3.0, 3.0)
+                continue
+            # a weak one still reads as a mark: 6 px, the rest by strength
+            level = max(0, min(100, int(m.get("level") or 0)))
+            h = 6.0 + level / 100.0 * (self._MARK_H - 10)
+            p.setBrush(qcolor(hue, 1.0 if op == "shock" else 0.75))
+            p.drawRoundedRect(QRectF(x - 1.5, base - h, 3.0, h), 1.0, 1.0)
+        return y + self._MARK_H + self._MARK_GAP
+
+    def _marks_between(self, t0: float, t1: float) -> List[Dict[str, Any]]:
+        return [m for m in self._marks if t0 <= float(m["t"]) < t1]
 
     def _paint_zones(self, p: QPainter, g: "_Frame", y: float) -> float:
         """A contact lane per zone."""
@@ -449,6 +523,14 @@ class SessionTimeline(QWidget):
         touching = [zone_label(z) for z in self._zones
                     if any(v > 0 for v in self._d["zones"][z][a_i:b_i])]
         lines.append(", ".join(touching) if touching else "no contact")
+        hits = self._marks_between(self._bucket_epoch(a_i), self._bucket_epoch(b_i))
+        if hits:
+            hue = _theme.hue(_theme.SHOCKERS_HUE)
+            for m in hits[:_HOVER_MARKS]:
+                lines.append(f"<span style='color:{hue}'>&#9632;</span> "
+                             f"{html.escape(mark_text(m))}")
+            if len(hits) > _HOVER_MARKS:
+                lines.append(f"and {len(hits) - _HOVER_MARKS} more")
         QToolTip.showText(event.globalPosition().toPoint(),
                           "<br>".join(lines), self)
 

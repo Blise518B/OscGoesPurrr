@@ -7,6 +7,9 @@ The menu drives straight from the OSC thread (no queue hop): `_slot_map`
 is a snapshot of what each slot drives, swapped whole by the GUI thread
 whenever the board changes, and `_params_send` goes to VRChat from any
 thread. A locked category is about friends -- your own menu drives it.
+A Radial may also hold the page's Height box (param_board's HEIGHT_SLOT):
+it sets your height right away, across the box's lowest .. highest
+(height_facade.py), and follows it like a slider.
 
 The page and the menu agree, OGP first (as for the Friends menu, Blise's
 call 2026-10-28): the GUI tick puts a slot's own Toggle / Radial where its
@@ -28,7 +31,8 @@ from parameter_store import store
 
 _PREFIX = "OGP/Remote/"
 _PARAMS = {"toggle": OGP_REMOTE_TOGGLE_PARAMETERS, "radial": OGP_REMOTE_RADIAL_PARAMETERS}
-_OSC_TYPE = {"toggle": "T", "radial": "f"}
+_OSC_TYPE = {"toggle": "T", "radial": "f", "height": "f"}
+_HEIGHT = "height"      # a Radial holding the Height box, in _slot_map
 _ECHO_S = 1.0           # what OGP set on the menu comes back this soon: not a hand
 _HANDS_OFF_S = 1.5      # the menu isn't moved for you this long after you moved it
 _SAME = 0.01
@@ -45,8 +49,9 @@ class ParamsMenuMixin:
     """Mixin: the avatar menu's Avatar Remote slots."""
 
     def _params_menu_init(self) -> None:
-        # menu parameter -> ("toggle" | "radial", [controls]): the worn board's
-        # taken slots, swapped whole by the GUI thread
+        # menu parameter -> ("toggle" | "radial", [controls]) -- or ("height",
+        # []) for a Radial holding the Height box: the worn board's taken
+        # slots, swapped whole by the GUI thread
         self._slot_map: Dict[str, Tuple[str, List[Dict[str, Any]]]] = {}
         self._slot_heard: Dict[str, Any] = {}               # what the menu shows, as far as we know
         self._slot_sent: Dict[str, Tuple[Any, float]] = {}  # what OGP set on it, and when
@@ -60,6 +65,9 @@ class ParamsMenuMixin:
             taken = slots.get(menu) or []
             for i, param in enumerate(params):
                 key = taken[i] if i < len(taken) else None
+                if key == pb.HEIGHT_SLOT and menu == "radial" and board is not None:
+                    out[param] = (_HEIGHT, [])
+                    continue
                 controls = [dict(c) for c in pb.slot_controls(board or {}, menu, key)]
                 if controls:
                     out[param] = (menu, controls)
@@ -89,6 +97,9 @@ class ParamsMenuMixin:
         if entry is None:
             return                                  # a free slot does nothing
         menu, controls = entry
+        if menu == _HEIGHT:
+            self._height_from_menu(value)
+            return
         for control in controls:
             out = pb.slot_send_value(menu, control, value)
             if out is not None:
@@ -119,7 +130,8 @@ class ParamsMenuMixin:
                 continue
             if changed_only and now - self._slot_hand_t.get(param, -_HANDS_OFF_S) < _HANDS_OFF_S:
                 continue                            # you're still turning it
-            want = pb.slot_state(menu, controls, values)
+            want = (self._height_menu_state() if menu == _HEIGHT else
+                    pb.slot_state(menu, controls, values))
             if want is None:
                 continue
             if changed_only and param in self._slot_heard and _same(self._slot_heard[param], want):

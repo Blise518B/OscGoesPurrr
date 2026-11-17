@@ -13,6 +13,8 @@ import time
 from typing import Any, Dict, List, Optional
 
 from utilities import atomic_write_json, strip_param_prefix
+import contact_filters
+import settings_history
 
 from settings import (
     APPDATA_DIR,
@@ -127,7 +129,12 @@ def preset_motor_mix() -> Dict[str, Any]:
 _ROUTING_DEVICE_KEYS = frozenset({"osc_addresses"})
 _ROUTING_MOTOR_SUFFIXES = (
     "_zones",                # SPS / OGB zone filter
-    "_touch", "_pen", "_self", "_others",   # interaction filters
+    # Interaction filters: the 2x2 (Touch / Penetration x Self / Others,
+    # see contact_filters) ...
+    "_touch_self", "_touch_others", "_pen_self", "_pen_others",
+    # ... and the two old pairs, kept so they survive _clean_routing until
+    # contact_filters.migrate_routing turns them into the 2x2 at load.
+    "_touch", "_pen", "_self", "_others",
     "_param_out_enabled", "_param_out_address",   # mirror-to-VRChat output
 )
 
@@ -184,10 +191,18 @@ class ModeManager:
         never wait for a recompute. The per-motor param-out mirror is
         deliberately NOT silenced: Off is a toy switch, and an avatar
         visual should keep reporting the contact that is still happening.
+      * `held_off` — the same silence, held by something other than the
+        user's switch: "Off while you're away" (away_off.py) while VRChat
+        says you're AFK or a picked parameter is on. Kept apart from
+        `output_off` so the hold never changes the switch: when it lets
+        go, exactly the state the switch was in comes back.
       * `sleep_active` — hands the Buttplug chain's Wake stage over to
         stroke-counter mode (see MotorRouter.SLEEP_WAKE_OVERRIDE). Read by
         the router at tick time; nothing is written to the stored chain, so
         switching it off restores the user's real wake settings exactly.
+      * `sleeping_toys` — the same Sleep for one toy alone (its bar's Sleep
+        chip, Blise's ask 2026-11-17): a set of toy names. Session-only like
+        `sleep_active`; the sidebar's Sleep puts every toy to sleep on top.
 
     The settings managers ride on this object exactly as they did on
     ProfileManager (self.app_settings, self.sps_sources, ...) — many
@@ -226,7 +241,9 @@ class ModeManager:
         self._strength: float = self.DEFAULT_STRENGTH
         # Session-only toggles — deliberately not persisted.
         self.output_off: bool = False
+        self.held_off: bool = False
         self.sleep_active: bool = False
+        self.sleeping_toys: set = set()
         # avtr_xxx id -> last active mode index. Always recorded; only
         # APPLIED on avatar change when the "remember mode per avatar" app
         # setting is on (the facade checks it).
@@ -238,6 +255,7 @@ class ModeManager:
         self.known_devices = KnownDevicesRegistry()
         self.sps_sources = SpsSourceManager()
         self._load_or_create_default()
+        settings_history.track(self)        # Ctrl+Z: see history_state below
 
     # ------------------------------------------------------------------
     # Construction helpers
@@ -290,6 +308,12 @@ class ModeManager:
         schema = raw.get("schema") if isinstance(raw, dict) else None
         if schema == self.SCHEMA_VERSION:
             self._load_v4(raw)
+            if self._migrate_contact_filters():
+                # The old Touch / Penetration + Self / Others pairs became
+                # the 2x2. Keep the file as it was beside it, then save once
+                # so the copy is taken only the first time.
+                self._preserve_aside("before-contact-2x2")
+                self.save_profiles()
         else:
             # Unreadable, or an unsupported schema. Preserve it aside, then
             # start fresh. (An OLDER schema lands here too — there is no
@@ -415,6 +439,25 @@ class ModeManager:
             and 0 <= v < self.MODE_COUNT
         } if isinstance(last, dict) else {}
 
+    def _migrate_contact_filters(self) -> bool:
+        """Turn every mode's old interaction filters (Touch / Penetration
+        and Self / Others, two independent pairs) into the 2x2 the router
+        and the UI read now -- see contact_filters.migrate_routing. Each
+        chain keeps hearing exactly what it heard; the chain types come
+        from the shared feel. Returns True when anything changed. Runs on
+        every load and is a no-op once nothing old is left."""
+        changed = False
+        for mode in self.modes:
+            routing = mode.get("routing")
+            if not isinstance(routing, dict):
+                continue
+            for dev, per_dev in routing.items():
+                types = contact_filters.chain_types_from_feel(
+                    self.feel.get(dev))
+                if contact_filters.migrate_routing(per_dev, types):
+                    changed = True
+        return changed
+
     def _normalize_wiring_addresses(self) -> None:
         """Validate saved OSC address lists: drop blanks and non-strings,
         and reduce a pasted `/avatar/parameters/X` to the bare name the
@@ -458,7 +501,94 @@ class ModeManager:
 
     def load_profiles(self) -> None:
         """Reload from disk (legacy-named facade; kept for callers)."""
-        return self._load_or_create_default()
+        self._load_or_create_default()
+        settings_history.track(self)        # changes start from what was read
+
+    # ------------------------------------------------------------------
+    # Ctrl+Z (settings_history.py): the saved payload is what a change is
+    # measured in; an undo writes into the live stores, then re-installs
+    # the layers and saves, exactly like an edit
+    # ------------------------------------------------------------------
+
+    HISTORY_KEY = "modes"
+    HISTORY_LABEL = "Toys"
+
+    def history_state(self) -> Dict[str, Any]:
+        return {
+            "wiring": {name: {k: v for k, v in cfg.items()
+                              if k != "mix" and not is_routing_key(k)}
+                       for name, cfg in self.wiring.items()},
+            "feel": self.feel,
+            "modes": self.modes,
+            "active_mode": self.active_mode,
+            "strength": self._strength,
+            "avatar_last_mode": self.avatar_last_mode,
+        }
+
+    def history_live(self) -> Dict[str, Any]:
+        # the live dicts themselves: a change at ("wiring", toy, key) lands
+        # in the merged per-toy dict the router reads
+        return {"wiring": self.wiring, "feel": self.feel, "modes": self.modes,
+                "active_mode": self.active_mode, "strength": self._strength,
+                "avatar_last_mode": self.avatar_last_mode}
+
+    def history_commit(self, live: Dict[str, Any]) -> None:
+        if isinstance(live.get("wiring"), dict):
+            self.wiring = live["wiring"]
+        if isinstance(live.get("feel"), dict):
+            self.feel = live["feel"]
+        if isinstance(live.get("modes"), list) and len(live["modes"]) == self.MODE_COUNT:
+            self.modes = live["modes"]
+        idx = live.get("active_mode")
+        if isinstance(idx, int) and 0 <= idx < self.MODE_COUNT:
+            self.active_mode = idx
+        self._strength = self._coerce_strength(live.get("strength"), self._strength)
+        self._install_active_layers()
+        # a forgotten toy brought back: known again, so its card comes back
+        self._backfill_known_devices()
+        self.save_profiles()
+
+    @staticmethod
+    def history_asks(current: Dict[str, Any], target: Dict[str, Any]) -> list:
+        """Ctrl+Z (settings_history.py): a toy's own anti-stuck switched off
+        asks first, as it loosens a safety cutoff (antistuck.py)."""
+        import antistuck
+        from settings_history import Ask
+        wiring_now = (current or {}).get("wiring") or {}
+        return [Ask("confirm", f"switches anti-stuck off for {name}")
+                for name, cfg in ((target or {}).get("wiring") or {}).items()
+                if antistuck.toy_on(wiring_now.get(name)) and not antistuck.toy_on(cfg)]
+
+    @staticmethod
+    def history_ignore(path, before, after) -> bool:
+        if not path or path[0] == "avatar_last_mode":
+            return True        # bookkeeping: recorded on every switch
+        # a toy seen for the first time gets its blank entries: no setting
+        if path[0] in ("wiring", "feel") and len(path) == 2 and before is settings_history.MISSING:
+            return True
+        return (path[0] == "modes" and len(path) == 4 and path[2] == "routing"
+                and before is settings_history.MISSING)
+
+    def history_describe(self, path) -> str:
+        head = path[0] if path else ""
+        if head == "strength":
+            return "Strength"
+        if head == "active_mode":
+            return "Mode"
+        if head == "feel" and len(path) >= 2:
+            return f"{path[1]}'s chain"
+        if head == "wiring" and len(path) >= 2:
+            return f"{path[1]}" + (f": {settings_history.humanize(path[2])}"
+                                   if len(path) >= 3 else "")
+        if head == "modes" and len(path) >= 2:
+            try:
+                name = self.modes[int(path[1])].get("name", "mode")
+            except (ValueError, IndexError, TypeError):
+                name = "mode"
+            if len(path) >= 4 and path[2] == "routing":
+                return f"{path[3]} in {name}"
+            return f"mode {name}"
+        return ""
 
     def save_profiles(self) -> None:
         """Persist wiring + modes to modes.json in the v4 schema — the only
@@ -514,6 +644,7 @@ class ModeManager:
             atomic_write_json(MODES_FILE, payload, indent=2)
         except OSError as e:
             print(f"Config save error: {e}")
+        settings_history.saved(self)
 
     # ------------------------------------------------------------------
     # Active mode
@@ -647,6 +778,19 @@ class ModeManager:
         self.output_off = active
         return True
 
+    def set_held_off(self, active: bool) -> bool:
+        """The held silence (see `held_off`) on/off. Returns True when it
+        changed. Never touches `output_off`. Session-only."""
+        active = bool(active)
+        if active == self.held_off:
+            return False
+        self.held_off = active
+        return True
+
+    def is_silenced(self) -> bool:
+        """Off by the switch or by a hold -- what everything obeys."""
+        return self.output_off or self.held_off
+
     def set_sleep_active(self, active: bool) -> bool:
         """Sleep toggle on/off. Returns True when it changed. Session-only,
         same reasoning as `set_output_off`."""
@@ -656,12 +800,23 @@ class ModeManager:
         self.sleep_active = active
         return True
 
+    def set_toy_sleep(self, device_name: str, active: bool) -> bool:
+        """One toy's own Sleep on/off. Returns True when it changed.
+        Session-only, like `set_sleep_active`."""
+        if bool(active) == (device_name in self.sleeping_toys):
+            return False
+        if active:
+            self.sleeping_toys.add(device_name)
+        else:
+            self.sleeping_toys.discard(device_name)
+        return True
+
     def get_master_scale(self) -> float:
         """The dispatch multiplier: 0.0 while the Off toggle is on (panic
-        silence), otherwise the global strength. Read from backend dispatch
-        paths (any thread) — must stay a plain attribute read with no
-        locking or I/O."""
-        return 0.0 if self.output_off else self._strength
+        silence) or a hold keeps it off, otherwise the global strength.
+        Read from backend dispatch paths (any thread) — must stay plain
+        attribute reads with no locking or I/O."""
+        return 0.0 if (self.output_off or self.held_off) else self._strength
 
     # ------------------------------------------------------------------
     # Avatar memory

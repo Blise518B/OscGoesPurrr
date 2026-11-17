@@ -78,14 +78,30 @@ class ToggleSwitch(QCheckBox):
     _COLOR_KNOB_ON = QColor(_C.COLOR_INK)
     _COLOR_DISABLED_KNOB = QColor(_C.COLOR_DIM)
 
+    # A switch labelled "On" says "Off" while it's off (Blise's call,
+    # 2026-11-17: "it would be better if it says off if it's off, and it
+    # should say on if it's on") -- as Home's device rows already do.
+    _STATE_WORDS = ("On", "Off")
+
     def __init__(self, text: str = "", parent=None):
         super().__init__(text, parent)
         self.setCursor(Qt.PointingHandCursor)
+        self._says_state = text in self._STATE_WORDS
+        if self._says_state:
+            self.toggled.connect(self._say_state)
+            self._say_state(self.isChecked())
+
+    def _say_state(self, on: bool) -> None:
+        words = "On" if on else "Off"
+        if self.text() != words:
+            self.setText(words)
 
     def sizeHint(self) -> QSize:
         fm = self.fontMetrics()
         text = self.text()
         text_w = fm.horizontalAdvance(text) if text else 0
+        if getattr(self, "_says_state", False):   # room for either word: nothing shifts
+            text_w = max(fm.horizontalAdvance(w) for w in self._STATE_WORDS)
         text_h = fm.height()
         w = self._TRACK_W + (self._LABEL_SPACING + text_w if text else 0) + 2
         h = max(self._TRACK_H, text_h) + 4
@@ -251,10 +267,25 @@ class ToyFrame(QFrame):
     toy is offline. Painted, for the same reason as Canvas: it contains
     the toy's sections."""
 
+    # The hairline under the head (set_head): this far in from each side,
+    # in line with the chains under it, and this far below the head.
+    HEAD_LINE_INSET = 13
+    HEAD_LINE_GAP = 3
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._hue = ""
         self._number = 0
+        self._head: Optional[QWidget] = None
+        self._body: Optional[QWidget] = None
+
+    def set_head(self, head: QWidget, body: QWidget) -> None:
+        """A toy card on the Toys page: a hairline in the toy's hue under
+        `head` (its bar) while `body` (its chains) is open, so where one
+        toy starts is plain in a stack of them (Blise's ask, 2026-11-17).
+        Home's rows are a bar alone and have none."""
+        self._head, self._body = head, body
+        self.update()
 
     def set_hue(self, hue: str) -> None:
         if hue != self._hue:
@@ -285,6 +316,15 @@ class ToyFrame(QFrame):
         p.setPen(QPen(QColor(outline), 1.0))
         p.setBrush(QBrush(QColor(ground)) if ground else Qt.NoBrush)
         p.drawRoundedRect(box, radius, radius)
+        head, body = self._head, self._body
+        if (head is not None and body is not None and shiboken6.isValid(head)
+                and shiboken6.isValid(body) and not body.isHidden()):
+            y = head.geometry().bottom() + 1 + self.HEAD_LINE_GAP + 0.5
+            inset = float(self.HEAD_LINE_INSET)
+            p.setRenderHint(QPainter.Antialiasing, False)
+            p.setPen(QPen(QColor(_theme.toy_divider_color(self._hue)), 1.0))
+            p.drawLine(QPointF(inset, y), QPointF(self.width() - inset, y))
+            p.setRenderHint(QPainter.Antialiasing, True)
         if self._number:
             f = QFont(self.font())
             f.setPixelSize(10)

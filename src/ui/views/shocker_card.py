@@ -22,6 +22,13 @@ Interface"):
     Continuous vibrates first when the shock slider leaves 0.
   * Duration -- 0.1 s, 0.3 s, then whole seconds to 10 s, never past theirs.
     Duration, Warning and Use Mode open a picker over the card.
+  * Their shocker's own switches (`set_rules`): an op switched off on that
+    shocker -- or one arming turns into what is switched off -- greys its
+    button and slider, and the card says why in a line under its name (and
+    on the button's hover): Blise's call, 2026-11-14, so nobody presses
+    something that can't arrive; a shocker that can't warn (Vibrate and
+    Beep both off there) greys Warning and sends none -- a shock asked to
+    come after one would be held back.
 
 Cards only draw and call back with primitive values; the Friends view wires
 those to the controller. Strengths go out as 0..1 of the RECEIVER's caps
@@ -60,6 +67,14 @@ PARTY_CAPS = (100, 100, _DURATIONS_MS[-1])
 _NUDGE = 0.05                          # ⇈ / ⇊: this much of the cap
 
 
+# what Operate and Beep say on hover while you may use them
+_TILE_TIPS = {
+    "shock": "Shock at this strength for the Duration (Remote: while you hold it)",
+    "vibrate": "Vibrate at this strength for the Duration (Remote: while you hold it)",
+    "beep": "A beep (Remote: while you hold it)",
+}
+
+
 def _secs(ms: int) -> str:
     return f"{ms / 1000:g}"
 
@@ -92,6 +107,10 @@ class ShockerCard(QFrame):
         self._warn = 0                                           # index into WARNINGS
         self._random = False
         self._blocked = False                                    # they paused you / Off
+        self._ops = {"shock", "vibrate", "beep"}                # what they let you send
+        self._why: Dict[str, str] = {}                           # ... and why not
+        self._warn_ok = True                                     # a warning can play there
+        self._warn_kept = 0                  # the Warning picked, while it can't play
         self._dur = {"shock": 300, "vibrate": 1000}             # ms
         self._before_cont: Optional[Dict[str, int]] = None       # strengths before Continuous
         self._picker: Optional[Picker] = None
@@ -119,6 +138,14 @@ class ShockerCard(QFrame):
                                       "one after the other")
             head.addWidget(self.party_box)
         lay.addLayout(head)
+        # why a button is greyed (their shocker's switches): said once,
+        # under the name, where a VR pointer that can't hover sees it too
+        self._why_line = bigger(QLabel(""), big)
+        self._why_line.setObjectName("cardHint")
+        self._why_line.setProperty("muted", "true")
+        self._why_line.setWordWrap(True)
+        self._why_line.setVisible(False)
+        lay.addWidget(self._why_line)
 
         self._tiles: Dict[str, Tile] = {}
         self._sliders, self._max_lbls, self._gauges = {}, {}, {}
@@ -171,7 +198,7 @@ class ShockerCard(QFrame):
                         "a shock waiting after its warning")
         stop.clicked.connect(lambda _=False: self._stop())
         beep = Tile("Beep", "", big=big, wide=True)
-        beep.setToolTip("A beep (Remote: while you hold it)")
+        beep.setToolTip(_TILE_TIPS["beep"])
         self._wire(beep, "beep")
         self._tiles.update(use=use, stop=stop, beep=beep)
         self._center_tiles = [use, stop, beep]
@@ -232,8 +259,7 @@ class ShockerCard(QFrame):
 
     def _operate(self, op: str, hue: str) -> Tile:
         t = Tile("Operate", hue, filled=True, big=self._big)
-        t.setToolTip(f"{op.capitalize()} at this strength for the Duration "
-                     "(Remote: while you hold it)")
+        t.setToolTip(_TILE_TIPS[op])
         self._wire(t, op)
         return t
 
@@ -401,12 +427,38 @@ class ShockerCard(QFrame):
 
     def _show_controls(self) -> None:
         cont, tap = self._use == "continuous", self._use == "tap"
-        t = self._tiles
+        t, ops = self._tiles, self._ops
         for key in ("shock", "vibrate", "beep"):
-            t[key].setEnabled(not cont and not self._blocked)
-        t["shock_dur"].setEnabled(tap)
-        t["vibrate_dur"].setEnabled(tap)
-        self._dice_btn.setEnabled(not cont)
+            t[key].setEnabled(not cont and not self._blocked and key in ops)
+            tip = self._why.get(key) if key not in ops else ""
+            tip = tip or _TILE_TIPS[key]
+            if t[key].toolTip() != tip:
+                t[key].setToolTip(tip)
+        lines = list(dict.fromkeys(self._why[op] for op in ("shock", "vibrate", "beep")
+                                   if op not in ops and self._why.get(op)))
+        if not self._warn_ok and "shock" in ops and self._why.get("warn"):
+            lines.append(self._why["warn"])      # (a greyed Shock already says it)
+        text = ". ".join(lines) + ("." if lines else "")
+        if self._why_line.text() != text:
+            self._why_line.setText(text)
+        self._why_line.setVisible(bool(text))
+        t["shock_dur"].setEnabled(tap and "shock" in ops)
+        t["vibrate_dur"].setEnabled(tap and "vibrate" in ops)
+        t["warn"].setEnabled("shock" in ops and self._warn_ok)
+        for op in ("shock", "vibrate"):
+            self._sliders[op].setEnabled(op in ops)
+        self._range.setEnabled("shock" in ops)
+        for b in (self._up, self._down):
+            b.setEnabled("shock" in ops)
+        for b in (self._vup, self._vdown):
+            b.setEnabled("vibrate" in ops)
+        self._dice_btn.setEnabled(not cont and "shock" in ops)
+        warn_tip = ("Vibration before a shock: Small 1-3 s, Mid 3-6 s, Long 6-9 s - how long "
+                    "exactly is random, at the vibrate strength. Works in every Use Mode.")
+        if not self._warn_ok:
+            warn_tip = self._why.get("warn") or warn_tip
+        if t["warn"].toolTip() != warn_tip:
+            t["warn"].setToolTip(warn_tip)
         random_on = self._random and not cont
         self._sliders["shock"].setVisible(not random_on)
         self._range.setVisible(random_on)
@@ -448,6 +500,34 @@ class ShockerCard(QFrame):
         self._range.update()
         self._show_controls()
 
+    def set_rules(self, ops, why: Optional[Dict[str, str]] = None,
+                  warn_ok: bool = True) -> None:
+        """What that shocker's own switches let you do: the ops you may
+        send, whether a warning can play there (`warn_ok`) -- and `why` an
+        op (or "warn") is not there (remote_protocol.shocker_why /
+        WARN_OFF_WHY), which the card says. A party's card takes what any of
+        its shockers lets through -- the receivers drop the rest."""
+        ops, warn_ok = set(ops), bool(warn_ok)
+        why = {k: text for k, text in (why or {}).items()
+               if text and (k not in ops if k != "warn" else not warn_ok)}
+        if (ops, why, warn_ok) == (self._ops, self._why, self._warn_ok):
+            return
+        self._ops, self._why, self._warn_ok = ops, why, warn_ok
+        self._fit_warning()
+        if self._holding and self._holding not in ops:
+            self.release()
+        self._show_controls()
+
+    def _fit_warning(self) -> None:
+        """The Warning as the rules allow: none while a warning can't play
+        there (the pick comes back when it can)."""
+        if not self._warn_ok:
+            if self._warn:
+                self._warn_kept, self._warn = self._warn, 0
+            return
+        if self._warn == 0 and self._warn_kept:
+            self._warn, self._warn_kept = self._warn_kept, 0
+
     def set_blocked(self, blocked: bool) -> None:
         """They paused all friends, or their Off is on: nothing would reach
         them, so Operate and Beep rest (STOP never does)."""
@@ -466,11 +546,13 @@ class ShockerCard(QFrame):
         big = self._big
         if which == "warn":
             opener = self._tiles["warn"]
-            picker = Picker(self, opener, [(n, True) for n in _WARNING_PICKS], self._warn, 1,
+            picks = [(n, True) for n in _WARNING_PICKS]
+            picker = Picker(self, opener, picks, self._warn, 1,
                             self._warn_picked, self.hue, big, wide=True)
         elif which == "use":
             opener = self._tiles["use"]
-            picker = Picker(self, opener, [(n, True) for n in _USE_PICKS],
+            picks = [(n, True) for n in _USE_PICKS]
+            picker = Picker(self, opener, picks,
                             USES.index(self._use), 1, self._mode_picked, "", big, wide=True)
         else:
             op = which[:-4]
@@ -525,6 +607,8 @@ class ShockerCard(QFrame):
         self._show_controls()
 
     def _warn_picked(self, i: int) -> None:
+        if i and not self._warn_ok:
+            return                               # none can play there
         self._warn = i
         self._show_values()
 
@@ -539,6 +623,8 @@ class ShockerCard(QFrame):
 
     def _strength_moved(self, op: str) -> None:
         self._show_values()
+        if op not in self._ops:
+            return                               # they don't let you send it
         v = self._sliders[op].value()
         if self._use == "continuous":
             # the slider is the control: above 0 it runs, at 0 it stops
@@ -595,7 +681,7 @@ class ShockerCard(QFrame):
             self._on_hold("shock", self._to_fraction("shock", v))
 
     def _tap(self, op: str) -> None:
-        if self._use != "tap" or self._blocked:
+        if self._use != "tap" or self._blocked or op not in self._ops:
             return
         warn_ms = self._warn_ms() if op == "shock" else 0
         strength = self._strength(op) if op != "beep" else 1
@@ -604,7 +690,7 @@ class ShockerCard(QFrame):
                       warn_ms, self._warn_fraction())
 
     def _press(self, op: str) -> None:
-        if self._use != "remote" or self._blocked:
+        if self._use != "remote" or self._blocked or op not in self._ops:
             return
         if op == "shock" and self._warn:
             self._start_warning(self._strength("shock"))
@@ -650,7 +736,8 @@ class ShockerCard(QFrame):
         """Set up like the card this one replaces (after set_caps). A
         Continuous card comes back quiet: its hold was let go."""
         self._use = st["use"]
-        self._warn = st["warn"]
+        self._warn, self._warn_kept = st["warn"], 0
+        self._fit_warning()
         self._random = st["random"]
         self._dice_btn.setChecked(self._random)
         self._dur.update(st["dur"])

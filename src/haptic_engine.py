@@ -214,19 +214,62 @@ class HapticEngine:
         # connect time so the worker loop doesn't reflect each tick.
         self._motor_features: Dict[str, List[Tuple[str, OutputType, object]]] = {}
 
+        # The worker waits on `_wake` between passes, so a new target goes out
+        # the moment it is set instead of at the loop's next poll (on Windows
+        # an asyncio sleep lasts at least one 15.6 ms clock step, which used to
+        # be most of OGP's own latency). Both are made by async_worker on its
+        # loop. `_wake_asked` keeps it to one cross-thread call per pass however
+        # many targets change in between.
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        self._wake: Optional[asyncio.Event] = None
+        self._wake_asked = False
+
     def update_target(self, device_name: str, motor_idx: int, target_val: float):
         """Thread-safe entry point for the Main Thread to command hardware.
 
         The engine is the last line of defense: coerce and clamp to [0, 1]
         here so no caller (router bug, UI test path) can push garbage, an
-        out-of-range value, or NaN into the device output command."""
+        out-of-range value, or NaN into the device output command. A changed
+        value wakes the worker at once (see `_request_wake`)."""
         try:
             v = float(target_val)
         except (TypeError, ValueError):
             v = 0.0
         if not math.isfinite(v):
             v = 0.0
-        self.device_targets[(device_name, motor_idx)] = min(max(v, 0.0), 1.0)
+        v = min(max(v, 0.0), 1.0)
+        key = (device_name, motor_idx)
+        if self.device_targets.get(key) != v:
+            self.device_targets[key] = v
+            self._request_wake()
+
+    def _request_wake(self) -> None:
+        """Run the worker's next pass now (any thread). The worker clears
+        `_wake_asked` and `_wake` at the top of each pass, BEFORE it reads the
+        targets, so a target written after that read always finds the flag
+        down and wakes it, and one written before is seen by that pass."""
+        if self._wake_asked:
+            return
+        loop, wake = self._loop, self._wake
+        if loop is None or wake is None:
+            return                  # no worker yet: its first pass reads the targets anyway
+        self._wake_asked = True
+        try:
+            loop.call_soon_threadsafe(wake.set)
+        except RuntimeError:
+            pass                    # the loop has closed (app exit)
+
+    async def _nap(self, seconds: float) -> None:
+        """Wait up to `seconds` for the next pass, or less if `_request_wake`
+        or a finished send cuts it short."""
+        wake = self._wake
+        if wake is None:
+            await asyncio.sleep(seconds)
+            return
+        try:
+            await asyncio.wait_for(wake.wait(), timeout=seconds)
+        except asyncio.TimeoutError:
+            pass
 
     def _dispatch_output(self, device_name: str, motor_idx: int, coro) -> None:
         """Fire-and-forget a continuous-output command on the engine loop.
@@ -247,6 +290,11 @@ class HapticEngine:
                 self._handle_feature_error(device_name, motor_idx, e)
             finally:
                 self._send_gate.set_inflight(key, False)
+                # A newer value held back while this send was in flight goes
+                # out now, not at the worker's next timeout.
+                if self._wake is not None and self._send_gate.is_pending(
+                        key, self.device_targets.get(key, 0.0)):
+                    self._wake.set()
 
         try:
             task = asyncio.create_task(_runner())
@@ -270,6 +318,8 @@ class HapticEngine:
         the engine's internal state owned by the engine (ARCHITECTURE.md
         rule #3)."""
         self.is_connected = bool(connected)
+        if self.is_connected:
+            self._request_wake()        # targets held over a reconnect go out now
 
     def set_connection_mode(self, mode: str) -> None:
         """Primitive facade: choose how the Buttplug server is provisioned —
@@ -696,6 +746,7 @@ class HapticEngine:
                     }
                 },
             ))
+            self._request_wake()        # what's already routed to it goes out now
         except Exception as e:
             self.push_ui_update(f"on_device_added handler error: {e}")
 
@@ -922,8 +973,15 @@ class HapticEngine:
         """
         Main async worker for buttplug operations.
 
-        This is the primary loop that runs in the async thread, polling
-        device targets and sending updates at a controlled rate.
+        This is the primary loop that runs in the async thread, sending
+        device targets out as they change, within each feature's send cap.
+
+        Event-driven: a pass runs the moment `update_target` changes a value
+        (or a send finishes), so a new level goes out within a millisecond of
+        the router setting it. Between changes the loop only times out --
+        at HAPTIC_POLL_RATE while something still needs it (a linear toy's
+        physics, a value a send cap or an in-flight send is holding back),
+        HAPTIC_IDLE_RATE otherwise.
 
         Vibrate features only emit when the routed level changes. Linear
         actuators tick every cycle regardless so the velocity-limited physics
@@ -947,9 +1005,16 @@ class HapticEngine:
         battery_poll_s = 30.0
         next_battery_poll = 0.0
 
+        self._loop = asyncio.get_running_loop()
+        self._wake = asyncio.Event()
+
         # Main async loop - Golden Loop
         while True:
-            pace = HAPTIC_IDLE_RATE         # nothing to send to: no fast ticks
+            # Before reading any target (see _request_wake): a change after
+            # this point wakes the next nap at once.
+            self._wake_asked = False
+            self._wake.clear()
+            pace = HAPTIC_IDLE_RATE         # nothing to send or tick: no fast passes
             if self.is_connected and self.buttplug_client:
                 # Defensive health check: catch WS drops the on_server_disconnect
                 # hook never surfaced (older buttplug versions, edge timing).
@@ -981,8 +1046,6 @@ class HapticEngine:
                 connection_dropped = False
                 now_ms = time.monotonic() * 1000.0
                 devices = list(self.buttplug_client.devices.values())
-                if devices:
-                    pace = HAPTIC_POLL_RATE     # a toy to drive: the full rate
 
                 for device in devices:
                     if connection_dropped:
@@ -992,23 +1055,28 @@ class HapticEngine:
 
                     # --- Legacy device-wide vibrate (motor_idx == -1) -----------------
                     legacy_target = self.device_targets.get((device_name, -1))
-                    if (legacy_target is not None
-                            and self._send_gate.try_continuous(
-                                (device_name, -1), legacy_target, now_ms)):
-                        # Fire-and-forget (see _dispatch_output), rate-capped
-                        # per feature; the loop never blocks on the ack.
-                        self._dispatch_output(
-                            device_name, -1,
-                            device.run_output(
-                                DeviceOutputCommand(OutputType.VIBRATE, legacy_target)
-                            ),
-                        )
+                    if legacy_target is not None:
+                        if self._send_gate.try_continuous(
+                                (device_name, -1), legacy_target, now_ms):
+                            # Fire-and-forget (see _dispatch_output), rate-capped
+                            # per feature; the loop never blocks on the ack.
+                            self._dispatch_output(
+                                device_name, -1,
+                                device.run_output(
+                                    DeviceOutputCommand(OutputType.VIBRATE, legacy_target)
+                                ),
+                            )
+                        elif self._send_gate.is_pending((device_name, -1), legacy_target):
+                            pace = HAPTIC_POLL_RATE     # held back: retry soon
 
                     # --- Per-feature dispatch ---------------------------------------
                     for motor_idx, (kind, output_type, feature) in enumerate(features):
                         target = self.device_targets.get((device_name, motor_idx), 0.0)
 
                         if kind in LINEAR_KINDS:
+                            # The physics moves between target changes too
+                            # (acceleration, the resting return): keep passing.
+                            pace = HAPTIC_POLL_RATE
                             # Integrate the stroke physics EVERY loop so the
                             # trajectory stays smooth and fine-grained, decoupled
                             # from how often we actually transmit. tick() returns
@@ -1064,16 +1132,23 @@ class HapticEngine:
                             # see FeatureSendGate.try_continuous).
                             if not self._send_gate.try_continuous(
                                     (device_name, motor_idx), target, now_ms):
+                                # A newer value the cap or an in-flight send
+                                # holds back must still go out -- a stop above
+                                # all -- even if nothing changes again.
+                                if self._send_gate.is_pending(
+                                        (device_name, motor_idx), target):
+                                    pace = HAPTIC_POLL_RATE
                                 continue
                             self._dispatch_output(
                                 device_name, motor_idx,
                                 feature.run_output(DeviceOutputCommand(output_type, target)),
                             )
 
-            # Engine tick: HAPTIC_POLL_RATE while a toy is connected, the idle
-            # pace while there is none (a new one shows up through the device
-            # poll above, which keeps its 2 s either way).
-            await asyncio.sleep(pace)
+            # Until the next change (update_target / a finished send wakes the
+            # nap at once), or HAPTIC_POLL_RATE while something above still
+            # needs passes, else the idle pace (a new toy shows up through
+            # the device poll above, which keeps its 2 s either way).
+            await self._nap(pace)
 
     def _handle_feature_error(self, device_name: str, motor_idx: int, e: Exception) -> bool:
         """Log a feature command error. Return True if the connection appears to have

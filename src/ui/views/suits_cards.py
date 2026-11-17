@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen
-from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QWidget
+from PySide6.QtWidgets import QFrame, QLabel, QLineEdit, QPushButton, QWidget
 
 import body_map
 from ui import theme as _theme
@@ -241,15 +241,30 @@ class MuscleCard(QFrame):
         self.live.setText(f"Playing {percent} %" if percent else "")
 
 
+def tracker_line(d: Dict[str, Any]) -> str:
+    """"VIVE Tracker 3.0 MV · …81FC61B · 80 %" for one tracker."""
+    serial = str(d.get("serial") or "")
+    short = ("…" + serial[-7:]) if len(serial) > 8 else serial
+    batt = d.get("battery")
+    return " · ".join(x for x in (str(d.get("model") or "Tracker"), short,
+                                  f"{batt} %" if batt is not None else "") if x)
+
+
 class TrackerCard(QFrame):
-    """A Vive tracker picked on the body (tracker haptics): on or off, how
-    strong it buzzes, a test buzz, and whether its contacts are on the
-    avatar."""
+    """A spot with a haptic tracker on it, picked on the body: which
+    tracker is there and why (its SteamVR role, or placed by you), on or
+    off, how strong it buzzes, its top, the avatar parameters it follows, a
+    test buzz, and whether the avatar has them."""
 
     def __init__(self, on_enabled: Callable[[str, bool], None],
-                 on_strength: Callable[[str, int], None], on_test: Callable[[str], None]):
+                 on_strength: Callable[[str, int], None], on_test: Callable[[str], None],
+                 on_top: Optional[Callable[[str, int], None]] = None,
+                 on_params: Optional[Callable[[str, str], None]] = None,
+                 on_move: Optional[Callable[[str], None]] = None,
+                 on_reset: Optional[Callable[[str], None]] = None):
         super().__init__()
         self.tracker: Optional[str] = None
+        self._serials: List[str] = []
         self._filling = False
         self.frame, lay = _card(TRACKERS_HUE)
         outer = vbox(0, 0)
@@ -257,6 +272,21 @@ class TrackerCard(QFrame):
         self.setLayout(outer)
         self.title = _head(lay, "Tracker", TRACKERS_HUE)
         self.check = _check(lay)
+        self.who = _hint()
+        self.who.setToolTip("The tracker on this spot, and why it's here.")
+        lay.addWidget(self.who)
+        moves = hbox(0, 6)
+        self.move = mini_button("Move…", "Put this tracker on another spot: click it on her next.")
+        self.move.clicked.connect(
+            lambda _=False: None if not self._serials or on_move is None else on_move(self._serials[0]))
+        moves.addWidget(self.move)
+        self.reset = mini_button("Use its SteamVR role",
+                                 "Let the role it has in SteamVR's Manage Trackers place it again.")
+        self.reset.clicked.connect(
+            lambda _=False: None if not self._serials or on_reset is None else on_reset(self._serials[0]))
+        moves.addWidget(self.reset)
+        moves.addStretch(1)
+        lay.addLayout(moves)
         self.on = ToggleSwitch("On")
         self.on.toggled.connect(
             lambda v: None if self._filling or self.tracker is None
@@ -267,6 +297,25 @@ class TrackerCard(QFrame):
             on_change=lambda v: None if self.tracker is None else on_strength(self.tracker, int(v)),
             tip="How strong this tracker buzzes at a full touch, before the sidebar's strength.")
         lay.addWidget(self.strength)
+        self.top = ValueSlider(
+            "Top", 0, 100, 80, 5, _pct, hue=TRACKERS_HUE,
+            on_change=lambda v: None if self.tracker is None or on_top is None
+            else on_top(self.tracker, int(v)),
+            tip="The most its motor ever gets, whatever asks. A plain motor on a Vive "
+                "Tracker's pins: Haptic Pancake's guide says stay at 80 % or under, so "
+                "the pin isn't overloaded.")
+        lay.addWidget(self.top)
+        lay.addWidget(QLabel("Follows these avatar parameters"))
+        self.params = QLineEdit()
+        self.params.setPlaceholderText("Avatar parameters, comma-separated")
+        self.params.setToolTip(
+            "<b>Follows</b><br>The avatar parameters (contact receivers, Proximity) that make "
+            "this tracker buzz -- the strongest wins. Haptic Pancake's names by default, "
+            "so an avatar set up for it works as it is.")
+        self.params.editingFinished.connect(
+            lambda: None if self._filling or self.tracker is None or on_params is None
+            else on_params(self.tracker, self.params.text()))
+        lay.addWidget(self.params)
         self.test = mini_button("Feel it", "A short buzz on this tracker.")
         self.test.clicked.connect(
             lambda _=False: None if self.tracker is None else on_test(self.tracker))
@@ -275,19 +324,38 @@ class TrackerCard(QFrame):
         lay.addWidget(self.hint)
 
     def show_tracker(self, key: str, name: str, cfg: Dict[str, Any]) -> None:
-        """`cfg`: enabled, intensity, and contacts as [found, total] (or
+        """`cfg`: enabled, intensity, max, params, the trackers there (as
+        get_suits_status lists them) and contacts as [found, total] (or
         nothing, when there's no avatar to check)."""
         if key != self.tracker:
             self.strength.flush()
+            self.top.flush()
         self.tracker = key
         on = bool(cfg.get("enabled", True))
+        here = list(cfg.get("trackers") or [])
+        self._serials = [str(d.get("serial") or "") for d in here]
+        lines = []
+        for d in here:
+            if d.get("placed_by") == "you":
+                why = "placed by you"
+            else:
+                role = str(d.get("role") or "").split(",")[0].replace("TrackerRole_", "")
+                why = f"SteamVR role {role}" if role else "its SteamVR role"
+            lines.append(f"{tracker_line(d)} — {why}")
         self._filling = True
         try:
             self.title.setText(f"{name} tracker")
             self.on.setChecked(on)
             self.strength.set_value(float(cfg.get("intensity", 100)))
+            self.top.set_value(float(cfg.get("max", 80)))
+            if not self.params.hasFocus():
+                self.params.setText(", ".join(cfg.get("params") or []))
         finally:
             self._filling = False
+        self.who.setText("\n".join(lines))
+        self.who.setVisible(bool(lines))
+        self.move.setVisible(bool(here))
+        self.reset.setVisible(any(d.get("placed_by") == "you" for d in here))
         self.strength.setEnabled(on)
         self.test.setEnabled(on)
         contacts = cfg.get("contacts")

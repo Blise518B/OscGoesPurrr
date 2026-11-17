@@ -15,7 +15,14 @@ Two jobs:
   stretch with their name. The stretch ends when that changes (or the OSC
   link to VRChat drops), and one that held no activity is dropped again.
   A VRChat user keeps the name they were first tagged with, so a display
-  name change doesn't split them in two.
+  name change doesn't split them in two -- and a friend linked to their
+  VRChat account on the Friends page is first tagged with the name shown
+  there, so the People table and the friend list use one name for them.
+
+The watcher is shared: the Friends page reads who's in your instance from
+it too (controllers/friends_vrchat.py), behind its own switch
+(`FRIENDS_LOG_KEY`). It runs while either switch is on; each part acts only
+while its own switch is on.
 
 Not a hot path: `_people_tick()` rides the 1 Hz heartbeat after the stats
 sample, and the log is never read on the GUI thread.
@@ -33,6 +40,9 @@ from stats_people import clean_names, credit, credit_from_totals, held_nothing
 from vrchat_log import LogWatcher, companion
 
 AUTODETECT_KEY = "people_autodetect"
+# The Friends page's "who's in your instance" switch: the same log, its own
+# opt-in (controllers/friends_vrchat.py)
+FRIENDS_LOG_KEY = "friends_vrc_log"
 
 # The same person back within this long (they rejoined, or the OSC link
 # blinked) continues their stretch instead of starting a new one.
@@ -58,8 +68,25 @@ class PeopleFacade:
         # and the last one it ended: (session id, tag id, key, end).
         self._people_auto: Optional[Tuple[str, int, str]] = None
         self._people_last_auto: Optional[Tuple[str, int, str, float]] = None
-        if self.get_people_autodetect_enabled():
+        self._vrc_log_sync()
+
+    def _vrc_log_wanted(self) -> bool:
+        """Someone wants VRChat's log read: People's tagging or the Friends
+        page's who's-in-your-instance."""
+        settings = self.mode_manager.app_settings
+        return bool(settings.get(AUTODETECT_KEY, False) or settings.get(FRIENDS_LOG_KEY, False))
+
+    def _vrc_log_sync(self) -> None:
+        """Run the watcher while a switch wants it, stop it once none does."""
+        if self._vrc_log_wanted():
             self._people_start_watcher()
+        else:
+            self._people_stop_watcher()
+
+    def _vrc_log_snapshot(self) -> Optional[Dict[str, Any]]:
+        """The watcher's last snapshot, or None while the log isn't read."""
+        watcher = getattr(self, "_people_watcher", None)
+        return watcher.snapshot() if watcher is not None else None
 
     def _people_start_watcher(self) -> None:
         if getattr(self, "_people_watcher", None) is None:
@@ -99,7 +126,9 @@ class PeopleFacade:
     def _people_follow_log(self, now: float) -> None:
         people = getattr(self, "stats_people", None)
         hist = getattr(self, "stats_history", None)
-        watcher = getattr(self, "_people_watcher", None)
+        # running for the Friends page alone doesn't tag anything
+        watcher = (getattr(self, "_people_watcher", None)
+                   if self.get_people_autodetect_enabled() else None)
         cur = getattr(self, "_people_auto", None)
         if people is None or hist is None or watcher is None:
             if cur is not None:
@@ -137,7 +166,10 @@ class PeopleFacade:
                 return
             start = max(start, last[3])
         uid = key if key.startswith("usr_") else ""
-        name = people.vrc_name(uid, comp[1])
+        # a friend linked to this account: the name the friend list shows
+        linked = getattr(self, "_friends_vrc_link_name", None)
+        name = people.vrc_name(uid, (linked(uid) if linked is not None and uid else "")
+                               or comp[1])
         tag_id = people.add_stretch(sid, started, start, None, [name],
                                     auto=True, vrc=uid)
         self._people_auto = (sid, tag_id, key) if tag_id else None
@@ -303,13 +335,11 @@ class PeopleFacade:
     def set_people_autodetect(self, enabled: bool) -> None:
         enabled = bool(enabled)
         self.mode_manager.app_settings.set(AUTODETECT_KEY, enabled)
-        if enabled:
-            self._people_start_watcher()
-            return
-        cur = getattr(self, "_people_auto", None)
-        if cur is not None:
-            self._people_end_auto(cur, time.time())
-        self._people_stop_watcher()
+        if not enabled:
+            cur = getattr(self, "_people_auto", None)
+            if cur is not None:
+                self._people_end_auto(cur, time.time())
+        self._vrc_log_sync()        # the Friends page may still want the log
 
     def get_people_autodetect_status(self) -> Dict[str, Any]:
         """What the option is doing, for its status line: `state` is one of

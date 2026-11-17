@@ -1,0 +1,285 @@
+/* ============================================================================
+   The guide in the 518 design system (_hub/design-518.md).
+   The tokens themselves (--bg, --accent, --line, the ten hues ...) come from
+   the site's docs/assets/tokens.css, put into every page by
+   plugins/tokens518.js. This file only maps them onto Docusaurus' Infima
+   variables and styles a few pieces. Never a hex here.
+
+   Docusaurus' "dark" mode is Neon (the default), "light" is Midnight: the
+   same layout, the frame is the difference (green outlines vs hairlines).
+   ========================================================================= */
+
+/* "Aldrich Guide", the site's Aldrich-Regular.ttf, is declared by
+   plugins/tokens518.js (it knows the baseUrl). */
+
+:root,
+html[data-theme='dark'],
+html[data-theme='light'] {
+  /* ── surfaces ── */
+  --ifm-background-color: var(--bg);
+  --ifm-background-surface-color: var(--panel);
+  --ifm-navbar-background-color: var(--panel);
+  --ifm-footer-background-color: var(--panel);
+  --ifm-dropdown-background-color: var(--card);
+  --ifm-card-background-color: var(--card);
+  --ifm-code-background: var(--well);
+  --prism-background-color: var(--well);
+  --ifm-hover-overlay: var(--hover);
+
+  /* ── the green ── */
+  --ifm-color-primary: var(--accent);
+  --ifm-color-primary-dark: var(--accent);
+  --ifm-color-primary-darker: var(--accent);
+  --ifm-color-primary-darkest: var(--accent);
+  --ifm-color-primary-light: var(--accent2);
+  --ifm-color-primary-lighter: var(--accent2);
+  --ifm-color-primary-lightest: var(--accent2);
+  --ifm-color-primary-contrast-background: var(--tint);
+  --ifm-color-primary-contrast-foreground: var(--txt);
+
+  /* ── text ── */
+  --ifm-font-color-base: var(--txt);
+  --ifm-font-color-secondary: var(--muted);
+  --ifm-heading-color: var(--txt);
+  --ifm-link-color: var(--blue);
+  --ifm-link-hover-color: var(--blue);
+  --ifm-menu-color: var(--muted);
+  --ifm-menu-color-active: var(--accent);
+  --ifm-menu-color-background-active: var(--tint);
+  --ifm-menu-color-background-hover: var(--hover);
+  --ifm-navbar-link-color: var(--muted);
+  --ifm-navbar-link-hover-color: var(--txt);
+  --ifm-breadcrumb-color-active: var(--accent);
+  --ifm-breadcrumb-item-background-active: var(--tint);
+  --ifm-toc-link-color: var(--muted);
+
+  /* the emphasis scale Infima builds greys from: dim to bright on dark */
+  --ifm-color-emphasis-0: var(--bg);
+  --ifm-color-emphasis-100: var(--card);
+  --ifm-color-emphasis-200: var(--hover);
+  --ifm-color-emphasis-300: var(--line);
+  --ifm-color-emphasis-400: var(--line);
+  --ifm-color-emphasis-500: var(--dim);
+  --ifm-color-emphasis-600: var(--muted);
+  --ifm-color-emphasis-700: var(--muted);
+  --ifm-color-emphasis-800: var(--txt);
+  --ifm-color-emphasis-900: var(--txt);
+  --ifm-color-emphasis-1000: var(--txt);
+  --ifm-color-content: var(--txt);
+  --ifm-color-content-secondary: var(--muted);
+
+  /* ── the frame: every 1px border ── */
+  --ifm-toc-border-color: var(--line);
+  --ifm-hr-background-color: var(--line);
+  --ifm-table-border-color: var(--line);
+  --ifm-table-stripe-background: var(--panel);
+  --ifm-table-head-background: var(--panel);
+  --ifm-color-gray-700: var(--line);
+
+  /* ── type: the site's (body 16px / 1.6, titles in Aldrich) ── */
+  --ifm-font-family-base: "Segoe UI", system-ui, sans-serif;
+  --ifm-heading-font-family: "Aldrich Guide", "Segoe UI", sans-serif;
+  --ifm-font-family-monospace: var(--mono);
+  --ifm-font-size-base: 16px;
+  --ifm-line-height-base: 1.6;
+  --ifm-heading-font-weight: 400;
+  --ifm-code-font-size: 90%;
+
+  /* ── glow is the only shadow (design-518 § 4.10) ── */
+  --ifm-navbar-shadow: none;
+  --ifm-global-shadow-lw: none;
+  --ifm-global-shadow-md: none;
+  --ifm-global-shadow-tl: none;
+  --ifm-global-radius: 8px;
+  --ifm-pagination-nav-border-radius: 12px;
+  --ifm-code-border-radius: 5px;
+  --docusaurus-highlighted-code-line-bg: var(--hover);
+  --docsearch-searchbox-shadow: none;
+
+  /* ── admonitions: a hue's tri-tone (vibrant title, mid frame, tint fill) ── */
+  --ifm-color-secondary-contrast-background: var(--grey-tint);
+  --ifm-color-secondary-dark: var(--grey);
+  --ifm-color-secondary-contrast-foreground: var(--txt);
+  --ifm-color-success-contrast-background: var(--green-tint);
+  --ifm-color-success-dark: var(--green);
+  --ifm-color-success-contrast-foreground: var(--txt);
+  --ifm-color-info-contrast-background: var(--blue-tint);
+  --ifm-color-info-dark: var(--blue);
+  --ifm-color-info-contrast-foreground: var(--txt);
+  --ifm-color-warning-contrast-background: var(--warn-tint);
+  --ifm-color-warning-dark: var(--warn);
+  --ifm-color-warning-contrast-foreground: var(--txt);
+  --ifm-color-danger-contrast-background: var(--err-tint);
+  --ifm-color-danger-dark: var(--err);
+  --ifm-color-danger-contrast-foreground: var(--txt);
+}
+
+body { -webkit-font-smoothing: antialiased; }
+
+/* ── headings: Aldrich like the site; the page title in the green ── */
+.markdown h1,
+.markdown h2,
+.markdown h3,
+.markdown h4 { letter-spacing: .5px; }
+main h1 { color: var(--accent); }
+.markdown h3 { color: var(--txt); }
+.markdown h4 { font-family: var(--ifm-font-family-base); font-weight: 600; }
+
+/* ── header and footer: the 518 shell (panel ground, one 1px line) ── */
+.navbar {
+  border-bottom: 1px solid var(--line);
+  height: 3.6rem;
+}
+.navbar__title {
+  font-family: "Aldrich Guide", "Segoe UI", sans-serif;
+  font-weight: 400;
+  color: var(--accent);
+  letter-spacing: 1px;
+}
+.navbar__logo { height: 1.9rem; }
+.navbar__link--active { color: var(--accent); }
+.footer,
+.footer--dark {
+  border-top: 1px solid var(--line);
+  --ifm-footer-background-color: var(--panel);
+  --ifm-footer-link-color: var(--muted);
+  --ifm-footer-link-hover-color: var(--txt);
+  --ifm-footer-title-color: var(--dim);
+  --ifm-footer-color: var(--dim);
+}
+.footer__title {
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+}
+.footer__copyright { font-size: 12px; }
+.footer__author { color: var(--accent); font-weight: 600; }
+.footer__author:hover { color: var(--accent); }
+
+/* ── the Neon / Midnight toggle (src/theme/ColorModeToggle) ── */
+.modeToggle__button {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font: inherit;
+  font-size: 13px;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: var(--r-chip);
+  padding: 2px 11px;
+  cursor: pointer;
+  transition: border-color .12s, color .12s, background .12s;
+}
+.modeToggle__button:hover:not(:disabled) {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--hover);
+}
+.modeToggle__button:disabled { opacity: .55; cursor: default; }
+.modeToggle__midnight { display: none; }
+html[data-theme='light'] .modeToggle__neon { display: none; }
+html[data-theme='light'] .modeToggle__midnight { display: inline; }
+.navbar__items--right .modeToggle { margin: 0 6px; }
+
+/* ── sidebar, table of contents ── */
+.theme-doc-sidebar-container { border-right-color: var(--line) !important; }
+.menu__link--active:not(.menu__link--sublist) { font-weight: 600; }
+.menu__caret:before,
+.menu__link--sublist-caret:after { filter: invert(.7); }
+.table-of-contents__link--active { color: var(--accent); }
+
+/* ── cards: a section's page (generated index), pagination, search box ── */
+main .card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+}
+main a.card:hover { border-color: var(--accent); background: var(--hover); }
+.pagination-nav__link {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--r-card);
+}
+.pagination-nav__link:hover { border-color: var(--accent); background: var(--hover); }
+.pagination-nav__sublabel { color: var(--dim); }
+.pagination-nav__label { color: var(--txt); }
+.navbar__search-input {
+  background: var(--well) !important;
+  border: 1px solid var(--line) !important;
+  color: var(--txt) !important;
+}
+
+/* ── admonitions ── */
+.theme-admonition.alert {
+  border: 1px solid var(--ifm-alert-border-color);
+  border-left-width: 4px;
+  border-radius: var(--r-btn);
+  box-shadow: none;
+}
+.theme-admonition [class*='admonitionHeading'] {
+  color: var(--ifm-alert-border-color);
+  letter-spacing: .5px;
+}
+.theme-admonition [class*='admonitionIcon'] svg { fill: var(--ifm-alert-border-color); }
+
+/* ── code ── */
+.markdown code {
+  border: 1px solid var(--line);
+  background: var(--well);
+  color: var(--txt);
+}
+.markdown pre code { border: 0; }
+.markdown pre { border: 1px solid var(--line); }
+
+/* ── tables ── */
+/* full width on a wide screen; a phone keeps Infima's own (it scrolls
+   sideways instead of widening the page) */
+.markdown table { font-size: 15px; }
+@media (min-width: 997px) {
+  .markdown table { display: table; width: 100%; }
+}
+.markdown table thead tr { border-bottom: 1px solid var(--line); }
+.markdown th {
+  color: var(--dim);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  text-align: left;
+}
+
+/* ── screenshots: the real app, framed like a card, its caption under it.
+   Markdown:  ![what it is](./img/x.png)
+              *What the picture shows.*   (the line right under it) ── */
+.markdown img {
+  display: block;
+  border: 1px solid var(--line);
+  border-radius: var(--r-btn);
+  margin: 6px 0 0;
+}
+.markdown p > img + em,
+.markdown p > img ~ em:last-child {
+  display: block;
+  margin-top: 6px;
+  color: var(--dim);
+  font-size: 13.5px;
+  font-style: normal;
+}
+
+/* ── keys: <kbd>F1</kbd> ── */
+kbd {
+  font: 12px var(--mono);
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 5px;
+  box-shadow: none;
+  color: var(--txt);
+  padding: 1px 6px;
+}
+
+/* ── a step's number in Getting started stays the green ── */
+.markdown h2 .step { color: var(--accent); }
+
+::selection { background: var(--tint); color: var(--txt); }

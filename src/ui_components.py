@@ -36,6 +36,7 @@ import constants as _constants
 from parameter_store import store
 from utilities import (
     apply_window_frame_colors as _apply_window_frame_colors,
+    set_window_class_icon as _set_window_class_icon,
     strip_param_prefix,
 )
 
@@ -83,16 +84,21 @@ from ui.views.settings import SettingsMixin
 from ui.views.sessions import SessionsMixin
 from ui.views.device_frame import DeviceFrameMixin
 from ui.views.home import HomeMixin
+from ui.views.toys import ToysMixin
 from ui.views.sps_sources import SpsSourcesMixin
 from ui.views.statistics import StatisticsMixin
+from ui.views.log_page import LogPageMixin
 from ui.views.pishock import PiShockMixin
 from ui.views.suits import SuitsMixin
+from ui.views.psvr2 import PSVR2Mixin
 from ui.views.friends import FriendsMixin
 from ui.views.params import ParamsMixin
 from ui.views.whats_new import WhatsNewMixin
 from ui.views.intiface_card import IntifaceSidebarInfo
 from ui.views.interests import InterestsMixin
+from ui.views.tour import TourMixin
 from ui.views.help import HelpMixin
+from ui.history_keys import HistoryMixin
 
 
 # ============================================================
@@ -159,15 +165,20 @@ class OscGoesPurrrUI(
     SessionsMixin,
     DeviceFrameMixin,
     HomeMixin,
+    ToysMixin,
     SpsSourcesMixin,
     StatisticsMixin,
+    LogPageMixin,
     PiShockMixin,
     SuitsMixin,
+    PSVR2Mixin,
     FriendsMixin,
     ParamsMixin,
     WhatsNewMixin,
     InterestsMixin,
+    TourMixin,
     HelpMixin,
+    HistoryMixin,
 ):
     """UI Component class — handles all GUI rendering and updates."""
 
@@ -233,12 +244,14 @@ class OscGoesPurrrUI(
 
         # Set application icon for window title bar and taskbar.
         # Resolves correctly in development and when frozen by PyInstaller.
+        self._icon_path = ""
         try:
             if getattr(sys, "frozen", False):
                 icon_path = os.path.join(sys._MEIPASS, "Images", "OGP_Icon.ico")
             else:
                 icon_path = os.path.join(os.path.dirname(__file__), "Images", "OGP_Icon.ico")
             if os.path.exists(icon_path):
+                self._icon_path = icon_path
                 icon = QIcon(icon_path)
                 self.qapp.setWindowIcon(icon)
                 self.window.setWindowIcon(icon)
@@ -273,8 +286,10 @@ class OscGoesPurrrUI(
         self.auto_refresh_var: Optional[QCheckBox] = None
         self.osc_auto_connect_var: Optional[QCheckBox] = None
 
-        # Home's toy list
+        # Home's device list, and the Toys page's toy cards
         self.devices_container_frame: Optional[QFrame] = None
+        self.home_list_frame: Optional[QWidget] = None
+        self.home_list_layout: Optional[QVBoxLayout] = None
         self.unified_devices_frame: Optional[QWidget] = None
         self.unified_devices_layout: Optional[QVBoxLayout] = None
 
@@ -298,6 +313,10 @@ class OscGoesPurrrUI(
         # The 518 shell's bottom status bar: what just happened on the
         # left, the identity tag on the right.
         self._build_status_bar()
+
+        # Ctrl+Z / Ctrl+Y anywhere (ui/history_keys.py): one app-wide
+        # filter, like the wheel guard; its questions sit in the status bar.
+        self._history_install()
 
     # ----------------------------------------------------------
     # Top-level layout
@@ -368,18 +387,23 @@ class OscGoesPurrrUI(
         main_content_lay.addWidget(self.main_stack, 1)
         root_layout.addWidget(main_content, 1)
 
-        view_names = ["Home", "Friends", "My Avatar Remote", "Shockers", "Suits", "Statistics",
-                      "SPS Sources",
+        # The sidebar's order (Blise's call, 2026-11-17): Home, Friends, then
+        # the devices in Home's own order, then the rest -- Help's tiles follow it
+        view_names = ["Home", "Friends", "Toys", "Shockers", "Suits", "PSVR2",
+                      "My Avatar Remote",
+                      "Statistics", "Log",
                       "OSC Inspector", "OSC Diagnostics", "System Log",
                       "Settings", "Help"]
         builders = {
             "Home": self._build_home_view,
+            "Toys": self._build_toys_view,
             "Statistics": self._build_statistics_view,
+            "Log": self._build_log_view,
             "Shockers": self._build_pishock_view,
             "Suits": self._build_suits_view,
+            "PSVR2": self._build_psvr2_view,
             "Friends": self._build_friends_view,
             "My Avatar Remote": self._build_params_view,
-            "SPS Sources": self._build_sps_sources_view,
             "OSC Inspector": self._build_network_debug_view,
             "OSC Diagnostics": self._build_osc_diagnostics_view,
             "System Log": self._build_system_log_view,
@@ -398,10 +422,10 @@ class OscGoesPurrrUI(
             self.views[name] = wrapper
             self.main_stack.addWidget(wrapper)
             # One section per page -- except those that register finer
-            # ones themselves: Home (a toy's bar, a motor's block: its
-            # page holds every toy), Settings (card by card, where the
+            # ones themselves: Home and Toys (a toy's bar, a motor's block:
+            # each holds every toy), Settings (card by card, where the
             # colour is picked) and Help (card by card: long texts).
-            if name not in ("Home", "Settings", "Help"):
+            if name not in ("Home", "Toys", "Settings", "Help"):
                 self.live_theme.add_root(wrapper)
 
         self.window.setCentralWidget(root)
@@ -483,6 +507,21 @@ class OscGoesPurrrUI(
         dim 11px; only `Blise518B` carries the accent."""
         bar = QStatusBar()
         bar.setSizeGripEnabled(False)
+        # While "Off while you're away" holds everything off, why -- "AFK:
+        # everything off" -- in an amber pill at the far left, where a new
+        # log line can't push it out (show_away_hold).
+        self.status_away_pill = QLabel("")
+        self.status_away_pill.setProperty("role", "pill")
+        self.status_away_pill.setProperty("tone", "warn")
+        self._explain(
+            self.status_away_pill, "Everything is off while you're away",
+            "Your toys, shockers, suits and trackers are held off, and so "
+            "are friends' drives, because VRChat says you're AFK or a "
+            "parameter you picked is on. It all comes back by itself when "
+            "that ends; your own Off switch isn't touched.<br><br>"
+            "Settings → Safety → <b>Off while you're away</b> picks "
+            "what holds it.")
+        bar.addWidget(self.status_away_pill)
         self.status_message_label = _StatusLabel()
         self.status_message_label.setObjectName("statusMessage")
         bar.addWidget(self.status_message_label, 1)
@@ -491,15 +530,30 @@ class OscGoesPurrrUI(
             getattr(_constants, "APP_NAME", "OscGoesPurrr"), _APP_VERSION))
         tag.setObjectName("statusTag")
         tag.setTextFormat(Qt.RichText)
-        tag.setOpenExternalLinks(True)       # the name: OscGoesPurrr on GitHub
+        tag.setOpenExternalLinks(True)       # name and version: OscGoesPurrr on GitHub
         self._explain(tag, "OscGoesPurrr on GitHub",
-                      "Click OscGoesPurrr for the project on GitHub - every release, the "
-                      "setup guides and where to report a problem - or Blise518B for the "
-                      "maker's GitHub.")
+                      "Click OscGoesPurrr or its version for the project on GitHub - every "
+                      "release, the setup guides and where to report a problem - or "
+                      "Blise518B for the maker's GitHub.")
         bar.addPermanentWidget(tag)
         self.window.setStatusBar(bar)
         self.live_theme.add_root(bar)
         self._status_message_full = ""
+        held = getattr(self.controller, "get_away_status_text", None)
+        self.show_away_hold(held() if callable(held) else "")
+
+    def show_away_hold(self, text: str) -> None:
+        """The status bar's amber pill: why everything is held off ("AFK:
+        everything off"), or hidden for ""."""
+        pill = getattr(self, "status_away_pill", None)
+        if pill is None:
+            return
+        text = str(text or "")
+        try:
+            pill.setText(text)
+            pill.setVisible(bool(text))
+        except RuntimeError:
+            pass
 
     def set_status_message(self, text: str) -> None:
         """Left zone of the status bar. One line; elided from the right."""
@@ -516,9 +570,12 @@ class OscGoesPurrrUI(
 
     # What each page is for, shown when you rest the mouse on its entry.
     _NAV_TIPS = {
-        "Home": "Your toys, live: what's connected, battery and output at "
-                "a glance, with Test and Mute. Click a toy to set up which "
-                "parts of your avatar drive it and how each motor responds.",
+        "Home": "Everything at a glance: each toy, your shocker hub, suits and "
+                "headset, live, with their quick switches - Mute and Test, "
+                "Arm shocks, On / Off. Click one to open its own page.",
+        "Toys": "Your toys and how each responds: which parts of your avatar "
+                "drive it and each motor's signal chain, SPS Sources, the toy "
+                "server and the tuning tools.",
         "Friends": "Other OGP users over the internet: let a friend drive "
                    "your toys or shockers, and drive theirs. Everything they "
                    "do is logged.",
@@ -532,11 +589,13 @@ class OscGoesPurrrUI(
                     "every shock obeys.",
         "Suits": "Your bHaptics suit over Bluetooth and your OWO suit through "
                  "My OWO, both driven by the same contacts on your avatar.",
+        "PSVR2": "Your PlayStation VR2 headset's rumble motor, from a contact "
+                 "on your avatar, through PSVR2Toolkit (a jailbroken headset).",
         "Statistics": "Your sessions with a timeline for each, lifetime "
                       "totals and fun facts, and when you play.",
-        "SPS Sources": "Build your own contact zones out of raw VRChat "
-                       "contact receivers, for spots the standard SPS "
-                       "zones don't cover.",
+        "Log": "Who did what, person by person: every friend's, Me's and web "
+               "remote guest's action and your avatar's shocks, kept on this PC "
+               "for 30 days.",
         "OSC Inspector": "Every parameter your avatar is sending, live — "
                          "for finding a parameter's exact name.",
         "OSC Diagnostics": "Connection internals: which path the data takes, "
@@ -584,14 +643,15 @@ class OscGoesPurrrUI(
         lay.addWidget(self._build_mode_grid())
         lay.addSpacing(8)
 
-        # Home is the landing page -- where the app opens and where the
-        # toys are -- so it is the one entry that is framed and larger. The
-        # rest follow in the order they are reached for: the everyday
-        # pages, the tools for digging into OSC, then Settings and Help.
-        # Every entry has an icon (Blise's ask, 2026-10-28): what is a kind
-        # of thing -- Friends, Avatar Remote, Shockers, Suits -- the one it
-        # has everywhere, in its colour (ui/icons.identity_icon); the other
-        # pages theirs in the entries' own tone (ui/icons.page_icon).
+        # Home is the landing page -- where the app opens and everything is
+        # at a glance -- so it is the one entry that is framed and larger.
+        # The rest follow in the order they are reached for: Toys right
+        # after it, the other everyday pages, the tools for digging into
+        # OSC, then Settings and Help. Every entry has an icon (Blise's ask,
+        # 2026-10-28): what is a kind of thing -- Toys, Friends, Avatar
+        # Remote, Shockers, Suits -- the one it has everywhere, in its colour
+        # (ui/icons.identity_icon); the other pages theirs in the entries'
+        # own tone (ui/icons.page_icon).
         def nav_button(name: str, role: str = "nav") -> QPushButton:
             btn = QPushButton(name)
             btn.setProperty("role", role)
@@ -612,7 +672,8 @@ class OscGoesPurrrUI(
             lambda: home.setIcon(_icon_home(COLOR_ACCENT)))
         lay.addSpacing(2)
         plain = []
-        for name in ("Friends", "My Avatar Remote", "Shockers", "Suits", "Statistics"):
+        for name in ("Friends", "Toys", "Shockers", "Suits", "PSVR2", "My Avatar Remote",
+                     "Statistics", "Log"):
             plain.append(nav_button(name))
         # The same break before each of the two lower groups; the TOOLS
         # label sits tight above the group it names.
@@ -620,8 +681,7 @@ class OscGoesPurrrUI(
         tools = QLabel("TOOLS")
         tools.setObjectName("navGroup")
         lay.addWidget(tools)
-        for name in ("SPS Sources", "OSC Inspector", "OSC Diagnostics",
-                     "System Log"):
+        for name in ("OSC Inspector", "OSC Diagnostics", "System Log"):
             plain.append(nav_button(name))
         lay.addSpacing(self._NAV_GROUP_GAP)
         for name in ("Settings", "Help"):
@@ -794,9 +854,10 @@ class OscGoesPurrrUI(
     _SIDEBAR_LINK_BTN_H = 26
     _NAV_GROUP_GAP = 10
     # Each sidebar entry's icon under Home's own (ui/icons.page_icon)
-    _NAV_ICONS = {"Friends": "friends", "My Avatar Remote": "params",
-                  "Shockers": "shock", "Suits": "suits", "Statistics": "stats",
-                  "SPS Sources": "sps", "OSC Inspector": "inspector",
+    _NAV_ICONS = {"Toys": "toys", "Friends": "friends", "My Avatar Remote": "params",
+                  "Shockers": "shock", "Suits": "suits", "PSVR2": "psvr2",
+                  "Statistics": "stats", "Log": "activity",
+                  "OSC Inspector": "inspector",
                   "OSC Diagnostics": "diagnostics", "System Log": "log",
                   "Settings": "settings", "Help": "help"}
 
@@ -842,9 +903,12 @@ class OscGoesPurrrUI(
     def _refresh_page_on_arrival(self, view_name: str) -> None:
         arrival_refreshers = {
             "Home": ("_refresh_home_dynamic",),
+            "Toys": ("_refresh_toys_dynamic",),
             "Statistics": ("_refresh_statistics_view",),
+            "Log": ("_refresh_log_view",),
             "Shockers": ("refresh_pishock_status", "_refresh_pishock_live"),
             "Suits": ("refresh_suits_status", "_refresh_suits_live"),
+            "PSVR2": ("refresh_psvr2_status", "_refresh_psvr2_live"),
             "Friends": ("refresh_friends",),
             "My Avatar Remote": ("refresh_params_live",),
             "Settings": ("_refresh_sessions_view",
@@ -954,6 +1018,8 @@ class OscGoesPurrrUI(
         row = getattr(self, "_toy_buttons_row", None)
         if row is not None:
             row.setVisible(show_connect or show_find)
+        # The Toys page's toy server line says the same
+        self._refresh_toy_server()
 
     def update_connection_status(self, connected: bool, server: str):
         # Sync haptic engine flag through the controller facade
@@ -990,6 +1056,7 @@ class OscGoesPurrrUI(
         self.status_label.setText(text)
         self.status_label.setProperty("tone", tone)
         self._repolish(self.status_label)
+        self._refresh_toy_server()
 
     def _on_intiface_where_changed(self) -> None:
         """The sidebar's Intiface section saw a change (switch flipped,
@@ -1301,6 +1368,11 @@ class OscGoesPurrrUI(
             callback()
 
     def run(self) -> None:
+        # the window's class gets the cat too, so the taskbar shows it
+        # whichever icon it takes (utilities.set_window_class_icon); right
+        # before show(), which creates the native window anyway
+        if sys.platform == "win32" and self._icon_path:
+            _set_window_class_icon(int(self.window.winId()), self._icon_path)
         self.window.show()
         self.qapp.exec()
 

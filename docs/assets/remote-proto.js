@@ -1,9 +1,11 @@
 /*!
  * remote-proto.js - the web remote's half of OGP's Friends protocol, ported
  * from the app's Python: src/remote_protocol.py (cmd, shk, stp, st, pnl,
- * oth), src/remote_params.py (an avatar board: pw, pbd, pv, pst, ph),
- * src/friend_patterns.py (the auto modes' shapes, for the card's graph) and
- * the speed slider's mapping in src/ui/views/card_parts.py.
+ * oth), src/remote_params.py (an avatar board: pw, pbd, pv, pst, ph; the
+ * Height box's ht, pv's h and pht), src/avatar_height.py (the Height box's
+ * log slider and its numbers), src/friend_patterns.py (the auto modes'
+ * shapes, for the card's graph) and the speed slider's mapping in
+ * src/ui/views/card_parts.py.
  *
  * What the page sends must read back on OGP's side exactly as an OGP
  * friend's would: tests/test_web_remote.py runs these builders in node and
@@ -48,6 +50,10 @@
   var KINDS_FOR_PTYPE = { Bool: ['toggle', 'button'], Int: ['int', 'slider', 'toggle', 'button'],
                           Float: ['slider'] };
   var CATEGORY_HUES = ['green', 'pink', 'red', 'amber', 'yellow', 'cyan', 'blue', 'purple'];
+  // avatar_height
+  var HEIGHT_SAFE_MIN = 0.1;
+  var HEIGHT_SAFE_MAX = 100.0;
+  var HEIGHT_MODES = ['grow', 'now', 'reset'];
 
   // friend_patterns
   var WAVES = ['sine', 'square', 'triangle', 'saw', 'random', 'heart', 'build', 'osc'];
@@ -193,6 +199,11 @@
     if (syn !== null && syn !== undefined) { msg.syn = Math.max(0, Math.trunc(syn)); }
     return fit(msg);
   }
+  /** Their owner has each friend drive on their own (``sep`` in their
+   *  ``st``; remote_protocol.read_separate). Absent: synced. */
+  function readSeparate(msg) {
+    return Boolean(msg && msg.sep);
+  }
   function drives(msg) {
     return Boolean((msg.lvl && Object.keys(msg.lvl).length) || msg.pat || msg.hold);
   }
@@ -216,6 +227,36 @@
     return msg;
   }
   function makeStop(id, slots) { return { t: 'stp', id: str(id, 16), slots: slotList(slots) }; }
+  /** ``sop``: what you may send on one of their shockers, one bit per op */
+  var OP_BITS = { shock: 1, vibrate: 2, beep: 4 };
+  function maskOps(mask) { return OPS.filter(function (op) { return (mask & OP_BITS[op]) !== 0; }); }
+  /** the op names you may send on one of their shockers (all of them from a
+   *  copy that doesn't say -- shocker_ops) */
+  function shockerOps(st, slot) {
+    var own = st.shockerOps || [];
+    return slot >= 0 && slot < own.length ? own[slot].slice() : OPS.slice();
+  }
+  /** can a warning play on one of their shockers? (can_warn) -- it vibrates,
+   *  or beeps where Vibrate is off; with both off it can't */
+  var WARN_OFF_WHY = 'Can\'t warn: vibrate and beep are both off on their side';
+  function canWarn(st, slot) {
+    var own = st.shockerOff || [];
+    var off = slot >= 0 && slot < own.length ? own[slot] : [];
+    return !(off.indexOf('vibrate') >= 0 && off.indexOf('beep') >= 0);
+  }
+  /** why you can't send `op` on one of their shockers ('' when you can) --
+   *  the line a greyed button says (remote_protocol.shocker_why) */
+  function shockerWhy(st, slot, op) {
+    if (shockerOps(st, slot).indexOf(op) >= 0) { return ''; }
+    var own = st.shockerOff || [];
+    var off = slot >= 0 && slot < own.length ? own[slot] : [];
+    var has = function (o) { return off.indexOf(o) >= 0; };
+    if (has(op)) { return op.charAt(0).toUpperCase() + op.slice(1) + ' is switched off on their side'; }
+    if (op === 'shock' && has('vibrate') && !st.armed) {
+      return 'Vibrate is switched off on their side - and a shock that isn\'t armed goes out as a vibrate';
+    }
+    return 'They don\'t let you ' + op;
+  }
   /** (shock cap, vibrate cap, longest pulse ms) of one of their shockers */
   function shockerCaps(st, slot) {
     var own = st.shockerCaps || [];
@@ -269,17 +310,28 @@
       caps.push([intIn(c[0], 1, 1, 100), intIn(c[1], 1, 1, 100), intIn(c[2], SHOCK_MIN_MS, SHOCK_MIN_MS, 15000)]);
     }
     if (caps.length !== count) { caps = []; }
+    var readOps = function (raw) {
+      var out = [];
+      raw = Array.isArray(raw) ? raw : [];
+      for (var k = 0; k < Math.min(raw.length, count); k++) {
+        if (typeof raw[k] !== 'number' || !isFinite(raw[k])) { return []; }
+        out.push(maskOps(intIn(raw[k], 0, 0, 7)));
+      }
+      return out.length === count ? out : [];
+    };
+    var ops = readOps(msg.sop);
     var strength = unitOrNull(msg.str);
     var maxInt = intIn(lim.int, 0, 0, 100);
     return {
       toys: toys, outputs: outputs, strength: strength === null ? 1 : strength,
-      off: Boolean(msg.off), paused: Boolean(msg.pause),
+      off: Boolean(msg.off), paused: Boolean(msg.pause), notHere: Boolean(msg.nh),
       allowToys: Boolean(allow.toys), allowShock: Boolean(allow.shock),
       shockers: shockers, armed: Boolean(msg.armed),
       maxIntensity: maxInt, maxPulseMs: intIn(lim.ms, 0, 0, 15000),
       maxVibrate: intIn(lim.vib, maxInt, 0, 100),
       maxHoldS: Math.max(0, Math.min(600, Number(lim.hold) || 0)),
-      shockerCaps: caps, prm: isObj(msg.prm) ? readPrm(msg.prm) : null, batteries: batteries
+      shockerCaps: caps, shockerOps: ops, shockerOff: readOps(msg.soff),
+      prm: isObj(msg.prm) ? readPrm(msg.prm) : null, batteries: batteries
     };
   }
   function readOthers(msg) {
@@ -379,7 +431,7 @@
       });
     }
     return { ver: msg.b.slice(0, 32), name: str(msg.name, AVATAR_NAME_MAX), avatar: hexKey(msg.a),
-             categories: cats, controls: ctl, keys: keys, all: all };
+             categories: cats, controls: ctl, keys: keys, all: all, height: readHeightBox(msg.ht) };
   }
   function readValues(msg, board) {
     if (msg.b !== board.ver) { return {}; }
@@ -402,6 +454,83 @@
     return out;
   }
 
+  // ---- their height: the Height box (avatar_height, remote_params) ----------------
+  function heightSafe(v) { return Math.max(HEIGHT_SAFE_MIN, Math.min(HEIGHT_SAFE_MAX, v)); }
+  /** The board's ht -> {lo, hi, locked, allowed}, or null (the box is off). */
+  function readHeightBox(raw) {
+    if (!isObj(raw)) { return null; }
+    var lo = num(raw.lo), hi = num(raw.hi);
+    if (lo === null || hi === null) { return null; }
+    lo = heightSafe(lo);
+    hi = heightSafe(hi);
+    if (hi <= lo) { return null; }
+    return { lo: lo, hi: hi, locked: Boolean(raw.lk), allowed: !raw.no };
+  }
+  /** Their height right now, off the first pv (null: it carries none). */
+  function readHeight(msg) {
+    var v = num(msg.h);
+    return v !== null && v > 0 ? heightSafe(v) : null;
+  }
+  /** Grow (glide) / now (jump) to value, or reset. */
+  function makeHeightSet(seq, mode, value) {
+    var msg = { t: 'pht', id: Math.trunc(seq), m: String(mode) };
+    if (value !== null && value !== undefined && mode !== 'reset') { msg.v = round(Number(value), 3); }
+    return msg;
+  }
+  /** The slider is a log scale: equal steps are equal factors. */
+  function heightToSlider(h, lo, hi) {
+    if (h === null || h === undefined || !(h > 0) || !(lo > 0) || !(hi > lo)) { return null; }
+    var c = Math.max(lo, Math.min(hi, h));
+    return (Math.log(c) - Math.log(lo)) / (Math.log(hi) - Math.log(lo));
+  }
+  function sliderToHeight(x, lo, hi) {
+    var t = Math.max(0, Math.min(1, Number(x)));
+    if (t <= 0) { return Number(lo); }
+    if (t >= 1) { return Number(hi); }
+    return Math.exp(Math.log(lo) + t * (Math.log(hi) - Math.log(lo)));
+  }
+  // --- the shocker buttons: PiShock's panel or OpenShock's (src/shocker_layout.py) ---
+  var LAYOUTS = ['pishock', 'openshock'];
+  var LAYOUT_DEFAULT = 'pishock';
+  var OS = { INTENSITY_DEFAULT: 25, DURATION_DEFAULT_MS: 1000, DURATION_MIN_MS: 300,
+             DURATION_STEP_MS: 100, OPS: ['beep', 'vibrate', 'shock'],
+             OP_NAMES: { beep: 'Sound', vibrate: 'Vibrate', shock: 'Shock' },
+             LIVE_DEFAULT_OP: 'vibrate', LIVE_STEP: 0.05 };
+  function cleanLayout(v) { return LAYOUTS.indexOf(v) >= 0 ? v : LAYOUT_DEFAULT; }
+  function jsRound(x) { return Math.floor(x + 0.5); }
+  /** a strength 1..cap as 0..1 of their cap (to_fraction) */
+  function toFraction(strength, cap) {
+    cap = Math.max(1, cap);
+    return cap <= 1 ? 1 : Math.max(0, (strength - 1) / (cap - 1));
+  }
+  /** a length in ms as 0..1 of their longest pulse (length_fraction) */
+  function lengthFraction(ms, top) {
+    top = Math.max(SHOCK_MIN_MS, top);
+    return top <= SHOCK_MIN_MS ? 0 : (Math.min(ms, top) - SHOCK_MIN_MS) / (top - SHOCK_MIN_MS);
+  }
+  /** [shortest, longest] on the Duration dial (duration_range) */
+  function durationRange(top) {
+    var hi = Math.max(SHOCK_MIN_MS, top);
+    return [Math.min(OS.DURATION_MIN_MS, hi), hi];
+  }
+  /** `ms` on the dial's tenths (snap_duration) */
+  function snapDuration(ms, top) {
+    var r = durationRange(top), steps = jsRound((ms - r[0]) / OS.DURATION_STEP_MS);
+    return Math.max(r[0], Math.min(r[1], r[0] + steps * OS.DURATION_STEP_MS));
+  }
+  /** Live control: the pad's point (0 top .. 1 bottom) as 0..cap (live_strength) */
+  function liveStrength(y, cap) {
+    y = Math.max(0, Math.min(1, y));
+    return Math.max(0, Math.min(cap, jsRound((1 - y) * Math.max(0, cap))));
+  }
+
+  /** "1.62 m" (a centimetre under 10 m, a decimetre past it), "–" unknown --
+   *  avatar_height.fmt to the digit. */
+  function fmtHeight(h) {
+    if (h === null || h === undefined) { return '\u2013'; }
+    return h < 10 ? chain.math.pyFixed(h, 2) + ' m' : chain.math.pyFixed(h, 1) + ' m';
+  }
+
   return {
     ALPN: ALPN, PROTOCOL_VERSION: PROTOCOL_VERSION, ALL: ALL, MAX_DATAGRAM: MAX_DATAGRAM,
     NICK_MAX: NICK_MAX, MAX_SHOCKERS: MAX_SHOCKERS, SHOCK_MIN_MS: SHOCK_MIN_MS, OPS: OPS,
@@ -412,10 +541,18 @@
     cleanPattern: cleanPattern, shape: shape, patternLevel: patternLevel,
     periodToSlider: periodToSlider, sliderToPeriod: sliderToPeriod, fmtPeriod: fmtPeriod,
     makeCmd: makeCmd, drives: drives, makeShock: makeShock, makeStop: makeStop,
-    shockerCaps: shockerCaps, shockValues: shockValues,
-    readStatus: readStatus, readOthers: readOthers, readPanel: readPanel,
+    shockerCaps: shockerCaps, shockerOps: shockerOps, shockerWhy: shockerWhy, OP_BITS: OP_BITS,
+    canWarn: canWarn, WARN_OFF_WHY: WARN_OFF_WHY,
+    shockValues: shockValues,
+    LAYOUTS: LAYOUTS, LAYOUT_DEFAULT: LAYOUT_DEFAULT, OS: OS, cleanLayout: cleanLayout,
+    toFraction: toFraction, lengthFraction: lengthFraction, durationRange: durationRange,
+    snapDuration: snapDuration, liveStrength: liveStrength,
+    readStatus: readStatus, readSeparate: readSeparate, readOthers: readOthers, readPanel: readPanel,
     readPrm: readPrm, makeWatch: makeWatch, makeSet: makeSet, makeHolds: makeHolds, wire: wire,
     isIntSwitch: isIntSwitch, intSwitchValues: intSwitchValues, showsOn: showsOn,
-    readBoard: readBoard, readValues: readValues
+    readBoard: readBoard, readValues: readValues,
+    HEIGHT_MODES: HEIGHT_MODES, readHeightBox: readHeightBox, readHeight: readHeight,
+    makeHeightSet: makeHeightSet, heightToSlider: heightToSlider, sliderToHeight: sliderToHeight,
+    fmtHeight: fmtHeight
   };
 }));

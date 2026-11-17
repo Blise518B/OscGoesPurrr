@@ -144,6 +144,42 @@ logger also emits a **full OGB snapshot** every ~30 seconds (a
 `type: "ogb_snapshot"` event with every current OGB param). Cheap
 in the streaming case, makes random-access loading possible.
 
+### `raw` / `raw_snapshot` — Record raw contacts (debug)
+
+With Settings → Sessions → **Record raw contacts** on (2026-11-13, for
+chasing the SPS 3 bug), a recording session also keeps every contact
+packet exactly as it arrived, from the parameter store's tap
+(`store.set_contact_tap`, on the OSC thread, queue only):
+
+```jsonc
+{ "type": "raw", "t_ms": 1234.56, "a": "OGB/Socket/Booty/DepthOthers", "v": 0.412 }
+```
+
+`a` is VRChat's own name before any renaming (SPS 3's `Socket` / `Plug`,
+`VFH/...`), `t_ms` to the hundredth so one frame's messages keep their
+order and spacing, floats to six decimals. Kept: everything starting
+`OGB` (zones, `OGB/Enabled`, `OGB_ENABLED`, `OGB/HapticsDisabled`,
+versions), `VFH/`, `TPS_Internal/`, and `avatar/change`. Each avatar load
+(and the start of recording, with whatever is already loaded) writes the
+avatar's matching parameters at once -- the constants among them
+(`DepthRadius`, `LengthMult2` ...) never arrive as packets:
+
+```jsonc
+{ "type": "raw_snapshot", "t_ms": 0.0, "source": "oscquery" | "store",
+  "params": { "OGB/Socket/Booty/DepthRadius": 0.31, ... },
+  "types":  { "OGB/Socket/Booty/DepthRadius": "f", ... } }
+```
+
+The OSC Inspector page's **Debug recording** card does all of it with one
+button (`start_debug_recording`: logging and raw contacts on, a session
+started -- or the contacts added to one already running; the button
+again stops it), for "record this, look at it later".
+
+`source` "store" means OGP's stored names (already renamed). The header
+says `"raw_contacts": true` and the `app_version` that recorded it.
+`tools/contact_debug.py` reads such a file without the app (see its
+docstring).
+
 ### `footer` — last line, flushed on stop
 
 ```jsonc
@@ -211,7 +247,8 @@ schema:
 {
   "enabled":    false,        // master toggle; opt-in
   "auto_start": false,        // start a session on app launch?
-  "retention":  20            // max files kept on disk
+  "retention":  20,           // max files kept on disk
+  "raw_contacts": false       // debug: also record raw packets (see above)
 }
 ```
 
@@ -315,6 +352,13 @@ recorded cadence (optionally time-scaled ×0.5–×4). While replaying:
   present. The Off mode still means silence.
 * On stop (or when the recording ends) live input is unlocked and the
   replayed contacts are zeroed so nothing latches.
+
+A recording with raw lines replays those instead, from the first one on:
+packets that arrived within `RAW_BURST_MS` make one frame, fed through
+the store's whole input path (`store.replay_packets` /
+`replay_snapshot` -- renaming, SPS 3 plug lengths, zone discovery), so a
+change to any of it can be tried on the very recording that showed a bug.
+OnEnter edges are not counted during any replay.
 
 Driven by `controllers/replay_facade.py` (`ReplayFacade`), with the
 Replay card living in the Sessions tab (`ui/views/sessions.py`). This is

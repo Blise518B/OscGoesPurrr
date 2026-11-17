@@ -3,7 +3,8 @@ cards and category boxes in OGP's look: a category is a frame in its
 colour with a filled header bar (drag it by its ⠿ to reorder, 🔒 makes it
 look-only for friends, ⋯ for its colour, copy to another preset, delete),
 a control is a card in it (drag it by its ⠿ to move it, ⋯ to edit or
-remove). Drops show a see-through copy where they will land. Both have the
+remove). Drops show a see-through copy where they will land; either one
+dragged back onto the parameter list (ParamTree) is removed. Both have the
 avatar menu's slot circle in their top bar (param_slots.py).
 
 The same pieces draw a friend's board on the Friends page, with
@@ -159,7 +160,73 @@ class NoWheelSpin(QSpinBox):
 
 class ParamTree(QTreeWidget):
     """The avatar's parameter list; a row dragged onto a category makes a
-    control there."""
+    control there -- and a piece of the board dragged back onto it goes.
+
+    The going is generic: `accept_removal(mime, hint)` names a kind of drag
+    the list takes, `remove_dropped(mime, payload)` says what was dropped,
+    and while one hovers the list lights up with "Drop to remove" (and
+    `hint` under it). The page decides what removing it means."""
+
+    remove_dropped = Signal(str, str)              # mime type, its data as text
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setDragEnabled(True)
+        self.setDragDropMode(QTreeWidget.DragOnly)    # rows never move about ...
+        self.setAcceptDrops(True)                     # ... but the board's pieces land
+        self.viewport().setAcceptDrops(True)
+        self._removable: Dict[str, str] = {}
+        self.drop_hint = QLabel(self.viewport())
+        self.drop_hint.setObjectName("paramRemoveDrop")
+        # at the top: the list runs taller than the window, its middle may be
+        # out of sight
+        self.drop_hint.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self.drop_hint.setWordWrap(True)
+        self.drop_hint.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.drop_hint.hide()
+
+    def accept_removal(self, mime: str, hint: str = "") -> None:
+        self._removable[mime] = hint
+
+    def _removal(self, event) -> Optional[str]:
+        """The removable kind a drag carries (None: not one of ours)."""
+        md = event.mimeData()
+        return next((m for m in self._removable if md.hasFormat(m)), None)
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        mime = self._removal(event)
+        if mime is None:
+            event.ignore()                   # a row dragged out passing over it
+            return
+        event.acceptProposedAction()
+        hint = self._removable[mime]
+        self.drop_hint.setText("Drop to remove" + (f"\n\n{hint}" if hint else ""))
+        self.drop_hint.setGeometry(self.viewport().rect())
+        self.drop_hint.raise_()
+        self.drop_hint.show()
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        if self._removal(event) is None:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+
+    def dragLeaveEvent(self, event) -> None:  # noqa: N802
+        self.drop_hint.hide()
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        self.drop_hint.hide()
+        mime = self._removal(event)
+        if mime is None:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        self.remove_dropped.emit(mime, bytes(event.mimeData().data(mime)).decode(errors="ignore"))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if self.drop_hint.isVisible():
+            self.drop_hint.setGeometry(self.viewport().rect())
 
     def startDrag(self, actions) -> None:  # noqa: N802
         item = self.currentItem()

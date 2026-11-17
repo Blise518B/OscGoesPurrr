@@ -11,6 +11,7 @@ import json
 import os
 from typing import Any, Dict, List, Optional
 
+import settings_history
 from utilities import atomic_write_json
 from sps_source import normalize_source_def
 
@@ -23,10 +24,22 @@ class SpsSourceManager:
     class only loads, saves, and mutates the canonical list."""
 
     SCHEMA_VERSION = 1
+    HISTORY_KEY = "sps"
+    HISTORY_LABEL = "SPS sources"
 
     def __init__(self):
         self.sources: List[Dict[str, Any]] = []
         self._load()
+        settings_history.track(self)
+
+    # Ctrl+Z (settings_history.py): the list, written back whole when a
+    # source came or went
+    def history_state(self) -> Dict[str, Any]:
+        return {"sources": self.sources}
+
+    def history_commit(self, live: Dict[str, Any]) -> None:
+        self.sources = live["sources"]
+        self.save()
 
     # ------------------------------------------------------------------
     # Load / save
@@ -55,6 +68,7 @@ class SpsSourceManager:
             atomic_write_json(SPS_SOURCES_FILE, payload, indent=2)
         except OSError as e:
             print(f"SPS sources save error: {e}")
+        settings_history.saved(self)
 
     # ------------------------------------------------------------------
     # Reads

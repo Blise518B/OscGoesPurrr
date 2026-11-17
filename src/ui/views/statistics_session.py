@@ -1,7 +1,9 @@
 """Statistics view, one session's page: its tiles, the timeline (an
-intensity lane per toy, thrusts per minute, a lane per zone, the people
-tagged), and a short analysis. Part of StatisticsMixin (statistics.py)."""
+intensity lane per toy, thrusts per minute, the shocks on your shockers, a
+lane per zone, the people tagged), and a short analysis -- with who did what
+to you in it. Part of StatisticsMixin (statistics.py)."""
 
+import html
 from typing import Any, Dict, List
 
 from PySide6.QtCore import Qt, QTimer
@@ -14,7 +16,54 @@ from ui.stats_charts import (
 )
 from ui.session_timeline import SessionTimeline
 from ui.stats_widgets import Tile
+from ui.views.statistics_whom import ops_line
 from ui.widgets import Card as _Card
+
+
+def _ops_short(ops: Dict[str, Dict[str, Any]]) -> str:
+    """"8 shocks, 4 vibrates" ("" for none)."""
+    return ", ".join(f"{ops[op]['n']:,} {word}{'s' if ops[op]['n'] != 1 else ''}"
+                     for op, word in (("shock", "shock"), ("vibrate", "vibrate"),
+                                      ("beep", "beep")) if ops[op]["n"])
+
+
+def whom_lines(tally: Dict[str, Any]) -> List[str]:
+    """What the session page says of who did what to you (rich text, the
+    names escaped -- they're other people's)."""
+    if not tally:
+        return []
+    lines: List[str] = []
+    line = ops_line(tally["ops"])
+    if line:
+        lines.append(f"On your shockers: {line}.")
+    people = tally.get("people") or []
+    parts = []
+    for p in people:
+        short = _ops_short(p["ops"])
+        if not short:
+            continue
+        sub = "; ".join(f"{html.escape(v['label'])}: {_ops_short(v['ops'])}"
+                        for v in p["via"] if _ops_short(v["ops"]))
+        parts.append(f"<b>{html.escape(p['name'])}</b> {short}"
+                     + (f" ({sub})" if sub else ""))
+    if parts:
+        lines.append("From whom: " + "  ·  ".join(parts))
+    drove = [f"<b>{html.escape(p['name'])}</b> {fmt_short(p['drive_s'])}"
+             for p in people if p["drive_s"] >= 1]
+    if drove:
+        lines.append("On your toys: " + "  ·  ".join(drove))
+    sets = [f"<b>{html.escape(p['name'])}</b> {p['sets']:,} set{'s' if p['sets'] != 1 else ''}"
+            for p in people if p["sets"]]
+    if sets:
+        lines.append("Your Avatar Remote: " + "  ·  ".join(sets))
+    held = [f"{html.escape(p['name'])} {p['held']:,}" for p in people if p["held"]]
+    if held:
+        lines.append("Held back (not counted above): " + "  ·  ".join(held))
+    worn = tally.get("worn") or []
+    if worn:
+        lines.append("Suits and trackers: " + "  ·  ".join(
+            f"{html.escape(name)} {fmt_short(s)}" for name, s in worn))
+    return lines
 
 
 class StatisticsSessionMixin:
@@ -223,6 +272,7 @@ class StatisticsSessionMixin:
             order = sorted(zones, key=lambda z: -float(zones[z]))
             lines.append("Contact: " + "  ·  ".join(
                 f"{zone_label(z)} {fmt_short(zones[z])}" for z in order))
+        lines += whom_lines((d.get("shocks") or {}).get("tally") or {})
         if not lines:
             lines.append("Nothing much happened in this one.")
         for text in lines:

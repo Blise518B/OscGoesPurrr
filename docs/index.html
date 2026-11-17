@@ -246,6 +246,7 @@ footer { margin-top: 84px; border-top: 1px solid var(--edge); padding: 44px 0 30
       <a class="hide-sm" href="#how">How it works</a>
       <a class="hide-sm" href="#does">What it does</a>
       <a class="hide-sm" href="#install">Install</a>
+      <a href="guide/">Guide</a>
       <a class="gh" href="https://github.com/Blise518B/OscGoesPurrr">
         <svg viewBox="0 0 16 16" aria-hidden="true" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
         GitHub</a>
@@ -266,6 +267,7 @@ footer { margin-top: 84px; border-top: 1px solid var(--edge); padding: 44px 0 30
     <a class="btn btn-primary dl" href="https://github.com/Blise518B/OscGoesPurrr/releases/latest/download/OscGoesPurrr-Windows.exe">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg>
       <span class="dl-label">Download for Windows</span></a>
+    <a class="btn" href="guide/">Read the guide</a>
     <a class="btn" href="#how">How it works</a>
   </div>
   <p class="dlmeta"><span class="dl-meta">Windows 10 / 11 &middot; free and open source</span><br>
@@ -282,7 +284,8 @@ footer { margin-top: 84px; border-top: 1px solid var(--edge); padding: 44px 0 30
     <div class="demo-cap">
       <h2>This is the app.</h2>
       <p>A working copy of the real window, running the app's own signal maths in your browser. Only the toys,
-        the shocker hub, the suits, your friends and the link to VRChat are simulated.</p>
+        the shocker hub, the suits, the headset, your friends, VRChat's log and the link to VRChat are simulated.
+        A friend's panel has nobody at the other end; Pop out and the guided tour need the real app.</p>
     </div>
     <div id="ogp-demo" aria-label="A working copy of the OscGoesPurrr window"></div>
     <p class="demo-swipe">The window keeps its real proportions &mdash; swipe sideways to see the rest of it.</p>
@@ -378,24 +381,45 @@ footer { margin-top: 84px; border-top: 1px solid var(--edge); padding: 44px 0 30
         <li><b>Finds your toys by itself</b> and takes them back when they reconnect. A chime tells you in VR when
           one connects or drops.</li>
         <li><b>Updates in one click.</b> It offers a new version at launch, and afterwards shows what changed.</li>
+        <li><b>A guided tour</b> on the first launch waits for you to do each real step &mdash; your toy, its zones,
+          the chips, Test and strength, then what you use. Help &rarr; Take the tour runs it again.</li>
+        <li><b>Add Variable hides the noise.</b> VRChat's own, GoGo Loco, face tracking and other well-known
+          parameters are filtered out of the picker, one chip each; a search still finds them.</li>
       </ul></div>
       <div class="group"><h3>Routing</h3><ul>
         <li><b>Four modes</b> &mdash; Combined, Separate and two of your own &mdash; decide which parts of your
           avatar drive which toy. Each avatar can remember its mode.</li>
         <li><b>Touch and penetration apart.</b> Every motor has a chain per kind of contact, merged by add, max or
           multiply.</li>
-        <li><b>SPS Sources</b> builds a zone from any contact receivers, for avatars without the standard sockets.</li>
+        <li><b>Who a toy hears.</b> Touch and penetration, each from yourself or from others: four chips on every
+          toy's row.</li>
+        <li><b>Home at a glance.</b> Every toy, the shocker hub, the suits and the headset with their quick switches;
+          a click opens the toy's card on the Toys page, where its chains are.</li>
+        <li><b>SPS Sources</b>, on the Toys page, builds a zone from any contact receivers, for avatars without the
+          standard sockets.</li>
       </ul></div>
       <div class="group"><h3>Feel</h3><ul>
         <li><b>Total output strength</b> scales every toy at once and never touches your tuning.</li>
         <li><b>Fitted to the toy.</b> A gain and a min / max band per chain. Strokers such as a Solace Pro or an
           OSR2 follow the depth as position.</li>
-        <li><b>Sleep</b> wakes only for real strokes. <b>Off</b> is instant silence.</li>
-        <li><b>PiShock / OpenShock over USB.</b> Contacts drive the hub straight down the cable, on PiShock's firmware or OpenShock's. Each shocker gets a card with its own limits; drag it onto a behaviour: touch zones (each contact its own shocker), single contacts, continuous and impact rules. Shocks stay vibrates until you arm them. Off until you switch it on in Settings.</li>
+        <li><b>Sleep</b> wakes only for real strokes, for every toy or one toy from its row. <b>Off</b> is instant silence.</li>
+        <li><b>PiShock / OpenShock over USB.</b> Contacts drive the hub straight down the cable, on PiShock's firmware or OpenShock's. Each shocker gets a card with its own limits; drag it onto a behaviour: touch zones (each contact its own shocker), single contacts, continuous, impact and pull rules. Shocks stay vibrates until you arm them. Off until you switch it on in Settings.</li>
+        <li><b>Shock, vibrate and beep, each on its own.</b> Every shocker has its own three switches; one switched
+          off is refused, whoever sends it.</li>
+        <li><b>Arm shocks asks first</b>, on Home and on the Shockers page, and red words beside it say whether
+          shocks are armed.</li>
+        <li><b>ShockOSC avatars in one click.</b> Its parameters become behaviours, its feedback parameters are sent
+          back, and the avatar's own settings only ever make things gentler.</li>
+        <li><b>Several people on one shocker</b>: the strongest hold plays, a shock before any vibrate.</li>
+        <li><b>PS VR2 headset rumble</b> through PSVR2Toolkit (its experimental build, on a jailbroken headset;
+          Windows only). Off until you switch it on in Settings.</li>
         <li><b>Haptic suits.</b> A bHaptics suit, sleeves or head straight over Bluetooth, no bHaptics Player, and
           an OWO suit through My OWO, from your avatar's bHaptics and OWO contacts. The Suits page draws them on a
           body and says which contacts the avatar you wear has. Each suit is off until you switch it on in
           Settings.</li>
+        <li><b>Trackers that vibrate.</b> A Vive Tracker with a Haptic Pancake or a Tundra with a Tundra Tapper buzzes
+          from your avatar's contacts, under Haptic Pancake's parameter names, so an avatar set up for it works as
+          it is. Each lands where its SteamVR role puts it. Off until you switch it on in Settings.</li>
       </ul></div>
       <div class="group"><h3>From inside VRChat</h3><ul>
         <li><b>Your avatar's menu</b> gets a strength radial plus Mode, Off, Sleep, Test, Avatar Remote (seven toggles
@@ -405,15 +429,19 @@ footer { margin-top: 84px; border-top: 1px solid var(--edge); padding: 44px 0 30
           own controls, the Friends ones, or both. They are unsynced parameters, so they cost 0 sync bits.</li>
         <li><b>Output back to the avatar.</b> Any motor's level can be sent as a parameter, to drive a glow, a
           blendshape or a meter.</li>
-        <li><b>&ldquo;A toy is connected&rdquo;</b> as a parameter, for the whole rig or for one toy.</li>
+        <li><b>&ldquo;It's connected&rdquo;</b> as a parameter, on by default: any toy or each one, the
+          bHaptics suit or each part, the OWO suit, any shocker or each one.</li>
         <li><b>Thrust counters</b> as parameters: the lifetime total, this session's count and thrusts per minute,
           each as an Int and digit by digit, for a counter display.</li>
       </ul></div>
       <div class="group"><h3>Safety</h3><ul>
         <li><b>Anti-stuck.</b> OSC only sends changes, so a contact that freezes &mdash; an avatar swap, a partner
           leaving &mdash; would hold a motor on. A value frozen part-way is cut after a second; one held at 100&nbsp;%
-          eases off after ten.</li>
+          eases off after ten. The toys, each suit, the trackers and the headset each have their own, with their own
+          timers, and a toy's row can leave that one toy out.</li>
         <li><b>Off</b> stops everything at once, from the app or from your avatar's menu.</li>
+        <li><b>Off while you're away.</b> While VRChat says you're AFK &mdash; or GoGo Loco's AFK, or a parameter
+          you pick &mdash; everything is held off, and it all comes back when you are.</li>
         <li><b>OWO is EMS</b>, so it gets the shockers' care: it connects only when you press Connect, starts
           capped at 60&nbsp;% of the maximum you calibrated in My OWO, and the caps can't be widened from
           settings.</li>
@@ -428,16 +456,28 @@ footer { margin-top: 84px; border-top: 1px solid var(--edge); padding: 44px 0 30
         <li><b>A card per toy and per shocker.</b> Set a toy's level, let it play an auto mode (sine, square,
           random, heartbeat, build-up, oscillate and more), or override what your avatar does with it. Each
           shocker gets PiShock's own panel, laid out the way PiShock's is: shock, vibrate and beep, Tap, Remote
-          or Continuous, Random intensity, a warning first, stop. Party Mode drives several shockers, of one
+          or Continuous, Random intensity, a warning first, stop. Or pick OpenShock's card instead: Intensity
+          and Duration dials, Sound, Vibrate and Shock, and Live control, where the strength follows your finger
+          on a pad. Either way the same press sends the same thing. Party Mode drives several shockers, of one
           friend or a whole group: all at once, one at random, or one after the other. Control mode makes one
           friend's controls big, for VR.</li>
         <li><b>Your limits hold.</b> A friend's level stays under your strength, Off and each toy's maximum.
-          Their shocks stay vibrates until you arm them, inside your caps.</li>
+          Their shocks stay vibrates until you arm them, inside each shocker's own limits and switches from
+          the Shockers page. What they can't use is greyed on their side, with why. A modified app gains nothing:
+          whatever OGP itself would never send is corrected to your limits when it arrives, or refused.</li>
+        <li><b>Only friends in your instance.</b> Link each friend to their VRChat account &mdash; from VRChat's
+          log or VRCX &mdash; and, if you like, let only those in your VRChat instance drive you.</li>
+        <li><b>&#8635; Check now</b> looks for an offline friend at once. <b>Pop out</b> puts a friend's panel in a
+          window of its own, for a VR overlay.</li>
+        <li><b>A log per person.</b> The Log page keeps 30 days of who did what: filter it by person, kind and time,
+          or search it.</li>
         <li><b>Everything is logged</b>, both ways. From your avatar's menu you drive the friends you picked,
           one or several together: level, their strength, which toy, shocks.</li>
         <li><b>Their avatar, too.</b> With Avatar Remote on, a friend sees the board of the avatar you wear
           &mdash; toggles, hold buttons, sliders, steppers &mdash; and can use it. Lock a category to make it
           look-only, YOLO hands them every parameter, Pause blocks them all. Nothing is sent until they look.</li>
+        <li><b>Your height, too.</b> A Height box on Avatar Remote grows or shrinks you in VRChat, within the range
+          you set &mdash; from the page, your avatar's menu, or friends you allow.</li>
         <li><b>No OGP on their side?</b> Share your web remote link: whoever opens it gets a friend's panel in
           their browser, no install, no account. Your toys, and your shockers and avatar's board once you tick
           them, and your limits still hold. Everyone on it shows up under one row in your list; switch it off,
@@ -446,9 +486,13 @@ footer { margin-top: 84px; border-top: 1px solid var(--edge); padding: 44px 0 30
       <div class="group"><h3>Also in there</h3><ul>
         <li><b>Avatar Remote.</b> VRC Parameter Relay's board, built in: controls for your avatar's parameters in
           coloured categories, per avatar and preset, an Int as several toggles like VRChat's own menu. Boards
-          made in the Relay import with one click. Off until you switch it on.</li>
+          made in the Relay import with one click; drag a control back to the list to remove it. Off until you
+          switch it on.</li>
         <li><b>Statistics.</b> Every session with its timeline, a when-you-play heatmap and a calendar. One switch
           turns it off, one button deletes it.</li>
+        <li><b>From whom.</b> Every shock, vibrate and beep that reached your shockers &mdash; how many, the
+          strongest, how long &mdash; per person and per behaviour, marked on each session's timeline.</li>
+        <li><b>Ctrl+Z / Ctrl+Y</b> undo and redo your last changes, anywhere in the app.</li>
         <li><b>Stats per person.</b> Tag who a session was with, or a stretch of it, and see everyone ranked by
           thrusts. Optionally tagged for you when VRChat's log says you are alone with one other person.</li>
         <li><b>Tune without a partner.</b> An input simulator, a live signal graph, and recording and replay of
@@ -479,8 +523,8 @@ footer { margin-top: 84px; border-top: 1px solid var(--edge); padding: 44px 0 30
       <div class="step"><div class="num">2</div><h3>Run it</h3>
         <p>The first time, Windows shows a blue &ldquo;Windows protected your PC&rdquo; box because the exe isn't
           code-signed. Click <kbd>More info</kbd> &rarr; <kbd>Run anyway</kbd>.</p>
-        <p>The app then asks what you have and want &mdash; toys, a shocker, friends &mdash; and shows
-          those pages.</p>
+        <p>The app then asks what you have and want &mdash; toys, a shocker, friends &mdash; shows those pages,
+          and a short tour walks you through them.</p>
         <p>On Linux, get the <a class="inl" href="https://github.com/Blise518B/OscGoesPurrr/releases/latest/download/OscGoesPurrr-Linux-x86_64.AppImage">AppImage</a>,
           make it executable (<span class="mono">chmod +x</span>) and run it.</p></div>
       <div class="step"><div class="num">3</div><h3>Switch on and play</h3>
@@ -509,9 +553,7 @@ footer { margin-top: 84px; border-top: 1px solid var(--edge); padding: 44px 0 30
         they are ready to hand to anyone. No dates &mdash; the app tells you when an update lands.</p>
     </div>
     <div class="soon">
-      <div><b>SteamVR trackers</b><span>IN DEVELOPMENT</span><p>Buzz Vive and Tundra trackers from avatar contacts.</p></div>
       <div><b>DG-Lab Coyote</b><span>IN DEVELOPMENT</span><p>E-stim from contacts, with rests, caps and strength ceilings built in.</p></div>
-      <div><b>PS VR2 headset rumble</b><span>IN DEVELOPMENT</span><p>The headset itself, through PSVR2Toolkit.</p></div>
       <div><b>The Handy</b><span>IN DEVELOPMENT</span><p>Being rebuilt around streaming, for low-latency strokes.</p></div>
       <div><b>Typed chains</b><span class="plan">PLANNED</span><p>Chains that know what they are for &mdash; touch, penetration, vibe, impact &mdash; and more than two per motor.</p></div>
       <div><b>Props that just work</b><span class="plan">PLANNED</span><p>A shared standard for contacts, so a friend's prop drives your toys with no setup.</p></div>

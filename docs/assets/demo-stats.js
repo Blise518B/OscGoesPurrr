@@ -35,6 +35,52 @@
     "20260905-214211": { whole: ["Alex"], str: [] }
   };
 
+  /* What reached your shockers (stats_events.py), sample data too. A
+     session's marks: bucket k, op, level, ms, the shockers it landed on, who,
+     and for your avatar's behaviours and Me which way it came (via); hold:
+     how long it was held. */
+  var MARKS = {
+    "20260925-221503": [
+      { k: 40, op: 'vibrate', level: 20, ms: 500, on: ['Collar'], who: 'Alex' },
+      { k: 95, op: 'shock', level: 25, ms: 500, on: ['Collar'], who: 'Alex' },
+      { k: 150, op: 'vibrate', level: 15, ms: 500, on: ['Collar'], who: 'Your avatar', via: 'Touch zones · Neck' },
+      { k: 152, op: 'vibrate', level: 18, ms: 500, on: ['Collar'], who: 'Your avatar', via: 'Touch zones · Neck' },
+      { k: 210, op: 'vibrate', level: 12, ms: 12000, hold: true, on: ['Collar'], who: 'Your avatar', via: 'Continuous · Prox' },
+      { k: 262, op: 'shock', level: 10, ms: 300, on: ['Thigh'], who: 'You (Me)', via: 'Avatar menu' },
+      { k: 300, op: 'beep', level: null, ms: 300, on: ['Collar'], who: 'Alex' },
+      { k: 331, op: 'shock', level: 30, ms: 1000, on: ['Collar', 'Thigh'], who: 'Alex' }
+    ],
+    "20260919-203647": [
+      { k: 60, op: 'vibrate', level: 25, ms: 800, on: ['Collar'], who: 'Alex' },
+      { k: 120, op: 'shock', level: 20, ms: 500, on: ['Collar'], who: 'Alex' },
+      { k: 260, op: 'vibrate', level: 30, ms: 1000, on: ['Thigh'], who: 'Kim' },
+      { k: 300, op: 'shock', level: 15, ms: 300, on: ['Collar'], who: 'Your avatar', via: 'Pull · Tail' },
+      { k: 380, op: 'shock', level: 18, ms: 500, on: ['Thigh'], who: 'Sam' }
+    ],
+    "20260917-224833": [
+      { k: 70, op: 'vibrate', level: 22, ms: 600, on: ['Collar'], who: 'Your avatar', via: 'Touch zones · Neck' },
+      { k: 140, op: 'shock', level: 40, ms: 300, on: ['Collar'], who: 'Your avatar', via: 'Contact · Headpat' },
+      { k: 200, op: 'vibrate', level: 35, ms: 1500, on: ['Collar'], who: 'Alex' }
+    ]
+  };
+  /* Lifetime, per person: ops [count, strongest, seconds], how long they
+     drove your toys, how many Avatar Remote controls they set, when last;
+     your avatar's behaviours and Me's ways under them (via). */
+  function ops(s, v, b) { return { shock: s || [0, 0, 0], vibrate: v || [0, 0, 0], beep: b || [0, 0, 0] }; }
+  var WHOM = [
+    { name: 'Your avatar', role: 'avatar', ops: ops([14, 40, 7.0], [31, 30, 46.5], [2, 0, 0.6]), drive: 0, sets: 0, last: 1790374503,
+      via: [['Touch zones · Neck', ops([8, 35, 4.0], [20, 25, 10.0], [2, 0, 0.6])], ['Contact · Headpat', ops([5, 40, 2.5], [3, 30, 1.5])],
+            ['Pull · Tail', ops([1, 15, 0.5], [4, 30, 2.0])], ['Continuous · Prox', ops(null, [4, 22, 33.0])]] },
+    { name: 'Alex', role: 'friend', ops: ops([12, 44, 6.6], [15, 45, 16.2], [3, 0, 0.9]), drive: 12600, sets: 12, last: 1790374503, via: [] },
+    { name: 'Kim', role: 'friend', ops: ops([5, 30, 2.5], [9, 40, 9.0], [1, 0, 0.3]), drive: 3900, sets: 0, last: 1789845523, via: [] },
+    { name: 'You (Me)', role: 'me', ops: ops([4, 30, 1.6], [6, 30, 4.2], [1, 0, 0.3]), drive: 0, sets: 0, last: 1790374503,
+      via: [['Avatar menu', ops([3, 30, 1.2], [4, 30, 2.8])], ['Party Mode', ops([1, 20, 0.4], [2, 25, 1.4], [1, 0, 0.3])]] },
+    { name: 'Sam', role: 'friend', ops: ops([2, 20, 1.0], [5, 25, 5.0]), drive: 8040, sets: 31, last: 1789845523, via: [] },
+    { name: 'Jo (web)', role: 'web', ops: ops(null, [3, 20, 3.0]), drive: 2340, sets: 0, last: 1789682105, via: [] }
+  ];
+  var WHOM_SHOCKERS = [['Collar', ops([28, 44, 14.0], [52, 45, 60.4], [6, 0, 1.8])], ['Thigh', ops([9, 30, 4.7], [17, 30, 23.5], [1, 0, 0.3])]];
+  var WORN = [['bHaptics Vest', 23040, 0]];          /* suits and trackers: lifetime s, this session s */
+
   var WEEKDAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
   var WEEKDAYS_LONG = ['Mondays', 'Tuesdays', 'Wednesdays', 'Thursdays', 'Fridays', 'Saturdays', 'Sundays'];
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -44,7 +90,7 @@
   var TOY_HUES = ['cyan', 'blue', 'purple'];          /* theme.TOY_HUES */
   var SPANS = [[28, 'over the last 4 weeks'], [91, 'over the last 3 months'], [null, 'all time']];
   var TOKENS = ['card', 'well', 'accent', 'ink', 'txt', 'muted', 'dim',
-    'green', 'green-mid', 'green-tint', 'cyan', 'blue', 'purple', 'pink', 'amber',
+    'green', 'green-mid', 'green-tint', 'cyan', 'blue', 'purple', 'pink', 'amber', 'yellow',
     'grey', 'grey-mid'];
 
   var S = {
@@ -497,7 +543,7 @@
 
   var TL = {
     LABEL_W: 116, TOP: 20, TOY_H: 36, TOY_GAP: 8, THR_H: 44, THR_GAP: 12,
-    CAPTION_H: 16, ZONE_H: 14, ZONE_GAP: 6, PEOPLE_H: 16, PEOPLE_GAP: 4,
+    CAPTION_H: 16, ZONE_H: 14, ZONE_GAP: 6, PEOPLE_H: 16, PEOPLE_GAP: 4, MARK_H: 26, MARK_GAP: 12,
     AXIS_H: 20, MIN_COL_PX: 3
   };
 
@@ -518,9 +564,11 @@
         if (row < 0) { row = rowsEnd.length; rowsEnd.push(r[1]); } else rowsEnd[row] = r[1];
         return [r[0], r[1], r[2].join(', '), row];
       });
+    var marks = MARKS[s.id] || [];
     return {
-      s: s, toys: toys, zones: zones, lv: lv, thr: decode(s.thr), bars: bars, rows: rowsEnd.length,
+      s: s, toys: toys, zones: zones, lv: lv, thr: decode(s.thr), bars: bars, rows: rowsEnd.length, marks: marks,
       height: TL.TOP + toys.length * (TL.TOY_H + TL.TOY_GAP) + TL.THR_H + TL.THR_GAP +
+        (marks.length ? TL.CAPTION_H + TL.MARK_H + TL.MARK_GAP : 0) +
         (zones.length ? TL.CAPTION_H + zones.length * (TL.ZONE_H + TL.ZONE_GAP) : 0) +
         (rowsEnd.length ? TL.CAPTION_H + rowsEnd.length * (TL.PEOPLE_H + TL.PEOPLE_GAP) : 0) + TL.AXIS_H
     };
@@ -615,6 +663,34 @@
     }
     y += TL.THR_H + TL.THR_GAP;
 
+    /* The shockers lane (session_timeline._paint_marks): a mark per shock
+       (full yellow), vibrate (paler) and beep (a dot), as tall as it was
+       strong; a hold also shows how long it was held. */
+    if (M.marks.length) {
+      var shocks = 0;
+      M.marks.forEach(function (m) { if (m.op === 'shock') shocks += Math.max(1, m.on.length); });
+      text(ctx, 0, y + 11, 'Shockers', txt, 'left', 11, true);
+      text(ctx, 0, y + TL.CAPTION_H + 15, shocks ? shocks + ' shock' + (shocks !== 1 ? 's' : '') : M.marks.length + ' on them', dim);
+      y += TL.CAPTION_H;
+      fillRR(ctx, left, y, pw, TL.MARK_H, 3, css(C.well));
+      var mbase = y + TL.MARK_H - 2;
+      M.marks.forEach(function (m) {
+        var x = Math.min(right, Math.max(left, xOf(m.k)));
+        if (m.hold && m.ms) {
+          var x1 = Math.min(right, xOf(m.k + m.ms / 1000 / bs));
+          if (x1 - x > 1) { ctx.fillStyle = css(C.yellow, 0.3); ctx.fillRect(x, y + 2, x1 - x, TL.MARK_H - 4); }
+        }
+        if (m.op === 'beep') {
+          ctx.beginPath(); ctx.arc(x, y + TL.MARK_H / 2, 3, 0, Math.PI * 2);
+          ctx.fillStyle = css(C.yellow, 0.9); ctx.fill();
+          return;
+        }
+        var mh = 6 + Math.max(0, Math.min(100, m.level || 0)) / 100 * (TL.MARK_H - 10);
+        fillRR(ctx, x - 1.5, mbase - mh, 3, mh, 1, css(C.yellow, m.op === 'shock' ? 1 : 0.75));
+      });
+      y += TL.MARK_H + TL.MARK_GAP;
+    }
+
     /* Contact lanes. */
     if (M.zones.length) {
       text(ctx, 0, y + 11, 'Contact', txt, 'left', 11, true);
@@ -691,7 +767,154 @@
       return s.zr[z].some(function (run) { return run[0] < b && run[1] > a; });
     }).map(zoneLabel);
     lines.push(touching.length ? touching.map(esc).join(', ') : 'no contact');
+    var hits = M.marks.filter(function (m) { return a <= m.k && m.k < b; });
+    hits.slice(0, 6).forEach(function (m) { lines.push('<span class="st-dot-yellow">&#9632;</span> ' + esc(markText(s, m))); });
+    if (hits.length > 6) lines.push('and ' + (hits.length - 6) + ' more');
     return { col: col, html: lines.join('<br>') };
+  }
+  /* One mark as the hover says it (session_timeline.mark_text). */
+  function markText(s, m) {
+    var t = s.start + (s.start_i + m.k) * s.bucket_s, d = dt(t);
+    var what = m.level === null ? m.op : m.op + ' ' + m.level;
+    if (m.hold) what += ' · held ' + (m.ms / 1000).toFixed(1) + ' s';
+    else if (m.ms) what += ' · ' + (m.ms / 1000).toFixed(1) + ' s';
+    if (m.on.length) what += ' on ' + m.on.join(', ');
+    return clock(t) + ':' + p2(d.getUTCSeconds()) + ' ' + what + ' — from ' + m.who;
+  }
+
+  /* ── what reached your shockers (statistics_whom.py) ──────────────────── */
+
+  function secsText(s) { return s < 60 ? s.toFixed(1) + 's' : s < 3600 ? fmtDur(s) : fmtShort(s); }
+  function count(n) { return n ? num(n) : '—'; }
+  /* Shocks, vibrates, beeps, strongest, time (op_cells). */
+  function opCells(o) {
+    var strongest = o.shock[1] ? String(o.shock[1]) : o.vibrate[1] ? o.vibrate[1] + ' vib' : '—';
+    var secs = o.shock[2] + o.vibrate[2] + o.beep[2];
+    return [count(o.shock[0]), count(o.vibrate[0]), count(o.beep[0]), strongest, secs ? secsText(secs) : '—'];
+  }
+  /* "3 shocks up to 25 (1.3s) · 4 vibrates up to 30 (14.0s) · 1 beep" (ops_line). */
+  function opsLine(o) {
+    var parts = [];
+    [['shock', 'shock'], ['vibrate', 'vibrate'], ['beep', 'beep']].forEach(function (p) {
+      var v = o[p[0]];
+      if (!v[0]) return;
+      var t = num(v[0]) + ' ' + p[1] + (v[0] !== 1 ? 's' : '');
+      if (v[1] && p[0] !== 'beep') t += ' up to ' + v[1];
+      if (v[2] && p[0] !== 'beep') t += ' (' + secsText(v[2]) + ')';
+      parts.push(t);
+    });
+    return parts.join('  ·  ');
+  }
+  function opsShort(o) {
+    return [['shock', 'shock'], ['vibrate', 'vibrate'], ['beep', 'beep']].filter(function (p) { return o[p[0]][0]; })
+      .map(function (p) { return num(o[p[0]][0]) + ' ' + p[1] + (o[p[0]][0] !== 1 ? 's' : ''); }).join(', ');
+  }
+  function addOp(o, op, level, secs, times) {
+    var v = o[op];
+    v[0] += times || 1; v[1] = Math.max(v[1], level || 0); v[2] += secs || 0;
+  }
+  /* A session's tally from its marks: in all, and per person (with via). */
+  function marksTally(marks) {
+    var all = ops(), people = [], by = {};
+    marks.forEach(function (m) {
+      var n = Math.max(1, m.on.length), secs = (m.ms || 0) / 1000 * n;
+      addOp(all, m.op, m.level, secs, n);
+      var p = by[m.who];
+      if (!p) { p = by[m.who] = { name: m.who, ops: ops(), via: {} }; people.push(p); }
+      addOp(p.ops, m.op, m.level, secs, n);
+      if (m.via) addOp(p.via[m.via] || (p.via[m.via] = ops()), m.op, m.level, secs, n);
+    });
+    return { ops: all, people: people };
+  }
+  /* What you fired yourself as Me on the Friends page since the demo opened:
+     this session, live (the log's shock entries, role me / friend / web). */
+  var OPENED = Date.now() / 1000;
+  function liveTally() {
+    var log = window.OGPDemoLog, marks = [];
+    (log ? log.events : []).forEach(function (e) {
+      if (e.t < OPENED || e.held || e.kind !== 'shock' || ['shock', 'vibrate', 'beep'].indexOf(e.op) < 0) return;
+      if (['me', 'friend', 'web', 'avatar'].indexOf(e.role) < 0 || e.level === undefined) return;
+      marks.push({ op: e.op, level: e.op === 'beep' ? null : e.level, ms: e.ms, on: e.on || [], who: e.name, via: e.via });
+    });
+    return marksTally(marks);
+  }
+
+  function fillWhom() {
+    var lifetime = S.whomSpan === 0, live = liveTally(), people;
+    if (lifetime) {
+      /* the sample's lifetime, with what happened since the demo opened on top */
+      people = WHOM.map(function (p) {
+        var o = { shock: p.ops.shock.slice(), vibrate: p.ops.vibrate.slice(), beep: p.ops.beep.slice() };
+        var more = live.people.filter(function (q) { return q.name === p.name; })[0];
+        if (more) ['shock', 'vibrate', 'beep'].forEach(function (op) { addOp(o, op, more.ops[op][1], more.ops[op][2], more.ops[op][0]); });
+        return { name: p.name, role: p.role, ops: o, drive: p.drive, sets: p.sets, last: more ? DATA.now : p.last, via: p.via };
+      });
+    } else {
+      people = live.people.map(function (p) {
+        return { name: p.name, ops: p.ops, drive: 0, sets: 0, last: DATA.now,
+                 via: Object.keys(p.via).map(function (k) { return [k, p.via[k]]; }) };
+      });
+    }
+    people.sort(function (a, b) { return (b.ops.shock[0] - a.ops.shock[0]) || (b.ops.vibrate[0] - a.ops.vibrate[0]) || byName(a.name, b.name); });
+    var total = ops();
+    people.forEach(function (p) { ['shock', 'vibrate', 'beep'].forEach(function (op) { addOp(total, op, p.ops[op][1], p.ops[op][2], p.ops[op][0]); }); });
+    [['shock', 'whom-shocks'], ['vibrate', 'whom-vibrates'], ['beep', 'whom-beeps']].forEach(function (t) {
+      var v = total[t[0]];
+      q(t[1]).textContent = num(v[0]);
+      q(t[1] + '-note').textContent = v[0] && t[0] !== 'beep' ? (v[1] ? 'up to ' + v[1] + '  ·  ' + secsText(v[2]) : secsText(v[2])) : '';
+    });
+    var host = q('whom'), sh = q('whom-shockers');
+    host.textContent = '';
+    sh.textContent = '';
+    q('whom-empty').hidden = !!people.length;
+    host.hidden = !people.length;
+    q('whom-shockers-h').hidden = !people.length;
+    sh.hidden = !people.length;
+    if (!people.length) return;
+    /* a column header: its identity icon (one icon per thing) and words */
+    function iconHead(name, hue, words) {
+      var th = make('span', 'st-th'), ic = make('i', 'st-ic');
+      ic.innerHTML = (window.OGPDemoIcons || {})[name] || '';
+      ic.style.color = 'var(--' + hue + ')';
+      th.appendChild(ic);
+      th.appendChild(document.createTextNode(words));
+      return th;
+    }
+    ['', 'Who', null, 'Vibrates', 'Beeps', 'Strongest', 'Time', null, null, 'Last time'].forEach(function (h, i) {
+      host.appendChild(i === 2 ? iconHead('shock', 'yellow', 'Shocks') : i === 7 ? iconHead('toys', 'pink', 'Toys')
+        : i === 8 ? iconHead('params', 'accent', 'Avatar Remote') : make('span', 'st-th', h));
+    });
+    people.forEach(function (p, i) {
+      host.appendChild(make('span', 'st-td-s', String(i + 1)));
+      [p.name].concat(opCells(p.ops), [p.drive >= 1 ? fmtShort(p.drive) : '—', p.sets ? num(p.sets) : '—', day(p.last)])
+        .forEach(function (v) { host.appendChild(make('span', '', v)); });
+      p.via.forEach(function (v) {
+        host.appendChild(make('span', ''));
+        [' └ ' + v[0]].concat(opCells(v[1]), ['', '', '']).forEach(function (c) { host.appendChild(make('span', 'st-td-s', c)); });
+      });
+    });
+    [null, 'Shocks', 'Vibrates', 'Beeps', 'Strongest', 'Time'].forEach(function (h) {
+      sh.appendChild(h === null ? iconHead('shock', 'yellow', 'Shocker') : make('span', 'st-th', h));
+    });
+    WHOM_SHOCKERS.forEach(function (r) {
+      [r[0]].concat(opCells(lifetime ? r[1] : ops())).forEach(function (v) { sh.appendChild(make('span', '', v)); });
+    });
+    root2().querySelectorAll('[data-whom]').forEach(function (b) { b.classList.toggle('is-on', +b.dataset.whom === S.whomSpan); });
+  }
+  function root2() { return S.root; }
+  /* The session page's lines on who did what to you (statistics_session.whom_lines). */
+  function whomLines(s) {
+    var t = marksTally(MARKS[s.id] || []), lines = [], parts = [];
+    var line = opsLine(t.ops);
+    if (line) lines.push('On your shockers: ' + line + '.');
+    t.people.forEach(function (p) {
+      var short = opsShort(p.ops);
+      if (!short) return;
+      var sub = Object.keys(p.via).map(function (k) { return esc(k) + ': ' + opsShort(p.via[k]); }).join('; ');
+      parts.push('<b>' + esc(p.name) + '</b> ' + short + (sub ? ' (' + sub + ')' : ''));
+    });
+    if (parts.length) lines.push('From whom: ' + parts.join('  ·  '));
+    return lines;
   }
 
   /* ── DOM ──────────────────────────────────────────────────────────────── */
@@ -771,6 +994,7 @@
     table(q('zones'), Object.keys(life.zones).sort(byName).map(function (key) {
       return [zoneLabel(key), life.zones[key]];
     }));
+    table(q('worn'), WORN.map(function (w) { return [w[0], w[1]]; }));
   }
   function fillPeople() {
     var rows = peopleTable(), host = q('people');
@@ -895,6 +1119,7 @@
         return esc(zoneLabel(z)) + ' ' + fmtShort(s.zones[z]);
       }).join(' · '));
     }
+    lines = lines.concat(whomLines(s));
     if (!lines.length) lines.push('Nothing much happened in this one.');
     var host = q('insights');
     host.textContent = '';
@@ -1079,8 +1304,41 @@
     fillSessions();
     fillLifetime();
     fillPeople();
+    S.whomSpan = 0;
+    fillWhom();
     fillPatterns();
     fillMonth();
+
+    root.querySelectorAll('[data-whom]').forEach(function (b) {
+      b.addEventListener('click', function () { S.whomSpan = +b.dataset.whom; fillWhom(); });
+    });
+    q('keep-names').addEventListener('click', function () { q('keep-names').classList.toggle('on'); });
+    /* Forget names asks first, in its own place: a second click within a few seconds */
+    q('forget').addEventListener('click', function () {
+      var b = q('forget');
+      if (!b.dataset.ask) {
+        b.dataset.ask = '1'; b.textContent = 'Click again to forget';
+        setTimeout(function () { delete b.dataset.ask; b.textContent = 'Forget names…'; }, 3000);
+        return;
+      }
+      WHOM.forEach(function (p) {
+        if (p.role === 'friend') p.name = 'A friend';
+        if (p.role === 'web') p.name = 'Web remote';
+      });
+      /* the friends now share one row */
+      var merged = [];
+      WHOM.forEach(function (p) {
+        var into = merged.filter(function (m) { return m.name === p.name && p.role !== 'avatar' && p.role !== 'me'; })[0];
+        if (!into) { merged.push(p); return; }
+        ['shock', 'vibrate', 'beep'].forEach(function (op) { addOp(into.ops, op, p.ops[op][1], p.ops[op][2], p.ops[op][0]); });
+        into.drive += p.drive; into.sets += p.sets; into.last = Math.max(into.last, p.last);
+      });
+      WHOM.length = 0;
+      merged.forEach(function (p) { WHOM.push(p); });
+      delete b.dataset.ask; b.textContent = 'Forget names…'; b.disabled = true;
+      fillWhom();
+    });
+    if (window.OGPDemoLog) window.OGPDemoLog.onChange(function () { if (!S.detail) fillWhom(); });
 
     S.el.list.addEventListener('click', function (ev) {
       var row = ev.target.closest('.st-row');
@@ -1190,4 +1448,4 @@
 })();
 
 // The page's markup (stats.html), so the demo can mount it without a request.
-window.OGPDemoStats.HTML = "<div class=\"pg pg-stats\">\n  <div class=\"st-page\">\n    <div class=\"st-title\">Statistics</div>\n\n    <!-- ── the overview: sessions, lifetime, when you play, month ── -->\n    <div class=\"st-overview\" data-st=\"overview\">\n      <div class=\"st-muted\">How much your gear actually gets used, and when. Sampled once per second; nothing here touches the haptic path.</div>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\" data-st-tiptitle=\"Sessions\" data-st-tip=\"Every app run that saw activity, newest first. The graph is how busy each part of it was. Click a session for its timeline: each toy's intensity, thrusts per minute, which zones were touched, and a short analysis.&lt;br&gt;&lt;br&gt;With no toy running, stray contacts don't start a session: contact only counts once it adds up to 20 thrusts without a pause longer than 10 seconds, or to a minute of touching within three minutes. Strokes counted while nothing is touching you never count.\">Sessions</div>\n        </div>\n        <div class=\"st-list\" data-st=\"list\"></div>\n      </section>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\" data-st-tiptitle=\"Lifetime statistics\" data-st-tip=\"What counts: a toy is &lt;b&gt;on&lt;/b&gt; while any of its motors is driven above zero; a zone is &lt;b&gt;in contact&lt;/b&gt; while any of its OGB signals reads above zero; &lt;b&gt;active time&lt;/b&gt; ticks while either is true. One full in-out stroke = one &lt;b&gt;thrust&lt;/b&gt;. Everything is sampled once per second, so sub-second blips can round away. Sessions are app runs that saw any activity.&lt;br&gt;&lt;br&gt;While no toy is running, contact is held back until it turns into a real scene: 20 thrusts with no pause longer than 10 seconds, or a minute of touching within three minutes (one long touch or many short ones), and a stroke only counts while something is touching you. Then the 30 seconds before it count as well, and it keeps counting until half an hour of quiet. Stray contacts and lone strokes never count.\">Lifetime</div>\n          <button type=\"button\" class=\"st-btn\" data-st=\"reset\" data-st-tip=\"Zero every statistic, session and chart. Asks first.\">Reset</button>\n        </div>\n        <div class=\"st-tiles st-cols-3\">\n          <div class=\"st-tile\"><div class=\"st-cap\">Total active time</div><div class=\"st-val\" data-st=\"life-active\">—</div></div>\n          <div class=\"st-tile\"><div class=\"st-cap\">Thrusts</div><div class=\"st-val\" data-st=\"life-thrusts\">—</div></div>\n          <div class=\"st-tile\"><div class=\"st-cap\">Sessions</div><div class=\"st-val\" data-st=\"life-sessions\">—</div></div>\n        </div>\n        <div class=\"st-muted st-pre\" data-st=\"this-session\"></div>\n        <div class=\"st-h\">Fun facts</div>\n        <div class=\"st-tiles st-cols-3\" data-st=\"facts\"></div>\n        <div class=\"st-h\">Toys</div>\n        <div class=\"st-table\" data-st=\"toys\"></div>\n        <div class=\"st-h\">Zones</div>\n        <div class=\"st-table\" data-st=\"zones\"></div>\n      </section>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\" data-st-tiptitle=\"People\" data-st-tip=\"Everyone you tagged sessions with, most thrusts first. Each person gets what happened while they were tagged: the active time, the thrusts, and their best minute (peak pace).&lt;br&gt;&lt;br&gt;Tag a session on its page: the whole session, or drag across its timeline to tag a stretch of it — for a session that had more than one person in it. Two people tagged on the same stretch both get all of it. Names match without regard to upper and lower case.\">People</div>\n        </div>\n        <div class=\"st-swrow\" data-st-tiptitle=\"Tag who you're with from VRChat's log\" data-st-tip=\"While you are alone in an instance with exactly one other person, the running session is tagged with them, from the moment that was true until it isn't any more (someone joins, they leave, you change world). A stretch with nothing in it is dropped again. With more people around nobody is tagged; tag those sessions yourself.&lt;br&gt;&lt;br&gt;VRChat writes who joins and leaves your instance to a log file on this PC; the app reads that file while this is on, and keeps only the names of people you were tagged with. Nothing leaves your PC. Off by default.\"><span class=\"o-sw\" data-st=\"auto\"></span><span>Tag who you're with from VRChat's log</span></div>\n        <div class=\"st-hint\" data-st=\"auto-status\" hidden></div>\n        <div class=\"st-people\" data-st=\"people\"></div>\n        <div class=\"st-muted\" data-st=\"people-empty\" hidden>Nobody tagged yet. Open a session and tag who it was with: the whole session, or drag across its timeline to tag a stretch.</div>\n      </section>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\" data-st-tiptitle=\"When you play\" data-st-tip=\"Active time by weekday and hour of the day. The brighter the cell, the more happened in that hour. The bars below add up every day per hour; the bars on the right add up each weekday. Hover anything for the numbers.\">When you play</div>\n          <button type=\"button\" class=\"st-btn st-seg\" data-span=\"0\">4 weeks</button>\n          <button type=\"button\" class=\"st-btn st-seg\" data-span=\"1\">3 months</button>\n          <button type=\"button\" class=\"st-btn st-seg\" data-span=\"2\">All time</button>\n        </div>\n        <canvas class=\"st-week\" data-st=\"week\"></canvas>\n        <div class=\"st-hint\" data-st=\"week-hint\"></div>\n      </section>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\">Month</div>\n          <button type=\"button\" class=\"st-btn\" data-month=\"-1\" data-st-tip=\"Previous month\">←</button>\n          <div class=\"st-month-label\" data-st=\"month-label\"></div>\n          <button type=\"button\" class=\"st-btn\" data-month=\"1\" data-st-tip=\"Next month\">→</button>\n        </div>\n        <div class=\"st-month\">\n          <canvas class=\"st-cal\" data-st=\"cal\"></canvas>\n          <div class=\"st-tiles st-cols-2\">\n            <div class=\"st-tile\"><div class=\"st-cap\">Active</div><div class=\"st-val\" data-st=\"m-active\">—</div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Thrusts</div><div class=\"st-val\" data-st=\"m-thrusts\">—</div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Sessions</div><div class=\"st-val\" data-st=\"m-sessions\">—</div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Days with play</div><div class=\"st-val\" data-st=\"m-days\">—</div><div class=\"st-note\" data-st=\"m-days-note\"></div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Best day</div><div class=\"st-val\" data-st=\"m-best\">—</div><div class=\"st-note\" data-st=\"m-best-note\"></div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Average play day</div><div class=\"st-val\" data-st=\"m-avg\">—</div><div class=\"st-note\" data-st=\"m-avg-note\"></div></div>\n          </div>\n        </div>\n        <div class=\"st-hint\">Sessions from before the charts existed count on the day they started.</div>\n      </section>\n    </div>\n\n    <!-- ── one session's page (shown instead of the overview) ── -->\n    <div class=\"st-detail\" data-st=\"detail\" hidden>\n      <div class=\"st-head\">\n        <button type=\"button\" class=\"st-btn st-pre\" data-st=\"back\">←  All sessions</button>\n        <div class=\"st-sec st-pre\" data-st=\"detail-title\">Session</div>\n      </div>\n      <section class=\"st-card st-card-detail\">\n        <div class=\"st-tiles st-cols-4\" data-st=\"detail-tiles\"></div>\n        <div class=\"st-tags\">\n          <div class=\"st-withrow\"><span class=\"st-h\">With</span><span class=\"st-chips\" data-st=\"with\"></span><span class=\"st-hint\" data-st=\"with-none\">nobody tagged</span><span class=\"st-grow\"></span><button type=\"button\" class=\"st-btn\" data-st=\"tag-whole\" data-st-tiptitle=\"Tag session\" data-st-tip=\"Who this whole session was with. Type one name or several, separated by commas; names you used before are suggested. Clear the field to remove the tag. For a session with more than one person in it, drag across the timeline below instead and tag each stretch.\">Tag session…</button></div>\n          <div class=\"st-editor\" data-st=\"editor\" hidden><span data-st=\"editor-what\"></span><input class=\"st-input\" data-st=\"editor-input\" type=\"text\" autocomplete=\"off\" placeholder=\"Who? Separate several names with commas\"><button type=\"button\" class=\"st-btn\" data-st=\"editor-save\">Tag</button><button type=\"button\" class=\"st-btn st-ghost\" data-st=\"editor-cancel\">Cancel</button></div>\n          <div class=\"st-stretches\" data-st=\"stretches\"></div>\n          <div class=\"st-hint\" data-st=\"tags-hint\">More than one person? Drag across the timeline to tag a stretch of the session with someone.</div>\n        </div>\n        <canvas class=\"st-timeline\" data-st=\"timeline\"></canvas>\n        <div class=\"st-h\">Analysis</div>\n        <div class=\"st-insights\" data-st=\"insights\"></div>\n      </section>\n    </div>\n  </div>\n  <div class=\"st-tip\" data-st=\"tip\" hidden></div>\n</div>\n";
+window.OGPDemoStats.HTML = "<div class=\"pg pg-stats\">\n  <div class=\"st-page\">\n    <div class=\"st-title\">Statistics</div>\n\n    <!-- ── the overview: sessions, lifetime, when you play, month ── -->\n    <div class=\"st-overview\" data-st=\"overview\">\n      <div class=\"st-muted\">How much your gear actually gets used, and when. Sampled once per second; nothing here touches the haptic path.</div>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\" data-st-tiptitle=\"Sessions\" data-st-tip=\"Every app run that saw activity, newest first. The graph is how busy each part of it was. Click a session for its timeline: each toy's intensity, thrusts per minute, which zones were touched, and a short analysis.&lt;br&gt;&lt;br&gt;With no toy running, stray contacts don't start a session: contact only counts once it adds up to 20 thrusts without a pause longer than 10 seconds, or to a minute of touching within three minutes. Strokes counted while nothing is touching you never count.\">Sessions</div>\n        </div>\n        <div class=\"st-list\" data-st=\"list\"></div>\n      </section>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\" data-st-tiptitle=\"Lifetime statistics\" data-st-tip=\"What counts: a toy is &lt;b&gt;on&lt;/b&gt; while any of its motors is driven above zero; a zone is &lt;b&gt;in contact&lt;/b&gt; while any of its OGB signals reads above zero; &lt;b&gt;active time&lt;/b&gt; ticks while either is true. One full in-out stroke = one &lt;b&gt;thrust&lt;/b&gt;. Everything is sampled once per second, so sub-second blips can round away. Sessions are app runs that saw any activity.&lt;br&gt;&lt;br&gt;While no toy is running, contact is held back until it turns into a real scene: 20 thrusts with no pause longer than 10 seconds, or a minute of touching within three minutes (one long touch or many short ones), and a stroke only counts while something is touching you. Then the 30 seconds before it count as well, and it keeps counting until half an hour of quiet. Stray contacts and lone strokes never count.\">Lifetime</div>\n          <button type=\"button\" class=\"st-btn\" data-st=\"reset\" data-st-tip=\"Zero every statistic, session and chart. Asks first.\">Reset</button>\n        </div>\n        <div class=\"st-tiles st-cols-3\">\n          <div class=\"st-tile\"><div class=\"st-cap\">Total active time</div><div class=\"st-val\" data-st=\"life-active\">—</div></div>\n          <div class=\"st-tile\"><div class=\"st-cap\">Thrusts</div><div class=\"st-val\" data-st=\"life-thrusts\">—</div></div>\n          <div class=\"st-tile\"><div class=\"st-cap\">Sessions</div><div class=\"st-val\" data-st=\"life-sessions\">—</div></div>\n        </div>\n        <div class=\"st-muted st-pre\" data-st=\"this-session\"></div>\n        <div class=\"st-h\">Fun facts</div>\n        <div class=\"st-tiles st-cols-3\" data-st=\"facts\"></div>\n        <div class=\"st-h\">Toys</div>\n        <div class=\"st-table\" data-st=\"toys\"></div>\n        <div class=\"st-h\">Zones</div>\n        <div class=\"st-table\" data-st=\"zones\"></div>\n        <div class=\"st-h\">Suits and trackers</div>\n        <div class=\"st-table\" data-st=\"worn\"></div>\n      </section>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\" data-st-tiptitle=\"People\" data-st-tip=\"Everyone you tagged sessions with, most thrusts first. Each person gets what happened while they were tagged: the active time, the thrusts, and their best minute (peak pace).&lt;br&gt;&lt;br&gt;Tag a session on its page: the whole session, or drag across its timeline to tag a stretch of it — for a session that had more than one person in it. Two people tagged on the same stretch both get all of it. Names match without regard to upper and lower case.\">People</div>\n        </div>\n        <div class=\"st-swrow\" data-st-tiptitle=\"Tag who you're with from VRChat's log\" data-st-tip=\"While you are alone in an instance with exactly one other person, the running session is tagged with them, from the moment that was true until it isn't any more (someone joins, they leave, you change world). A stretch with nothing in it is dropped again. With more people around nobody is tagged; tag those sessions yourself.&lt;br&gt;&lt;br&gt;VRChat writes who joins and leaves your instance to a log file on this PC; the app reads that file while this is on, and keeps only the names of people you were tagged with. Nothing leaves your PC. Off by default.\"><span class=\"o-sw\" data-st=\"auto\"></span><span>Tag who you're with from VRChat's log</span></div>\n        <div class=\"st-hint\" data-st=\"auto-status\" hidden></div>\n        <div class=\"st-people\" data-st=\"people\"></div>\n        <div class=\"st-muted\" data-st=\"people-empty\" hidden>Nobody tagged yet. Open a session and tag who it was with: the whole session, or drag across its timeline to tag a stretch.</div>\n      </section>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\" data-st-tiptitle=\"From whom\" data-st-tip=\"Who did what to you: every shock, vibrate and beep that reached one of your shockers — how many, the strongest and how long — and who it came from. Your avatar's behaviours on the Shockers page are listed one by one under Your avatar; what you sent yourself as Me says when it came from your avatar menu or Party Mode. A friend's own menu or Party Mode isn't told over the link, so a friend is one row. Toys is how long they drove your toys, Avatar Remote how many of your avatar's controls they set.&lt;br&gt;&lt;br&gt;An operation on two shockers counts on each. Counted from the log as it happens and kept for good, on this PC only: never sent to anyone.\">From whom</div>\n          <button type=\"button\" class=\"st-btn st-seg\" data-whom=\"0\">Lifetime</button>\n          <button type=\"button\" class=\"st-btn st-seg\" data-whom=\"1\">This session</button>\n        </div>\n        <div class=\"st-swrow\"><span class=\"o-sw on\" data-st=\"keep-names\" data-st-tiptitle=\"Keep friends' names\" data-st-tip=\"On, each friend and each web remote guest has a row of their own here. Off, what they do from now on counts under A friend or Web remote, without a name. On by default. The names already kept stay until you click Forget names.\"></span><span>Keep friends' names</span><span class=\"st-grow\"></span><button type=\"button\" class=\"st-btn\" data-st=\"forget\" data-st-tiptitle=\"Forget names\" data-st-tip=\"Every friend's numbers go under A friend and every web remote guest's under Web remote, for good — lifetime and every session. Asks first. The Log page keeps its own 30 days of who did what; clear it there.\">Forget names…</button></div>\n        <div class=\"st-tiles st-cols-3\">\n          <div class=\"st-tile\"><div class=\"st-cap\">Shocks</div><div class=\"st-val\" data-st=\"whom-shocks\">—</div><div class=\"st-note\" data-st=\"whom-shocks-note\"></div></div>\n          <div class=\"st-tile\"><div class=\"st-cap\">Vibrates</div><div class=\"st-val\" data-st=\"whom-vibrates\">—</div><div class=\"st-note\" data-st=\"whom-vibrates-note\"></div></div>\n          <div class=\"st-tile\"><div class=\"st-cap\">Beeps</div><div class=\"st-val\" data-st=\"whom-beeps\">—</div><div class=\"st-note\" data-st=\"whom-beeps-note\"></div></div>\n        </div>\n        <div class=\"st-whom\" data-st=\"whom\"></div>\n        <div class=\"st-muted\" data-st=\"whom-empty\" hidden>Nobody yet. Shocks, vibrates and beeps on your shockers, friends driving your toys and their Avatar Remote sets land here as they happen.</div>\n        <div class=\"st-h\" data-st=\"whom-shockers-h\">Per shocker</div>\n        <div class=\"st-whomsh\" data-st=\"whom-shockers\"></div>\n      </section>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\" data-st-tiptitle=\"When you play\" data-st-tip=\"Active time by weekday and hour of the day. The brighter the cell, the more happened in that hour. The bars below add up every day per hour; the bars on the right add up each weekday. Hover anything for the numbers.\">When you play</div>\n          <button type=\"button\" class=\"st-btn st-seg\" data-span=\"0\">4 weeks</button>\n          <button type=\"button\" class=\"st-btn st-seg\" data-span=\"1\">3 months</button>\n          <button type=\"button\" class=\"st-btn st-seg\" data-span=\"2\">All time</button>\n        </div>\n        <canvas class=\"st-week\" data-st=\"week\"></canvas>\n        <div class=\"st-hint\" data-st=\"week-hint\"></div>\n      </section>\n\n      <section class=\"st-card\">\n        <div class=\"st-head\">\n          <div class=\"st-sec\">Month</div>\n          <button type=\"button\" class=\"st-btn\" data-month=\"-1\" data-st-tip=\"Previous month\">←</button>\n          <div class=\"st-month-label\" data-st=\"month-label\"></div>\n          <button type=\"button\" class=\"st-btn\" data-month=\"1\" data-st-tip=\"Next month\">→</button>\n        </div>\n        <div class=\"st-month\">\n          <canvas class=\"st-cal\" data-st=\"cal\"></canvas>\n          <div class=\"st-tiles st-cols-2\">\n            <div class=\"st-tile\"><div class=\"st-cap\">Active</div><div class=\"st-val\" data-st=\"m-active\">—</div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Thrusts</div><div class=\"st-val\" data-st=\"m-thrusts\">—</div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Sessions</div><div class=\"st-val\" data-st=\"m-sessions\">—</div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Days with play</div><div class=\"st-val\" data-st=\"m-days\">—</div><div class=\"st-note\" data-st=\"m-days-note\"></div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Best day</div><div class=\"st-val\" data-st=\"m-best\">—</div><div class=\"st-note\" data-st=\"m-best-note\"></div></div>\n            <div class=\"st-tile\"><div class=\"st-cap\">Average play day</div><div class=\"st-val\" data-st=\"m-avg\">—</div><div class=\"st-note\" data-st=\"m-avg-note\"></div></div>\n          </div>\n        </div>\n        <div class=\"st-hint\">Sessions from before the charts existed count on the day they started.</div>\n      </section>\n    </div>\n\n    <!-- ── one session's page (shown instead of the overview) ── -->\n    <div class=\"st-detail\" data-st=\"detail\" hidden>\n      <div class=\"st-head\">\n        <button type=\"button\" class=\"st-btn st-pre\" data-st=\"back\">←  All sessions</button>\n        <div class=\"st-sec st-pre\" data-st=\"detail-title\">Session</div>\n      </div>\n      <section class=\"st-card st-card-detail\">\n        <div class=\"st-tiles st-cols-4\" data-st=\"detail-tiles\"></div>\n        <div class=\"st-tags\">\n          <div class=\"st-withrow\"><span class=\"st-h\">With</span><span class=\"st-chips\" data-st=\"with\"></span><span class=\"st-hint\" data-st=\"with-none\">nobody tagged</span><span class=\"st-grow\"></span><button type=\"button\" class=\"st-btn\" data-st=\"tag-whole\" data-st-tiptitle=\"Tag session\" data-st-tip=\"Who this whole session was with. Type one name or several, separated by commas; names you used before are suggested. Clear the field to remove the tag. For a session with more than one person in it, drag across the timeline below instead and tag each stretch.\">Tag session…</button></div>\n          <div class=\"st-editor\" data-st=\"editor\" hidden><span data-st=\"editor-what\"></span><input class=\"st-input\" data-st=\"editor-input\" type=\"text\" autocomplete=\"off\" placeholder=\"Who? Separate several names with commas\"><button type=\"button\" class=\"st-btn\" data-st=\"editor-save\">Tag</button><button type=\"button\" class=\"st-btn st-ghost\" data-st=\"editor-cancel\">Cancel</button></div>\n          <div class=\"st-stretches\" data-st=\"stretches\"></div>\n          <div class=\"st-hint\" data-st=\"tags-hint\">More than one person? Drag across the timeline to tag a stretch of the session with someone.</div>\n        </div>\n        <canvas class=\"st-timeline\" data-st=\"timeline\"></canvas>\n        <div class=\"st-h\">Analysis</div>\n        <div class=\"st-insights\" data-st=\"insights\"></div>\n      </section>\n    </div>\n  </div>\n  <div class=\"st-tip\" data-st=\"tip\" hidden></div>\n</div>\n";

@@ -70,8 +70,20 @@ def rig():
                     param_store=store)
     r._stale = Stale()
     cfg = SuitsSettingsManager().snapshot()
-    r.configure(cfg, bhaptics_on=True, owo_on=True)
+    _safety(r, cfg, dict(TOY_SAFETY, enabled=False))     # each test says if it's on
     return r, store, bh, owo, scale, cfg, clock
+
+
+# Anti-stuck's defaults; each kind has its own (antistuck.py).
+TOY_SAFETY = {"enabled": True, "active_s": 1, "peaked_s": 10}
+
+
+def _safety(r, cfg, block, kinds=("bhaptics", "owo", "trackers"), **on):
+    """Give `kinds` the anti-stuck `block` and hand the router the snapshot."""
+    for kind in kinds:
+        cfg[kind]["antistuck"] = dict(block)
+    r.configure(cfg, bhaptics_on=on.get("bhaptics_on", True),
+                owo_on=on.get("owo_on", True))
 
 
 def test_a_contact_reaches_both_suits(rig):
@@ -147,13 +159,9 @@ def test_test_holds_play_while_quiet_but_not_while_off(rig):
     assert bh.frames["VestFront"] == [0] * 20
 
 
-# Settings → Toy Safety's defaults, which the suits share.
-TOY_SAFETY = {"enabled": True, "active_s": 1, "peaked_s": 10}
-
-
 def test_a_stuck_mid_range_contact_is_cut_after_a_second(rig):
-    r, store, bh, owo, _scale, _cfg, clock = rig
-    r._get_antistuck = lambda: TOY_SAFETY
+    r, store, bh, owo, _scale, cfg, clock = rig
+    _safety(r, cfg, TOY_SAFETY)
     store.update_parameter("bOSC_v1_VestBack_19", 0.5)
     store.update_parameter("owo_suit_Arm_R", 0.5)
     r.tick()
@@ -171,8 +179,8 @@ def test_a_stuck_mid_range_contact_is_cut_after_a_second(rig):
 
 
 def test_a_held_full_contact_gets_ten_seconds_then_fades(rig):
-    r, store, bh, _owo, _scale, _cfg, clock = rig
-    r._get_antistuck = lambda: TOY_SAFETY
+    r, store, bh, _owo, _scale, cfg, clock = rig
+    _safety(r, cfg, TOY_SAFETY)
     store.update_parameter("bOSC/v2/VestBack/0/others", True)
     r.tick()
     clock.t += 9.9
@@ -187,8 +195,8 @@ def test_a_held_full_contact_gets_ten_seconds_then_fades(rig):
 
 
 def test_a_frozen_contact_doesnt_silence_a_live_one_under_it(rig):
-    r, store, bh, _owo, _scale, _cfg, clock = rig
-    r._get_antistuck = lambda: TOY_SAFETY
+    r, store, bh, _owo, _scale, cfg, clock = rig
+    _safety(r, cfg, TOY_SAFETY)
     pos, cells = body_map.OWO_REGIONS["Dorsal_L"]
     node = cells[0]
     store.update_parameter(f"bOSC_v1_{pos}_{node}", 0.6)      # frozen
@@ -199,23 +207,54 @@ def test_a_frozen_contact_doesnt_silence_a_live_one_under_it(rig):
     assert bh.frames[pos][node] in (30, 31)
 
 
-def test_toy_safety_off_holds_and_turning_it_on_starts_the_fuse(rig):
-    r, store, bh, _owo, _scale, _cfg, clock = rig
+def test_anti_stuck_off_holds_and_turning_it_on_starts_the_fuse(rig):
+    r, store, bh, _owo, _scale, cfg, clock = rig
     safety = dict(TOY_SAFETY, enabled=False)
-    r._get_antistuck = lambda: safety
+    _safety(r, cfg, safety)
     store.update_parameter("bOSC_v1_VestFront_3", 0.5)
     r.hold_dot("VestBack", 3, 30.0)
     r.tick()
     clock.t += 20.0
     r.tick()
     assert bh.frames["VestFront"][3] == 50
-    safety["enabled"] = True
+    _safety(r, cfg, dict(safety, enabled=True))
     r.tick()
     assert bh.frames["VestFront"][3] == 50         # not cut on the spot
     clock.t += 1.0
     r.tick()
     assert bh.frames["VestFront"][3] == 0
     assert bh.frames["VestBack"][3] == 30          # the page's test hold is never cut
+
+
+def test_each_suit_has_its_own_anti_stuck(rig):
+    """bHaptics' off, OWO's on (Blise's ask, 2026-11-17: "some of them may
+    want different settings"): the same frozen contact keeps the suit
+    buzzing and is cut on the EMS."""
+    r, store, bh, owo, _scale, cfg, clock = rig
+    _safety(r, cfg, dict(TOY_SAFETY, enabled=False), kinds=("bhaptics",))
+    _safety(r, cfg, TOY_SAFETY, kinds=("owo",))
+    store.update_parameter("bOSC_v1_VestBack_19", 0.5)
+    store.update_parameter("owo_suit_Arm_R", 0.5)
+    r.tick()
+    clock.t += 1.5
+    r.tick()
+    assert bh.frames["VestBack"][19] == 50
+    assert owo.active == {}
+
+
+def test_each_suit_has_its_own_timers(rig):
+    r, store, bh, owo, _scale, cfg, clock = rig
+    _safety(r, cfg, dict(TOY_SAFETY, active_s=3), kinds=("bhaptics",))
+    _safety(r, cfg, TOY_SAFETY, kinds=("owo",))
+    store.update_parameter("bOSC_v1_VestBack_19", 0.5)
+    store.update_parameter("owo_suit_Arm_R", 0.5)
+    r.tick()
+    clock.t += 1.5
+    r.tick()
+    assert bh.frames["VestBack"][19] == 50 and owo.active == {}
+    clock.t += 2.0
+    r.tick()
+    assert bh.frames["VestBack"] == [0] * 20
 
 
 def test_a_switched_off_or_unconnected_suit_gets_nothing(rig):

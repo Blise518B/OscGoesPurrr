@@ -44,7 +44,8 @@ def test_each_icon_is_drawn_in_its_colour_and_anything_else_is_blank(qapp):
 
 
 def test_the_other_pages_wear_the_sidebars_tone(qapp):
-    for what in ("stats", "sps", "inspector", "diagnostics", "log", "settings", "help"):
+    for what in ("stats", "sps", "inspector", "diagnostics", "log", "settings", "help",
+                 "limits"):
         assert colours(page_icon(what)) == {constants.COLOR_MUTED.lower()}, what
     # a kind of thing keeps its own colour there, anything else is blank
     assert colours(page_icon("shock")) == colours(identity_icon("shock"))
@@ -53,8 +54,8 @@ def test_the_other_pages_wear_the_sidebars_tone(qapp):
 
 def test_every_sidebar_entry_has_an_icon(qapp):
     from ui_components import OscGoesPurrrUI
-    entries = ("Friends", "My Avatar Remote", "Shockers", "Suits", "Statistics",
-               "SPS Sources", "OSC Inspector", "OSC Diagnostics", "System Log",
+    entries = ("Toys", "Friends", "My Avatar Remote", "Shockers", "Suits", "Statistics",
+               "OSC Inspector", "OSC Diagnostics", "System Log",
                "Settings", "Help")
     for name in entries:
         what = OscGoesPurrrUI._NAV_ICONS[name]

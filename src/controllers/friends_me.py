@@ -73,7 +73,7 @@ class FriendsMeMixin:
         """GUI tick: what the link would send between two OGPs -- the status,
         the drive (kept fresh like a friend's), who else drives, the board's
         watch and values."""
-        self._me_in(self._friends_status_for(ME))
+        self._me_in(self._friends_st_for(ME))
         self._me_in(self._friends_cmd_for(ME))
         for msg in self._friends_more_for(ME).values():
             self._me_in(msg)
@@ -91,5 +91,4 @@ class FriendsMeMixin:
             "my_levels": dict(self._my_levels.get(ME, {})),
             "driving_me": self._is_driving(ME, now),
             "others": list(self._friend_others.get(ME, [])),
-            "sync": False,
         }

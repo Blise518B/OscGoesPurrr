@@ -1,0 +1,6 @@
+# Docusaurus: dependencies, caches and the build (tools/build_guide.py
+# copies the build into docs/guide/, which is what gets committed)
+node_modules/
+.docusaurus/
+.cache-loader/
+build/

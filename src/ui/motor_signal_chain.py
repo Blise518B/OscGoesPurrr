@@ -50,6 +50,7 @@ from constants import (
     SIM_PEN_ADDRESS, SIM_TOUCH_ADDRESS, SIM_ADDRESSES,
 )
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
+import contact_filters as _contact
 from ui import theme as _theme
 from ui import frame_clock as _frame_clock
 from ui.widgets import ToggleSwitch, RainbowMeter as _RainbowMeter, ProgressProxy as _ProgressProxy
@@ -219,6 +220,21 @@ def _chain_display_name(controller, device_name: str, motor_idx: int,
     name = chain.get("name") if isinstance(chain, dict) else None
     name = str(name or "").strip()
     return name if name else f"Chain {chain_idx + 1}"
+
+
+# A folded chain's bar, by its hover explanation's title (help mode and the
+# guided tour find it by this).
+CHAIN_FOLD_TITLE = "Signal chain"
+
+
+def motor_title(motor_idx: int, motor_kind: Optional[str]) -> str:
+    """"Motor 0 · Vibrate" -- what a motor is called: over its folded
+    chains on the Toys page and in its open chain's header."""
+    title = f"Motor {motor_idx}"
+    if motor_kind in ("linear", "linear-d"):
+        return title + " · Thrust (linear)"
+    info = _KIND_DISPLAY.get(motor_kind)
+    return title + (f" · {info.suffix}" if info is not None else "")
 
 
 def _clamp_num(value: Any, default: float, lo: float, hi: float) -> float:
@@ -1868,13 +1884,7 @@ class MotorSignalChainWidget(QFrame):
         # the shared _KIND_DISPLAY table. Linear actuators are
         # special-cased because they get a structurally different
         # Output editor, not just a different label.
-        title_text = f"Motor {motor_idx}"
-        if self._is_linear:
-            title_text += " · Thrust (linear)"
-        else:
-            info = _KIND_DISPLAY.get(motor_kind)
-            if info is not None:
-                title_text += f" · {info.suffix}"
+        title_text = motor_title(motor_idx, motor_kind)
         # Name the chain by what drives it. "Chain 2" says nothing; a
         # motor now carries one chain per kind of contact, and which is
         # which is the first thing you need to know when you open it.
@@ -3348,10 +3358,11 @@ class MotorSignalChainWidget(QFrame):
             "dialled in apart — the type decides which reaches this "
             "chain, so you never have to keep two filter toggles "
             "consistent by hand.<br><br>"
-            "<b>Custom</b> hands the Touch/Penetration toggles back for "
-            "a chain that should react to both, or to something you "
-            "wire up yourself.<br><br>"
-            "Zones and Self/Others below are set <i>per chain</i>: until "
+            "<b>Custom</b> hears both, for a chain that should react to "
+            "touch and penetration, or to something you wire up "
+            "yourself.<br><br>"
+            "Zones and who it hears (Self / Others) below are set "
+            "<i>per chain</i>: until "
             "you change them here they follow the motor's, so a chain "
             "you have not customised behaves exactly as the motor did."
         )
@@ -3500,9 +3511,8 @@ class MotorSignalChainWidget(QFrame):
 
     def _on_chain_type_changed(self, text: str) -> None:
         """Persist a new chain type and rebuild — the type changes what
-        the Input panel offers (a typed chain hides the Touch/Penetration
-        toggles it would otherwise contradict) and what the card is
-        called."""
+        the Input panel offers (a typed chain greys the other kind's row
+        of the contact switches) and what the card is called."""
         value = next((t for t in CHAIN_TYPES
                       if CHAIN_TYPE_LABELS[t] == text), "custom")
         _update_chain_field(
@@ -4772,7 +4782,7 @@ def _chain_summary_line(controller, device_name: str, motor_idx: int,
         return " "
     bits: List[str] = []
 
-    # Input: per-chain zones (motor fallback), then self/others flags.
+    # Input: per-chain zones (motor fallback), then who it hears.
     _MISSING = object()
 
     def routed(suffix, default):
@@ -4797,8 +4807,19 @@ def _chain_summary_line(controller, device_name: str, motor_idx: int,
         zone_txt = "All SPS" + (" +" + "+".join(rest) if rest else "")
     else:
         zone_txt = "+".join(zones)
-    so = ("S" if routed("self", False) else "") + \
-         ("O" if routed("others", True) else "")
+    # Who it hears (the contact 2x2): S = from yourself, O = from others,
+    # for the kind(s) the chain's type hears. A Custom chain whose touch
+    # and penetration differ spells both out, "TS/PO".
+    def sources(kind):
+        s_pair, o_pair = _contact.KIND_PAIRS[kind]
+        return (("S" if routed(s_pair, _contact.DEFAULTS[s_pair]) else "")
+                + ("O" if routed(o_pair, _contact.DEFAULTS[o_pair]) else ""))
+
+    per_kind = [sources(k) for k in _contact.kinds_for_type(chain.get("type"))]
+    if len(set(per_kind)) == 1:
+        so = per_kind[0]
+    else:
+        so = f"T{per_kind[0] or '—'}/P{per_kind[1] or '—'}"
     bits.append(f"{zone_txt}·{so}" if so else f"{zone_txt}·—")
     # Custom OSC parameters mapped onto this motor (they feed every
     # chain — addresses are per-motor).
@@ -5084,6 +5105,16 @@ class _ChainFoldBar(QFrame):
         self._ui._repolish(self._summary)
         col.addWidget(self._summary)
 
+        # Named for help mode and the guided tour, whose Input step lights
+        # the chain first while it is folded (ui/tour_steps.py)
+        explain = getattr(self._ui, "_explain", None)
+        if callable(explain):
+            explain(self, CHAIN_FOLD_TITLE,
+                    "One of this motor's signal chains, folded: its name, a "
+                    "light per stage and its live output. <b>Click</b> to open "
+                    "it and set each stage - Input first, where its signal "
+                    "comes from.")
+
         # Live plumbing: router callback → queued signal → UI slot.
         self.intermediates.connect(self._on_intermediates)
         self._callback = self.intermediates.emit
@@ -5228,20 +5259,23 @@ class MotorChainListWidget(QFrame):
 
     def __init__(self, ui, device_name: str, motor_idx: int,
                  motor_kind: Optional[str] = None,
-                 parent: Optional[QWidget] = None) -> None:
+                 parent: Optional[QWidget] = None, heading: bool = False) -> None:
         super().__init__(parent)
         self._ui = ui
         self._controller = ui.controller
         self._device_name = device_name
         self._motor_idx = motor_idx
         self._motor_kind = motor_kind
+        # "Motor 1 · Rotate" over the chains: a toy with several motors
+        # says which chains are whose (an open chain's header says it too)
+        self._heading = heading
 
 
         # Which chains are OPEN. Session-only, preserved across
-        # _rebuild. Default: a single-chain motor opens its one chain
-        # (nothing to scan past); a multi-chain motor starts fully
-        # folded — with a chain per contact type the folded stack IS
-        # the overview, and you open the one you're working on.
+        # _rebuild. Default: every chain folded (Blise's ask, 2026-11-16) --
+        # the toy's card on the Toys page opens showing each motor's
+        # Touch and Penetration chains as their folded bars, the overview;
+        # you open the one you're working on.
         self._fold_open: Dict[int, bool] = {}
         self._fold_bars: List[_ChainFoldBar] = []
 
@@ -5330,9 +5364,15 @@ class MotorChainListWidget(QFrame):
         n = max(1, min(n, MAX_CHAINS_PER_MOTOR))
         merge_op = _get_merge_op(self._controller, self._device_name,
                                  self._motor_idx)
+        if self._heading:
+            # which motor these chains are, over them: with every chain
+            # folded, nothing else says so
+            heading = QLabel(motor_title(self._motor_idx, self._motor_kind))
+            heading.setObjectName("motorLabel")
+            self._root_lay.addWidget(heading)
         prev_open = False
         for chain_idx in range(n):
-            is_open = self._fold_open.get(chain_idx, n == 1)
+            is_open = self._fold_open.get(chain_idx, False)
             # The merge picker only appears next to an OPEN chain —
             # folded bars carry a compact merge tag instead, so a fully
             # folded stack spends no rows on an op nobody is editing.
@@ -5409,14 +5449,19 @@ class MotorChainListWidget(QFrame):
         return host
 
     def _build_add_row(self) -> QWidget:
-        """Centered '+ Add chain' button shown when n < cap."""
+        """Centered '+ Add chain' shown when n < cap: a ghost button --
+        muted words, a frame only on hover, like the card's own "▸ Avatar
+        parameters" -- so it reads as a side action under the chains, never
+        as the card's main button (Blise's ask, 2026-11-17: it was still
+        too large)."""
         host = QWidget()
         lay = _hbox(0, 0)
         host.setLayout(lay)
         lay.addStretch(1)
         btn = QPushButton("+ Add chain")
         btn.setFixedHeight(BTN_HEIGHT_SMALL)
-        btn.setProperty("role", "secondary")
+        btn.setProperty("role", "ghost")
+        btn.setCursor(Qt.PointingHandCursor)
         btn.setToolTip(
             "Add a second parallel signal chain on this motor. Both "
             "chains process the same input independently; their "
@@ -5433,9 +5478,7 @@ class MotorChainListWidget(QFrame):
         """Open/close one chain and rebuild. Independent toggles, not an
         accordion — comparing two chains side by side is a real
         workflow, so opening one must not slam the other shut."""
-        n = _get_chain_count(self._controller, self._device_name,
-                             self._motor_idx)
-        current = self._fold_open.get(chain_idx, n == 1)
+        current = self._fold_open.get(chain_idx, False)
         self._fold_open[chain_idx] = not current
         self._rebuild()
 

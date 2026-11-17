@@ -1,20 +1,42 @@
-"""Friends view, the shockers on the control panel: a friend's (one
-PiShock-style card per shocker -- shocker_card.py -- and, once two or more
-are ticked for Party, PiShock's Party panel over them -- shock_party.py) or
-everyone's in a group (the Party panel alone, over every member's
-shockers). Over the cards, a strip says what reaches them: armed (shocks
-are real), not armed (a shock arrives as a vibration), paused or Off.
+"""Friends view, the shockers on the control panel: a friend's (one card
+per shocker and, once two or more are ticked for Party, the Party panel
+over them -- shock_party.py) or everyone's in a group (the Party panel
+alone, over every member's shockers). Over the cards, a strip says what
+reaches them: armed (shocks are real), not armed (a shock arrives as a
+vibration), paused or Off.
+
+The cards are PiShock's own panel (shocker_card.py) or OpenShock's card
+(openshock_card.py), as the section's "Shocker buttons" switch says -- one
+app setting for every panel (shocker_layout.py; PiShock by default,
+Blise's call 2026-11-15). Both take the same calls, so nothing below cares
+which; each layout keeps its own memory of how its cards were set.
 Part of FriendsMixin (friends.py), with friends_panel.py."""
 
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from PySide6.QtWidgets import QFrame, QLabel, QPushButton
+from PySide6.QtWidgets import QFrame, QLabel, QPushButton, QWidget
 
-from remote_protocol import display_name, shocker_caps
+import shocker_layout
+from remote_protocol import (OPS, WARN_OFF_WHY, can_warn, display_name, shocker_caps,
+                             shocker_ops, shocker_why)
 from ui.layout_helpers import hbox
 from ui.theme import FRIEND_SHOCK_HUE as _SHOCK, friend_hue
+from ui.views.card_parts import bigger, segmented
+from ui.views.openshock_card import OpenShockCard
 from ui.views.shock_party import ShockParty
 from ui.views.shocker_card import ShockerCard
+
+_CARDS = {shocker_layout.PISHOCK: ShockerCard, shocker_layout.OPENSHOCK: OpenShockCard}
+LAYOUT_TITLE = "Shocker buttons"
+LAYOUT_TIP = ("Whose shocker buttons you drive with here: PiShock's panel (the default) or "
+              "OpenShock's card with its Live control. It only changes how the buttons look - "
+              "every press sends the same, and their caps, arming and each shocker's "
+              "switches hold either way. One setting for every friend's panel, "
+              "yours (Me) and every group's, remembered.")
+
+# their shockers while only friends in their VRChat instance may drive them
+# and you aren't in it (their status says so -- never where they are)
+NOT_HERE_SHOCKERS = "they only let friends in their VRChat instance drive them"
 
 
 def their_caps(theirs: Dict[str, Any], slot: int = -1):
@@ -23,14 +45,85 @@ def their_caps(theirs: Dict[str, Any], slot: int = -1):
     return shocker_caps(theirs, slot), float(theirs.get("max_hold_s") or 0.0)
 
 
+def their_rules(theirs: Dict[str, Any], slots) -> Tuple[set, Dict[str, str], bool]:
+    """(ops you may send, why an op -- or "warn" -- isn't there, a warning
+    can play) on a friend's shockers -- one slot's, or what any of `slots`
+    lets through (a party: each receiver drops what its switches don't
+    allow)."""
+    slots = list(slots)
+    ops = set()
+    for slot in slots:
+        ops |= set(shocker_ops(theirs, slot))
+    pairs = [(theirs, slot) for slot in slots]
+    warn_ok = _warn_ok(pairs)
+    return ops, _reasons(pairs, ops, warn_ok), warn_ok
+
+
+def _warn_ok(pairs) -> bool:
+    """A warning can play on any of `pairs` (status, slot) -- or there are
+    none to say otherwise."""
+    return not pairs or any(can_warn(theirs, slot) for theirs, slot in pairs)
+
+
+def _reasons(pairs, ops, warn_ok: bool = True) -> Dict[str, str]:
+    """Why each op outside `ops` is greyed: the one reason when all of
+    `pairs` (status, slot) say the same, else that none of them lets you;
+    and Warning's, when no warning can play."""
+    out: Dict[str, str] = {} if warn_ok else {"warn": WARN_OFF_WHY}
+    for op in OPS:
+        if op in ops or not pairs:
+            continue
+        said = {shocker_why(theirs, slot, op) for theirs, slot in pairs} - {""}
+        out[op] = said.pop() if len(said) == 1 else f"None of them lets you {op}"
+    return out
+
+
 class FriendsShockersMixin:
 
-    def _shock_memory(self) -> Dict[Any, Any]:
+    def _shock_memory(self, which: Optional[str] = None) -> Dict[Any, Any]:
         """How the shocker cards and parties were set, across rebuilds --
-        this window's own."""
+        this window's own, one memory per layout (`which`, else the one
+        the panel shows now)."""
         if "_shocker_memory" not in vars(self):
             self._shocker_memory = {}
-        return self._shocker_memory
+        return self._shocker_memory.setdefault(which or self._shocker_buttons(), {})
+
+    # ---- whose buttons -----------------------------------------
+
+    def _shocker_buttons(self) -> str:
+        """The layout the panel is built in (friends_panel._rebuild_panel
+        reads it from the status)."""
+        return shocker_layout.clean(getattr(self, "_shocker_layout", None))
+
+    def _card_class(self) -> type:
+        return _CARDS[self._shocker_buttons()]
+
+    def _layout_switch(self, head) -> QWidget:
+        """"Shocker buttons: PiShock | OpenShock" in the shocker section's
+        header, where someone driving looks for it. A pick saves the one
+        setting; the panel is rebuilt in the other layout."""
+        box = QWidget()
+        row = hbox(0, 6)
+        box.setLayout(row)
+        big = self._friends_big
+        lbl = bigger(QLabel(LAYOUT_TITLE), big)
+        lbl.setProperty("muted", "true")
+        row.addWidget(lbl)
+        seg, group = segmented([shocker_layout.NAMES[x] for x in shocker_layout.LAYOUTS], _SHOCK,
+                               lambda i: self._layout_picked(shocker_layout.LAYOUTS[i]), big)
+        group.button(shocker_layout.LAYOUTS.index(self._shocker_buttons())).setChecked(True)
+        seg.setObjectName("shockerLayout")
+        row.addWidget(seg)
+        box.setObjectName("shockerLayoutSwitch")
+        box.group = group
+        self._explain(box, LAYOUT_TITLE, LAYOUT_TIP)
+        head.addWidget(box)
+        self._panel_w["layout_switch"] = box
+        return box
+
+    def _layout_picked(self, name: str) -> None:
+        if name != self._shocker_buttons():
+            self.controller.set_shocker_layout(name)
 
     # ---- what reaches them -------------------------------------
 
@@ -86,14 +179,16 @@ class FriendsShockersMixin:
             on_release=lambda pairs: c.party_release(pairs),
             on_stop=lambda pairs: c.party_stop(pairs),
             on_ticks=lambda ticked: self._party_ticked(ticked),
-            big=self._friends_big)
+            big=self._friends_big, card_cls=self._card_class())
 
     # ---- the panel rebuilds ------------------------------------
 
     def _keep_shockers(self) -> None:
         """The cards are about to go: nothing they hold may keep running,
-        and the cards that replace them start where they were."""
-        memory, w = self._shock_memory(), self._panel_w
+        and the cards that replace them start where they were (in the
+        layout they were built in)."""
+        w = self._panel_w
+        memory = self._shock_memory(w.get("layout"))
         for i, card in enumerate(w.get("shockers") or []):
             card.release()
             memory[(w.get("kind"), w.get("id"), i)] = card.settings()
@@ -110,8 +205,13 @@ class FriendsShockersMixin:
         on Home. Any of those off and the section isn't there at all."""
         w, c = self._panel_w, self.controller
         names = theirs["shockers"]
+        cls = self._card_class()
+        w["layout"] = self._shocker_buttons()
         lay, head = self._friends_section("THEIR SHOCKERS", _SHOCK)
-        if len(names) > 1:
+        self._layout_switch(head)
+        # OpenShock's card has no STOP of its own (pressing a running button
+        # again stops it), so its panel keeps Stop all even for one shocker
+        if len(names) > 1 or (names and cls is OpenShockCard):
             head.addWidget(self._stop_all_button(
                 lambda: [card.stop() for card in w.get("shockers") or []]))
         w["state"] = self._shock_state()
@@ -134,9 +234,9 @@ class FriendsShockersMixin:
             # window of its own for a moment
             party.setVisible(bool(party.ticked()))
         w["party"] = party
-        cards: List[ShockerCard] = []
+        cards: List[QWidget] = []
         for i, n in enumerate(names):
-            card = ShockerCard(
+            card = cls(
                 f"{i + 1} · {n}", _SHOCK,
                 on_fire=lambda op, it, ln, wms, wi, s=i: c.friend_shock(fid, [s], it, ln, op, wms, wi),
                 on_hold=lambda op, it, s=i: c.friend_hold(fid, [s], op, it),
@@ -144,6 +244,7 @@ class FriendsShockersMixin:
                 on_stop=lambda s=i: c.friend_stop(fid, [s]),
                 big=self._friends_big, party_box=party is not None)
             card.set_caps(*their_caps(theirs, i))
+            card.set_rules(*their_rules(theirs, [i]))
             st = self._shock_memory().get(("friend", fid, i))
             if st is not None:
                 card.restore(st)
@@ -190,14 +291,18 @@ class FriendsShockersMixin:
         blocked = bool(theirs.get("paused") or theirs.get("off"))
         for i, card in enumerate(w.get("shockers") or []):
             card.set_caps(*their_caps(theirs, i))
+            card.set_rules(*their_rules(theirs, [i]))
             card.set_blocked(blocked)
         party = w.get("party")
         if party is not None:
+            party.card.set_rules(*their_rules(theirs, range(len(theirs.get("shockers") or []))))
             party.card.set_blocked(blocked)
         strip = w.get("state")
         if strip is None:
             return
-        if theirs.get("paused"):
+        if theirs.get("not_here"):
+            self._set_shock_state(strip, "", "Not here", NOT_HERE_SHOCKERS)
+        elif theirs.get("paused"):
             self._set_shock_state(strip, "", "Paused", "they paused all friends - nothing "
                                                        "reaches them")
         elif theirs.get("off"):
@@ -211,7 +316,9 @@ class FriendsShockersMixin:
 
     def _build_group_shockers(self) -> None:
         w = self._panel_w
-        lay, _head = self._friends_section("EVERYONE'S SHOCKERS", _SHOCK)
+        w["layout"] = self._shocker_buttons()
+        lay, head = self._friends_section("EVERYONE'S SHOCKERS", _SHOCK)
+        self._layout_switch(head)
         w["state"] = self._shock_state()
         lay.addWidget(w["state"])
         party = self._new_party("Everyone")
@@ -237,6 +344,18 @@ class FriendsShockersMixin:
             nick = display_name(f["nick"], f["id"])
             for i, n in enumerate(theirs.get("shockers") or []):
                 targets.append((f["id"], i, f"{nick} · {n}", hue))
+        # what any of them lets through (each receiver drops the rest)
+        ops, pairs = set(), []
+        for f in members:
+            theirs = f["theirs"]
+            if f["linked"] and theirs and theirs.get("allow_shock"):
+                slots = range(len(theirs.get("shockers") or []))
+                ops |= their_rules(theirs, slots)[0]
+                pairs += [(theirs, slot) for slot in slots]
+        if not targets:
+            ops = set(OPS)
+        warn_ok = _warn_ok(pairs)
+        party.card.set_rules(ops, _reasons(pairs, ops, warn_ok), warn_ok)
         kept = w.pop("party_kept", None)
         if kept is not None:
             # first time: the ticks it had, or every one of them

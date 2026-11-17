@@ -1,6 +1,7 @@
 """Friends view, the Web remote panel: your one web remote link -- Copy, New
-link, On -- what everyone on it may do (Toys, Shockers, Avatar), who is on
-it right now (a Kick each), and Remove. Part of FriendsMixin (friends.py); what it does is
+link, On -- what everyone on it may do (Toys, Shockers, Avatar; and, while
+only friends in your instance may drive you, Allow the web remote anyway),
+who is on it right now (a Kick each), and Remove. Part of FriendsMixin (friends.py); what it does is
 controllers/friends_web.py."""
 
 from typing import Any, Dict
@@ -17,6 +18,7 @@ from ui.views.friends_list import web_guests_tip
 from ui.widgets import IdentityMark, ToggleSwitch
 
 _COPY = "Copy link"
+_ANYWAY = "Allow the web remote anyway"
 # The panel's three switches: (settings key, label, identity icon, explanation)
 _SWITCHES = (
     ("toys", "Toys", "toys",
@@ -64,14 +66,18 @@ class FriendsWebPanelMixin:
         w["copy"].setProperty("role", "secondary")
         w["copy"].clicked.connect(lambda _=False: self._on_web_copy())
         btns.addWidget(w["copy"])
-        new = QPushButton("New link…")
-        new.setMinimumHeight(BTN_HEIGHT_SMALL)
-        new.setProperty("role", "ghost")
-        new.clicked.connect(lambda _=False: self._confirm_web_new_link())
-        btns.addWidget(new)
-        self._explain(new, "New link",
-                      "Your link stops working and everyone on it is let go; the new "
-                      "one only reaches whoever you give it to.")
+        # New link and Remove ask first, in a window of their own: they stay
+        # on the page, never in the popped-out panel (friends_window.py)
+        popped = self._friends_popped
+        if not popped:
+            new = QPushButton("New link…")
+            new.setMinimumHeight(BTN_HEIGHT_SMALL)
+            new.setProperty("role", "ghost")
+            new.clicked.connect(lambda _=False: self._confirm_web_new_link())
+            btns.addWidget(new)
+            self._explain(new, "New link",
+                          "Your link stops working and everyone on it is let go; the new "
+                          "one only reaches whoever you give it to.")
         btns.addStretch(1)
         lay.addLayout(btns)
         lay.addWidget(self._muted_label(
@@ -98,6 +104,29 @@ class FriendsWebPanelMixin:
         lay.addWidget(self._muted_label(
             "For everyone on the link at once. Shockers and Avatar start off: anyone "
             "with the link gets what you tick here."))
+        # only friends in my instance: a browser can't be in one, so it's
+        # blocked unless this is on (controllers/friends_instance.py)
+        anyway = ToggleSwitch(_ANYWAY)
+        anyway.setChecked(bool(web.get("anyway")))
+        anyway.toggled.connect(lambda on: self.controller.set_friends_web_anyway(bool(on)))
+        arow = _hbox(0, 8)
+        arow.addWidget(anyway)
+        arow.addStretch(1)
+        lay.addLayout(arow)
+        blocked = self._muted_label(
+            "Only friends in my instance is on, and a browser can't be in your VRChat "
+            "instance: nobody on your web remote can drive you unless you allow it "
+            "anyway. They're told why - never your friends' names or where you are.")
+        lay.addWidget(blocked)
+        anyway.setVisible(False)
+        blocked.setVisible(False)
+        self._explain(anyway, _ANYWAY,
+                      "On: everyone on your web remote can drive you while Only friends in "
+                      "my instance is on - a browser can never be in your VRChat instance, "
+                      "so without this it's blocked. Everything else still holds: the "
+                      "switches above, Pause all friends, Off, your strength and every "
+                      "shocker limit. Off by default.")
+        w["anyway"], w["anyway_note"] = anyway, blocked
 
         lay, head = self._friends_section("ON NOW", FRIENDS_HUE)
         box = QWidget()
@@ -110,6 +139,8 @@ class FriendsWebPanelMixin:
             box_lay.addWidget(self._muted_label("Nobody right now."))
         lay.addWidget(box)
 
+        if popped:
+            return
         foot = _hbox(0, 8)
         foot.addStretch(1)
         remove = QPushButton("Remove web remote…")
@@ -160,11 +191,15 @@ class FriendsWebPanelMixin:
         tip = web_guests_tip(web)
         if w["pill"].toolTip() != tip:
             w["pill"].setToolTip(tip)
-        for key in ("on", "toys", "shock", "params"):
-            if key in w and w[key].isChecked() != bool(web[key]):
+        for key in ("on", "toys", "shock", "params", "anyway"):
+            if key in w and w[key].isChecked() != bool(web.get(key)):
                 w[key].blockSignals(True)
-                w[key].setChecked(bool(web[key]))
+                w[key].setChecked(bool(web.get(key)))
                 w[key].blockSignals(False)
+        inst = st.get("instance") or {}
+        if "anyway" in w:
+            w["anyway"].setVisible(bool(inst.get("on")))
+            w["anyway_note"].setVisible(bool(inst.get("web_blocked")))
         for g in web["guests"]:
             r = w["guests"].get(g["id"])
             if r is None:

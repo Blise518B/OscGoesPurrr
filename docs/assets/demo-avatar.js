@@ -9,7 +9,7 @@
 // worn avatar's state: the Friends page's "you" panel shows the same board,
 // as a friend would see it (locked categories look-only there).
 
-import { el } from "./remote-ui.js";
+import { el, hslider } from "./remote-ui.js";
 import { Board } from "./remote-board.js";
 
 const D = window.OGPDemo;
@@ -36,14 +36,44 @@ const TYPES = [["Blush", "Float"], ["EarsDown", "Bool"], ["Emote", "Int"], ["Fac
   ["HueShift", "Float"], ["OGP/Friend/Level", "Float"], ["OGP/Strength", "Float"], ["Outfit", "Int"], ["Particles", "Int"], ["ScaleFactor", "Float"],
   ["TailWag", "Bool"], ["TongueOut", "Bool"]];
 
+// VRChat's /avatar/eyeheight and the Height box's settings (avatar_height.py:
+// on for friends, the lock, lowest / highest -- VRChat's own menu's 0.2-5 m
+// out of the box -- and Grow's seconds per doubling)
+const HEIGHT = { on: true, locked: false, lo: 0.2, hi: 5.0, double_s: 4, now: 1.42, own: 1.42, target: null };
+const clampH = (h) => Math.max(HEIGHT.lo, Math.min(HEIGHT.hi, h));
+let glideTimer = null;
+/** One step of Grow: doubling (or halving) every double_s seconds, never
+ *  past the target (avatar_height.glide_step), ten writes a second. */
+function glide() {
+  const step = (Math.log(2) * 0.1) / Math.max(1, HEIGHT.double_s);
+  const a = Math.log(HEIGHT.now), b = Math.log(HEIGHT.target);
+  HEIGHT.now = Math.abs(b - a) <= step ? HEIGHT.target : Math.exp(a + (b > a ? step : -step));
+  if (HEIGHT.now === HEIGHT.target) { clearInterval(glideTimer); glideTimer = null; HEIGHT.target = null; }
+  AVATAR.listeners.forEach((fn) => fn());
+}
+
 export const AVATAR = {
   name: "Kitsune",
   id: "avtr_6a1f3c2e-4b7d-4e19-9c55-518c0ffee518",
   values: { "OGP/Friend/Level": 0, Blush: 0.45, EarsDown: false, Emote: 0, FaceShy: 0, Glasses: true, HueShift: 0.62, Outfit: 2,
             Particles: 3, ScaleFactor: 1, TailWag: true, TongueOut: false },
   board: { ver: "kitsune-1", name: "Kitsune", avatar: "", categories: CATS, controls: CONTROLS, keys: [], all: null },
+  heightBox: HEIGHT,
   listeners: [],
   onChange(fn) { this.listeners.push(fn); },
+  /** The board as a friend sees it: the Height box only while it's on for friends. */
+  friendBoard() {
+    return { ...this.board, height: HEIGHT.on ? { lo: HEIGHT.lo, hi: HEIGHT.hi, allowed: true, locked: HEIGHT.locked } : null };
+  },
+  heightNow() { return HEIGHT.now; },
+  /** Grow (glide), now (a jump) or reset (back to your own height). */
+  height(mode, h) {
+    if (glideTimer) { clearInterval(glideTimer); glideTimer = null; }
+    if (mode === "reset") HEIGHT.now = HEIGHT.own;
+    else if (mode === "now") HEIGHT.now = clampH(h);
+    else { HEIGHT.target = clampH(h); glideTimer = setInterval(glide, 100); }
+    this.listeners.forEach((fn) => fn());
+  },
   /** What setting a control does to its parameter (param_board.send_value). */
   set(id, v) {
     const c = CONTROLS.find((x) => x.id === id);
@@ -67,6 +97,7 @@ const SLOT_NAMES = { toggle: ["Toggle", "Toggles"], radial: ["Radial", "Radials"
 const slotsOf = (key) => ["toggle", "radial"].flatMap((m) => SLOTS[m].map((k, i) => (k === key ? [m, i] : null)).filter(Boolean));
 function slotLabel(key) {
   if (!key) return "";
+  if (key === "h:height") return "Height";                 // param_board.HEIGHT_SLOT, Radials only
   const [kind, id] = [key[0], key.slice(2)];
   if (kind === "g") return (CATS.find((c) => c.id === id) || {}).name || "";
   return (CONTROLS.find((c) => c.id === id) || {}).label || "";
@@ -180,38 +211,158 @@ function openSlots(dot) {
   const host = W.root.getBoundingClientRect(), at = dot.getBoundingClientRect();
   const x = Math.max(4, Math.min(at.left - host.left + at.width / 2 - 116, host.width - 236));
   box.style.left = `${x}px`;
-  box.style.top = `${at.bottom - host.top + 4}px`;
+  box.style.top = `${at.bottom - host.top + 4 + W.root.scrollTop}px`;
 }
 
 function ownBoard() {
-  // the owner uses every category; the lock is what friends get (look-only)
-  return { ...AVATAR.board, categories: CATS.map((c) => ({ ...c, locked: false })) };
+  // the owner uses every category; the lock is what friends get (look-only);
+  // the Height box is always there for you (its switch is for friends)
+  return { ...AVATAR.board, categories: CATS.map((c) => ({ ...c, locked: false })),
+           height: { lo: HEIGHT.lo, hi: HEIGHT.hi, allowed: true, locked: false } };
 }
 
-/** The owner's extras on the friend board's cards: ⠿, ⋯, the lock. */
+const MIME_CONTROL = "text/x-ogp-control", MIME_CATEGORY = "text/x-ogp-category";
+function lockButton(get, set) {
+  const lock = el("button.pg-lock", { type: "button" });
+  const show = () => {
+    lock.textContent = get() ? "🔒" : "🔓";
+    lock.title = get() ? "Locked: friends can only look at it. Click to unlock."
+      : "Friends may use it. Click to lock it (look-only for friends).";
+  };
+  lock.onclick = () => { set(!get()); show(); AVATAR.listeners.forEach((fn) => fn()); };
+  show();
+  return lock;
+}
+
+/** The owner's extras on the friend board's cards: ⠿ (drag it back to the
+ *  list to remove it), ⋯, the lock -- and the Height box's own (param_height). */
 function decorate(root) {
-  for (const head of root.querySelectorAll(".cat-head:not(.own)")) {
+  for (const head of root.querySelectorAll(".cat:not(.hbox) > .cat-head:not(.own)")) {
     head.classList.add("own");
     const cat = CATS.find((c) => c.name === head.querySelector(".cat-name").textContent);
-    const lock = el("button.pg-lock", { type: "button" });
-    const show = () => {
-      lock.textContent = cat.locked ? "🔒" : "🔓";
-      lock.title = cat.locked ? "Locked: friends can only look at it. Click to unlock."
-        : "Friends may use it. Click to lock it (look-only for friends).";
-    };
-    lock.onclick = () => { cat.locked = !cat.locked; show(); AVATAR.listeners.forEach((fn) => fn()); };
-    show();
-    head.prepend(el("span.pg-grip.light", { title: "Drag to move the category" }, "⠿"));
-    head.append(slotDot(`g:${cat.id}`, ["toggle", "radial"]), lock, el("span.pg-more", { title: "Rename, colour, delete…" }, "⋯"));
+    if (!cat) continue;
+    const grip = el("span.pg-grip.light", { draggable: "true", title: "Drag to move the category - or onto the parameter list to remove it" }, "⠿");
+    grip.addEventListener("dragstart", (e) => { e.dataTransfer.setData(MIME_CATEGORY, cat.id); e.dataTransfer.effectAllowed = "move"; dragging(MIME_CATEGORY); });
+    grip.addEventListener("dragend", () => dragging(null));
+    head.prepend(grip);
+    head.append(slotDot(`g:${cat.id}`, ["toggle", "radial"]), lockButton(() => cat.locked, (v) => { cat.locked = v; }),
+      el("span.pg-more", { title: "Rename, colour, delete…" }, "⋯"));
   }
   for (const head of root.querySelectorAll(".pc-head:not(.own)")) {
     head.classList.add("own");
     const label = head.querySelector(".pc-label").textContent;
     const c = CONTROLS.find((x) => (x.label || x.param) === label);
-    head.prepend(el("span.pg-grip.hue", { title: "Drag to move the control" }, "⠿"));
+    const grip = el("span.pg-grip.hue", { draggable: "true", title: "Drag to move the control - or back to the parameter list to remove it" }, "⠿");
+    if (c) {
+      grip.addEventListener("dragstart", (e) => { e.dataTransfer.setData(MIME_CONTROL, c.id); e.dataTransfer.effectAllowed = "move"; dragging(MIME_CONTROL); });
+      grip.addEventListener("dragend", () => dragging(null));
+    }
+    head.prepend(grip);
     if (c) head.append(slotDot(`c:${c.id}`, [SLOT_KINDS.toggle.includes(c.kind) ? "toggle" : "radial"]));
     head.append(el("span.pg-more", { title: "Edit, duplicate, delete…" }, "⋯"));
   }
+  const hbox = root.querySelector(".hbox");
+  const hhead = hbox && hbox.querySelector(".cat-head:not(.own)");
+  if (hhead) {
+    hhead.classList.add("own");
+    const sw = el("label.sw.pg-hsw", { title: "Height for friends: whether friends you allow see this box and can change your height. "
+      + "Off, they don't see it and nothing they send changes it; your own box and avatar menu still work." },
+      el("input", { type: "checkbox", checked: HEIGHT.on, onchange: (e) => { HEIGHT.on = e.target.checked; AVATAR.listeners.forEach((fn) => fn()); } }),
+      el("span.knob"));
+    const opts = heightOptions();
+    const more = el("span.pg-more", { title: "Height settings: your lowest and highest height, and how fast Grow glides. Nobody can take "
+      + "you past them, friends included." }, "⋯");
+    more.onclick = () => { opts.hidden = !opts.hidden; };
+    hhead.append(slotDot("h:height", ["radial"]), lockButton(() => HEIGHT.locked, (v) => { HEIGHT.locked = v; }), more, sw);
+    hbox.querySelector(".hbody").before(opts);
+    hbox.title = "Height: your height in VRChat, from here, from your avatar menu and from friends you allow. It stays where it was put "
+      + "until someone changes it.";
+  }
+}
+
+/** What ⋯ folds out inside the Height box: Lowest, Highest, Grow speed. */
+function heightOptions() {
+  const fmtM = (h) => P.fmtHeight(h);
+  const lo = hslider({ max: 1000, hue: "green", value: Math.round(P.heightToSlider(HEIGHT.lo, 0.1, 100) * 1000),
+    onInput: (x) => { HEIGHT.lo = Math.min(P.sliderToHeight(x / 1000, 0.1, 100), HEIGHT.hi / 1.1); loV.textContent = fmtM(HEIGHT.lo); } });
+  const hi = hslider({ max: 1000, hue: "green", value: Math.round(P.heightToSlider(HEIGHT.hi, 0.1, 100) * 1000),
+    onInput: (x) => { HEIGHT.hi = Math.max(P.sliderToHeight(x / 1000, 0.1, 100), HEIGHT.lo * 1.1); hiV.textContent = fmtM(HEIGHT.hi); } });
+  // faster to the right: fewer seconds per doubling
+  const speed = hslider({ max: 29, hue: "green", value: 30 - HEIGHT.double_s,
+    onInput: (x) => { HEIGHT.double_s = 30 - x; spV.textContent = `×2 in ${HEIGHT.double_s} s`; } });
+  const loV = el("span.pval", {}, fmtM(HEIGHT.lo)), hiV = el("span.pval", {}, fmtM(HEIGHT.hi));
+  const spV = el("span.pval", {}, `×2 in ${HEIGHT.double_s} s`);
+  const row = (name, s, v, title) => el("div.row", { title }, el("span.small.pg-hopt", {}, name), s, v);
+  return el("div.pg-hopts", { hidden: true },
+    row("Lowest", lo, loV, "The smallest anyone can make you, you included. VRChat's own menu stops at 0.2 m, and VRChat doesn't support under 0.1 m."),
+    row("Highest", hi, hiV, "The tallest anyone can make you, you included. VRChat's own menu stops at 5 m, and VRChat doesn't support over 100 m."),
+    row("Grow speed", speed, spV, "How long Grow takes to double or halve your height. Slower is gentler on VRChat's view, which can jitter while the height glides."));
+}
+
+// ---- dragged back to the list: removed (params.py, param_remove.py) ----------
+
+const UNDO_S = 8;
+function dragging(mime) {
+  if (!W.drop) return;
+  W.drop.hidden = !mime;
+  W.drop.lastChild.textContent = mime === MIME_CATEGORY ? "The whole category and its controls. Asks first." : "Undo brings it back.";
+}
+/** A control goes at once, its menu slots with it; Undo puts it back. */
+function takeControl(id) {
+  const at = CONTROLS.findIndex((c) => c.id === id);
+  if (at < 0) return;
+  const c = CONTROLS[at], key = `c:${id}`;
+  const slots = ["toggle", "radial"].flatMap((m) => SLOTS[m].map((k, i) => (k === key ? [m, i] : null)).filter(Boolean));
+  CONTROLS.splice(at, 1);
+  slots.forEach(([m, i]) => { SLOTS[m][i] = null; });
+  AVATAR.listeners.forEach((fn) => fn());
+  offerUndo(`Removed “${c.label}”.`, () => {
+    CONTROLS.splice(at, 0, c);
+    slots.forEach(([m, i]) => { if (!SLOTS[m][i]) SLOTS[m][i] = key; });
+    AVATAR.listeners.forEach((fn) => fn());
+  });
+}
+/** A whole category: asked first, in the window. */
+function askTakeCategory(id) {
+  const cat = CATS.find((c) => c.id === id);
+  if (!cat) return;
+  const n = CONTROLS.filter((c) => c.cat === id).length;
+  const controls = `${n} control${n === 1 ? "" : "s"}`;
+  strip("ask", n ? `Remove the category “${cat.name}” and its ${controls}?` : `Remove the empty category “${cat.name}”?`, () => {
+    const ci = CATS.indexOf(cat), gone = CONTROLS.map((c, i) => [c, i]).filter(([c]) => c.cat === id);
+    CATS.splice(ci, 1);
+    for (const [c] of gone.slice().reverse()) CONTROLS.splice(CONTROLS.indexOf(c), 1);
+    AVATAR.listeners.forEach((fn) => fn());
+    offerUndo(`Removed “${cat.name}”.`, () => {
+      CATS.splice(ci, 0, cat);
+      for (const [c, i] of gone) CONTROLS.splice(i, 0, c);
+      AVATAR.listeners.forEach((fn) => fn());
+    });
+  });
+}
+function offerUndo(text, undo) { strip("undo", text, undo); }
+/** The strip above the list: Undo for UNDO_S seconds, or a question that waits. */
+function strip(mode, text, then) {
+  const s = W.strip;
+  clearTimeout(s.timer);
+  s.text.textContent = text;
+  s.undo.hidden = mode !== "undo";
+  s.yes.hidden = s.no.hidden = mode !== "ask";
+  s.root.classList.toggle("ask", mode === "ask");
+  s.then = then;
+  s.root.hidden = false;
+  if (mode === "undo") s.timer = setTimeout(() => { s.root.hidden = true; }, UNDO_S * 1000);
+}
+function removeStrip() {
+  const text = el("span.grow");
+  const go = () => { W.strip.root.hidden = true; const t = W.strip.then; W.strip.then = null; if (t) t(); };
+  const undo = el("button.pg-btn", { type: "button", onclick: go, title: "Puts back what you just dragged to the list, where it was and "
+    + "in the same avatar menu slots. Offered for a few seconds." }, "Undo");
+  const yes = el("button.pg-btn.danger", { type: "button", onclick: go, title: "Removes the category and every control in it. Undo is "
+    + "offered for a few seconds after." }, "Remove");
+  const no = el("button.pg-btn", { type: "button", onclick: () => { W.strip.root.hidden = true; }, title: "Leaves the category on the board as it is." }, "Keep");
+  const root = el("div.pg-rmstrip", { hidden: true }, text, undo, yes, no);
+  return { root, text, undo, yes, no, timer: null, then: null };
 }
 
 function paramDock() {
@@ -227,12 +378,25 @@ function paramDock() {
     W.filter = filt.value.trim().toLowerCase();
     for (const [name, r] of Object.entries(W.rows)) r.row.hidden = Boolean(W.filter) && !name.toLowerCase().includes(W.filter);
   });
+  W.strip = removeStrip();
+  // the list takes a control or a category dragged back to it: "Drop to remove"
+  W.drop = el("div.pg-rmdrop", { hidden: true }, el("b", {}, "Drop to remove"), el("span"));
+  const table = el("div.pg-ptable", {}, el("div.pg-prow.th", {}, el("span", {}, "Parameter"), el("span", {}, "Type"), el("span", {}, "Value")), body, W.drop);
+  table.addEventListener("dragover", (e) => {
+    const t = e.dataTransfer.types;
+    if (t.includes(MIME_CONTROL) || t.includes(MIME_CATEGORY)) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }
+  });
+  table.addEventListener("drop", (e) => {
+    const t = e.dataTransfer.types;
+    dragging(null);
+    if (t.includes(MIME_CONTROL)) { e.preventDefault(); takeControl(e.dataTransfer.getData(MIME_CONTROL)); }
+    else if (t.includes(MIME_CATEGORY)) { e.preventDefault(); askTakeCategory(e.dataTransfer.getData(MIME_CATEGORY)); }
+  });
   return el("div.pg-dock", {},
     el("div.pg-row.tight", {}, el("span.pg-chip.wide", {}, "Avatar parameters"),
       el("button.pg-btn", { type: "button", title: "Ask VRChat for every value again" }, "⟳  Resync")),
-    filt,
-    el("div.pg-ptable", {}, el("div.pg-prow.th", {}, el("span", {}, "Parameter"), el("span", {}, "Type"), el("span", {}, "Value")), body),
-    el("p.pg-note", {}, "Double-click a parameter, or drag it into a category, to make a control."),
+    filt, W.strip.root, table,
+    el("p.pg-note", {}, "Double-click a parameter, or drag it into a category, to make a control. Drag a control back here to remove it."),
     el("p.pg-note", {}, "Values update live from VRChat."));
 }
 
@@ -244,7 +408,7 @@ function fmt(type, v) {
 
 function refresh() {
   const values = valuesNow();
-  W.board.update({ ver: AVATAR.board.ver, stop: false, yolo: false }, ownBoard(), values);
+  W.board.update({ ver: AVATAR.board.ver, stop: false, yolo: false }, ownBoard(), values, false, HEIGHT.now);
   decorate(W.board.root);
   paintDots();
   for (const [name, r] of Object.entries(W.rows)) {
@@ -255,7 +419,8 @@ function refresh() {
 
 function build(root) {
   const friends = el("button.pg-btn", { type: "button", onclick: () => D.go("Friends") }, "Friends ▸");
-  W.board = new Board({ onSet: (id, v) => AVATAR.set(id, v), onHold: (id, held) => AVATAR.hold(id, held), onSetAny() {} });
+  W.board = new Board({ onSet: (id, v) => AVATAR.set(id, v), onHold: (id, held) => AVATAR.hold(id, held), onSetAny() {},
+                        onHeight: (mode, h) => AVATAR.height(mode, h) });
   W.dock = paramDock();
   const dockBtn = el("button.pg-link", { type: "button" }, "Avatar parameters ◂");
   const cols = el("div.pg-avcols", {}, el("div.pg-avboard", {}, W.board.root), W.dock);
@@ -287,7 +452,7 @@ function build(root) {
       el("button.pg-link", { type: "button" }, "Import from VRC Parameter Relay…"), dockBtn),
     cols);
   W.root = root;
-  root.style.position = "relative";
+  // (the page scroller is absolutely placed already: the slot picker sits in it)
   refresh();
 }
 

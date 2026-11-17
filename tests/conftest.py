@@ -64,9 +64,19 @@ def _never_touch_real_appdata(monkeypatch, tmp_path):
     from settings.suits import SuitsSettingsManager
     monkeypatch.setattr(SuitsSettingsManager, "FILE_PATH",
                         tmp_path / "suits_settings.json")
+    from settings.psvr2 import PSVR2SettingsManager
+    monkeypatch.setattr(PSVR2SettingsManager, "FILE_PATH",
+                        tmp_path / "psvr2_settings.json")
     from settings.param_boards import ParamBoardsSettingsManager
     monkeypatch.setattr(ParamBoardsSettingsManager, "FILE_PATH",
                         tmp_path / "param_boards.json")
+    # The log's day files (event_log.py, written by LogFacade)
+    from controllers import log_facade
+    monkeypatch.setattr(log_facade, "LOG_DIR", tmp_path / "event_log")
+    # What Statistics counts from the log (stats_events.py)
+    from controllers import stats_events_facade
+    monkeypatch.setattr(stats_events_facade, "STATS_EVENTS_FILE",
+                        tmp_path / "stats_events.json")
     # The SteamVR toy driver installs under %LOCALAPPDATA% and edits
     # SteamVR's openvrpaths.vrpath there — never the real ones.
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))

@@ -304,6 +304,21 @@ def glyph_icon(kind: str, color: str, size: int = 16) -> QIcon:
                 QPointF((tip.x() + back * sx * 4) * s, tip.y() * s),
                 QPointF(tip.x() * s, tip.y() * s),
                 QPointF(tip.x() * s, (tip.y() + back * sy * 4) * s)]))
+    elif kind in ("popout", "popin"):
+        # a window, its top right corner open, and an arrow out through it
+        # (into a window of its own) or back in (into the page)
+        p.setPen(QPen(c, 1.5 * s, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        p.drawPolyline(QPolygonF([QPointF(7 * s, 3 * s), QPointF(3 * s, 3 * s),
+                                  QPointF(3 * s, 13 * s), QPointF(13 * s, 13 * s),
+                                  QPointF(13 * s, 9 * s)]))
+        inner, outer = QPointF(7.5 * s, 8.5 * s), QPointF(14 * s, 2 * s)
+        p.drawLine(inner, outer)
+        if kind == "popout":
+            head = [QPointF(9.5 * s, 2 * s), outer, QPointF(14 * s, 6.5 * s)]
+        else:
+            head = [QPointF(7.5 * s, 4 * s), inner, QPointF(12 * s, 8.5 * s)]
+        p.drawPolyline(QPolygonF(head))
     elif kind in ("up", "down"):
         p.setPen(QPen(c, 1.6 * s, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         for dy in (0, 5):
@@ -379,6 +394,25 @@ def glyph_icon(kind: str, color: str, size: int = 16) -> QIcon:
         p.setPen(Qt.NoPen)
         p.setBrush(QBrush(c))
         p.drawEllipse(QPointF(8 * s, 9 * s), 1.4 * s, 1.4 * s)
+    # OpenShock's shocker card (ui/views/openshock_card.py): Sound -- a
+    # speaker and two sound waves -- and Vibrate's three wavy lines
+    elif kind == "sound":
+        p.setPen(QPen(c, 1.5 * s, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        p.drawPolygon(QPolygonF([QPointF(x * s, y * s) for x, y in (
+            (1.8, 6), (4.6, 6), (8.4, 2.6), (8.4, 13.4), (4.6, 10), (1.8, 10))]))
+        for r in (2.6, 5.0):
+            p.drawArc(QRectF((9.5 - r) * s, (8 - r) * s, 2 * r * s, 2 * r * s), -50 * 16, 100 * 16)
+    elif kind == "waves":
+        p.setPen(QPen(c, 1.4 * s, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        for y in (3.8, 8.0, 12.2):
+            path = QPainterPath(QPointF(1.5 * s, y * s))
+            path.cubicTo(QPointF(3.7 * s, (y - 1.8) * s), QPointF(5.8 * s, (y - 1.8) * s),
+                         QPointF(8 * s, y * s))
+            path.cubicTo(QPointF(10.2 * s, (y + 1.8) * s), QPointF(12.3 * s, (y + 1.8) * s),
+                         QPointF(14.5 * s, y * s))
+            p.drawPath(path)
     p.end()
     return QIcon(pm)
 
@@ -527,7 +561,8 @@ def _draw_web(p: QPainter, c: QColor) -> None:
 _IDENTITY_DRAW = {"toys": _draw_toy, "shock": _draw_bolt, "params": _draw_remote,
                   "friends": _draw_friends, "suits": _draw_suit, "web": _draw_web}
 IDENTITY_NAMES = {"toys": "Toys", "shock": "Shockers", "params": "Avatar Remote",
-                  "friends": "Friends", "suits": "Suits", "web": "Web remote"}
+                  "friends": "Friends", "suits": "Suits", "web": "Web remote",
+                  "psvr2": "PSVR2"}
 
 
 def identity_color(what: str) -> str:
@@ -539,7 +574,8 @@ def identity_color(what: str) -> str:
         return constants.COLOR_ACCENT
     return theme.hue({"toys": theme.FRIEND_TOYS_HUE, "friends": theme.FRIENDS_HUE,
                       "web": theme.FRIENDS_HUE,          # part of Friends
-                      "suits": theme.SUITS_HUE}.get(what, theme.FRIEND_SHOCK_HUE))
+                      "suits": theme.SUITS_HUE,
+                      "psvr2": theme.PSVR2_HUE}.get(what, theme.FRIEND_SHOCK_HUE))
 
 
 def identity_icon(what: str, size: int = 20) -> QIcon:
@@ -556,8 +592,8 @@ def identity_pixmap(what: str, size: int, dpr: float) -> QPixmap:
 
 
 # ---------------------------------------------------------------------------
-# The pages that are not a kind of thing -- Statistics, the tools, Settings,
-# Help -- so every sidebar entry has an icon (Blise's ask, 2026-10-28). Line
+# The pages that are not a kind of thing -- Statistics, Log, the tools,
+# Settings, Help -- so every sidebar entry has an icon (Blise's ask, 2026-10-28). Line
 # art like the ones above, in the sidebar's text tone: a colour stays the
 # sign of what something is.
 # ---------------------------------------------------------------------------
@@ -616,6 +652,19 @@ def _draw_log(p: QPainter, c: QColor) -> None:
         p.drawLine(QPointF(7.0, y), QPointF(x1, y))
 
 
+def _draw_activity(p: QPainter, c: QColor) -> None:
+    """Log (who did what): a timeline -- three moments on it, and a line of
+    what happened beside each. Not System Log's page of lines."""
+    _stroke(p, c)
+    p.drawLine(QPointF(5.0, 2.75), QPointF(5.0, 17.25))
+    for y, x1 in ((4.75, 16.75), (10.0, 14.25), (15.25, 16.0)):
+        p.drawLine(QPointF(9.25, y), QPointF(x1, y))
+    p.setPen(Qt.NoPen)
+    p.setBrush(QBrush(c))
+    for y in (4.75, 10.0, 15.25):
+        p.drawEllipse(QPointF(5.0, y), 2.0, 2.0)
+
+
 def _draw_gear(p: QPainter, c: QColor) -> None:
     """Settings: a gear."""
     import math
@@ -654,9 +703,46 @@ def _draw_help(p: QPainter, c: QColor) -> None:
     p.drawEllipse(QPointF(10.0, 14.75), 1.05, 1.05)
 
 
+def _draw_limits(p: QPainter, c: QColor) -> None:
+    """Limits: a ceiling, and an arrow rising toward it that stops short.
+    Not a sidebar entry -- the Shockers page's Limits groups wear it."""
+    _stroke(p, c)
+    p.drawLine(QPointF(10.0, 17.75), QPointF(10.0, 7.25))
+    p.drawPolyline(QPolygonF([QPointF(5.75, 11.5), QPointF(10.0, 7.25), QPointF(14.25, 11.5)]))
+    p.setPen(QPen(c, 2.25, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+    p.drawLine(QPointF(2.75, 3.25), QPointF(17.25, 3.25))
+
+
+def _draw_headset(p: QPainter, c: QColor) -> None:
+    """The PSVR2 headset: a visor with a nose cut, its halo band over it.
+    (Drawn here, with the page icons, but an identity: _IDENTITY_DRAW.)"""
+    _stroke(p, c)
+    visor = QPainterPath(QPointF(5.75, 8.5))
+    visor.lineTo(QPointF(14.25, 8.5))
+    visor.quadTo(QPointF(17.0, 8.5), QPointF(17.0, 11.25))
+    visor.lineTo(QPointF(17.0, 12.5))
+    visor.quadTo(QPointF(17.0, 15.25), QPointF(14.25, 15.25))
+    visor.lineTo(QPointF(12.0, 15.25))
+    visor.cubicTo(QPointF(11.5, 13.0), QPointF(8.5, 13.0), QPointF(8.0, 15.25))
+    visor.lineTo(QPointF(5.75, 15.25))
+    visor.quadTo(QPointF(3.0, 15.25), QPointF(3.0, 12.5))
+    visor.lineTo(QPointF(3.0, 11.25))
+    visor.quadTo(QPointF(3.0, 8.5), QPointF(5.75, 8.5))
+    visor.closeSubpath()
+    p.drawPath(visor)
+    p.drawArc(QRectF(3.5, 3.0, 13.0, 11.0), 0, 180 * 16)
+
+
 _PAGE_DRAW = {"stats": _draw_stats, "sps": _draw_sps, "inspector": _draw_inspector,
-              "diagnostics": _draw_diagnostics, "log": _draw_log,
-              "settings": _draw_gear, "help": _draw_help}
+              "diagnostics": _draw_diagnostics, "log": _draw_log, "activity": _draw_activity,
+              "settings": _draw_gear, "help": _draw_help, "limits": _draw_limits}
+_IDENTITY_DRAW["psvr2"] = _draw_headset
+
+
+def drawn_icon(what: str, color: str, size: int = 20) -> QIcon:
+    """One of the line-art icons above in a colour of the caller's -- the
+    PSVR2 headset's on Home, greyed while its row isn't up."""
+    return _scaled(_PAGE_DRAW.get(what) or _IDENTITY_DRAW.get(what), color, size)
 
 
 def page_icon(what: str, size: int = 20) -> QIcon:

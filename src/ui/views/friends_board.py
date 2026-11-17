@@ -3,8 +3,11 @@ Avatar Remote page for the avatar they wear, under their toys and shockers in
 the panel (one friend only: in a group everyone wears something else).
 
 Their categories and cards as they have them (param_cards.py, without
-grips or menus); a locked category is look-only. With their ⚡ YOLO on, a
-list of every parameter follows, filterable. While the panel shows them
+grips or menus); a locked category is look-only. Their Height box follows
+(param_height.py, while its switch is on on their side): their height now,
+Grow / Right away / Reset inside their range -- look-only while they locked
+it, their world forbids it or they paused all friends. With their ⚡ YOLO
+on, a list of every parameter follows, filterable. While the panel shows them
 the page tells the controller it is watching (only then does their OGP
 send the board and its values); looking away says so too. Part of
 FriendsMixin (friends.py)."""
@@ -14,11 +17,16 @@ from typing import Any, Dict, Optional
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QLabel, QLineEdit, QPushButton, QWidget
 
+import avatar_height as ah
 from ui.layout_helpers import clear_layout, hbox as _hbox, vbox as _vbox
 from ui.views.card_parts import WheelSafeSlider
 from ui.views.param_cards import NoWheelSpin, ParamCard, ParamCategory
+from ui.views.param_height import HeightBox
 
 _HUE = "accent"
+# their board while only friends in their VRChat instance may drive them and
+# you aren't in it (their status says so -- never where they are)
+NOT_HERE_BOARD = "not here - they only let friends in their VRChat instance use it"
 _YOLO_ROWS = 60           # the every-parameter list shows this many at once
 
 
@@ -27,9 +35,11 @@ def _shape(board: Optional[Dict[str, Any]]):
     locks (those change in place)."""
     if board is None:
         return None
+    height = board.get("height")
     return (tuple((c["id"], c["color"]) for c in board["categories"]),
             tuple(tuple(sorted(c.items())) for c in board["controls"]),
-            None if board.get("all") is None else tuple(board["all"]))
+            None if board.get("all") is None else tuple(board["all"]),
+            None if height is None else (height["lo"], height["hi"]))
 
 
 class FriendsBoardMixin:
@@ -60,7 +70,8 @@ class FriendsBoardMixin:
         lay.addWidget(body)
         frame.setVisible(False)
         self._panel_w["board"] = {"fid": fid, "frame": frame, "note": note, "lay": body_lay,
-                                  "key": None, "cards": {}, "boxes": {}, "yolo_open": False,
+                                  "key": None, "cards": {}, "boxes": {}, "height": None,
+                                  "yolo_open": False,
                                   "yolo_rows": {}, "yolo_filter": "", "yolo_all": False}
 
     def _update_friend_board(self) -> None:
@@ -71,9 +82,9 @@ class FriendsBoardMixin:
         c, fid = self.controller, b["fid"]
         theirs = c.get_friend_board(fid)
         b["frame"].setVisible(theirs is not None)
-        page = self.views.get("Friends") if hasattr(self, "views") else None
-        if theirs is None or page is None or not page.isVisible():
-            self._friends_watch(None)            # only while you can see it
+        # only while you can see it: on the page, or in its own window
+        if theirs is None or not self._friends_panel_seen():
+            self._friends_watch(None)
             if theirs is None:
                 return
         else:
@@ -93,7 +104,8 @@ class FriendsBoardMixin:
                     box.set_state(cat["name"], cat["locked"], prm["stop"])
         note = (board["name"] if board and board["name"] else "")
         if prm["stop"]:
-            note = (note + " · " if note else "") + "paused - they paused all friends"
+            note = (note + " · " if note else "") + (
+                NOT_HERE_BOARD if theirs.get("not_here") else "paused - they paused all friends")
         if b["note"].text() != note:
             b["note"].setText(note)
         values = theirs["values"]
@@ -101,13 +113,15 @@ class FriendsBoardMixin:
             name = card.control["param"]
             if name in values:
                 card.update_value(values[name])
+        if b["height"] is not None and board is not None and board.get("height"):
+            self._show_friend_height(b["height"], board["height"], theirs, prm["stop"])
         for name, set_value in b["yolo_rows"].items():
             if name in values:
                 set_value(values[name])
 
     def _rebuild_friend_board(self, b: Dict[str, Any], theirs: Dict[str, Any]) -> None:
         clear_layout(b["lay"])
-        b["cards"], b["yolo_rows"], b["boxes"] = {}, {}, {}
+        b["cards"], b["yolo_rows"], b["boxes"], b["height"] = {}, {}, {}, None
         prm, board = theirs["prm"], theirs["board"]
         if not prm["ver"]:
             b["lay"].addWidget(self._muted_label(
@@ -118,7 +132,7 @@ class FriendsBoardMixin:
             b["lay"].addWidget(self._muted_label("Getting their board…"))
             return
         c, fid = self.controller, b["fid"]
-        if not board["controls"] and board.get("all") is None:
+        if not board["controls"] and board.get("all") is None and not board.get("height"):
             b["lay"].addWidget(self._muted_label(
                 "Nothing on this avatar's board yet - they add controls on their "
                 "Avatar Remote page."))
@@ -138,8 +152,43 @@ class FriendsBoardMixin:
             box.finalize(stopped=prm["stop"])
             b["boxes"][cat["id"]] = box
             b["lay"].addWidget(box)
+        if board.get("height"):
+            b["height"] = self._friend_height_box(fid)
+            b["lay"].addWidget(b["height"])
+            self._show_friend_height(b["height"], board["height"], theirs, prm["stop"])
         if board.get("all") is not None:
             self._friend_board_yolo(b, board, theirs, prm["stop"])
+
+    # ---- their height ------------------------------------------
+
+    def _friend_height_box(self, fid: str) -> HeightBox:
+        c = self.controller
+        box = HeightBox(editable=False)
+        box.go.connect(lambda mode, h: c.friend_height(fid, mode, h))
+        box.reset.connect(lambda: c.friend_height(fid, ah.RESET))
+        self._explain(box, "Their height",
+                      "Their height in VRChat, from their Avatar Remote page's Height box. "
+                      "It stays where you put it, inside the range they chose.")
+        self._explain(box.grow_btn, "Grow",
+                      "Glides them to the slider's height, at the speed they chose.")
+        self._explain(box.now_btn, "Right away", "Jumps them straight to the slider's height.")
+        self._explain(box.reset_btn, "Reset",
+                      "Back to their own height: what VRChat reported before anyone changed it.")
+        return box
+
+    def _show_friend_height(self, box: HeightBox, height: Dict[str, Any],
+                            theirs: Dict[str, Any], stopped: bool) -> None:
+        if not height["allowed"]:
+            note = "Their world doesn't allow changing height."
+        elif stopped and theirs.get("not_here"):
+            note = "Not here - they only let friends in their VRChat instance change it."
+        elif stopped:
+            note = "Paused - they paused all friends."
+        else:
+            note = ""
+        box.show_state(theirs.get("height"), height["lo"], height["hi"],
+                       usable=height["allowed"] and not height["locked"] and not stopped,
+                       note=note, locked=height["locked"])
 
     # ---- ⚡ YOLO: every parameter --------------------------------
 

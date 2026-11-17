@@ -177,6 +177,47 @@ class TestLogTagging:
         auto.follow(120, [(ALEX, "Alex")], since=0)
         assert len(auto.tags()) == 1
 
+    def test_a_linked_friends_name_is_the_one_tagged(self, auto):
+        """One name for one person: an account linked to a friend on the
+        Friends page is tagged with the name shown there."""
+        auto._friends_vrc_link_name = lambda uid: "Alex VR" if uid == ALEX else ""
+        auto.follow(0, [(ALEX, "AlexRightNow")], since=0)
+        assert auto.tags()[0]["people"] == ["Alex VR"]
+        assert auto.stats_people.vrc_names[ALEX] == "Alex VR"
+
+
+class TestSharedWatcher:
+    """The Friends page reads the same log behind its own switch."""
+
+    def test_friends_alone_reads_the_log_but_tags_nothing(self, host):
+        host.mode_manager.app_settings.set(pf.FRIENDS_LOG_KEY, True)
+        host._vrc_log_sync()
+        assert host.watcher.started == 1
+        assert host._vrc_log_snapshot() is host.watcher.snap
+        host.follow(100, [(ALEX, "Alex")], since=60)
+        assert host.tags() == []
+        assert host.get_people_autodetect_status() == {"state": "off"}
+
+    def test_switching_tagging_off_leaves_the_log_to_friends(self, auto):
+        auto.mode_manager.app_settings.set(pf.FRIENDS_LOG_KEY, True)
+        auto.follow(0, [(ALEX, "Alex")], since=0)
+        auto.play(10, 30)
+        auto.set_people_autodetect(False)
+        assert auto.watcher.stopped == 0                  # Friends still reads it
+        assert auto.tags()[0]["end"] is not None          # but the stretch ended
+        auto.follow(120, [(ALEX, "Alex")], since=0)
+        assert len(auto.tags()) == 1
+        auto.mode_manager.app_settings.set(pf.FRIENDS_LOG_KEY, False)
+        auto._vrc_log_sync()                              # the Friends switch went off
+        assert auto.watcher.stopped == 1 and auto._vrc_log_snapshot() is None
+
+    def test_on_at_launch_for_either(self, tmp_path):
+        h = Host(tmp_path)
+        assert h.watcher.started == 0
+        h.mode_manager.app_settings.set(pf.FRIENDS_LOG_KEY, True)
+        h._people_init()
+        assert h.watcher.started == 1
+
 
 class TestTagging:
     def test_whole_session_and_stretches(self, host):

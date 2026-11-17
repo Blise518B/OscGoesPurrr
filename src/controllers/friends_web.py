@@ -13,7 +13,9 @@ call, 2026-10-28 -- anyone with the link gets them). Its messages take the
 friends' own path, so every friend rule holds (Pause all friends, Off,
 your strength, each toy's output band, zero when its updates stop, the
 shocker engine's arming and caps, locked categories), and it is logged
-like a friend. It never hears your friends' names: who else drives you
+like a friend. While only friends in your instance may drive you it is
+blocked -- a browser can't be in one -- unless its panel's "Allow the web
+remote anyway" is on (friends_instance.py). It never hears your friends' names: who else drives you
 reaches it as a count.
 
 Your link: Copy (the first copy makes it, and the row), New link (the old
@@ -36,6 +38,7 @@ import friend_links
 import remote_link
 import remote_protocol as proto
 from controllers.friends_common import FEATURE_KEY
+from event_log import IN, LINK, ROLE_WEB, SETTINGS
 
 
 class FriendsWebMixin:
@@ -45,6 +48,7 @@ class FriendsWebMixin:
         self._web_lock = threading.Lock()
         self._web_guests: Dict[str, str] = {}      # browser id -> nickname, while it's on
         self._web_selected = False                 # the Web remote row is picked
+        self._web_refusals: set = set()            # (browser, kind) said in the debug log
 
     # ------------------------------------------------------------------
     # The page
@@ -60,7 +64,8 @@ class FriendsWebMixin:
                   for gid, nick in sorted(self._web_guests.items(), key=lambda kv: kv[1].lower())]
         return {"on": web["on"], "toys": web["toys"], "shock": web["shock"],
                 "params": web["params"], "guests": guests,
-                "driving": any(g["driving"] for g in guests), "selected": self._web_selected}
+                "driving": any(g["driving"] for g in guests), "selected": self._web_selected,
+                "anyway": bool(web.get("anyway"))}
 
     def friends_web_link_message(self) -> str:
         """Your web remote link for the clipboard (the link, and what it is
@@ -74,9 +79,10 @@ class FriendsWebMixin:
         if first:
             self._friends_rebuild_perms()
             self._friends_note("You made your web remote link - anyone who opens it in a "
-                               "browser can drive your toys")
+                               "browser can drive your toys", kind=SETTINGS, op="web")
         else:
-            self._friends_note("You copied your web remote link", key=("web-copy",))
+            self._friends_note("You copied your web remote link", key=("web-copy",),
+                               kind=SETTINGS, op="web")
         self._friends_refresh_ui()
         return friend_links.remote_message(my_id, code, self.friends_settings.get_nickname())
 
@@ -87,7 +93,8 @@ class FriendsWebMixin:
         self.friends_settings.new_web_code()
         n = self._web_let_go_all(remote_link.WEB_CLOSED)
         self._friends_note("You made a new web remote link - the old one stopped working"
-                           + (f" ({_browsers(n)} let go)" if n else ""))
+                           + (f" ({_browsers(n)} let go)" if n else ""), kind=SETTINGS,
+                           op="web")
         self._friends_refresh_ui()
 
     def set_friends_web_on(self, on: bool) -> None:
@@ -96,11 +103,12 @@ class FriendsWebMixin:
             return
         self.friends_settings.set_web_on(on)
         if on:
-            self._friends_note("Your web remote link works again")
+            self._friends_note("Your web remote link works again", kind=SETTINGS, op="web")
         else:
             n = self._web_let_go_all(remote_link.WEB_CLOSED)
             self._friends_note("You switched your web remote off - nobody gets in"
-                               + (f" ({_browsers(n)} let go)" if n else ""))
+                               + (f" ({_browsers(n)} let go)" if n else ""), kind=SETTINGS,
+                               op="web")
         self._friends_refresh_ui()
 
     def set_friends_web_permission(self, what: str, on: bool) -> None:
@@ -121,7 +129,7 @@ class FriendsWebMixin:
                 elif drop is not None:
                     drop(gid)                       # held buttons let go
         self._friends_note(f"Your web remote may {'now' if on else 'no longer'} "
-                           f"{_WEB_LABELS[what]}")
+                           f"{_WEB_LABELS[what]}", kind=SETTINGS, op="allow" if on else "deny")
         self._friends_refresh_ui()
 
     def friends_web_kick(self, gid: str) -> None:
@@ -133,7 +141,8 @@ class FriendsWebMixin:
         self._web_forget(gid)
         self.friends_link.drop(gid, remote_link.WEB_KICKED)
         self._friends_note(f"You kicked {nick} off your web remote - that browser can't "
-                           "come back")
+                           "come back", who=gid, name=f"{nick} (web)", role=ROLE_WEB,
+                           op="kick")
         self._friends_refresh_ui()
 
     def friends_web_remove(self) -> None:
@@ -144,7 +153,8 @@ class FriendsWebMixin:
         self.friends_settings.forget_web()
         self._web_selected = False
         self._friends_note("You removed your web remote - its link stopped working"
-                           + (f" ({_browsers(n)} let go)" if n else ""))
+                           + (f" ({_browsers(n)} let go)" if n else ""), kind=SETTINGS,
+                           op="web")
         self._friends_refresh_ui()
 
     def _web_let_go_all(self, reason: bytes) -> int:
@@ -174,6 +184,16 @@ class FriendsWebMixin:
         perms = (bool(web["toys"]), bool(web["shock"]), bool(web["params"]))
         return {gid: perms for gid in self._web_guests}
 
+    def _web_refused(self, gid: str, kind: str) -> None:
+        """A browser sent what only an OGP sends (friends_facade's
+        _NEVER_FROM_A_BROWSER): dropped, and said in the debug log once per
+        browser and kind."""
+        if (gid, kind) in self._web_refusals:
+            return
+        self._web_refusals = self._web_refusals | {(gid, kind)}
+        self._friends_debug(f"Friends: a web remote browser ({gid[:8]}…) sent '{kind}', "
+                            "which the page never sends - dropped")
+
     def _web_nick(self, gid: str) -> Optional[str]:
         """How a web guest is called on the page and in the log, or None
         for anyone else."""
@@ -194,6 +214,10 @@ class FriendsWebMixin:
             return False
         nick = proto.clean_nick(nick) or "Web guest"
         with self._web_lock:
+            if self._web_not_here():
+                # only friends in your instance: a browser can't be in one --
+                # refused from its first message on (friends_instance.py)
+                self._not_here = self._not_here | {peer}
             self._web_guests = {**self._web_guests, peer: nick}
             self._friend_perms = {**self._friend_perms, **self._web_perms()}
         self.thread_queue.put(("friends", ("web_joined", (peer, nick))))
@@ -208,14 +232,18 @@ class FriendsWebMixin:
         if kind == "web_joined":
             gid, nick = data
             if gid in self._web_guests:
-                self._friends_note(f"{nick} opened your web remote")
+                self._friends_note(f"{nick} opened your web remote", who=gid,
+                                   name=f"{nick} (web)", role=ROLE_WEB, kind=LINK,
+                                   op="online", dir=IN)
         elif kind == "web_left":
             gid, word = data
             nick = self._web_guests.get(gid)
             if nick is not None:
                 self._web_forget(gid)
                 why = {"bye": "closed the page", "timeout": "connection lost"}.get(word, "left")
-                self._friends_note(f"{nick} left your web remote ({why})")
+                self._friends_note(f"{nick} left your web remote ({why})", who=gid,
+                                   name=f"{nick} (web)", role=ROLE_WEB, kind=LINK,
+                                   op="offline")
         elif kind == "web_nick":
             gid, nick = data
             nick = proto.clean_nick(nick)
@@ -223,7 +251,8 @@ class FriendsWebMixin:
             if old is not None and nick and nick != old:
                 with self._web_lock:
                     self._web_guests = {**self._web_guests, gid: nick}
-                self._friends_note(f"{old} (web) is now called {nick}")
+                self._friends_note(f"{old} (web) is now called {nick}", who=gid,
+                                   name=f"{nick} (web)", role=ROLE_WEB, kind=LINK, op="rename")
         else:
             return False
         return True

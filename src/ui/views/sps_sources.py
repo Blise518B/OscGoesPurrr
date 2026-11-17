@@ -1,4 +1,6 @@
-"""SPS Sources view — build user-defined synthetic SPS sources.
+"""SPS Sources — build user-defined synthetic SPS sources. A fold on the
+Toys page (ui/views/toys.py) since 2026-11-14; it used to be a page of its
+own under TOOLS.
 
 Mixin for ui_components.OscGoesPurrrUI. A synthetic source assembles raw
 VRChat contact receivers into a single SPS-style signal:
@@ -10,8 +12,8 @@ VRChat contact receivers into a single SPS-style signal:
                  multiplied by the shared multiplier
   * max value  — clamp on the raw proximity before the multiplier
 
-The result shows up in every toy's zone picker on Home, so it routes
-exactly like an auto-detected SPS zone.
+The result shows up in every toy's zone picker (the Input stage), so it
+routes exactly like an auto-detected SPS zone.
 All persistence + math goes through the controller facade; this file only
 draws widgets and forwards primitive values (Demeter rule).
 """
@@ -52,7 +54,7 @@ class SpsSourcesMixin:
             "gate it to a specific spot (the signal only counts while one is "
             "firing); 'velocity' on-enter contacts boost the output by the "
             "multiplier; and the max value caps the raw proximity. Each source "
-            "becomes a zone you can pick for any toy on Home."
+            "becomes a zone you can pick in any toy's Input stage, above."
         ))
 
         top_row = _hbox(0, 8)
@@ -68,8 +70,8 @@ class SpsSourcesMixin:
         self._explain(
             add_btn, "Add source",
             "Creates a new, empty source. Give it at least one proximity "
-            "contact and it becomes a zone you can pick for any toy on Home, "
-            "like the ones your avatar's SPS provides.")
+            "contact and it becomes a zone you can pick in any toy's Input "
+            "stage, like the ones your avatar's SPS provides.")
         top_row.addWidget(add_btn)
         parent_layout.addLayout(top_row)
 
@@ -80,6 +82,7 @@ class SpsSourcesMixin:
         self.sps_sources_list_layout = _vbox(8, 8)
         inner.setLayout(self.sps_sources_list_layout)
         scroll.setWidget(inner)
+        self._sps_sources_inner = inner
         parent_layout.addWidget(scroll, 1)
 
         # Live readout pump — only does work while this view is visible.
@@ -154,7 +157,7 @@ class SpsSourcesMixin:
             "its contacts and settings. Switch it back on to use it again.")
         self._explain(
             name_edit, "Source name",
-            "What this source is called in a toy's zone picker on Home.")
+            "What this source is called in a toy's zone picker (its Input stage).")
         self._explain(
             value_label, "Live value",
             "What this source is producing right now, from 0 to 1 — "
@@ -314,6 +317,7 @@ class SpsSourcesMixin:
             (getattr(self, "dialog_parent", None) or self.window), on_pick, allow_wildcards=False,
             subtitle="Pick the contact receiver parameter (double-click to "
                      "add) or enter one manually.",
+            mapped=self._parse_contacts(edit.text()), settings=self.controller,
         )
 
     # ----------------------------------------------------------
@@ -378,9 +382,11 @@ class SpsSourcesMixin:
     def _refresh_sps_source_values(self):
         if not self._sps_source_rows:
             return
+        # Only while the list is on screen: the Toys page shown and its
+        # SPS Sources fold open.
         try:
-            if (self.main_stack is None
-                    or self.main_stack.currentWidget() is not self.views.get("SPS Sources")):
+            inner = getattr(self, "_sps_sources_inner", None)
+            if inner is None or not inner.isVisible():
                 return
         except Exception:
             return

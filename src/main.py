@@ -14,9 +14,11 @@ import threading
 import asyncio
 import queue
 import sys
+import time
 from typing import Any, Dict, List, Optional
 
 # ModeManager from config manager module
+import antistuck
 from config_manager import ModeManager
 
 # UI Components for the Visual Shell (The Face / View)
@@ -30,6 +32,7 @@ from vrchat_osc import VRChatOSCManager
 from osc_router_518 import ROUTER_HOST, ROUTER_PORT, Router518Fallback
 from motor_router import MotorRouter
 from parameter_store import store
+from precise_alarm import PreciseAlarm
 import sps3_zone
 from motor_param_out import resolve_param_out
 from queue_drain import drain_and_coalesce
@@ -62,12 +65,17 @@ from controllers import (
     SteamVRToysFacade,
     PiShockFacade,
     SuitsFacade,
+    PSVR2Facade,
     FriendsFacade,
     ParamsFacade,
     ToySoundsFacade,
-    ToyPresenceFacade,
+    PresenceFacade,
     WhatsNewFacade,
     InterestsFacade,
+    TourFacade,
+    AwayFacade,
+    LogFacade,
+    HistoryFacade,
 )
 
 
@@ -84,15 +92,24 @@ class OscGoesPurrrApp(
     SteamVRToysFacade,
     PiShockFacade,
     SuitsFacade,
+    PSVR2Facade,
     FriendsFacade,
     ParamsFacade,
     ToySoundsFacade,
-    ToyPresenceFacade,
+    PresenceFacade,
     WhatsNewFacade,
     InterestsFacade,
+    TourFacade,
+    AwayFacade,
+    LogFacade,
+    HistoryFacade,
 ):
     def __init__(self):
         self.async_loop: asyncio.AbstractEventLoop = None
+
+        # Ctrl+Z / Ctrl+Y (settings_history.py): the one history, made
+        # before any settings store loads -- each tracks itself as it does.
+        self._history_init()
         
         # Thread-safe communication queue (standard library, not asyncio)
         self.thread_queue: queue.Queue = queue.Queue()
@@ -146,6 +163,13 @@ class OscGoesPurrrApp(
         # a new chain of ticks; `_routing_gen` retires the sleeping one.
         self._routing_asleep = False
         self._routing_gen = 0
+        # The tick's beat comes from a PreciseAlarm (made in run()): a QTimer
+        # here fell back to Windows' 15.6 ms step once OGP ran more than 16
+        # timers, so "90 Hz" ticked at 64 Hz. `_routing_alarm_gen` is the
+        # generation the alarm was armed for; a ring of an older one is void.
+        self._routing_alarm: Optional[PreciseAlarm] = None
+        self._routing_alarm_gen = -1
+        self._routing_due: Optional[float] = None    # perf_counter time of the next beat
 
         # Update state. `_pending_update` is the last check's result,
         # kept so the Install button doesn't re-query GitHub; the thread
@@ -189,7 +213,8 @@ class OscGoesPurrrApp(
         # Initialize standalone OSC routing engine
         self.motor_router = MotorRouter(get_sleep_active=self.is_sleep_active,
                                         get_master_scale=self.get_master_scale,
-                                        get_friend_drive=self.get_friend_drive_mode)
+                                        get_friend_drive=self.get_friend_drive_mode,
+                                        get_toy_sleep=self.is_toy_sleep_on)
 
         # Tune view's pattern player + source picker were deleted in
         # Cut 8 of the chain-inlined-tuning redesign; the parametric
@@ -251,6 +276,15 @@ class OscGoesPurrrApp(
         except Exception as e:
             print(f"[steamvr-toys] init failed: {e}")
 
+        # The log of who did what (friends, Me, web remote guests, your
+        # avatar's behaviours) — before the shockers, whose rules report to
+        # it, and Friends, which writes most of it. Its own thread reads the
+        # last 30 days and writes the day files; nothing waits for the disk.
+        try:
+            self._event_log_init()
+        except Exception as e:
+            print(f"[log] init failed: {e}")
+
         # Shockers (a PiShock or OpenShock hub on USB) — behind its feature
         # switch, off by default. Built before the UI, whose Shockers page
         # reads its status and rules while it is built; nothing connects
@@ -269,6 +303,14 @@ class OscGoesPurrrApp(
             self._suits_init()
         except Exception as e:
             print(f"[suits] init failed: {e}")
+
+        # PSVR2 headset rumble (through the user's own PSVR2Toolkit) --
+        # behind its feature switch, off by default, Windows only. The
+        # toolkit's DLL loads only once the feature is on.
+        try:
+            self._psvr2_init()
+        except Exception as e:
+            print(f"[psvr2] init failed: {e}")
 
         # Avatar Remote (avatar boards, VRC Parameter Relay's board inside OGP)
         # — behind its feature switch, off by default. Before Friends, whose
@@ -294,6 +336,15 @@ class OscGoesPurrrApp(
         # refresh_device_states heartbeat in run(), and _stats_shutdown()
         # in quit_app closes the session.
         self._stats_init()
+
+        # Off while you're away (AFK, GoGo Loco's AFK, picked parameters):
+        # the sources it watches, before the UI, whose Safety card and
+        # status bar read them while they are built.
+        self._away_init()
+
+        # Every settings store exists now: each gets the hook that puts an
+        # undo into effect (controllers/history_facade.py).
+        self._history_hooks()
 
         # Instantiate UI Component (must be after haptic_engine is created).
         # The UI owns its own root window so this controller stays
@@ -405,7 +456,7 @@ class OscGoesPurrrApp(
                 self.ui.update_stored_devices_ui()
                 self._steamvr_toys_event(self.steamvr_toys_on_devices_changed)
                 self.toy_sounds_on_devices_changed()
-                self.toy_presence_on_devices_changed()
+                self.presence_on_devices_changed()
             elif msg_type == "battery_update":
                 self.ui.update_battery_label(data["device_name"], data["level"])
                 # friends see it on their card for that toy
@@ -425,21 +476,35 @@ class OscGoesPurrrApp(
                 self.ui.update_stored_devices_ui()
                 self._steamvr_toys_event(self.steamvr_toys_on_devices_changed)
                 self.toy_sounds_on_devices_changed()
-                self.toy_presence_on_devices_changed()
+                self.presence_on_devices_changed()
             elif msg_type == "stored_devices_refresh":
                 self.ui.build_stored_devices_ui()
             elif msg_type == "friends":
                 kind, payload = data
                 self._friends_on_queue(kind, payload)
             elif msg_type == "pishock_state":
-                refresh = getattr(self.ui, "refresh_pishock_status", None)
+                # the hub, its shocker list, a shocker's On or one of the
+                # switches changed: the page and Home's row redraw
+                self._pishock_state_changed()
+                self.presence_on_devices_changed()
+            elif msg_type == "shockosc_config":
+                # the avatar's ShockOSC setting (its menu, a friend's set):
+                # the Shockers' behaviours follow (shockosc_sync)
+                self._shockosc_config_heard(*data)
+            elif msg_type == "shockosc_rules":
+                # ShockOSC behaviours' values changed by the sync: the page
+                self._shockosc_rules_changed()
+            elif msg_type == "psvr2_state":
+                refresh = getattr(self.ui, "refresh_psvr2_status", None)
                 if refresh is not None:
                     refresh()
+                self.presence_on_devices_changed()
             elif msg_type == "suits_state":
                 self._suits_note_connected()
                 refresh = getattr(self.ui, "refresh_suits_status", None)
                 if refresh is not None:
                     refresh()
+                self.presence_on_devices_changed()
             elif msg_type == "osc_status":
                 is_connected, port = data
                 self.ui.update_osc_status(is_connected, port)
@@ -478,17 +543,29 @@ class OscGoesPurrrApp(
                     # ...and for the connected-toy parameters and the
                     # thrust counters.
                     try:
-                        self.toy_presence_send_all()
+                        self.presence_send_all()
                     except Exception:
                         pass
                     try:
                         self.thrust_params_send_all()
                     except Exception:
                         pass
+                    # ...and ShockOSC's feedback (shockosc_facade)
+                    try:
+                        self.shockosc_resend()
+                    except Exception:
+                        pass
                 else:
                     self.ui.log_message("VRChat OSC Disconnected. Waiting for VRChat to come back...")
                     try:
                         self._params_vrchat_gone()
+                    except Exception:
+                        pass
+                    # VRChat closed (its OSCQuery record went, or its HTTP
+                    # server stopped answering) -- never just a quiet
+                    # stretch: an AFK hold lets go (away_facade).
+                    try:
+                        self._away_vrchat_gone()
                     except Exception:
                         pass
                     # The OGP/Test release edge can never arrive on a dead
@@ -522,8 +599,13 @@ class OscGoesPurrrApp(
                 self._on_avatar_change(data)
                 self._params_avatar_changed(data)
                 # The swap reset every avatar parameter, these included.
-                self.toy_presence_send_all()
+                self.presence_send_all()
                 self.thrust_params_send_all()
+                # its ShockOSC groups (the Shockers page's card, the feedback)
+                try:
+                    self.shockosc_avatar_changed()
+                except Exception as e:
+                    print(f"[ShockOSC] avatar change: {e}")
             elif msg_type == "ogp_mode":
                 # Expression-menu mode switch (OGP/Mode int from VRChat).
                 self._on_ogp_mode_osc(data)
@@ -539,6 +621,10 @@ class OscGoesPurrrApp(
             elif msg_type == "ogp_sleep":
                 # Menu sleep toggle (OGP/Sleep bool).
                 self._on_ogp_toggle_osc("sleep", data)
+            elif msg_type == "away_check":
+                # A parameter "Off while you're away" watches changed (AFK,
+                # VRCEmote, a picked one) or the store reloaded.
+                self._away_check()
             elif msg_type == "update_checked":
                 # GitHub release check finished (launch or manual; see
                 # _spawn_update_check). data = (info_or_none, manual).
@@ -847,7 +933,7 @@ class OscGoesPurrrApp(
         # on-time against the deleted toy in the statistics.
         self.motor_router.forget_device(device_name)
         # Its "connected" avatar parameter, if it had one, goes false.
-        self.toy_presence_sync()
+        self.presence_sync()
 
         # Remove from UI via the framework-agnostic facade
         self.ui.remove_device_frame(device_name)
@@ -869,15 +955,13 @@ class OscGoesPurrrApp(
         self.mode_manager.app_settings.set(key, value)
 
     def _get_toy_antistuck(self) -> Dict[str, Any]:
-        """Anti-stuck config for the toy path, read from app
-        settings and reshaped into the `{enabled, active_s, peaked_s}` dict
-        the motor router expects. Threaded into `reevaluate_state` each tick;
-        a plain dict read on the GUI thread, so it holds the latency budget."""
-        return {
-            "enabled": bool(self.get_app_setting("toy_antistuck_enabled", True)),
-            "active_s": int(self.get_app_setting("toy_antistuck_active_s", 1)),
-            "peaked_s": int(self.get_app_setting("toy_antistuck_peaked_s", 10)),
-        }
+        """The toys' anti-stuck (the Toys page), read from app settings
+        into the `{enabled, active_s, peaked_s}` dict the motor router
+        expects. Threaded into `reevaluate_state` each tick; a few dict
+        reads on the GUI thread, so it holds the latency budget. Each toy's
+        own switch is read by the router from its wiring; the suits, the
+        trackers and the PSVR2 have their own (antistuck.py)."""
+        return antistuck.from_app(self.get_app_setting)
 
     # ==================================================================
     # Feature toggles — Settings → Features panel uses these to gate the
@@ -894,6 +978,8 @@ class OscGoesPurrrApp(
         "feature_pishock",
         "feature_bhaptics",
         "feature_owo",
+        "feature_trackers",
+        "feature_psvr2",
         "feature_friends",
         "feature_params",
     )
@@ -902,7 +988,13 @@ class OscGoesPurrrApp(
     # edition is toys-first, and someone without the hardware should never
     # meet the page.
     _FEATURE_DEFAULT_OFF = frozenset({"feature_pishock", "feature_bhaptics", "feature_owo",
+                                      "feature_trackers", "feature_psvr2",
                                       "feature_params"})
+
+    # Features only Windows can have: PSVR2Toolkit (and its DLL) is Windows
+    # only. Elsewhere they're treated like FEATURES_NOT_YET -- always off,
+    # not in Settings → Features nor "What are you here for?".
+    FEATURES_WINDOWS_ONLY: frozenset = frozenset({"feature_psvr2"})
 
     # Features this build carries but doesn't offer yet: always off whatever
     # was saved, and missing from Settings → Features and "What are you here
@@ -912,17 +1004,25 @@ class OscGoesPurrrApp(
     # (2026-11-03, his bHaptics suit confirmed working). Empty for now.
     FEATURES_NOT_YET: frozenset = frozenset()
 
+    def _features_unavailable(self) -> frozenset:
+        """Not offered here: FEATURES_NOT_YET, plus the Windows-only ones
+        on any other system."""
+        if sys.platform == "win32":
+            return self.FEATURES_NOT_YET
+        return self.FEATURES_NOT_YET | self.FEATURES_WINDOWS_ONLY
+
     def get_feature_enabled(self, key: str) -> bool:
-        if key in self.FEATURES_NOT_YET:
+        if key in self._features_unavailable():
             return False
         return bool(self.get_app_setting(key, key not in self._FEATURE_DEFAULT_OFF))
 
     def get_feature_flags(self) -> Dict[str, bool]:
+        unavailable = self._features_unavailable()
         return {k: self.get_feature_enabled(k) for k in self.FEATURE_KEYS
-                if k not in self.FEATURES_NOT_YET}
+                if k not in unavailable}
 
     def set_feature_enabled(self, key: str, enabled: bool) -> None:
-        if key in self.FEATURES_NOT_YET:
+        if key in self._features_unavailable():
             return                      # a tester's saved switch stays as it was
         enabled = bool(enabled)
         self.set_app_setting(key, enabled)
@@ -930,6 +1030,9 @@ class OscGoesPurrrApp(
             self._apply_feature_state(key, enabled)
         except Exception as e:
             self.log_message(f"Feature toggle '{key}' apply error: {e}")
+        # A suit's or the shockers' "connected" parameters come and go with
+        # their feature (off: each said false once).
+        self.presence_sync()
         # Sync the sidebar visibility so disabled features hide their nav entry.
         if self.ui is not None:
             try:
@@ -956,6 +1059,10 @@ class OscGoesPurrrApp(
             self._bhaptics_feature_changed(enabled)
         elif key == "feature_owo":
             self._owo_feature_changed(enabled)
+        elif key == "feature_trackers":
+            self._trackers_feature_changed(enabled)
+        elif key == "feature_psvr2":
+            self._psvr2_feature_changed(enabled)
         elif key == "feature_friends":
             self._friends_feature_changed(enabled)
         elif key == "feature_params":
@@ -1018,6 +1125,32 @@ class OscGoesPurrrApp(
         tick = getattr(self, "_routing_tick", None)
         if tick is not None:
             self._routing_gen += 1          # the sleeping chain's callback retires
+            tick()
+
+    def _routing_schedule(self, delay_ms: float) -> None:
+        """Arm the routing tick's next beat `delay_ms` from now (UI thread).
+        Each call starts a new generation, so an older beat already on its
+        way to the UI thread does nothing."""
+        self._routing_gen += 1
+        gen = self._routing_gen
+        self._routing_due = time.perf_counter() + delay_ms / 1000.0
+        alarm = getattr(self, "_routing_alarm", None)
+        if alarm is None:
+            self.ui.schedule_callback(int(round(delay_ms)),
+                                      lambda: self._routing_beat(gen))
+            return
+        self._routing_alarm_gen = gen
+        alarm.set(delay_ms)
+
+    def _routing_alarm_rang(self) -> None:
+        """The alarm's thread: hand the beat to the UI thread, where the tick
+        runs, stamped with the generation the alarm was armed for."""
+        gen = self._routing_alarm_gen
+        self.ui.schedule_callback(0, lambda: self._routing_beat(gen))
+
+    def _routing_beat(self, gen: int) -> None:
+        tick = getattr(self, "_routing_tick", None)
+        if tick is not None and gen == self._routing_gen:
             tick()
 
     def force_recalculate(self, dispatch_direct: bool = False):
@@ -1393,7 +1526,7 @@ class OscGoesPurrrApp(
         # Tell the avatar no toy is connected any more, while the OSC link
         # is still up.
         try:
-            self.toy_presence_shutdown()
+            self.presence_shutdown()
         except Exception:
             pass
         # ...and that nothing is being counted any more (the pace goes to 0).
@@ -1432,6 +1565,12 @@ class OscGoesPurrrApp(
         except Exception:
             pass
 
+        # Leave the PSVR2 headset's motor off and let the toolkit go.
+        try:
+            self._psvr2_shutdown()
+        except Exception:
+            pass
+
         # Take the toys off SteamVR's device list and close the bridge.
         try:
             self._steamvr_toys_shutdown()
@@ -1461,6 +1600,14 @@ class OscGoesPurrrApp(
         # overwrite anything restored.
         try:
             self._stats_shutdown()
+        except Exception:
+            pass
+
+        # Write the last of the log (Friends and the shockers are closed by
+        # now, so whatever they said on the way out is in it). Like
+        # stats.json, it's history, not settings: not gated on skip_saves.
+        try:
+            self._event_log_shutdown()
         except Exception:
             pass
 
@@ -1498,6 +1645,12 @@ class OscGoesPurrrApp(
                 mgr.stop()
         except Exception:
             pass
+
+        # The routing tick's beat stops last: no beat may reach a UI being
+        # torn down.
+        alarm = getattr(self, "_routing_alarm", None)
+        if alarm is not None:
+            alarm.close()
 
         self.ui.shutdown()
 
@@ -1538,6 +1691,7 @@ class OscGoesPurrrApp(
             # fresh routing, it disables the needs_settling / anti-stuck
             # HARDWARE-SAFETY ticks while the engine keeps commanding the
             # last non-zero targets.
+            started = time.perf_counter()
             needs_tick = True           # an exception below keeps the full rate
             try:
                 needs_tick = getattr(self, '_needs_recalculation', False)
@@ -1595,14 +1749,19 @@ class OscGoesPurrrApp(
                 try:
                     hz = int(self.get_app_setting("router_poll_rate_hz", 60))
                     hz = max(10, min(240, hz))
-                    interval = max(1, int(round(1000.0 / hz)))
+                    interval = 1000.0 / hz
                 except Exception:
                     interval = ROUTER_POLL_RATE_MS
                 delay = self._routing_next_delay(needs_tick, interval)
-                self._routing_gen += 1
-                gen = self._routing_gen
-                self.ui.schedule_callback(
-                    delay, lambda: gen == self._routing_gen and routing_tick())
+                if delay == interval:
+                    # The next beat counts from when this one was due (from
+                    # its start if a wake ran it), so neither the tick's own
+                    # time nor the hand-over to this thread slows the rate.
+                    due = self._routing_due
+                    base = (due if due is not None and 0.0 <= started - due < interval / 1000.0
+                            else started)
+                    delay = max(1.0, (base + interval / 1000.0 - time.perf_counter()) * 1000.0)
+                self._routing_schedule(delay)
 
         # Periodically check for UI updates from async thread. Same rule as
         # routing_tick: the reschedule always runs — this pump carries every
@@ -1649,7 +1808,9 @@ class OscGoesPurrrApp(
 
         # Start the routing tick loop
         self._routing_tick = routing_tick
-        self.ui.schedule_callback(ROUTER_POLL_RATE_MS, routing_tick)
+        self._routing_alarm = PreciseAlarm(self._routing_alarm_rang,
+                                           name="OGP routing tick")
+        self._routing_schedule(ROUTER_POLL_RATE_MS)
 
         # Start the device-state heartbeat (1 Hz).
         self.ui.schedule_callback(1000, refresh_device_states)
@@ -1680,9 +1841,12 @@ class OscGoesPurrrApp(
         # launch with the question), then "What's new" when this is the
         # first launch after an update. One window at a time: What's new
         # waits for the question, and an update offer that arrives while
-        # either is open waits for both.
+        # either is open waits for both. Then the guided tour, once: a new
+        # install's starts when the question closes, an older install is
+        # offered it (a bar over the page, not a window).
         self.ui.schedule_callback(
-            1200, lambda: (self.interests_on_launch(), self.whats_new_on_launch()))
+            1200, lambda: (self.interests_on_launch(), self.whats_new_on_launch(),
+                           self.tour_on_launch()))
 
         # Start the OSC debugger UI refresh loop
         self.refresh_debugger_ui()

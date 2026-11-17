@@ -33,6 +33,8 @@ from utilities import strip_param_prefix
 from ui.geometry import parse_tk_geometry as _parse_tk_geometry
 from ui.geometry import format_tk_geometry as _format_tk_geometry
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox, clear_layout as _clear_layout
+from ui.layout_helpers import FlowLayout as _FlowLayout
+from ui.osc_variable_picker import open_osc_variable_picker
 from ui.text_helpers import truncate as _truncate, html_escape as _html_escape
 from ui.icons import (
     new_icon_pixmap as _new_icon_pixmap,
@@ -74,8 +76,8 @@ class SettingsMixin(AppearanceMixin):
     _FEATURE_TIPS = {
         "feature_intiface":
             "Everything to do with toys. Off: the app stops talking to "
-            "the toy server and hides the toy list on Home — only useful if "
-            "you run the app purely to drive avatar parameters.",
+            "the toy server and hides the Toys page and the toys on Home — "
+            "only useful if you run the app purely to drive avatar parameters.",
         "feature_osc_router_518":
             "After a few hours VRChat can stop announcing itself to new OSC "
             "apps. With this on, the app automatically listens through a "
@@ -113,6 +115,18 @@ class SettingsMixin(AppearanceMixin):
             "An OWO suit, through the My OWO app (which keeps your "
             "calibration). On: the Suits page appears; OGP connects when you "
             "press Connect. Off: OWO is stopped and My OWO is let go.",
+        "feature_trackers":
+            "SteamVR trackers with a vibration motor: a Vive Tracker with a "
+            "Haptic Pancake, a Tundra with a Tundra Tapper, a controller set "
+            "up as a tracker. On: they show on the Suits page where their "
+            "SteamVR role puts them and buzz from your avatar's contacts "
+            "(Haptic Pancake's names). Off: OGP lets go of SteamVR.",
+        "feature_psvr2":
+            "The PlayStation VR2 headset's rumble motor, through PSVR2Toolkit "
+            "(its experimental builds; a jailbroken headset - on a stock one "
+            "the motor never moves). On: OGP joins the toolkit whenever "
+            "SteamVR runs and buzzes the headset from your avatar's "
+            "contacts. Off: the motor is stopped and the toolkit let go.",
     }
 
     def _build_settings_view(self, parent_layout: QVBoxLayout):
@@ -389,7 +403,7 @@ class SettingsMixin(AppearanceMixin):
             "disconnect one.")
 
         # The whole-rig "a toy is connected" avatar parameter. Each toy has
-        # its own on its card (Home); this is the one for "any of them".
+        # its own on its card (the Toys page); this is the one for "any of them".
         getter = getattr(self.controller, "get_toy_presence_param", None)
         if callable(getter):
             any_on, any_param = getter()
@@ -405,7 +419,8 @@ class SettingsMixin(AppearanceMixin):
                 "avatar already sends.<br><br>"
                 "It is sent again whenever you change avatar, and goes "
                 "false when you close the app. Each toy has its own switch "
-                "for \"this toy is connected\": open the toy on Home."))
+                "for \"this toy is connected\": its card on the Toys page, under "
+                "Avatar parameters."))
 
         # Thrust counters as avatar parameters, for a counter display.
         if callable(getattr(self.controller, "get_thrust_params_enabled", None)):
@@ -436,7 +451,7 @@ class SettingsMixin(AppearanceMixin):
         parent_layout.addWidget(conn_card)
         self._connection_card = conn_card
 
-        # ---- Toy Safety Card ----
+        # ---- Safety Card (Toy Safety until 2026-11-17) ----
         self._toy_safety_card = self._build_toy_safety_card()
         parent_layout.addWidget(self._toy_safety_card)
 
@@ -769,6 +784,8 @@ class SettingsMixin(AppearanceMixin):
             "feature_pishock":          "Shockers — PiShock / OpenShock (USB)",
             "feature_bhaptics":         "bHaptics — suit and sleeves over Bluetooth",
             "feature_owo":              "OWO — EMS suit through the My OWO app",
+            "feature_trackers":         "Trackers — vibrating trackers through SteamVR",
+            "feature_psvr2":            "PSVR2 — the headset's rumble, through PSVR2Toolkit",
             "feature_friends":          "Friends — control each other over the internet",
             "feature_params":           "Avatar Remote — avatar boards friends can use too",
         }
@@ -781,6 +798,13 @@ class SettingsMixin(AppearanceMixin):
         ordered = [k for k in ordered if k not in self._HIDDEN_FEATURES]
         feature_rows = tuple((k, _feature_labels.get(k, k)) for k in ordered)
 
+        # Each row wears its page's icon (Blise's ask with the PSVR2 headset,
+        # 2026-11-14: its own icon here too) -- the same one as in the
+        # sidebar and "What are you here for?" (ui/views/interests.FEATURE_ICONS),
+        # redrawn with the colour picker. A row without one keeps the gap.
+        from ui.views.interests import FEATURE_ICONS as _FEATURE_ICONS
+        from ui.widgets import IdentityMark
+        icon_px, icon_gap = 16, 8
         self.feature_toggles: Dict[str, ToggleSwitch] = {}
         for key, label in feature_rows:
             tog = ToggleSwitch(label)
@@ -788,15 +812,22 @@ class SettingsMixin(AppearanceMixin):
             tog.toggled.connect(
                 lambda checked, k=key: self._on_feature_toggled(k, bool(checked))
             )
-            feat_lay.addWidget(tog)
+            line = _hbox(0, icon_gap)
+            if key in _FEATURE_ICONS:
+                line.addWidget(IdentityMark(_FEATURE_ICONS[key], icon_px), 0, Qt.AlignVCenter)
+            else:
+                line.addSpacing(icon_px)
+            line.addWidget(tog)
+            line.addStretch(1)
+            feat_lay.addLayout(line)
             self.feature_toggles[key] = tog
             if key in self._FEATURE_TIPS:
                 self._explain(tog, label, self._FEATURE_TIPS[key])
             if key == "feature_statistics":
                 # off keeps them; this is what deletes them (on or off)
                 row = _hbox(0, 8)
-                row.setContentsMargins(
-                    ToggleSwitch._TRACK_W + ToggleSwitch._LABEL_SPACING, 0, 0, 0)
+                row.setContentsMargins(icon_px + icon_gap + ToggleSwitch._TRACK_W
+                                       + ToggleSwitch._LABEL_SPACING, 0, 0, 0)
                 delete = QPushButton("Delete statistics…")
                 delete.setProperty("role", "danger")
                 delete.setProperty("size", "small")
@@ -1108,20 +1139,26 @@ class SettingsMixin(AppearanceMixin):
         section("What this app does", """
 OscGoesPurrr listens to VRChat OSC parameters once, then fans them out to independent output pipelines:
 
-  • Home — your Bluetooth toys via Intiface / Buttplug.io
+  • Toys — your Bluetooth toys via Intiface / Buttplug.io
   • OSC Inspector — live read-out of every parameter your avatar broadcasts
 
 Each section is self-contained: a failure in one never affects the others.
 """)
 
-        section("Home — your toys", """
-Home is where the app opens. Every toy you have connected gets a row outlined in its own colour, showing what drives it in the active mode, its battery and a live meter per motor, with Mute and Test right there. Toys you've used before but that are switched off stay listed in a grey outline, so their setup is always reachable. Test all buzzes every connected toy at once.
+        section("Home — everything at a glance", """
+Home is where the app opens: a row for everything you have. Every toy you have connected gets a row outlined in its own colour, showing what drives it in the active mode, who it hears (Touch and Penetration, from yourself or from others), its battery and a live meter per motor, with Mute and Test right there. Toys you've used before but that are switched off stay listed in a grey outline. Test all buzzes every connected toy at once. While they're switched on in Settings → Features, your shocker hub, suits and headset get a row too, with their own switches (the shockers' Arm shocks, Share with friends and On / Off).
 
-Click a toy's bar to open it: each motor's signal chains appear in place (Input → Depth/Speed/Punch → Combine → Wake → Envelope → Zero cut → Output). Click any stage to edit it. Click the bar again to fold the toy away.
+Click a row to open it on its own page — a toy opens at its card on the Toys page.
+""")
 
-Tuning tools, at the bottom, holds the two things you only need while shaping a response: the input simulator and the signal graph. It stays folded until you open it and remembers how you left it.
+        section("Toys — your toys in detail", """
+The Toys page holds every toy's card: the same bar as on Home, open on each motor's signal chains — one folded bar per chain, its stages lit as the signal passes. Click a chain to open it (Input → Depth/Speed/Punch → Combine → Wake → Envelope → Zero cut → Output) and any stage to edit it. A click on the toy's bar folds the toy away.
 
-Anti-stuck — the safety cutoff that stops a toy when a contact's value freezes (an avatar swap, a partner leaving) — is on by default and lives in Settings → Toy Safety.
+At the top, Scan now looks for toys right away (the app also looks by itself) and the Toy server line says whether the toy server is connected and where it runs — built in, or your own Intiface Central on this PC or a phone.
+
+Under the toys: SPS Sources, for zones of your own, and Tuning tools, which holds the two things you only need while shaping a response: the input simulator and the signal graph. Both stay folded until you open them; Tuning tools remembers how you left it.
+
+Under Toy server, Anti-stuck — the safety cutoff that stops a toy when a contact's value freezes (an avatar swap, a partner leaving) — with its two timers, for every toy. On by default. Each toy's bar has its own Anti-stuck chip too, to leave one toy out, and a Sleep chip that puts just that toy to sleep.
 """)
 
         section("Modes — what they are", """
@@ -1141,10 +1178,12 @@ How strong everything runs is the Total output strength bar in the sidebar — o
 
 Beside it are two toggles. Neither is remembered across restarts, deliberately — launching into silence, or into a sleep gate nobody remembers arming, just reads as a broken app.
 
-  • Off — panic silence. Everything stops instantly whatever the slider says; switch it back off and your level returns untouched.
-  • Sleep — makes your toys hard to wake: every chain's Wake stage switches to the stroke counter, so nothing plays until three full strokes land within six seconds. A brush against a sleeping partner does nothing. Your own Wake settings are untouched and come straight back. Buttplug toys only — no other backend has a Wake stage.
+  • Off — panic silence. Everything stops instantly whatever the slider says; switch it back off and your level returns untouched. While you're AFK in VRChat the same Off is held for you without pressing it (Settings → Safety → Off while you're away, on by default) — the status bar says so, and it all comes back when you do, or when VRChat closes.
+  • Sleep — makes every toy hard to wake: every chain's Wake stage switches to the stroke counter, so nothing plays until three full strokes land within six seconds. A brush against a sleeping partner does nothing. Your own Wake settings are untouched and come straight back. Buttplug toys only — no other backend has a Wake stage.
 
-If ONE toy always feels stronger than the rest, leave the slider alone and trim that motor instead: Home → the toy → its chain → Output → Gain. If instead a motor does nothing until it is well up its range, or gets unpleasant near the top, set Output → Range to the part it actually uses. Both are per-motor calibration and hold across every mode.
+Each toy's bar (on Home and the Toys page) has a Sleep chip of its own, for that toy alone — the same three strokes wake it. While the sidebar's Sleep is on, every toy's chip is lit. Like the sidebar's, it isn't remembered across restarts. Friends' drives reach a sleeping toy as before.
+
+If ONE toy always feels stronger than the rest, leave the slider alone and trim that motor instead: Toys → the toy → its chain → Output → Gain. If instead a motor does nothing until it is well up its range, or gets unpleasant near the top, set Output → Range to the part it actually uses. Both are per-motor calibration and hold across every mode.
 """)
 
         section("What is saved per mode vs. shared", """
@@ -1165,14 +1204,14 @@ The optional "Remember mode per avatar" setting (Settings → Modes) restores th
 """)
 
         section("Deleting a toy", """
-The red "Delete" button on a toy card forgets that toy entirely — it is removed from the wiring and every mode, and from the global known-toys list. To use the toy again, simply reconnect it; it will be re-registered automatically.
+"Delete device", at the right end of a toy card's last line on the Toys page, forgets that toy entirely — it is removed from the wiring and every mode, and from the global known-toys list. To use the toy again, simply reconnect it; it will be re-registered automatically.
 """)
 
         section("Showing connected toys on your avatar", """
 The app can tell your avatar whether a toy is connected, as a Bool avatar parameter — for a light, an icon, anything your avatar can switch on.
 
   • Any toy — Settings → Connection Settings → "Tell VRChat while any toy is connected". True while at least one toy is connected.
-  • One toy — open the toy on Home → "Tell VRChat while this toy is connected". True while that toy is connected. It is the same in every mode.
+  • One toy — the toy's card on the Toys page → Avatar parameters → "Tell VRChat while this toy is connected". True while that toy is connected. It is the same in every mode.
 
 Each has a name you can change; add a Bool with that name to your avatar's parameters. The values are sent again whenever you change avatar or VRChat reconnects, and all go false when you close the app. Setup details: docs/VRCHAT_MENU.md.
 """)
@@ -1184,14 +1223,14 @@ The picker shows live avatar parameters captured by the OSC inspector. Double-cl
 """)
 
         section("SPS Sources — synthetic contact zones", """
-The SPS Sources tab lets you build a "virtual" SPS zone out of raw VRChat contact receivers, for spots your avatar doesn't expose as an OGB zone. Each source combines:
+SPS Sources, under the toys on the Toys page, lets you build a "virtual" SPS zone out of raw VRChat contact receivers, for spots your avatar doesn't expose as an OGB zone. Each source combines:
 
   • Proximity — one or more proximity receivers. The loudest one wins.
   • Activation — binary gate contacts. The proximity only counts while at least one activation contact is firing, so you can pin the signal to a very specific spot. Leave empty for no gate.
   • Velocity — binary on-enter contacts. While any of them fires, the output is multiplied by the "Velocity ×" amount (a thrust/speed boost).
   • Max value — caps the raw proximity before the multiplier is applied.
 
-Type all the contact parameter names comma-separated (the /avatar/parameters/ prefix is optional). Each source you define then appears — by its name — in every toy's zone picker on Home (under "Custom Sources"), where it routes exactly like an auto-detected zone. The sources are global (shared by every mode).
+Type all the contact parameter names comma-separated (the /avatar/parameters/ prefix is optional). Each source you define then appears — by its name — in every toy's zone picker (its Input stage, under "Custom Sources"), where it routes exactly like an auto-detected zone. The sources are global (shared by every mode).
 """)
 
         section("Shockers over USB (PiShock / OpenShock)", """
@@ -1215,6 +1254,14 @@ bHaptics: OGP talks to the suit, sleeves and head over Bluetooth itself — clos
 OWO: OGP connects to the My OWO app the way a game does (on this PC first, then on your network). My OWO keeps your calibration and drives the suit; 100 % is the top of that calibration. The ceiling and each muscle's top cap every sensation, the Test button stays gentle, and Stop all, the sidebar's Off and VRChat going silent stop OWO at once.
 
 Contacts: the official bHaptics avatar package (bOSC/v2), older bHapticsOSC setups and the OWO avatar package (owo_suit_…) all work. With sharing on, a bHaptics contact also plays the OWO muscle around it and an OWO contact plays its patch of the bHaptics suit. Zone routes send an OGB / SPS zone or a custom source to a part of the body, for both suits.
+
+Anti-stuck: each suit has its own, in its Anti-stuck card, and the haptic trackers theirs under her (with the trackers). Each cuts a contact that freezes part-way and eases off one held at 100%, with its own timers. On by default.
+""")
+
+        section("PSVR2 headset rumble", """
+Switch it on under Settings → Features (Windows only). OGP drives the PlayStation VR2 headset's rumble motor through PSVR2Toolkit, which you install yourself — one of its experimental builds, run once so OGP can find it. The headset has to be jailbroken: on a stock one the commands go through and the motor never moves, so if Feel it stays silent while the page says Connected, that is why.
+
+The motor has one knob, how fast it rumbles (10-25 Hz; 0 is off). A touch maps onto the band you set: a light one is a slow thump, a full one a fast buzz. Pick the contact receiver on your avatar that drives it (a Haptic Pancake avatar has HapticHead). Off, the sidebar's strength, VRChat going silent and its own anti-stuck (in the Contact card) all hold it back, and if OGP stops sending, the motor stops within half a second.
 """)
 
         section("Avatar Remote — your avatar's board", """
@@ -1290,94 +1337,211 @@ OscGoesPurrr is free and open source under the MIT license. It also uses other o
                 else:
                     style_root(w)
 
+    # Where each kind's anti-stuck lives now (antistuck.py): (button, page)
+    _ANTISTUCK_PAGES = (("Toys", "Toys"), ("Suits", "Suits"), ("PSVR2", "PSVR2"))
+
     def _build_toy_safety_card(self) -> QWidget:
-        """Anti-stuck, the safety cutoff for a frozen input. It is on by
-        default and rarely touched, so it lives here rather than among
-        Home's tuning tools."""
+        """Safety: Off while you're away, and where anti-stuck went. Each
+        kind of device has its own anti-stuck on its own page since
+        2026-11-17 (Blise's ask: "some of them may want different
+        settings"); this card points there, one button per page that is in
+        the sidebar. (Called Toy Safety until then; the attribute and the
+        What's new place keep the old name.)"""
         card = _Card()
         lay = _vbox(20, 8)
         card.setLayout(lay)
 
-        hdr = QLabel("Toy Safety")
+        hdr = QLabel("Safety")
         hdr.setObjectName("sectionTitle")
         lay.addWidget(hdr)
-        lay.addWidget(self._muted_label(
-            "VRChat only sends a value when it changes. If a contact stops "
-            "updating — you swap avatar, your partner leaves, the link "
-            "drops — its last value would keep a toy or a suit running. "
-            "Anti-stuck notices a value that has frozen and stops it. On by "
-            "default."
-        ))
 
-        self.toy_antistuck_check = ToggleSwitch("Anti-stuck")
-        self.toy_antistuck_check.setChecked(
-            bool(self.controller.get_app_setting("toy_antistuck_enabled", True))
-        )
-        lay.addWidget(self.toy_antistuck_check)
-
-        # The two timeouts, shown only while the switch is on (hidden
-        # rather than disabled, like the chime volume row above).
-        times_row = QWidget()
-        times_lay = _hbox(0, 8)
-        # Indented to the switch's label, so the row reads as its own.
-        times_lay.setContentsMargins(
-            ToggleSwitch._TRACK_W + ToggleSwitch._LABEL_SPACING, 0, 0, 0)
-        times_row.setLayout(times_lay)
-
-        def seconds_spin(key: str, default: int) -> QSpinBox:
-            spin = QSpinBox()
-            spin.setRange(1, 600)
-            spin.setSuffix("s")
-            spin.setFixedWidth(86)
-            spin.setValue(int(self.controller.get_app_setting(key, default)))
-            return spin
-
-        times_lay.addWidget(QLabel("Frozen part-way: stop after"))
-        self.toy_antistuck_active_spin = seconds_spin("toy_antistuck_active_s", 1)
-        times_lay.addWidget(self.toy_antistuck_active_spin)
-        times_lay.addSpacing(14)
-        times_lay.addWidget(QLabel("Held at 100%: ease off after"))
-        self.toy_antistuck_peaked_spin = seconds_spin("toy_antistuck_peaked_s", 10)
-        times_lay.addWidget(self.toy_antistuck_peaked_spin)
-        times_lay.addStretch(1)
-        lay.addWidget(times_row)
-        times_row.setVisible(self.toy_antistuck_check.isChecked())
-        self.toy_antistuck_check.toggled.connect(times_row.setVisible)
-
+        where = QWidget()
+        wl = _hbox(0, 8)
+        where.setLayout(wl)
+        words = self._muted_label(
+            "Anti-stuck, which stops a toy, a suit or the headset when a "
+            "contact freezes, has its own switch and timers on each "
+            "device's page:")
+        wl.addWidget(words, 1)
+        self._antistuck_links: Dict[str, QPushButton] = {}
+        for text, page in self._ANTISTUCK_PAGES:
+            btn = QPushButton(text)
+            btn.setProperty("role", "secondary")
+            btn.setFixedHeight(BTN_HEIGHT_SMALL)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(lambda _=False, pg=page: self.select_view(pg))
+            wl.addWidget(btn, 0, Qt.AlignVCenter)
+            self._antistuck_links[page] = btn
+        lay.addWidget(where)
         self._explain(
-            (self.toy_antistuck_check, times_lay), "Anti-stuck",
-            "Safety cutoff for frozen inputs. VRChat only sends OSC on "
-            "parameter change — if an SPS input stops updating (avatar "
-            "swap, partner leaves, OSC routing loss), the last value "
-            "would drive the toy — or the suit — forever.<br><br>"
-            "A real tracked value between zero and one can never hold "
-            "perfectly still — animation and IK jitter it constantly "
-            "— so a value frozen <b>part-way</b> is cut quickly (1s by "
-            "default). Only a value held at <b>100%</b> gets the longer "
-            "fuse before a gentle ramp down, because all-the-way-in-and-"
-            "held is a real state that genuinely sits at a constant 1.0."
-        )
+            where, "Anti-stuck",
+            "VRChat only sends a value when it changes, so a contact that "
+            "stops updating (you swap avatar, your partner leaves, the link "
+            "drops) would keep its last value playing. Anti-stuck notices a "
+            "value that has frozen and stops it. On by default.<br><br>"
+            "Each kind of device has its own, with its own timers: the toys "
+            "on the Toys page (and each toy on its bar), the bHaptics suit, "
+            "the OWO suit and the haptic trackers on the Suits page, the "
+            "headset on the PSVR2 page.")
+        self._refresh_antistuck_links()
 
-        # Connect AFTER seeding so the initial setValue/setChecked calls
-        # don't echo straight back into app settings.
-        self.toy_antistuck_check.toggled.connect(self._on_toy_antistuck_changed)
-        self.toy_antistuck_active_spin.valueChanged.connect(
-            self._on_toy_antistuck_changed)
-        self.toy_antistuck_peaked_spin.valueChanged.connect(
-            self._on_toy_antistuck_changed)
+        if callable(getattr(self.controller, "get_away_settings", None)):
+            lay.addSpacing(6)
+            self._away_off_box = self._build_away_off_section()
+            lay.addWidget(self._away_off_box)
         return card
 
-    def _on_toy_antistuck_changed(self, *_):
-        """Persist the toy anti-stuck settings. The live routing
-        tick reads them fresh each evaluation via the controller's
-        `_get_toy_antistuck`, so the change takes effect on the next tick with
-        no explicit recalc kick."""
-        self.controller.set_app_setting(
-            "toy_antistuck_enabled", bool(self.toy_antistuck_check.isChecked()))
-        self.controller.set_app_setting(
-            "toy_antistuck_active_s", int(self.toy_antistuck_active_spin.value()))
-        self.controller.set_app_setting(
-            "toy_antistuck_peaked_s", int(self.toy_antistuck_peaked_spin.value()))
+    def _refresh_antistuck_links(self) -> None:
+        """Only the pages that are in the sidebar get a button."""
+        allows = getattr(self, "_feature_allows_view", None)
+        for page, btn in (getattr(self, "_antistuck_links", None) or {}).items():
+            try:
+                btn.setVisible(allows(page) if callable(allows) else True)
+            except RuntimeError:
+                pass
+
+    # ----------------------------------------------------------
+    # Safety → Off while you're away
+    # ----------------------------------------------------------
+
+    def _build_away_off_section(self) -> QWidget:
+        """Off while you're away: VRChat's AFK, GoGo Loco's AFK button and
+        a list of picked parameters, any of which holds everything off
+        (controllers/away_facade.py). On by default."""
+        box = QWidget()
+        lay = _vbox(0, 8)
+        box.setLayout(lay)
+        state = self.controller.get_away_settings() or {}
+
+        # Laid out like the other settings: what it does, then its switch.
+        lay.addWidget(self._muted_label(
+            "While VRChat says you're AFK, everything is off — toys, "
+            "shockers, suits, trackers and friends' drives — and it all "
+            "comes back by itself when you're back. Your own Off switch "
+            "isn't touched. On by default."
+        ))
+
+        self.away_off_toggle = ToggleSwitch("Off while you're away")
+        self.away_off_toggle.setChecked(bool(state.get("enabled")))
+        lay.addWidget(self.away_off_toggle)
+        self._explain(
+            self.away_off_toggle, "Off while you're away",
+            "Holds everything off while you're AFK in VRChat: your toys, "
+            "shockers, suits and haptic trackers, and every friend's drive "
+            "(their shocks are held back and logged). It's the same Off as "
+            "the sidebar's Off button and <b>OGP/Off</b>, held for you — "
+            "that switch isn't pressed, so when you're back everything is "
+            "exactly as it was. Closing VRChat lets go too: it only holds "
+            "while VRChat is running and says you're away.<br><br>"
+            "The status bar says why while it holds (\"AFK: everything "
+            "off\"). Pick below what counts as away.")
+
+        # The sources, indented under the switch and shown only while it is
+        # on (hidden rather than disabled, like each anti-stuck's timers).
+        sources = QWidget()
+        s_lay = _vbox(0, 6)
+        s_lay.setContentsMargins(
+            ToggleSwitch._TRACK_W + ToggleSwitch._LABEL_SPACING, 0, 0, 0)
+        sources.setLayout(s_lay)
+
+        self.away_vrchat_toggle = ToggleSwitch("VRChat's AFK")
+        self.away_vrchat_toggle.setChecked(bool(state.get("vrchat_afk")))
+        s_lay.addWidget(self.away_vrchat_toggle)
+        self._explain(
+            self.away_vrchat_toggle, "VRChat's AFK",
+            "Off while VRChat's own AFK parameter is on. VRChat sets it when "
+            "you take the headset off, or press End on desktop, and clears "
+            "it when you're back. Every avatar has it.")
+
+        self.away_gogo_toggle = ToggleSwitch("GoGo Loco's AFK button")
+        self.away_gogo_toggle.setChecked(bool(state.get("gogo_afk")))
+        s_lay.addWidget(self.away_gogo_toggle)
+        self._explain(
+            self.away_gogo_toggle, "GoGo Loco's AFK button",
+            "Off while GoGo Loco's AFK pose is on. GoGo Loco's Locomotion "
+            "menu has an AFK button that sets <b>VRCEmote</b> to 101, so "
+            "OGP reads that. Avatars without GoGo Loco never send it.")
+
+        also = QLabel("Also off while")
+        s_lay.addWidget(also)
+        self._away_chips_host = QWidget()
+        self._away_chips_flow = _FlowLayout(margin=0, h_spacing=6, v_spacing=6)
+        self._away_chips_host.setLayout(self._away_chips_flow)
+        s_lay.addWidget(self._away_chips_host)
+        add_btn = QPushButton("＋ Add parameter…")
+        add_btn.setProperty("role", "secondary")
+        add_btn.setFixedHeight(BTN_HEIGHT_SMALL)
+        add_btn.setCursor(Qt.PointingHandCursor)
+        add_btn.clicked.connect(lambda _=False: self._pick_away_param())
+        s_lay.addWidget(add_btn, 0, Qt.AlignLeft)
+        self._explain(
+            (also, self._away_chips_host, add_btn), "Also off while",
+            "Parameters of your choosing that switch everything off while "
+            "they're on — a Bool that is true, or a number above zero. Put "
+            "a toggle of your own in your avatar's menu and pick it here, "
+            "and it's your own Off switch; any one of them is enough.<br><br>"
+            "<b>Add parameter…</b> lists what your avatar sends right now, "
+            "or type a name. × takes one out.")
+        self._render_away_params()
+
+        lay.addWidget(sources)
+        sources.setVisible(self.away_off_toggle.isChecked())
+        self.away_off_toggle.toggled.connect(sources.setVisible)
+
+        # Connect after seeding, so setting the boxes above doesn't save.
+        self.away_off_toggle.toggled.connect(
+            lambda on: self.controller.set_away_switch("enabled", bool(on)))
+        self.away_vrchat_toggle.toggled.connect(
+            lambda on: self.controller.set_away_switch("vrchat_afk", bool(on)))
+        self.away_gogo_toggle.toggled.connect(
+            lambda on: self.controller.set_away_switch("gogo_afk", bool(on)))
+        return box
+
+    def _render_away_params(self) -> None:
+        """The "Also off while" list as chips, each with its ×."""
+        flow = getattr(self, "_away_chips_flow", None)
+        if flow is None:
+            return
+        _clear_layout(flow)
+        params = self.controller.get_away_params() or []
+        if not params:
+            empty = QLabel("None yet.")
+            empty.setProperty("muted", "true")
+            self._repolish(empty)
+            flow.addWidget(empty)
+            return
+        for name in params:
+            chip = QFrame()
+            chip.setObjectName("chip")
+            ch_lay = _hbox(8, 4)
+            ch_lay.setContentsMargins(8, 2, 4, 2)
+            chip.setLayout(ch_lay)
+            ch_lay.addWidget(QLabel(name))
+            rm = QPushButton("×")
+            rm.setFixedSize(22, 20)
+            rm.setProperty("role", "chipClose")
+            rm.setCursor(Qt.PointingHandCursor)
+            rm.clicked.connect(
+                lambda _=False, n=name: self._remove_away_param(n))
+            ch_lay.addWidget(rm)
+            self._explain(rm, f"Take {name} out",
+                          f"Stops {name} switching everything off.")
+            flow.addWidget(chip)
+
+    def _pick_away_param(self) -> None:
+        def on_pick(name: str) -> None:
+            if self.controller.add_away_param(name):
+                self._render_away_params()
+        open_osc_variable_picker(
+            (getattr(self, "dialog_parent", None) or self.window), on_pick,
+            title="Also off while",
+            subtitle="Pick the parameter that switches everything off while "
+                     "it's on (double-click), or enter its name.",
+            allow_wildcards=False)
+
+    def _remove_away_param(self, name: str) -> None:
+        self.controller.remove_away_param(name)
+        self._render_away_params()
 
     def _on_steamvr_toys_toggled(self, checked: bool):
         """Switch toys-in-SteamVR and say what happens next."""

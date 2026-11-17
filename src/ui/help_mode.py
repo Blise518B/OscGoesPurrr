@@ -16,6 +16,9 @@ on:
   setting -- except on the strip, the sidebar's pages (help mode follows
   to the next page), scroll bars and anything outside the window's body.
 
+The guided tour (ui/tour.py) is drawn with the same pieces -- the dim,
+the ring, `draw_bubble`.
+
 It reads nothing from the controller and keeps no state beyond what is
 lit: the explanations are the widgets' own tooltips, the steps come from
 page_steps, and the colours are the theme's at paint time, so the colour
@@ -318,6 +321,16 @@ class _Strip(QWidget):
         self.point = QLabel("Point at anything")
         self.point.setProperty("muted", "true")
         lay.addWidget(self.point, 0, Qt.AlignVCenter)
+        self.guide: Optional[QPushButton] = None
+        if mode.has_guide():
+            # this page's part of the user guide, in the browser
+            self.guide = QPushButton("Guide ↗")
+            self.guide.setProperty("role", "sideSmall")
+            self.guide.setCursor(Qt.PointingHandCursor)
+            self.guide.setToolTip("<b>Guide</b><br>Opens this page's part of the user guide "
+                                  "in your browser.")
+            self.guide.clicked.connect(mode.open_guide)
+            lay.addWidget(self.guide, 0, Qt.AlignVCenter)
         self.done = QPushButton("Done")
         self.done.setProperty("role", "sideSmall")
         self.done.setCursor(Qt.PointingHandCursor)
@@ -341,15 +354,19 @@ class HelpMode(QObject):
     """Help mode over `root` (the window body: sidebar and pages). The strip
     goes above `stack` (the pages), in its layout. `steps_for(page)` gives
     (page name, steps) for the page widget on screen; `passthrough(widget)`
-    says which widgets keep taking clicks (the sidebar's pages)."""
+    says which widgets keep taking clicks (the sidebar's pages).
+    `guide(page name)` opens that page in the user guide: the strip has a
+    Guide button while one is given."""
 
     def __init__(self, root: QWidget, stack: QStackedWidget,
                  steps_for: Callable[[QWidget], Tuple[str, Sequence]],
                  passthrough: Optional[Callable[[QWidget], bool]] = None,
-                 add_section: Optional[Callable[[QWidget], None]] = None):
+                 add_section: Optional[Callable[[QWidget], None]] = None,
+                 guide: Optional[Callable[[str], None]] = None):
         super().__init__(root)
         self.root, self.stack = root, stack
         self._steps_for = steps_for
+        self._guide = guide
         self._passthrough = passthrough or (lambda _w: False)
         self._add_section = add_section
         self.active = False
@@ -400,6 +417,13 @@ class HelpMode(QObject):
 
     def toggle(self) -> None:
         self.stop() if self.active else self.start()
+
+    def has_guide(self) -> bool:
+        return self._guide is not None
+
+    def open_guide(self) -> None:
+        if self._guide is not None:
+            self._guide(self.page_name)
 
     def _build(self) -> None:
         self.overlay = _Overlay(self)
@@ -612,29 +636,38 @@ class HelpMode(QObject):
             self._bubble(p, overlay, rect, title, text)
 
     def _bubble(self, p: QPainter, overlay: QWidget, anchor: QRect, title: str, text: str) -> None:
-        pad = 12
-        f_title = QFont(overlay.font())
-        f_title.setPixelSize(14)
-        f_title.setBold(True)
-        f_text = QFont(overlay.font())
-        f_text.setPixelSize(13)
-        inner = QRectF(0, 0, BUBBLE_W - 2 * pad, 2000)
-        tr = QFontMetricsF(f_title).boundingRect(inner, Qt.TextWordWrap, title)
-        br = QFontMetricsF(f_text).boundingRect(inner, Qt.TextWordWrap, text) if text else QRectF()
-        w = max(tr.width(), br.width()) + 2 * pad
-        h = tr.height() + (br.height() + 4 if text else 0) + 2 * pad
-        x = min(max(anchor.left(), 8), overlay.width() - w - 8)
-        below = anchor.bottom() + 14
-        y = below if below + h < overlay.height() - 8 else max(8, anchor.top() - 14 - h)
-        box = QRectF(x, y, w, h)
-        p.setPen(QPen(_c("accent"), 1.5))
-        p.setBrush(_c("panel"))
-        p.drawRoundedRect(box, 10, 10)
-        p.setFont(f_title)
-        p.setPen(_c("txt"))
-        p.drawText(QRectF(x + pad, y + pad, w - 2 * pad, tr.height()), Qt.TextWordWrap, title)
-        if text:
-            p.setFont(f_text)
-            p.setPen(_c("muted"))
-            p.drawText(QRectF(x + pad, y + pad + tr.height() + 4, w - 2 * pad, br.height()),
-                       Qt.TextWordWrap, text)
+        draw_bubble(p, overlay, anchor, [(title, 14, True, "txt"), (text, 13, False, "muted")])
+
+
+def draw_bubble(p: QPainter, overlay: QWidget, anchor: QRect,
+                lines: Sequence[Tuple[str, int, bool, str]]) -> QRectF:
+    """The bubble beside `anchor`: below it, or above when there's no room
+    -- never over it. `lines` are (text, pixel size, bold, theme colour
+    role), each word-wrapped; empty ones are left out. Returns where it
+    went. Help mode's (title, first sentence) and the tour's longer ones."""
+    pad = 12
+    inner = QRectF(0, 0, BUBBLE_W - 2 * pad, 2000)
+    laid = []
+    for text, px, bold, role in lines:
+        if not text:
+            continue
+        f = QFont(overlay.font())
+        f.setPixelSize(px)
+        f.setBold(bold)
+        laid.append((text, f, role, QFontMetricsF(f).boundingRect(inner, Qt.TextWordWrap, text)))
+    w = max([r.width() for *_x, r in laid] or [0]) + 2 * pad
+    h = sum(r.height() for *_x, r in laid) + 4 * max(len(laid) - 1, 0) + 2 * pad
+    x = min(max(anchor.left(), 8), overlay.width() - w - 8)
+    below = anchor.bottom() + 14
+    y = below if below + h < overlay.height() - 8 else max(8, anchor.top() - 14 - h)
+    box = QRectF(x, y, w, h)
+    p.setPen(QPen(_c("accent"), 1.5))
+    p.setBrush(_c("panel"))
+    p.drawRoundedRect(box, 10, 10)
+    top = y + pad
+    for text, f, role, r in laid:
+        p.setFont(f)
+        p.setPen(_c(role))
+        p.drawText(QRectF(x + pad, top, w - 2 * pad, r.height()), Qt.TextWordWrap, text)
+        top += r.height() + 4
+    return box

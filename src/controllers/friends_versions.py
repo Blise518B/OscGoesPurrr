@@ -66,11 +66,13 @@ class FriendsVersionsMixin:
         nick = self._friend_nick(peer)
         if state == "older":
             self._friends_note(
-                f"{nick} has an older OGP ({theirs or 'from before version checks'}) than "
-                f"yours ({VERSION}) - what's new in yours may not reach them until they update")
+                f"{{who}} has an older OGP ({theirs or 'from before version checks'}) than "
+                f"yours ({VERSION}) - what's new in yours may not reach them until they update",
+                who=peer, name=nick, op="version")
             return
-        self._friends_note(f"{nick} has a newer OGP ({theirs}) than yours ({VERSION}) - "
-                           "update so everything they do works for you")
+        self._friends_note(f"{{who}} has a newer OGP ({theirs}) than yours ({VERSION}) - "
+                           "update so everything they do works for you", who=peer, name=nick,
+                           op="version")
         if not self._update_warned:
             self._update_warned = True
             self.show_friends_update(nick, theirs)

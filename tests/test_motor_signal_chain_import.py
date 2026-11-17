@@ -1392,12 +1392,16 @@ class TestChainFoldBar:
         assert len(w._fold_bars) == 2
         assert all(not cw.isVisibleTo(w) for cw in w._chain_widgets)
 
-    def test_single_chain_motor_starts_open(self):
+    def test_a_single_chain_motor_starts_folded_too(self):
+        """Every chain starts folded (Blise's ask, 2026-11-16): the toy's
+        card on the Toys page opens on its chains' bars, one each."""
         _qt_app()
         from ui.motor_signal_chain import MotorChainListWidget
         ui = _SmokeUI(_SmokeController())          # no preset: one chain
         w = MotorChainListWidget(ui, "DevX", 0, "vibrate")
         assert len(w._fold_bars) == 1
+        assert not w._chain_widgets[0].isVisibleTo(w)
+        w._on_fold_toggled(0)
         assert w._chain_widgets[0].isVisibleTo(w)
 
     def test_toggle_opens_one_and_leaves_the_other(self):

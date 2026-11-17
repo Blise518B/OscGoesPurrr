@@ -115,7 +115,7 @@ def test_the_home_sharing_switch_is_kept_and_drops_what_friends_sent():
     dropped, notes = [], []
     host._friend_perms = {"a": (True, True, True), "b": (True, False, True)}
     host._drop_shocks = dropped.append
-    host._friends_note = notes.append
+    host._friends_note = lambda text, **what: notes.append(text)
     try:
         assert host.get_pishock_status()["friends_may_use"] is True
         host.set_pishock_friends_may_use(False)
@@ -194,5 +194,20 @@ def test_a_shocker_switched_off_reaches_the_engine_and_the_status():
         assert any("not in use" in m for m in host.logged)
         host.set_pishock_shocker_on(24326, True)
         assert host.pishock_engine._off == set()
+    finally:
+        host._pishock_shutdown()
+
+
+def test_a_shockers_op_switch_reaches_the_engine_and_the_status():
+    host = Host()
+    host._pishock_init()
+    try:
+        host.set_pishock_shocker_op(24325, "shock", False)
+        assert host.pishock_engine.ops_off() == {24325: ["shock"]}
+        assert not host.pishock_engine.op_allowed(24325, "shock")
+        assert host.get_pishock_status()["ops_off"] == {"24325": ["shock"]}
+        assert any("shock switched off" in m for m in host.logged)
+        host.set_pishock_shocker_op(24325, "shock", True)
+        assert host.pishock_engine.ops_off() == {}
     finally:
         host._pishock_shutdown()

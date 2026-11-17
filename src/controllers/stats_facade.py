@@ -27,6 +27,8 @@ from typing import Any, Dict, List, Optional, Tuple
 import debug_log
 from parameter_store import store
 from router_base import StaleSignalMonitor
+from controllers import stats_events_facade
+from controllers.stats_events_facade import StatsEventsMixin
 from settings import (
     STATS_FILE, STATS_HOURS_FILE, STATS_PEOPLE_FILE, STATS_SESSIONS_DIR,
 )
@@ -92,9 +94,10 @@ _SAME_SESSION_S = 2.0
 
 def _delete_stats_files() -> None:
     """Every file the statistics keep: the totals, the hourly history, the
-    session timelines, who each session was with, and their backups and
-    leftovers."""
-    for path in (STATS_FILE, STATS_HOURS_FILE, STATS_PEOPLE_FILE):
+    session timelines, who each session was with, what was counted from the
+    log, and their backups and leftovers."""
+    for path in (STATS_FILE, STATS_HOURS_FILE, STATS_PEOPLE_FILE,
+                 stats_events_facade.STATS_EVENTS_FILE):
         for suffix in ("", ".bak", ".before-gate.bak", ".tmp"):
             target = path.with_name(path.name + suffix)
             try:
@@ -106,8 +109,10 @@ def _delete_stats_files() -> None:
     shutil.rmtree(STATS_SESSIONS_DIR, ignore_errors=True)
 
 
-class StatsFacade:
-    """Mixin: usage statistics. Composed into OscGoesPurrrApp."""
+class StatsFacade(StatsEventsMixin):
+    """Mixin: usage statistics. Composed into OscGoesPurrrApp. What is
+    counted from the log (shocks, who did what, the suits) is its base's,
+    controllers/stats_events_facade.py."""
 
     # ------------------------------------------------------------------
     # Init / shutdown wiring (called from main.py)
@@ -124,6 +129,7 @@ class StatsFacade:
         self.stats_tracker = None
         self.stats_history = None
         self.stats_people = None
+        self.stats_events = None
         # The last minute's thrusts, for the live pace the thrust counters
         # send to the avatar (thrust_params_facade).
         self._stats_pace = PaceWindow()
@@ -172,6 +178,11 @@ class StatsFacade:
             self._stats_estimate_history(force=reestimate)
         except Exception as e:
             print(f"[stats] estimating earlier hours failed: {e}")
+        try:
+            self._stats_events_init()
+        except Exception as e:
+            print(f"[stats] counting from the log failed: {e}")
+            self.stats_events = None
 
     def _stats_feature_on(self) -> bool:
         get = getattr(self, "get_feature_enabled", None)
@@ -199,6 +210,7 @@ class StatsFacade:
         self.stats_tracker = None
         self.stats_history = None
         self.stats_people = None
+        self.stats_events = None
         self._stats_gate = ActivityGate()
         self._stats_pace = PaceWindow()
 
@@ -289,6 +301,11 @@ class StatsFacade:
         """Finalize the session (records it if it saw activity) and
         flush. Called from quit_app before engine teardown."""
         now = time.time()
+        try:
+            # first: its last shocks reach the timeline before it is filed
+            self._stats_events_close(now)
+        except Exception as e:
+            print(f"[stats] closing the session's counts failed: {e}")
         try:
             self._stats_people_close_live(now)
         except Exception as e:
@@ -394,6 +411,12 @@ class StatsFacade:
                                 (f"{ztype}/{zone_name}", ztype))
 
             thrusts = self.motor_router.consume_thrusts()
+            # What the log heard since the last tick, and the suits: counted
+            # here, off every routing path (stats_events_facade).
+            try:
+                self._stats_events_tick(dt)
+            except Exception as e:
+                print(f"[stats] counting from the log failed: {e}")
             flush = False
             self._stats_samples_since_flush += 1
             if self._stats_samples_since_flush >= _FLUSH_EVERY_SAMPLES:
@@ -434,6 +457,7 @@ class StatsFacade:
                 people = getattr(self, "stats_people", None)
                 if people is not None:
                     people.flush()
+                self._stats_events_flush()
         except Exception:
             pass
 
@@ -465,6 +489,10 @@ class StatsFacade:
             pass
         try:
             self.stats_people.reset()
+        except Exception:
+            pass
+        try:
+            self._stats_events_reset()
         except Exception:
             pass
         try:
@@ -575,6 +603,10 @@ class StatsFacade:
                        bucket_s=tl["bucket_s"], dense=dense(tl),
                        analysis=analyse(tl))
             out["tags"] = self._stats_tag_rows(sid, tl, out)
+            # Shocks, who did what and the suits -- counted -- and the
+            # timeline's marks, from the log
+            out["shocks"] = self._stats_session_shocks(
+                sid, out["started_ts"], None if live else out["ended_ts"])
             return out
         except Exception as e:
             print(f"[stats] session detail failed: {e}")

@@ -74,6 +74,11 @@ PISHOCK_SETTINGS_FILE = APPDATA_DIR / "pishock_settings.json"
 # the full edition keeps separate bHaptics / OWO files in this same folder.
 SUITS_SETTINGS_FILE = APPDATA_DIR / "suits_settings.json"
 
+# PSVR2 headset rumble (through the user's own PSVR2Toolkit) — the rumble
+# band, the command cap and what drives it. The full edition's file name
+# and shape, which shares this folder: both read the same band.
+PSVR2_SETTINGS_FILE = APPDATA_DIR / "psvr2_settings.json"
+
 # Friends — your nickname, your contact list and what each friend may do.
 # The link's identity is a key pair in its own binary file, NOT a .json:
 # settings backups copy every top-level *.json, and a backup restored on a
@@ -101,6 +106,18 @@ STATS_HOURS_FILE = APPDATA_DIR / "stats_hours.json"
 # Who each session was with — session tags and per-person totals. Owned by
 # stats_people.StatsPeople; apart from stats.json for the same reason.
 STATS_PEOPLE_FILE = APPDATA_DIR / "stats_people.json"
+
+# What Statistics counts from the log (shocks, vibrates and beeps by shocker
+# and source, friends' drive time and Avatar Remote sets) plus the suits' and
+# trackers' on-time, lifetime and per session. Owned by
+# stats_events.StatsEvents; apart from stats.json for the same reason.
+STATS_EVENTS_FILE = APPDATA_DIR / "stats_events.json"
+
+# The log (who did what: friends, Me, web remote guests, your avatar's
+# behaviours) — one JSON Lines file per day, the last 30 days. Owned by
+# event_log.EventLog. In a folder of its own and never a .json: settings
+# backups copy every top-level *.json, and it's no setting.
+EVENT_LOG_DIR = APPDATA_DIR / "event_log"
 
 
 os.makedirs(APPDATA_DIR, exist_ok=True)

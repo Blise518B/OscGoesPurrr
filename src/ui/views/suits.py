@@ -6,7 +6,7 @@ Mixin for ui_components.OscGoesPurrrUI, shown while either suit's feature
 bottom (Blise's ask, 2026-10-28: a picture of the body, not a list):
 
   * Body        — a cat girl's front and back with every bHaptics dot
-                  (orange), OWO's muscle patches (purple) and the Vive
+                  (orange), OWO's muscle patches (purple) and the haptic
                   trackers (blue) on her, lit as they play (body_view.py).
                   Click one and its card opens beside her with a line to
                   it (Blise's ask, 2026-10-28) -- its switch, strength, a
@@ -24,10 +24,11 @@ bottom (Blise's ask, 2026-10-28: a picture of the body, not a list):
   * Zone routes — an OGB / SPS zone or a custom source onto a body region,
                   felt by both suits.
 
-Trackers show only when get_suits_status() carries a "trackers" entry
-({"feature", "spots": {key: {"enabled", "intensity", "contacts"}}}), which
-nothing in this build does yet: the page is ready for tracker haptics to be
-ported from main (the facade's set_tracker / tracker_test).
+Haptic trackers (`feature_trackers`, tracker_engine.py through SteamVR) sit
+on Haptic Pancake's nine spots: get_suits_status()["trackers"] lists the
+trackers SteamVR shows and the spots that have one. A tracker goes where its
+SteamVR role says; one without a place is listed under the chips with Buzz
+(to find it) and Place on her -- the next click on a spot puts it there.
 
 Everything goes through the controller's Suits facade (Demeter rule); this
 file only draws widgets and forwards primitive values.
@@ -43,11 +44,14 @@ from PySide6.QtWidgets import (
 import body_map
 from constants import *
 from ui.layout_helpers import clear_layout, hbox as _hbox, vbox as _vbox
+from ui.views.antistuck_box import AntiStuckBox
 from ui.theme import BHAPTICS_HUE, OWO_HUE, TRACKERS_HUE
 from ui.views.body_view import TRACKER_NAMES, TRACKERS, BodyView
 from ui.views.card_parts import segmented
 from ui.views.param_cards import CARD_W
 from ui.views.pishock_cards import ValueSlider, category_frame, state_pill
+from ui.views.pishock_cards import mini_button
+from ui.views.suits_cards import tracker_line
 from ui.views.suits_cards import (
     INSPECTOR_W, CheckRow, ChipRow, MuscleCard, PartCard, Stage, Swatch, TrackerCard,
 )
@@ -94,6 +98,8 @@ class SuitsMixin:
         self._suits_bh_shown = True
         self._suits_owo_on = True
         self._suits_spots: Dict[str, Dict[str, Any]] = {}     # trackers there are
+        self._suits_placing = None                            # serial being placed by a click
+        self._suits_unplaced_sig = None
         self._suits_contacts = None                           # {position: indices} or unknown
         self._suits_owo_contacts: set = set()
         self._suit_routes_parts = self._suits_parts_shown
@@ -140,6 +146,20 @@ class SuitsMixin:
         lay.addWidget(head)
         return card, lay
 
+    def _suits_antistuck_box(self, kind: str, title: str, what: str,
+                             extra: str = "", stacked: bool = True,
+                             switch_text: str = "On") -> AntiStuckBox:
+        """One kind's anti-stuck (antistuck.py): "bhaptics", "owo" or
+        "trackers", each with its own switch and timers."""
+        hue = {"bhaptics": BHAPTICS_HUE, "owo": OWO_HUE}.get(kind, TRACKERS_HUE)
+        # filled from get_suits_status in refresh_suits_status, like the rest
+        return AntiStuckBox(
+            title, what, get=None,
+            set_=lambda k=kind, **ch: self.controller.set_suit_antistuck(k, **ch),
+            explain=self._explain, extra=extra, hue=hue, stacked=stacked,
+            # in a suit's own card titled Anti-stuck, the switch just says On
+            switch_text=switch_text)
+
     def _suits_button(self, text: str, role: str = "secondary") -> QPushButton:
         btn = QPushButton(text)
         btn.setMinimumHeight(BTN_HEIGHT_SMALL)
@@ -184,10 +204,10 @@ class SuitsMixin:
         card, lay, _hdr = self._suits_card("Body")
         self._suits_body = BodyView(
             on_hold=lambda pos, i, held: self.controller.bhaptics_hold_dot(pos, i, held),
-            on_pick=lambda _part, _muscle, _tracker: self._suits_fill_inspector())
+            on_pick=lambda _part, _muscle, tracker: self._suits_on_pick(tracker))
         self._explain(self._suits_body, "Body",
                       "Click a part of her and its settings open beside her. Orange dots "
-                      "are bHaptics motors, purple patches OWO's muscles, blue pucks Vive "
+                      "are bHaptics motors, purple patches OWO's muscles, blue pucks haptic "
                       "trackers; each lights up as it plays. Press and hold a dot to feel "
                       "it. A dashed amber ring: your avatar has no contact there. Front "
                       "and back are drawn as seen from outside.")
@@ -203,7 +223,11 @@ class SuitsMixin:
         self._suits_tracker_card = TrackerCard(
             on_enabled=lambda k, v: self.controller.set_tracker(k, enabled=v),
             on_strength=lambda k, v: self.controller.set_tracker(k, intensity=v),
-            on_test=lambda k: self.controller.tracker_test(k))
+            on_test=lambda k: self.controller.tracker_test(k),
+            on_top=lambda k, v: self.controller.set_tracker(k, max=v),
+            on_params=lambda k, text: self.controller.set_tracker(k, params=text),
+            on_move=self._suits_start_placing,
+            on_reset=self._suits_reset_place)
         self._suits_pick_hint = self._suits_wrap(
             "Click a part of her to set it up. Press and hold a dot to feel it.")
         self._suits_pick_hint.setFixedWidth(INSPECTOR_W)
@@ -226,7 +250,7 @@ class SuitsMixin:
         for key, hue, shape, text in (
                 (BHAPTICS_HUE, BHAPTICS_HUE, "dot", "bHaptics motor — press and hold to feel it"),
                 (OWO_HUE, OWO_HUE, "patch", "OWO muscle — the dots inside it play it too"),
-                (TRACKERS_HUE, TRACKERS_HUE, "puck", "Vive tracker"),
+                (TRACKERS_HUE, TRACKERS_HUE, "puck", "Haptic tracker"),
                 ("missing", "amber", "missing", "not on your avatar")):
             swatch = Swatch(hue, shape)
             words = self._suits_wrap(text)
@@ -247,19 +271,33 @@ class SuitsMixin:
         lay.addWidget(self._suits_muscles_lbl)
         self._suits_muscle_chips = ChipRow(body_map.MUSCLES, OWO_HUE, self._on_suits_muscle_chip)
         lay.addWidget(self._suits_muscle_chips)
-        self._suits_trackers_lbl = self._suits_wrap("Vive trackers")
+        self._suits_trackers_lbl = self._suits_wrap("Trackers")
         lay.addWidget(self._suits_trackers_lbl)
         self._suits_tracker_chips = ChipRow([k for k, _n, _xy in TRACKERS], TRACKERS_HUE,
                                             self._on_suits_tracker_chip, labels=TRACKER_NAMES)
         lay.addWidget(self._suits_tracker_chips)
+        self._suits_trk_note = self._suits_wrap("")
+        lay.addWidget(self._suits_trk_note)
+        self._suits_unplaced = QWidget()
+        self._suits_unplaced_lay = _vbox(0, 4)
+        self._suits_unplaced.setLayout(self._suits_unplaced_lay)
+        lay.addWidget(self._suits_unplaced)
+        self._trk_antistuck = self._suits_antistuck_box(
+            "trackers", "Trackers' anti-stuck", "a tracker buzzing", stacked=False,
+            switch_text="Anti-stuck for the trackers")
+        lay.addWidget(self._trk_antistuck)
+        self._explain(self._suits_unplaced, "Not on her yet",
+                      "Trackers SteamVR shows that have no spot: no role in SteamVR's Manage "
+                      "Trackers that OGP knows. Buzz finds which one it is; Place on her, "
+                      "then a click on the spot where it sits, puts it there.")
         self._explain(self._suits_part_chips, "bHaptics parts",
                       "Every part of the bHaptics suit you have, with its strength. Click "
                       "one to set it up beside her.")
         self._explain(self._suits_muscle_chips, "OWO muscles",
                       "Every OWO muscle with its top. Click one to set it up beside her.")
-        self._explain(self._suits_tracker_chips, "Vive trackers",
-                      "Every tracker that buzzes, with its strength. Click one to set it "
-                      "up beside her.")
+        self._explain(self._suits_tracker_chips, "Trackers",
+                      "Every spot with a haptic tracker on it, with its strength. Click one "
+                      "to set it up beside her.")
 
         self._suits_check_lbl = self._suits_wrap("Your avatar's contacts")
         lay.addWidget(self._suits_check_lbl)
@@ -284,6 +322,70 @@ class SuitsMixin:
     def _on_suits_muscle_chip(self, muscle: str) -> None:
         self._suits_body.select(None, muscle, None)
         self._suits_fill_inspector()
+
+    def _suits_on_pick(self, tracker) -> None:
+        """A click on her. While a tracker is being placed, a spot takes it."""
+        serial = self._suits_placing
+        if serial and tracker:
+            self._suits_placing = None
+            self.controller.place_tracker(serial, tracker)
+            self.refresh_suits_status()
+            return
+        self._suits_fill_inspector()
+
+    def _suits_start_placing(self, serial: str) -> None:
+        """Place on her / Move: the next click on a spot puts it there
+        (pressed again: cancelled)."""
+        self._suits_placing = None if self._suits_placing == serial else serial
+        self._suits_unplaced_sig = None
+        self.refresh_suits_status()
+
+    def _suits_reset_place(self, serial: str) -> None:
+        self.controller.place_tracker(serial, None)
+        self.refresh_suits_status()
+
+    def _suits_show_unplaced(self, trk: Dict[str, Any]) -> None:
+        """The note under the tracker chips and a row per tracker without a
+        spot (Buzz, Place on her)."""
+        devices = trk.get("devices") or []
+        loose = [d for d in devices if not d.get("spot")]
+        placing = self._suits_placing
+        if placing and not any(d.get("serial") == placing for d in devices):
+            self._suits_placing = placing = None          # it went away
+        if not trk.get("available"):
+            note = "SteamVR's library didn't load, so no trackers can be found."
+        elif not trk.get("alive"):
+            note = "Start SteamVR: OGP finds your trackers once it runs."
+        elif not devices:
+            note = "SteamVR shows no trackers."
+        elif placing:
+            note = "Now click the spot on her where it sits."
+        elif loose:
+            note = "Not on her yet:"
+        else:
+            note = ""
+        self._suits_trk_note.setText(note)
+        self._suits_trk_note.setVisible(bool(note))
+        sig = (tuple((d.get("serial"), tracker_line(d)) for d in loose), placing)
+        if sig == self._suits_unplaced_sig:
+            return
+        self._suits_unplaced_sig = sig
+        clear_layout(self._suits_unplaced_lay)
+        for d in loose:
+            serial = str(d.get("serial") or "")
+            row = _hbox(0, 6)
+            label = QLabel(tracker_line(d))
+            label.setToolTip(serial)
+            row.addWidget(label, 1)
+            buzz = mini_button("Buzz", "A short buzz on this tracker, to find which one it is.")
+            buzz.clicked.connect(lambda _=False, s=serial: self.controller.tracker_identify(s))
+            row.addWidget(buzz)
+            place = mini_button("Cancel" if placing == serial else "Place on her",
+                                "Then click the spot on her where it sits.")
+            place.clicked.connect(lambda _=False, s=serial: self._suits_start_placing(s))
+            row.addWidget(place)
+            self._suits_unplaced_lay.addLayout(row)
+        self._suits_unplaced.setVisible(bool(loose))
 
     def _on_suits_tracker_chip(self, key: str) -> None:
         self._suits_body.select(None, None, key)
@@ -435,7 +537,57 @@ class SuitsMixin:
                       "An avatar set up for OWO (owo_suit_… parameters) drives "
                       "the matching patch of the bHaptics suit too.")
         flow.addWidget(touches)
+
+        stuck, lay = self._suits_small_card("Anti-stuck", BHAPTICS_HUE)
+        self._bh_antistuck = self._suits_antistuck_box("bhaptics", "bHaptics anti-stuck",
+                                                       "the suit buzzing")
+        lay.addWidget(self._bh_antistuck)
+        flow.addWidget(stuck)
+
+        # "connected" avatar parameters: the whole suit, then each part you
+        # have (the controller's slots: "bhaptics", "bhaptics:<group>")
+        self._bh_presence_rows: Dict[str, QWidget] = {}
+        tell = self._build_suits_presence_card(BHAPTICS_HUE, [
+            ("bhaptics", "Any part", None),
+            *((f"bhaptics:{key}", name, key) for key, name, _p in body_map.PART_GROUPS)],
+            "Tell VRChat while the suit is connected",
+            "Sends a Bool avatar parameter that is <b>true while that part of "
+            "the suit is connected</b> and false while it isn't — so your "
+            "avatar can show which parts are live. <b>Any part</b> is true "
+            "while at least one is. Each part you have gets one.<br><br>"
+            "They are on by default under these names, so an avatar asset "
+            "made for OGP can use them. Add a Bool with the name to your "
+            "avatar's parameters; the name is yours to change, or "
+            "<b>Pick…</b> one your avatar already sends. It is sent again "
+            "whenever you change avatar, and goes false when you close the "
+            "app.", self._bh_presence_rows)
+        if tell is not None:
+            flow.addWidget(tell)
         return frame
+
+    def _build_suits_presence_card(self, hue: str, rows, tip_title: str,
+                                   tip_text: str, keep: Dict[str, QWidget]):
+        """A suit's "Tell VRChat" card: one "connected" avatar parameter
+        row per (controller slot, label, part group or None). Rows with a
+        part group are kept in `keep` by it, for refresh to show only the
+        parts you have. None when the controller has no such parameters."""
+        getter = getattr(self.controller, "get_device_connected_param", None)
+        if not callable(getter):
+            return None
+        card, lay = self._suits_small_card("Tell VRChat", hue, 2 * CARD_W + 10)
+        lay.addWidget(self._suits_wrap(
+            "A Bool on your avatar that is true while it's connected."))
+        for slot, label, group in rows:
+            enabled, name = getter(slot)
+            row = self._build_connected_param_row(
+                label, enabled, name,
+                lambda on, n, s=slot: self.controller.set_device_connected_param(s, on, n),
+                tip_title, tip_text, label_width=118)
+            lay.addWidget(row)
+            if group is not None:
+                keep[group] = row
+        self._explain(card, tip_title, tip_text)
+        return card
 
     def _on_bh_have(self, group: str) -> None:
         self.controller.set_bhaptics_have(group, self._bh_have.chips[group].isChecked())
@@ -537,6 +689,26 @@ class SuitsMixin:
                       "A bHaptics avatar package drives OWO too: each muscle "
                       "feels the strongest bHaptics dot inside its patch.")
         flow.addWidget(touches)
+
+        stuck, lay = self._suits_small_card("Anti-stuck", OWO_HUE)
+        self._owo_antistuck = self._suits_antistuck_box(
+            "owo", "OWO anti-stuck", "the suit's EMS going",
+            extra="OWO is EMS: keep it on unless you know why not.")
+        lay.addWidget(self._owo_antistuck)
+        flow.addWidget(stuck)
+
+        tell = self._build_suits_presence_card(OWO_HUE, [("owo", "OWO suit", None)],
+            "Tell VRChat while OWO is connected",
+            "Sends a Bool avatar parameter that is <b>true while OGP is "
+            "connected to My OWO</b> and false while it isn't — so your avatar "
+            "can show that your suit is live.<br><br>"
+            "It is on by default under this name, so an avatar asset made for "
+            "OGP can use it. Add a Bool with the name to your avatar's "
+            "parameters; the name is yours to change, or <b>Pick…</b> one "
+            "your avatar already sends. It is sent again whenever you change "
+            "avatar, and goes false when you close the app.", {})
+        if tell is not None:
+            flow.addWidget(tell)
         return frame
 
     def _on_owo_connect(self) -> None:
@@ -664,7 +836,7 @@ class SuitsMixin:
         lay.addWidget(self._pishock_flow([tuple(filter_boxes)]))
         self._explain(zone, "Zone",
                       "An OGB / SPS zone your avatar has, or a custom source "
-                      "(SPS Sources page). A custom source ignores the type and "
+                      "(SPS Sources, on the Toys page). A custom source ignores the type and "
                       "the checkboxes.")
         self._explain(ztype, "Type", "Orifice, penetrator or touch zone.")
         self._explain((to_lbl, region), "Lands on",
@@ -722,8 +894,11 @@ class SuitsMixin:
         shown = body_map.positions_of(bs.get("have", body_map.DEFAULT_HAVE))
         dots = bh_on and bool(shown)            # any bHaptics dot on her at all
         trk = st.get("trackers") or {}
+        trk_on = bool(trk.get("feature"))
         spots = {k: dict(v) for k, v in (trk.get("spots") or {}).items()
-                 if k in TRACKER_NAMES} if trk.get("feature") else {}
+                 if k in TRACKER_NAMES} if trk_on else {}
+        if not trk_on:
+            self._suits_placing = None
         self._suits_parts_shown, self._suits_bh_shown = shown, dots
         self._suits_owo_on, self._suits_spots = owo_on, spots
         self._suits_bh_card.setVisible(bh_on)
@@ -734,9 +909,20 @@ class SuitsMixin:
         for w in [self._suits_muscles_lbl, self._suits_muscle_chips,
                   *self._suits_legend[OWO_HUE]]:
             w.setVisible(owo_on)
-        for w in [self._suits_trackers_lbl, self._suits_tracker_chips,
-                  *self._suits_legend[TRACKERS_HUE]]:
+        for w in [self._suits_tracker_chips, *self._suits_legend[TRACKERS_HUE]]:
             w.setVisible(bool(spots))
+        self._suits_trackers_lbl.setVisible(trk_on)
+        self._trk_antistuck.setVisible(trk_on)
+        for box, values in ((self._bh_antistuck, bs.get("antistuck")),
+                            (self._owo_antistuck, os_.get("antistuck")),
+                            (self._trk_antistuck, trk.get("antistuck"))):
+            if values is not None:
+                box.refresh(values)
+        if trk_on:
+            self._suits_show_unplaced(trk)
+        else:
+            self._suits_trk_note.setVisible(False)
+            self._suits_unplaced.setVisible(False)
         self._suits_legend[OWO_HUE][1].setText(
             "OWO muscle — the dots inside it play it too" if dots
             else "OWO muscle — fills as it plays")
@@ -766,6 +952,11 @@ class SuitsMixin:
             info = bh.get("error") or "Switch the suit on and press Connect."
         self._bh_info.setText(info)
         self._bh_release_btn.setEnabled(bool(devices) or bool(bh.get("wanted")))
+        # a "connected" parameter for each part you have, or that is connected
+        live = {body_map.group_of(p) for d in devices for p in d.get("positions") or []}
+        have = set(bs.get("have", body_map.DEFAULT_HAVE)) | live
+        for group, row in getattr(self, "_bh_presence_rows", {}).items():
+            row.setVisible(group in have)
 
         if owo.get("paused"):
             self._suits_set_pill(self._owo_pill, "Stopped", "warn")
@@ -819,9 +1010,13 @@ class SuitsMixin:
         self._suits_body.set_state(bh_on, owo_on,
                                    [p for p, (on, _v) in part_vals.items() if not on],
                                    [m for m, (on, _v) in muscle_vals.items() if not on],
-                                   parts_shown=shown, trackers_shown=spots,
-                                   trackers_off=[k for k, v in spots.items()
-                                                 if not v.get("enabled", True)])
+                                   parts_shown=shown,
+                                   # placing: every spot, the empty ones dim
+                                   trackers_shown=(list(TRACKER_NAMES) if self._suits_placing
+                                                   else spots),
+                                   trackers_off=[k for k in TRACKER_NAMES
+                                                 if k not in spots
+                                                 or not spots[k].get("enabled", True)])
         self._suits_show_check(detected, shown if dots else (), owo_on, spots,
                                bool(os_.get("follow_bhaptics", True)))
         self._suits_fill_inspector()

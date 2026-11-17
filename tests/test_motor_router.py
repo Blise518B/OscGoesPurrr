@@ -12,6 +12,7 @@ import math
 
 import pytest
 
+from contact_filters import PAIRS, pairs_from_legacy
 from motor_router import MotorRouter
 
 
@@ -127,12 +128,10 @@ def _params_pen_others_legacy(amount: float = 0.4) -> dict:
 
 
 def _cfg(touch=True, pen=True, self_=True, others=True) -> dict:
-    return {
-        "motor_0_touch": touch,
-        "motor_0_pen": pen,
-        "motor_0_self": self_,
-        "motor_0_others": others,
-    }
+    """The motor's 2x2 (contact_filters), written from the old two pairs so
+    each test can still switch one kind or one source off."""
+    return {f"motor_0_{p}": v for p, v in
+            pairs_from_legacy(touch, pen, self_, others).items()}
 
 
 class TestZoneContributionFilters:
@@ -247,10 +246,10 @@ def _pass_through_mix() -> dict:
 
 def _basic_motor_cfg(**overrides) -> dict:
     cfg = {
-        "motor_0_touch": True,
-        "motor_0_pen": True,
-        "motor_0_self": False,
-        "motor_0_others": True,
+        "motor_0_touch_self": False,
+        "motor_0_touch_others": True,
+        "motor_0_pen_self": False,
+        "motor_0_pen_others": True,
         "mix": _pass_through_mix(),
     }
     cfg.update(overrides)
@@ -340,7 +339,8 @@ class TestCalculateMotorTarget:
     def test_touch_zone_ignored_when_touch_filter_off(self, router):
         # OGB parity: touch zones ride the hands toggle only, so turning
         # Touch off silences them even with pen enabled.
-        cfg = _basic_motor_cfg(motor_0_zones="Head", motor_0_touch=False)
+        cfg = _basic_motor_cfg(motor_0_zones="Head", motor_0_touch_self=False,
+                               motor_0_touch_others=False)
         params = {"OGB/Touch/Head/Others": 0.9}
         zones = {("Touch", "Head")}
         out = router._calculate_motor_target("dev", 0, cfg, params, zones=zones)
@@ -487,10 +487,10 @@ class TestMixerIntegration:
         # output: dt=0 so smoothing snaps to mixed; speed default has
         # gain 1.0 but s_raw=0 on the first sample → mixed=d_shaped=d_raw.
         cfg = {
-            "motor_0_touch": True,
-            "motor_0_pen": True,
-            "motor_0_self": False,
-            "motor_0_others": True,
+            "motor_0_touch_self": False,
+            "motor_0_touch_others": True,
+            "motor_0_pen_self": False,
+            "motor_0_pen_others": True,
             "osc_addresses": {"0": ["P"]},
         }
         out = router._calculate_motor_target("dev", 0, cfg, {"P": 0.5}, zones=set())
@@ -2260,6 +2260,28 @@ class TestAntiStuck:
         clock.advance(2.1)
         assert self._drive(router, cfg, 0.5, on) == 0.0
 
+    def test_a_toy_with_its_own_anti_stuck_off_keeps_playing(self, router, clock):
+        """Each toy's own switch (antistuck.TOY_KEY False in its wiring)
+        leaves it out; the others are still cut."""
+        import antistuck
+        base = {**_basic_motor_cfg(osc_addresses={"0": ["P"]}), "motor_count": 1}
+        profile = {"kept": {**base, antistuck.TOY_KEY: False},
+                   "cut": dict(base)}
+        asc = self._on(active_s=2.0, peaked_s=10.0)
+        router.reevaluate_state(profile, {"P": 0.5}, zones=set(), antistuck=asc)
+        clock.advance(2.1)
+        out = dict(((d, m), v) for d, v, m in
+                   router.reevaluate_state(profile, {"P": 0.5}, zones=set(), antistuck=asc))
+        assert out == {("cut", 0): 0.0}           # "kept" didn't change: still 0.5
+        assert router.last_outputs[("kept", 0)] == pytest.approx(0.5)
+        # switched back on: a fresh fuse from then, not a cut on the spot
+        profile["kept"][antistuck.TOY_KEY] = True
+        router.reevaluate_state(profile, {"P": 0.5}, zones=set(), antistuck=asc)
+        assert router.last_outputs[("kept", 0)] == pytest.approx(0.5)
+        clock.advance(2.1)
+        router.reevaluate_state(profile, {"P": 0.5}, zones=set(), antistuck=asc)
+        assert router.last_outputs[("kept", 0)] == 0.0
+
     def test_reevaluate_state_threads_antistuck(self, router, clock):
         # End-to-end through the public entry point the routing tick uses.
         profile = {
@@ -2963,6 +2985,54 @@ class TestSleepWakeOverride:
     def test_defaults_to_awake_without_a_getter(self, clock):
         r = MotorRouter(clock=clock.now)
         assert r.get_sleep_active() is False
+        assert r.get_toy_sleep("dev") is False
+
+
+class TestOneToyAsleep:
+    """A toy's own Sleep (its bar's chip, Blise's ask 2026-11-17): the same
+    override as the sidebar's, for that toy alone; the sidebar's still puts
+    every toy to sleep."""
+
+    def _profile(self):
+        cfg = TestSleepWakeOverride()._cfg()
+        return {"dev": {**cfg, "motor_count": 1},
+                "other": {**TestSleepWakeOverride()._cfg(), "motor_count": 1}}
+
+    def test_only_the_sleeping_toy_waits_for_its_strokes(self, clock):
+        asleep = {"dev"}
+        r = MotorRouter(clock=clock.now, get_toy_sleep=lambda n: n in asleep)
+        out = dict(((d, m), v) for d, v, m in
+                   r.reevaluate_state(self._profile(), {"P": 0.8}, zones=set()))
+        assert out[("dev", 0)] == 0.0
+        assert out[("other", 0)] == pytest.approx(0.8)
+
+    def test_the_sidebars_sleep_still_sleeps_every_toy(self, clock):
+        r = MotorRouter(clock=clock.now, get_sleep_active=lambda: True,
+                        get_toy_sleep=lambda n: False)
+        out = r.reevaluate_state(self._profile(), {"P": 0.8}, zones=set())
+        assert out == [] or all(v == 0.0 for _d, v, _m in out)
+
+    def test_waking_it_takes_the_strokes_and_letting_go_restores_it(self, clock):
+        asleep = {"dev"}
+        r = MotorRouter(clock=clock.now, get_toy_sleep=lambda n: n in asleep)
+        cfg = self._profile()["dev"]
+        for _ in range(4):
+            for depth in (1.0, 0.0):
+                r._calculate_motor_target("dev", 0, cfg, {"P": depth}, zones=set())
+                clock.advance(0.2)
+        assert r._calculate_motor_target("dev", 0, cfg, {"P": 0.8}, zones=set()) > 0.0
+        asleep.clear()
+        clock.advance(0.05)
+        assert r._calculate_motor_target(
+            "dev", 0, cfg, {"P": 0.8}, zones=set()) == pytest.approx(0.8)
+        assert cfg["mix"]["0"]["chains"][0]["wake"] == {"enabled": False}
+
+    def test_a_failing_getter_is_awake(self, clock):
+        def boom(_name):
+            raise RuntimeError("gone")
+        r = MotorRouter(clock=clock.now, get_toy_sleep=boom)
+        assert r._calculate_motor_target(
+            "dev", 0, self._profile()["dev"], {"P": 0.8}, zones=set()) == pytest.approx(0.8)
 
 
 class TestGetBoolBadTypes:
@@ -3056,7 +3126,8 @@ class TestChainTypes:
 
     def test_custom_chain_honours_explicit_filters(self, router):
         cfg = self._cfg([self._chain("custom")])
-        cfg["motor_0_touch"] = False        # penetration only, by hand
+        cfg["motor_0_touch_self"] = False   # penetration only, by hand
+        cfg["motor_0_touch_others"] = False
         assert self._chain_outs(router, cfg) == [pytest.approx(0.4)]
 
     def test_per_chain_zones_override_the_motor(self, router):
@@ -3070,7 +3141,7 @@ class TestChainTypes:
 
     def test_per_chain_self_others_override_the_motor(self, router):
         cfg = self._cfg([self._chain("touch"), self._chain("touch")])
-        cfg["motor_0_c1_others"] = False        # chain 1 ignores others
+        cfg["motor_0_c1_touch_others"] = False  # chain 1 ignores others
         first, second = self._chain_outs(router, cfg)
         assert first == pytest.approx(0.9)
         assert second == 0.0
@@ -3096,7 +3167,7 @@ class TestChainTypes:
         silently become shared across all four modes."""
         from config_manager import is_routing_key
         from motor_router import MotorRouter
-        for suffix in ("zones", "touch", "pen", "self", "others"):
+        for suffix in ("zones",) + PAIRS:
             key = MotorRouter.chain_routing_key(0, 1, suffix)
             assert key == f"motor_0_c1_{suffix}"
             assert is_routing_key(key) is True

@@ -15,14 +15,17 @@
 //
 // The panel is the app's (src/ui/views/friends_panel.py): their toys
 // (remote-toys.js), their shockers as PiShock's panel with Party Mode
-// (remote-shockers.js), their avatar's board (remote-board.js). The
+// (remote-shockers.js) -- or OpenShock's card with Live control, as the
+// "Shocker buttons" switch says (remote-openshock.js; remembered in this
+// browser, PiShock by default) -- their avatar's board (remote-board.js). The
 // browser keeps its own key (localStorage), so it is the same guest next
 // time -- and a kicked one stays kicked until that storage is cleared.
 
 import init, { Guest } from "./web_guest/ogp_web_guest.js";
-import { el, identity, pct, toggle, hslider } from "./remote-ui.js";
+import { el, identity, pct, toggle, hslider, segmented } from "./remote-ui.js";
 import { ToyCard } from "./remote-toys.js";
 import { ShockerCard, ShockParty } from "./remote-shockers.js";
+import { OpenShockCard } from "./remote-openshock.js";
 import { Board } from "./remote-board.js";
 
 const P = window.OGPRemoteProto;
@@ -38,7 +41,12 @@ const OWN_MS = 1500;        // your own avatar set shows over theirs this long
 const ASK_AGAIN_MS = 4000;  // a board that hasn't come is asked for again
 const KEY_STORE = "ogp-web-remote-key";
 const NICK_STORE = "ogp-web-remote-nick";
-const SYNC_STORE = "ogp-web-remote-sync";
+const LAYOUT_STORE = "ogp-web-remote-shocker-layout";   // "pishock" (default) | "openshock"
+const CARDS = { pishock: ShockerCard, openshock: OpenShockCard };
+const LAYOUT_TIP = "Whose shocker buttons you drive with here: PiShock's panel (the default) or "
+  + "OpenShock's card with its Live control. It only changes how the buttons look - every press "
+  + "sends the same, and their caps, arming and each shocker's switches hold either way. "
+  + "Remembered in this browser.";
 const RETRY_MS = [1000, 2000, 5000, 10000, 30000];
 
 const enc = new TextEncoder();
@@ -69,17 +77,22 @@ const S = {
   strength: null,               // [seq, value, when]
   strengthT: 0,                 // your hand on their strength slider
   mySeq: 0,
-  sync: store(SYNC_STORE) !== "0",
   pseq: 0,                      // Sync with others: your panel's version
+  separate: false,              // ... and how they have it: their call (``sep``)
   board: null, values: {}, ownSets: {}, paramHolds: new Set(), hadParamHolds: false,
+  height: null,                 // their height now (their Height box)
   paramSeq: Date.now(), yoloOpen: false,
-  shockMemory: {}, partyMemory: null, partyTicked: new Set(),
+  // how the shocker cards and the party were set, per layout (one memory each)
+  shockMemory: { pishock: {}, openshock: {} }, partyMemory: { pishock: null, openshock: null },
+  partyTicked: new Set(),
+  layout: P.cleanLayout(store(LAYOUT_STORE)),
 };
 // what was last sent of each state slot, and when
 const slots = { cmd: { sig: "", t: 0, reps: 0 }, lw: { sig: "", t: 0, reps: 0 },
                 pw: { sig: "", t: 0, reps: 0 }, ph: { sig: "", t: 0, reps: 0 } };
 // the panel's widgets
-const W = { key: null, toys: [], shockers: [], party: null, board: null, strength: null };
+const W = { key: null, toys: [], shockers: [], party: null, board: null, strength: null, layout: null,
+            synced: null };
 
 function store(key, value) {
   try {
@@ -136,7 +149,7 @@ function buildCmd() {
   const s = S.strength;
   const strength = s && now() - s[2] < STRENGTH_RESEND_MS ? [s[0], s[1]] : null;
   const msg = P.makeCmd(S.levels, strength, [...S.override], S.patterns, S.holds,
-                        S.sync ? S.pseq : null);
+                        S.pseq);
   // ts: when this left the browser, for tools/web_guest/test_host.py's
   // latency check; OGP ignores it.
   msg.ts = Date.now();
@@ -278,6 +291,7 @@ function onMsg(msg) {
       break;
     case "st":
       S.status = P.readStatus(msg);
+      S.separate = P.readSeparate(msg);
       render();
       break;
     case "oth":
@@ -287,7 +301,11 @@ function onMsg(msg) {
       panelIn(msg);
       break;
     case "pv":
-      if (S.board) Object.assign(S.values, P.readValues(msg, S.board));
+      if (S.board) {
+        Object.assign(S.values, P.readValues(msg, S.board));
+        const h = msg.b === S.board.ver ? P.readHeight(msg) : null;
+        if (h !== null) S.height = h;
+      }
       break;
     default:
       break;
@@ -297,7 +315,7 @@ function onMsg(msg) {
 // --- their toys (friends_control.py) ------------------------------------------------
 
 function panelChanged() {
-  if (S.sync) S.pseq += 1;           // past the newest seen: it wins over the others'
+  S.pseq += 1;                       // past the newest seen: it wins over the others'
 }
 function setLevel(toy, v) {
   const was = Object.values(S.levels).some((x) => x > 0);
@@ -329,18 +347,12 @@ function setStrength(v) {
   S.strengthT = now();
   pushCmd();
 }
-function setSync(on) {
-  S.sync = on;
-  store(SYNC_STORE, on ? "1" : "0");
-  S.pseq = 0;                        // joining takes the shared panel as it stands
-  pushCmd();
-  log(on ? "You share one panel with the others" : "You drive on your own");
-}
 /** Their OGP's shared panel: newer than yours, or the same version won by
- *  someone else -- take it as your own (friends_control._friend_panel_in). */
+ *  someone else -- take it as your own (friends_control._friend_panel_in).
+ *  It only comes while they sync everyone: their call, not yours. */
 function panelIn(msg) {
   const got = P.readPanel(msg);
-  if (!got || !S.sync) return;
+  if (!got) return;
   const [seq, levels, override, patterns] = got;
   if (seq < S.pseq) return;          // yours is newer: on its way to them
   const same = JSON.stringify([S.levels, [...S.override].sort(), S.patterns])
@@ -356,6 +368,25 @@ function panelIn(msg) {
 // --- their shockers ------------------------------------------------------------------
 
 function capsOf(slot) { return P.shockerCaps(S.status, slot); }
+/** [ops you may send, why one isn't there, a warning can play] on one of
+ *  their shockers -- or what any of `slots` lets through (a party: each
+ *  receiver drops what its switches don't allow); the app's their_rules. */
+function rulesOf(slots) {
+  const st = S.status, ops = new Set();
+  for (const slot of slots) for (const op of P.shockerOps(st, slot)) ops.add(op);
+  // why an op is greyed: the one reason when all of them say the same
+  // (friends_shockers._reasons)
+  // and Warning's, when no warning can play on any of them
+  const warnOk = !slots.length || slots.some((s) => P.canWarn(st, s));
+  const why = warnOk ? {} : { warn: P.WARN_OFF_WHY };
+  for (const op of P.OPS) {
+    if (ops.has(op) || !slots.length) continue;
+    const said = new Set(slots.map((s) => P.shockerWhy(st, s, op)).filter(Boolean));
+    why[op] = said.size === 1 ? [...said][0] : `None of them lets you ${op}`;
+  }
+  return [ops, why, warnOk];
+}
+function allSlots() { return S.status.shockers.map((_n, i) => i); }
 function shock(slots, intensity, length, op, warnMs, warnIntensity) {
   const st = S.status;
   if (!st || !st.allowShock || !slots.length) return;
@@ -405,6 +436,7 @@ function boardIn(msg) {
   if (!board) return;
   S.board = board;
   S.values = {};
+  S.height = null;
 }
 function theirBoard() {
   const prm = S.status && S.status.prm;
@@ -415,7 +447,7 @@ function theirBoard() {
   const values = board ? { ...S.values } : {};
   const t = now();
   for (const [name, [v, at]] of Object.entries(S.ownSets)) if (t - at < OWN_MS) values[name] = v;
-  return { prm, board, values };
+  return { prm, board, values, height: board ? S.height : null };
 }
 function watchBoard(visible) {
   const prm = S.status && S.status.prm;
@@ -483,6 +515,27 @@ function paramSetAny(name, value) {
   sendEvent(P.makeSet(S.paramSeq, out, "", name), 3);
   log(`You set ${theirNick}'s ${name} to ${out} (YOLO)`);
 }
+/** Their Height box: Grow / Right away to v (kept inside their range), or
+ *  Reset -- friends_params.friend_height. */
+function paramHeight(mode, v) {
+  const tb = theirBoard();
+  const box = tb && tb.board ? tb.board.height : null;
+  if (!box || tb.prm.stop || box.locked || !box.allowed || !P.HEIGHT_MODES.includes(mode)) return;
+  let value = null;
+  if (mode !== "reset") {
+    value = Number(v);
+    if (!Number.isFinite(value)) return;
+    value = Math.max(box.lo, Math.min(box.hi, value));
+  }
+  S.paramSeq += 1;
+  sendEvent(P.makeHeightSet(S.paramSeq, mode, value), 3);
+  if (mode === "reset") log(`You put ${theirNick}'s height back`);
+  else if (mode === "now") log(`You set ${theirNick}'s height to ${P.fmtHeight(value)}`);
+  else {
+    const shrink = tb.height !== null && value < tb.height;
+    log(`You ${shrink ? "shrank" : "grew"} ${theirNick} to ${P.fmtHeight(value)}`);
+  }
+}
 function letGoOfParams() {
   if (S.paramHolds.size) { S.paramHolds.clear(); sendEvent(P.makeHolds([]), 1); }
 }
@@ -529,7 +582,7 @@ function panelKey() {
   const st = S.status;
   if (!linked || !st) return JSON.stringify([linked]);
   return JSON.stringify([st.allowToys, st.toys.map((t) => t[0]), st.allowShock, st.shockers,
-                         Boolean(st.prm)]);
+                         Boolean(st.prm), S.layout]);
 }
 
 function render() {
@@ -552,8 +605,10 @@ function render() {
 function build() {
   // the cards about to go: nothing they hold keeps running, and the ones
   // that replace them start where these were (friends_shockers._keep_shockers)
-  W.shockers.forEach((card, i) => { card.release(); S.shockMemory[i] = card.settings(); });
-  if (W.party) { W.party.release(); S.partyMemory = W.party.settings(); }
+  const was = W.layout || S.layout;
+  W.shockers.forEach((card, i) => { card.release(); S.shockMemory[was][i] = card.settings(); });
+  if (W.party) { W.party.release(); S.partyMemory[was] = W.party.settings(); }
+  W.layout = S.layout;
   const panel = $("sections");
   panel.replaceChildren();
   W.toys = [];
@@ -561,6 +616,7 @@ function build() {
   W.party = null;
   W.board = null;
   W.strength = null;
+  W.synced = null;
   const st = S.status;
   if (!st) { panel.append(el("p.small", {}, "Waiting for their state…")); return; }
 
@@ -570,12 +626,6 @@ function build() {
   if (!st.allowToys) {
     toys.body.append(el("p.small", {}, "They haven't allowed you their toys."));
   } else {
-    const sync = toggle("Sync with others", S.sync, setSync,
-      "On: you see what the others driving them see - one set of toy cards for all of you. When one "
-      + "of you moves a level, starts an auto mode or picks Override, it moves on everyone's cards, and "
-      + "their toys play that one change (the newest wins). Off: your cards are just yours - you don't "
-      + "see what the others do, and their toys follow whichever of you is higher. Their strength "
-      + "slider is shared either way.");
     const val = el("span.val");
     const s = hslider({ max: 1000, hue: "accent", value: Math.round(st.strength * 1000),
                         title: "Their own strength slider, top left in their OGP: it scales everything "
@@ -584,7 +634,11 @@ function build() {
     s.classList.add("strength");
     val.textContent = pct(st.strength);
     W.strength = { s, val };
-    toys.head.append(sync, el("span.strength-g", {}, el("span.small", {}, "Their strength"), s, val));
+    // read-only, while others drive them too: how they have Sync with others
+    // (their call) -- in the toys' header, as the app's panel has it
+    W.synced = el("span.pill.idle", { title: "Whether everyone driving them shares one set of toy cards - their choice, not yours. SYNCED: a level, an auto mode or Override one of you sets moves on everyone's cards, and their toys play that one change (the newest wins). SEPARATE: your cards are just yours, and their toys follow whichever of you is higher. Their strength slider is shared either way." });
+    W.synced.hidden = true;
+    toys.head.append(W.synced, el("span.strength-g", {}, el("span.small", {}, "Their strength"), s, val));
     // "All their toys" only for two toys or more; one toy's card is the
     // all-toys one underneath (friends_panel.py): [key, title, the toy it shows]
     const names = st.toys.map(([n]) => n);
@@ -605,7 +659,13 @@ function build() {
   if (st.allowShock) {
     const sh = section("THEIR SHOCKERS", "yellow", "shock");
     panel.append(sh.box);
-    if (st.shockers.length > 1) {
+    const Card = CARDS[S.layout];
+    // "Shocker buttons: PiShock | OpenShock" -- the app's friends_shockers._layout_switch
+    const pick = segmented(["PiShock", "OpenShock"], "yellow", (i) => setLayout(P.LAYOUTS[i]),
+                           P.LAYOUTS.indexOf(S.layout));
+    sh.head.append(el("span.layout-switch", { title: LAYOUT_TIP }, el("span.small", {}, "Shocker buttons"), pick));
+    // OpenShock's card has no STOP of its own: its panel keeps Stop all for one shocker too
+    if (st.shockers.length > 1 || (st.shockers.length && Card === OpenShockCard)) {
       sh.head.append(el("button.btn.danger.sm", { type: "button", title: "Every one of their shockers stops now",
         onclick: () => W.shockers.forEach((c) => c.stop()) }, "Stop all"));
     }
@@ -621,19 +681,21 @@ function build() {
         W.party = new ShockParty({
           onFire: partyShock, onHold: (s, op, it) => hold(s, op, it), onRelease: release, onStop: stop,
           onTicks: (ticked) => partyTicked(ticked),
-        });
+        }, { Card });
         W.party.setTargets(st.shockers.map((n, i) => [i, `${i + 1} · ${n}`]), S.partyTicked);
-        if (S.partyMemory) W.party.restore(S.partyMemory);
+        W.party.card.setRules(...rulesOf(allSlots()));
+        if (S.partyMemory[S.layout]) W.party.restore(S.partyMemory[S.layout]);
         W.party.root.hidden = !S.partyTicked.size;
         sh.body.append(W.party.root);
       }
       st.shockers.forEach((n, i) => {
-        const card = new ShockerCard(`${i + 1} · ${n}`, {
+        const card = new Card(`${i + 1} · ${n}`, {
           onFire: (op, it, len, wms, wi) => shock([i], it, len, op, wms, wi),
           onHold: (op, it) => hold([i], op, it), onRelease: () => release([i]), onStop: () => stop([i]),
         }, { partyBox: Boolean(W.party) });
         card.setCaps(capsOf(i), st.maxHoldS);
-        if (S.shockMemory[i]) card.restore(S.shockMemory[i]);
+        card.setRules(...rulesOf([i]));
+        if (S.shockMemory[S.layout][i]) card.restore(S.shockMemory[S.layout][i]);
         if (card.partyBox) {
           card.partyBox.checked = S.partyTicked.has(i);
           card.partyBox.onchange = () => {
@@ -652,12 +714,22 @@ function build() {
   // their avatar
   if (st.prm) {
     const av = section("THEIR AVATAR", "green", "params");
-    W.board = new Board({ onSet: paramSet, onHold: paramHold, onSetAny: paramSetAny });
+    W.board = new Board({ onSet: paramSet, onHold: paramHold, onSetAny: paramSetAny,
+                          onHeight: paramHeight });
     W.board.onFold = () => { S.yoloOpen = W.board.yoloOpen; update(); };
     av.head.append(W.board.note);
     av.body.append(W.board.root);
     panel.append(av.box);
   }
+}
+
+/** The "Shocker buttons" switch: every card in the other layout, remembered here. */
+function setLayout(name) {
+  name = P.cleanLayout(name);
+  if (name === S.layout) return;
+  S.layout = name;
+  store(LAYOUT_STORE, name);
+  render();
 }
 
 function partyTicked(ticked) {
@@ -679,9 +751,16 @@ function update() {
   const others = $("others");
   others.hidden = !S.others;
   others.textContent = `+${S.others} OTHER${S.others > 1 ? "S" : ""}`;
+  if (W.synced) {                   // how they have Sync with others: their call
+    W.synced.hidden = !S.others;
+    W.synced.textContent = S.separate ? "SEPARATE" : "SYNCED";
+  }
   const st = S.status;
   if (!st) return;
-  const note = st.paused ? `${theirNick} paused all friends - nothing you send reaches them.`
+  // not here: they only let people in their VRChat instance drive them, and a
+  // browser can't be in one -- said without a word of who or where
+  const note = st.notHere ? `${theirNick} only lets people in their VRChat instance drive them right now - a browser can't be in one, so nothing you send reaches them.`
+    : st.paused ? `${theirNick} paused all friends - nothing you send reaches them.`
     : st.off ? `${theirNick}'s Off is on - nothing you send reaches them.` : "";
   $("note").textContent = note;
   $("note").hidden = !note;
@@ -696,10 +775,15 @@ function update() {
     if (card.shows !== P.ALL) card.setBattery(st.batteries[card.shows]);
   }
   const blocked = st.paused || st.off;
-  W.shockers.forEach((card, i) => { card.setCaps(capsOf(i), st.maxHoldS); card.setBlocked(blocked); });
-  if (W.party) W.party.card.setBlocked(blocked);
+  W.shockers.forEach((card, i) => {
+    card.setCaps(capsOf(i), st.maxHoldS);
+    card.setRules(...rulesOf([i]));
+    card.setBlocked(blocked);
+  });
+  if (W.party) { W.party.card.setRules(...rulesOf(allSlots())); W.party.card.setBlocked(blocked); }
   if (W.strip) {
-    const [head, rest, tone] = st.paused ? ["Paused", "they paused all friends - nothing reaches them", ""]
+    const [head, rest, tone] = st.notHere ? ["Not here", "they only let people in their VRChat instance drive them", ""]
+      : st.paused ? ["Paused", "they paused all friends - nothing reaches them", ""]
       : st.off ? ["Off", "their Off is on - nothing reaches them", ""]
       : st.armed ? ["⚠  ARMED", "shocks are real", "armed"]
       : ["Not armed", "a shock arrives as a vibration", ""];
@@ -709,7 +793,7 @@ function update() {
   }
   if (W.board) {
     const tb = theirBoard();
-    if (tb) W.board.update(tb.prm, tb.board, tb.values);
+    if (tb) W.board.update(tb.prm, tb.board, tb.values, st.notHere, tb.height);
   }
 }
 

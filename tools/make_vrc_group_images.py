@@ -63,12 +63,11 @@ import make_menu_icons as menu  # noqa: E402  (points offscreen Qt at the system
 import make_site_images as site  # noqa: E402
 
 from PIL import Image, ImageDraw, ImageFilter  # noqa: E402
-from PySide6.QtCore import QPointF, QRectF, Qt  # noqa: E402
+from PySide6.QtCore import QPoint, QPointF, QRectF, Qt  # noqa: E402
 from PySide6.QtGui import (QBrush, QColor, QFont, QFontMetricsF, QImage,  # noqa: E402
                            QPainter, QPainterPath, QPainterPathStroker, QPen,
                            QRadialGradient)
 
-from PySide6.QtTest import QTest  # noqa: E402
 from PySide6.QtWidgets import QApplication  # noqa: E402
 
 import app_shots  # noqa: E402
@@ -102,9 +101,10 @@ COMPACT_TOP = 158                             # in-game compact card
 LIST_THUMB = (256, 144)                       # the website's group list
 
 GW, GH = 1920, 1080
-SHOT = (1240, 814)       # the app window as rendered (814 high: the sidebar fits
-                         # without a scrollbar) ...
-SHOT_SCALE = 0.84        # ... and how big a page's card shows it
+SHOT = (1240, 880)       # the app window as rendered (880 high: the sidebar fits
+                         # without a scrollbar, Toys and Log included) ...
+SHOT_SCALE = 0.84        # ... and how big a page's card shows it, at most --
+FOOT_GAP = 14            # less if it would come closer than this to the footer
 BAR = 40                 # the title bar drawn over it
 RADIUS = 14              # the window's corners
 COLUMN_X = 110           # the text column's left edge, and the footer's
@@ -112,7 +112,7 @@ COLUMN_X = 110           # the text column's left edge, and the footer's
 # headline, what to do on the page first). The arrows are the page's steps
 # in ui/page_steps.py.
 SHOTS = (
-    ("toys", "Home", "toys", "TOYS", "Your avatar's touches, on your toys.", "open a toy"),
+    ("toys", "Toys", "toys", "TOYS", "Your avatar's touches, on your toys.", "open a chain"),
     ("friends", "Friends", "friends", "FRIENDS", "Hand your friends the remote.", None),
     ("shockers", "Shockers", "shock", "SHOCKERS", "PiShock and OpenShock, straight over USB.", None),
     ("suits", "Suits", "suits", "SUITS", "bHaptics and OWO feel the same touch.", None),
@@ -567,6 +567,30 @@ def _badge(g: QPainter, centre: QPointF, radius: float, n: int, colour: QColor) 
                Qt.AlignCenter, str(n))
 
 
+# A card's window grows to show every step's control, up to this tall.
+TALLEST_SHOT = 1600
+
+
+def _room_for_steps(shots, page: str, steps) -> int:
+    """How much taller than SHOT the window has to be for every step's
+    control on the page to be in the shot at once -- the Suits page's
+    bHaptics card sits under her body, My Avatar Remote's Height box under
+    the board -- or 0. (The card then shows the window a little smaller.)
+    Controls outside the page (the sidebar's) are always in it."""
+    area = shots.ui.views[page]
+    inner = area.widget() if hasattr(area, "widget") else None
+    if inner is None:
+        return 0
+    lowest = 0
+    for step in steps:
+        for t in ((step.target,) if isinstance(step.target, str) else step.target):
+            w = shots._find(page, t)
+            if w is not None and inner.isAncestorOf(w):
+                lowest = max(lowest, w.mapTo(inner, QPoint(0, 0)).y() + w.height())
+    grow = lowest + 16 - area.verticalScrollBar().value() - area.viewport().height()
+    return max(0, min(grow, TALLEST_SHOT - SHOT[1]))
+
+
 def draw_shot(spec, shots, title: str, body: str) -> Image.Image:
     """One page's card: the real page in its window in the middle, the
     headline over it, and each step beside the window at the height of the
@@ -575,11 +599,13 @@ def draw_shot(spec, shots, title: str, body: str) -> Image.Image:
     colour = QColor(_feature_art(art)[1])
     page = shots.show(page)
     steps = next(s for name, s in page_steps.STEPS.items() if shots.resolve(name) == page)
-    if first == "open a toy":
-        # one of app_shots' demo toys opened: its signal chain, how a toy is tuned
-        QTest.mouseClick(shots.ui.device_ui_frames["Lovense Lush 3"]["status_label"],
-                         Qt.LeftButton)
-        shots.pump(400)
+    if first == "open a chain":
+        # one of app_shots' demo toys with its chain open: how a toy is tuned
+        shots.open_chain("Lovense Lush 3")
+    grow = _room_for_steps(shots, page, steps)
+    if grow:
+        shots.ui.window.resize(SHOT[0], SHOT[1] + grow)
+        shots.pump(200)
     shot = _pil(shots.ui.window.grab().toImage())
     rects = []
     for step in steps:
@@ -592,11 +618,15 @@ def draw_shot(spec, shots, title: str, body: str) -> Image.Image:
         for more in found[1:]:
             r = r.united(more)
         rects.append(r)
+    if grow:                                # the next card starts at SHOT again
+        shots.ui.window.resize(*SHOT)
+        shots.pump(200)
 
-    k = SHOT_SCALE
+    wy = 186
     win = _window(shot, title, body)
+    k = min(SHOT_SCALE, (GH - 122 - FOOT_GAP - wy) / win.height)   # clear of the footer
     win = win.resize((round(win.width * k), round(win.height * k)), Image.LANCZOS)
-    wx, wy = (GW - win.width) // 2, 186
+    wx = (GW - win.width) // 2
     out = _pil(_ground(GW, GH, GW / 2, wy + win.height / 2, 1100, 620))
     _lifted(out, win, wx, wy, colour.name())
     rings = [QRectF(wx + r.x() * k, wy + (BAR + r.y()) * k, r.width() * k,
@@ -886,7 +916,7 @@ def main() -> int:
     for n, spec in enumerate(SHOTS, 2):
         cards.append(f"gallery-{n}-{spec[0]}.png")
         draw_shot(spec, shots, title, body).save(OUT / cards[-1], optimize=True)
-    # last, so its pages are as the cards left them (Home with a toy open)
+    # last, so its pages are as the cards left them (Toys with a toy open)
     draw_overview(shots, title, body).save(OUT / cards[0], optimize=True)
     for old in OUT.glob("gallery-*.png"):          # cards this run no longer draws
         if old.name not in cards:

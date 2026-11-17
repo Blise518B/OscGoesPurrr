@@ -13,11 +13,13 @@ The content is `whats_new.py`; this module only draws it.
 from __future__ import annotations
 
 import shiboken6
-from PySide6.QtCore import QPoint, Qt, QTimer
+from PySide6.QtCore import QPoint, Qt, QTimer, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDialog, QLabel, QPushButton, QSizePolicy, QStackedWidget, QWidget,
 )
 
+import guide_links
 from ui.layout_helpers import vbox as _vbox, hbox as _hbox
 from ui.text_helpers import html_escape as _html_escape
 from ui.widgets import IdentityMark
@@ -27,7 +29,17 @@ from ui.widgets import IdentityMark
 PLACES = {
     "appearance":   ("Settings", "_appearance_card"),
     "home":         ("Home", ""),
+    # A toy's signal chains, SPS Sources, Scan now and the tuning tools
+    # (they were Home's until 2026-11-14).
+    "toys":         ("Toys", ""),
     "friends":      ("Friends", ""),
+    # The pages of a feature someone may have switched off: the button
+    # shows only while that page is in the sidebar (_can_reveal).
+    "shockers":     ("Shockers", ""),
+    "params":       ("My Avatar Remote", ""),
+    "stats":        ("Statistics", ""),
+    "log":          ("Log", ""),
+    "help":         ("Help", ""),
     "toy_presence": ("Settings", "_connection_card"),
     "toy_safety":   ("Settings", "_toy_safety_card"),
     # Settings → Features, not the Suits page: the page only exists once a
@@ -118,6 +130,15 @@ class WhatsNewMixin:
         again = QLabel("Find this again in Settings → Quality of Life.")
         again.setProperty("muted", "true")
         foot.addWidget(again, 1)
+        # everything in detail: the user guide (guide_links)
+        guide = QPushButton("The guide  ↗")
+        guide.setProperty("role", "ghost")
+        guide.setCursor(Qt.PointingHandCursor)
+        guide.setToolTip("<b>The guide</b><br>Everything in detail, with pictures, in your "
+                         "browser.")
+        guide.clicked.connect(
+            lambda _=False: QDesktopServices.openUrl(QUrl(guide_links.GUIDE_URL)))
+        foot.addWidget(guide)
         done = QPushButton("Got it")
         done.setProperty("role", "primary")
         done.setDefault(True)
@@ -230,8 +251,14 @@ class WhatsNewMixin:
     # ------------------------------------------------------------------
 
     def _can_reveal(self, place: str) -> bool:
+        """The place exists in this build, and its page is in the sidebar
+        -- a page whose feature is switched off in Settings → Features
+        (Shockers, My Avatar Remote, the Log ...) is never jumped to."""
         page, _attr = PLACES.get(place, ("", ""))
-        return bool(page) and page in (getattr(self, "views", None) or {})
+        if not page or page not in (getattr(self, "views", None) or {}):
+            return False
+        allows = getattr(self, "_feature_allows_view", None)
+        return not callable(allows) or bool(allows(page))
 
     def reveal(self, place: str) -> bool:
         """Open the page a change lives on and, when it has a card of its

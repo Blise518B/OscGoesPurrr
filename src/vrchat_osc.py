@@ -1418,6 +1418,24 @@ class VRChatOSCManager:
         except Exception:
             return ""
 
+    def query_value(self, path: str) -> Any:
+        """One node's current value from VRChat's OSCQuery server (None when
+        it has no such node or doesn't answer) -- e.g. ``/avatar/eyeheight``,
+        which VRChat otherwise only sends when it changes."""
+        if not self.http_port:
+            return None
+        try:
+            r = requests.get(f"http://{self.vrc_ip}:{self.http_port}{path}", timeout=2)
+            if r.status_code != 200:
+                return None
+            val = r.json().get("VALUE")
+            # OSCQuery wraps single values in a one-element list.
+            if isinstance(val, list):
+                val = val[0] if val else None
+            return val
+        except Exception:
+            return None
+
     def _schedule_avatar_change_refetch(self, delay_s: float = 1.5) -> None:
         """Arm a single debounced re-fetch of the OSCQuery phonebook.
 
