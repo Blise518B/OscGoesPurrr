@@ -913,6 +913,31 @@ class TestToyBarWraps:
         return next(i for i, line in enumerate(data["bar_lines"]) if line.indexOf(w) >= 0)
 
     @staticmethod
+    def _room(data):
+        m = data["bar"].layout().contentsMargins()
+        return data["bar"].width() - m.left() - m.right()
+
+    def _place_for(self, host, arrangement, name="Bravo"):
+        """A window that gives the bar room for `arrangement` and for no
+        wider one: as little as the window allows above what it needs.
+        Worked out from the bar's own needs, so it holds whatever the font
+        (Linux's stand-in for Segoe UI fit one line at 1100 px, CI 0.16.0)."""
+        from ui.views.device_frame import _BAR_ARRANGEMENTS
+        data = self._place(host, 1700, name=name)
+        need = host._toy_bar_need(data, *arrangement)
+        wider = [host._toy_bar_need(data, *a)
+                 for a in _BAR_ARRANGEMENTS[:_BAR_ARRANGEMENTS.index(arrangement)]]
+        below = min(wider, default=10 ** 6)         # the room where a wider one fits
+        assert need < below, (arrangement, need, wider)
+        for _ in range(4):                  # a scrollbar coming or going moves the room
+            have = self._room(data)
+            if need <= have < below:
+                break
+            data = self._place(host, host.window.width() + need - have, name=name)
+        assert need <= self._room(data) < below, (arrangement, need, below, self._room(data))
+        return data
+
+    @staticmethod
     def _first_fit(host, data):
         from ui.views.device_frame import _BAR_ARRANGEMENTS
         m = data["bar"].layout().contentsMargins()
@@ -975,11 +1000,11 @@ class TestToyBarWraps:
         assert caps["Touch"].x() == caps["Penetration"].x()
         assert chips["touch_self"].x() == chips["pen_self"].x()
         # under the name on one row while that fits there ...
-        data = self._place(host, 1100)
+        data = self._place_for(host, ("two", False))
         assert data["bar_mode"] == ("two", False)
         assert cell(caps["Penetration"]) == (0, 3) and cell(chips["pen_others"]) == (0, 5)
         # ... else under the name on two rows, Sleep over Anti-stuck beside them
-        data = self._place(host, 820)
+        data = self._place_for(host, ("two", True))
         assert data["bar_mode"] == ("two", True)
         assert cell(caps["Penetration"]) == (1, 0)
         safety = data["safety_box"].layout()

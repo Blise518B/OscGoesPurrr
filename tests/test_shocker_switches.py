@@ -308,6 +308,33 @@ def test_arming_never_shifts_the_row(both):
         assert arm.sizeHint().width() == width
 
 
+def test_a_wider_question_never_widens_the_row_either(both):
+    """Where a font makes "Arm shocks? Yes / No" wider than the switch and
+    its words (Linux's stand-in for Segoe UI, CI 0.16.0), the words keep
+    that much more room, so asking still never widens the row. Forced here
+    with a wide Yes, so it holds whatever the font; the question itself,
+    its timeout and the words are untouched."""
+    ctl, ui = both()
+    for arm in (ui._home_shockers_row.arm, ui._pishock_arm):
+        plain = arm.sizeHint().width()
+        arm.yes.setMinimumWidth(plain)                  # the question: wider than it all
+        arm.set_armed(False)                            # a redraw measures again
+        width = arm.sizeHint().width()
+        assert width >= arm.ask.sizeHint().width() > plain
+        assert arm.status.text() == shocker_switches.NOT_ARMED_TEXT and not arm.isChecked()
+        arm.switch.click()
+        assert arm.asking and arm.sizeHint().width() <= width
+        assert arm.question.text() == shocker_switches.ARM_TEXT + "?"
+        arm.set_armed(False)                            # a redraw while asking keeps the room
+        assert arm.asking and arm.sizeHint().width() <= width
+        arm.no.click()
+        assert not arm.asking and not arm.isChecked()
+        assert arm.sizeHint().width() == width
+        arm.yes.setMinimumWidth(0)                      # back to the real question
+        arm.set_armed(False)
+        assert arm.sizeHint().width() == plain
+
+
 def test_no_second_armed_pill_beside_the_words(both):
     ctl, ui = both()
     ctl.set_pishock_armed(True)
@@ -402,7 +429,11 @@ def test_arm_asks_first_where_blise_says(both, monkeypatch, where_asks):
 
 
 def test_the_question_gives_up_by_itself(qapp, monkeypatch):
-    """Its own timer: ARM_ASK_S, then it is off again, nothing sent."""
+    """Its own timer: ARM_ASK_S, then it is off again, nothing sent.
+    Waited for rather than slept on: late in the full suite thousands of
+    earlier tests' widgets keep Qt's loop so busy that a 150 ms wait could
+    end before the 30 ms timeout was delivered (Ubuntu, 0.16.1's checks)."""
+    import time
     from PySide6.QtTest import QTest
     monkeypatch.setattr(shocker_switches, "ARM_ASKS_FROM", frozenset({"x"}))
     sent = []
@@ -411,7 +442,9 @@ def test_the_question_gives_up_by_itself(qapp, monkeypatch):
     arm._timer.setInterval(30)
     arm.switch.click()
     assert arm.asking
-    QTest.qWait(150)
+    deadline = time.monotonic() + 3     # under ARM_ASK_S: only the 30 ms timer ends it
+    while arm.asking and time.monotonic() < deadline:
+        QTest.qWait(10)
     assert not arm.asking and not arm.isChecked() and sent == []
 
 

@@ -31,7 +31,7 @@ _GAP_DEG = 2.0                    # between two wedges
 _CAPTION_H = 26
 _CAPTION_PAD = 10                 # the caption's left / right margin
 _CAPTION_GAP = 10                 # at least this between its title and "Avatar Remote ▸ …"
-_CAPTION_MIN_TITLE = 56           # the title keeps at least this much of it
+_CAPTION_MIN_TITLE = 56           # the title keeps this much of it (or all it needs, if less)
 SIZE = int(2 * R_OUT) + 12
 
 
@@ -232,16 +232,21 @@ class SlotRadial(QWidget):
         """(the title; where it goes: "Avatar Remote ▸ Toggles") -- the two
         never touch. A title too long for the whole path gets the room of
         all but "▸ Toggles" (the middle names the set too), then is elided;
-        a font too wide even for that loses the start of "▸ Toggles" last."""
+        a font too wide even for that loses the start of "▸ Toggles" last.
+        The title keeps only what it needs of that, up to
+        _CAPTION_MIN_TITLE: a short one ("Hat") never costs the path its
+        start (Linux's wider stand-in font for Segoe UI showed that)."""
         cap, small = self._caption_fonts()
         left, right = QFontMetrics(cap), QFontMetrics(small)
         both = self.width() - 2 * _CAPTION_PAD - _CAPTION_GAP
         name = _NAMES[self._menu][1]
         where = f"Avatar Remote ▸ {name}"
-        if left.horizontalAdvance(self._title) + right.horizontalAdvance(where) > both:
+        title_w = left.horizontalAdvance(self._title)
+        if title_w + right.horizontalAdvance(where) > both:
             where = f"▸ {name}"
-        if right.horizontalAdvance(where) > both - _CAPTION_MIN_TITLE:
-            where = right.elidedText(where, Qt.ElideLeft, both - _CAPTION_MIN_TITLE)
+        keep = min(_CAPTION_MIN_TITLE, title_w)
+        if right.horizontalAdvance(where) > both - keep:
+            where = right.elidedText(where, Qt.ElideLeft, both - keep)
         room = both - right.horizontalAdvance(where)
         return left.elidedText(self._title, Qt.ElideRight, max(0, room)), where
 

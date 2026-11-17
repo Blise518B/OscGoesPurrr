@@ -120,6 +120,8 @@ class ArmSwitch(QWidget):
         super().__init__(parent)
         self._where = where
         self._on_arm = on_arm
+        # what the question needs beyond the switch and its words (_fit_status)
+        self._question_room = 0
         lay = _hbox(0, 6)
         self.setLayout(lay)
 
@@ -198,14 +200,35 @@ class ArmSwitch(QWidget):
         self._fit_status()                  # (the page's style may have come since)
 
     def _fit_status(self) -> None:
-        """Room for the wider of the two, so arming never shifts the row."""
+        """Room for the wider of the two, so arming never shifts the row --
+        and, where a font makes "Arm shocks? Yes / No" wider than the switch
+        and its words (Linux's stand-in for Segoe UI does), the words take
+        that much more room too, so asking never widens the row either.
+        Where the question is the narrower (Segoe UI) nothing is added."""
         self.status.ensurePolished()
         bold, plain = QFont(self.status.font()), QFont(self.status.font())
         bold.setBold(True)
         plain.setBold(False)
-        self.status.setMinimumWidth(max(
-            QFontMetrics(bold).horizontalAdvance(ARMED_TEXT),
-            QFontMetrics(plain).horizontalAdvance(NOT_ARMED_TEXT)) + 2)
+        words = max(QFontMetrics(bold).horizontalAdvance(ARMED_TEXT),
+                    QFontMetrics(plain).horizontalAdvance(NOT_ARMED_TEXT)) + 2
+        if self.asking:
+            # measured in the switch's own state; a redraw while asking
+            # keeps what that found
+            self.status.setMinimumWidth(words + self._question_room)
+            return
+        self.status.setMinimumWidth(words)
+        for w in (self.question, self.yes, self.no):
+            w.ensurePolished()
+        # asking, the row is the question and the gap before the words'
+        # place (a spacer: no spacing beside it), within the margins
+        lay = self.layout()
+        m = lay.contentsMargins()
+        spacers = sum(lay.itemAt(i).spacerItem().sizeHint().width()
+                      for i in range(lay.count()) if lay.itemAt(i).spacerItem() is not None)
+        asking = self.ask.sizeHint().width() + spacers + m.left() + m.right()
+        self._question_room = max(0, asking - self.sizeHint().width())
+        if self._question_room:
+            self.status.setMinimumWidth(words + self._question_room)
 
     def _flipped(self, on: bool) -> None:
         if on and self._where in ARM_ASKS_FROM:

@@ -343,3 +343,33 @@ def test_the_caption_title_never_runs_into_where_it_goes(qapp):  # noqa: F811
     assert picker.caption()[0] == "Hat"                            # a short one stays whole
     picker.close_picker()
     root.hide()
+
+
+def test_a_short_title_never_costs_the_path_its_start(qapp):  # noqa: F811
+    """A caption just wide enough for "Hat" and the whole path shows both
+    whole: the title keeps only what it needs of _CAPTION_MIN_TITLE. Linux's
+    stand-in for Segoe UI made the path that wide (CI, 0.16.0); here the
+    picker is narrowed to it, so it holds whatever the font."""
+    host, ui, root = page(qapp)
+    host.params_edit("add_control", "Hoodie", "toggle", "Hoodie")
+    pump(qapp)
+    box = next(iter(ui._params_boxes.values()))
+    picker = param_slots.SlotRadial(root, lambda *_: None)
+    cap, small = (QFontMetrics(f) for f in picker._caption_fonts())
+    for menu in ("toggle", "radial"):
+        full = "Avatar Remote ▸ " + param_slots._NAMES[menu][1]
+        tight = (2 * param_slots._CAPTION_PAD + param_slots._CAPTION_GAP
+                 + cap.horizontalAdvance("Hat") + small.horizontalAdvance(full))
+        assert cap.horizontalAdvance("Hat") < param_slots._CAPTION_MIN_TITLE
+        picker.open_for(box.slot_dot, "Hat", host._params_book.board)
+        picker._menu = menu
+        picker.setFixedWidth(tight)
+        assert picker.caption() == ("Hat", full)                   # all of it, nothing cut
+        picker.setFixedWidth(tight - 1)                             # a pixel less: the set only
+        assert picker.caption() == ("Hat", "▸ " + param_slots._NAMES[menu][1])
+        picker.setFixedWidth(tight)
+        picker._title = "A" * 60                                    # too long: "▸ Toggles" only
+        title, where = picker.caption()
+        assert where == "▸ " + param_slots._NAMES[menu][1] and title.endswith("…")
+        picker.close_picker()
+    root.hide()
