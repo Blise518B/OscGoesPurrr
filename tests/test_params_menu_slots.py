@@ -5,12 +5,16 @@ them per preset; the menu drives the worn board straight from the OSC
 thread; the menu follows the board, OGP first, without fighting your hand
 or VRChat's echo; and the page's circle and radial picker set them."""
 
+import math
 import time
 
 import pytest
-from PySide6.QtCore import QPointF
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import QFontMetrics
+from PySide6.QtTest import QTest
 
 import param_board as pb
+from ui.views import param_slots
 from test_param_board import worn
 from test_params_facade import build, pair
 from test_params_page import page, pump, qapp  # noqa: F401 (fixture)
@@ -202,4 +206,140 @@ def test_the_circle_opens_the_radial_and_a_number_takes_the_slot(qapp):  # noqa:
     host.params_edit_quiet("toggle_slot", "radial", 1, box.slot_dot.key)
     host.params_edit_quiet("toggle_slot", "toggle", 0, box.slot_dot.key)
     assert box.slot_dot.text() == "T1·R2"
+    root.hide()
+
+
+# --- the page, clicked like a mouse does ---------------------------------------
+# A real click reaches the application's event filters for the window first
+# and only then for the widget under the pointer; QTest's widget overloads
+# skip the window, so these click through it (bug, 2026-11-14: the picker
+# took the window's press for a click elsewhere and closed before its own
+# wedge got it -- nothing was ever saved).
+
+def click(root, widget, pos=None):
+    at = widget.mapTo(root, pos if pos is not None else widget.rect().center())
+    QTest.mouseClick(root.windowHandle(), Qt.LeftButton, Qt.NoModifier, at)
+
+
+def wedge(picker, k):
+    """Where wedge `k` (0 Back, 1-7) is, in the picker."""
+    c = picker._centre()
+    a = math.radians(-90.0 + 45.0 * k)
+    r = (param_slots.R_IN + param_slots.R_OUT) / 2.0
+    return QPoint(round(c.x() + r * math.cos(a)), round(c.y() + r * math.sin(a)))
+
+
+def middle(picker, lower):
+    c = picker._centre()
+    return QPoint(round(c.x()), round(c.y() + (10 if lower else -10)))
+
+
+def test_a_clicked_number_takes_the_slot_and_every_place_shows_it(qapp):  # noqa: F811
+    host, ui, root = page(qapp)
+    hoodie = host.params_edit("add_control", "Hoodie", "toggle", "Hoodie")
+    bright = host.params_edit("add_control", "Brightness", "slider", "Brightness")
+    pump(qapp)
+    box = ui._params_boxes[hoodie["cat"]]
+    gkey = box.slot_dot.key
+    host.osc_manager.sent.clear()
+    click(root, box.slot_dot)
+    picker = ui._params_slot_picker
+    assert picker.isVisible() and picker.key == gkey
+    click(root, picker, wedge(picker, 1))                          # Toggles 1
+    assert picker.isVisible()                                      # stays open for another
+    board = host._params_book.board
+    assert board["slots"]["toggle"][0] == gkey
+    assert box.slot_dot.text() == "T1" and box.slot_dot.property("set") == "true"
+    assert picker._labels == {gkey: pb.slot_label(board, gkey)}    # the wedge says what has it
+    assert host.osc_manager.sent == []                             # nothing beneath was clicked
+    click(root, picker, middle(picker, lower=True))                # the middle: Radials
+    assert picker._menu == "radial" and picker.caption()[1].endswith("▸ Radials")
+    click(root, picker, wedge(picker, 2))                          # Radials 2: in both sets
+    assert board["slots"]["radial"][1] == gkey
+    assert box.slot_dot.text() == "T1·R2"
+    click(root, picker, middle(picker, lower=False))
+    assert picker._menu == "toggle"
+    click(root, picker, wedge(picker, 1))                          # its own again: freed
+    assert board["slots"]["toggle"][0] is None and box.slot_dot.text() == "R2"
+    # a card: the picker moves over to it, and a number it takes shows on its circle
+    card = ui._params_cards[hoodie["id"]]
+    click(root, card.slot_dot)
+    assert picker.isVisible() and picker.key == "c:" + hoodie["id"]
+    click(root, picker, wedge(picker, 3))
+    assert board["slots"]["toggle"][2] == "c:" + hoodie["id"] and card.slot_dot.text() == "3"
+    assert picker._labels["c:" + hoodie["id"]] == "Hoodie"
+    slider = ui._params_cards[bright["id"]]
+    click(root, slider.slot_dot)                                   # a slider: Radials only
+    assert picker._menus == ("radial",) and picker._menu == "radial"
+    click(root, picker, wedge(picker, 2))                          # taken from the category
+    assert board["slots"]["radial"][1] == "c:" + bright["id"]
+    assert slider.slot_dot.text() == "2" and box.slot_dot.text() == ""
+    assert picker._labels == {"c:" + hoodie["id"]: "Hoodie", "c:" + bright["id"]: "Brightness"}
+    # saved with the preset
+    again = pb.BoardBook(host.params_settings)
+    again.open_avatar(host._params_book.avatar_id)
+    assert again.board["slots"] == board["slots"]
+    # its circle again closes it; so does a click anywhere else
+    click(root, slider.slot_dot)
+    assert not picker.isVisible()
+    click(root, box.slot_dot)
+    assert picker.isVisible()
+    click(root, ui._params_tree)
+    assert not picker.isVisible()
+    assert host.osc_manager.sent == []
+    root.hide()
+
+
+def test_the_menu_follows_a_pick_on_the_page(qapp):  # noqa: F811
+    host, ui, root = page(qapp)
+    hoodie = host.params_edit("add_control", "Hoodie", "toggle", "Hoodie")
+    host.params_edit("add_control", "Brightness", "slider", "Brightness")
+    pump(qapp)
+    box = ui._params_boxes[hoodie["cat"]]
+    click(root, box.slot_dot)
+    picker = ui._params_slot_picker
+    click(root, picker, wedge(picker, 1))                          # the category in Toggles 1
+    click(root, picker, middle(picker, lower=True))
+    click(root, picker, wedge(picker, 4))                          # and Radials 4
+    host.osc_manager.sent.clear()
+    host._params_menu_follow()                                     # OGP first: the menu gets OGP's
+    assert sorted(sent(host)) == [("Radial4", 0.5), ("Toggle1", False)]
+    host._params_menu_on_osc("OGP/Remote/Toggle1", True)           # your hand on the menu
+    assert sent(host) == [("Hoodie", True)]
+    host._params_menu_on_osc("OGP/Remote/Radial4", 1.0)
+    assert sent(host) == [("Brightness", 1.0)]
+    click(root, picker, wedge(picker, 4))                          # freed on the page
+    host._params_menu_on_osc("OGP/Remote/Radial4", 0.2)
+    assert sent(host) == []                                        # drives nothing any more
+    root.hide()
+
+
+def test_the_caption_title_never_runs_into_where_it_goes(qapp):  # noqa: F811
+    host, ui, root = page(qapp)
+    host.params_edit("add_control", "Hoodie", "toggle", "Hoodie")
+    pump(qapp)
+    box = next(iter(ui._params_boxes.values()))
+    picker = param_slots.SlotRadial(root, lambda *_: None)
+    cap, small = picker._caption_fonts()
+    room = picker.width() - 2 * param_slots._CAPTION_PAD
+    for name in ("Category 2 (whole category)", "A" * 60, "Hat"):
+        for menu in ("toggle", "radial"):
+            picker.open_for(box.slot_dot, name, host._params_book.board)
+            picker._menu = menu
+            title, where = picker.caption()
+            used = (QFontMetrics(cap).horizontalAdvance(title) + param_slots._CAPTION_GAP
+                    + QFontMetrics(small).horizontalAdvance(where))
+            assert used <= room, (name, menu, title)
+            assert title == name or title.endswith("…")
+            assert where.endswith("▸ " + param_slots._NAMES[menu][1])   # the set always shows
+            full = "Avatar Remote ▸ " + param_slots._NAMES[menu][1]
+            if (QFontMetrics(cap).horizontalAdvance(name) + param_slots._CAPTION_GAP
+                    + QFontMetrics(small).horizontalAdvance(full)) <= room:
+                assert (title, where) == (name, full)                  # room for all of it
+            else:
+                assert where != full                                   # the title gets the room
+            picker.close_picker()
+    picker.open_for(box.slot_dot, "Hat", host._params_book.board)
+    assert picker.caption()[0] == "Hat"                            # a short one stays whole
+    picker.close_picker()
     root.hide()

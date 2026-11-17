@@ -24,30 +24,15 @@ update itself at launch.
 <!-- Replace this section before each release. Keep it short and concrete:
      what changed, and what a user would notice. -->
 
-A small update to 0.15.0: avatars built with the newest VRCFury work again, and
-OGP sits quieter while nothing happens.
+A bug-fix update to 0.15.1.
 
-- **SPS 3 avatars.** VRCFury 1.1443.0 (10 November) changed how sockets and
-  plugs report, so OGP found none on an avatar built with it. It reads them
-  again: depth, touch and frot, and it switches the avatar's touch contacts
-  on, which such an avatar now waits for. Touch also brings VRChat's own
-  reading of how fast the hand moves, so a hand sliding along you is felt,
-  not just one coming closer; each toy's Touch chain mixes it in through its
-  Speed and Combine settings. Older avatars feel exactly as before.
-- **Built with haptics off?** The OSC Inspector page says so when the avatar
-  you wear was built with VRCFury's haptics switched off, and where to switch
-  them back on.
-- **Less CPU while idle.** With nothing playing, OGP's routing and its toy
-  engine rest instead of waking about a hundred times a second, and Home's
-  meters repaint once per frame: fewer times while OGP isn't focused, not at
-  all while it's minimized.
-- **VRChat stays connected.** A crashed VRChat can leave its network
-  announcement behind for hours, and OGP kept dropping the working connection
-  for it every 15 seconds or so. It now sticks with the VRChat that answers.
-- **What's new, page by page.** Updating over several releases shows every
-  release's notes, one page each, instead of only the newest two.
+- **Avatar Remote:** picking a slot for a control or category in your avatar
+  menu's Toggles / Radials works again (the picker closed before your click
+  landed).
 
-**Coming from 0.14 or older?** 0.15.0 brought the haptic suits and Intiface on
-your phone: [the 0.15.0 notes](https://github.com/Blise518B/OscGoesPurrr/releases/tag/v0.15.0).
+**Coming from 0.15.0 or older?** 0.15.1 brought SPS 3 avatars and a quieter
+idle: [the 0.15.1 notes](https://github.com/Blise518B/OscGoesPurrr/releases/tag/v0.15.1).
+0.15.0 brought the haptic suits and Intiface on your phone:
+[the 0.15.0 notes](https://github.com/Blise518B/OscGoesPurrr/releases/tag/v0.15.0).
 
 More on the website: https://blise518b.github.io/OscGoesPurrr/

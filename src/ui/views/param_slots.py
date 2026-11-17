@@ -29,6 +29,9 @@ _NAMES = {"toggle": ("Toggle", "Toggles"), "radial": ("Radial", "Radials")}
 R_OUT, R_IN = 104.0, 40.0        # the ring
 _GAP_DEG = 2.0                    # between two wedges
 _CAPTION_H = 26
+_CAPTION_PAD = 10                 # the caption's left / right margin
+_CAPTION_GAP = 10                 # at least this between its title and "Avatar Remote ▸ …"
+_CAPTION_MIN_TITLE = 56           # the title keeps at least this much of it
 SIZE = int(2 * R_OUT) + 12
 
 
@@ -134,12 +137,17 @@ class SlotRadial(QWidget):
         self.update()
 
     def eventFilter(self, obj, ev):  # noqa: N802
-        if ev.type() == QEvent.MouseButtonPress and self.isVisible():
-            target = obj if isinstance(obj, QWidget) else None
-            inside = target is not None and (target is self or self.isAncestorOf(target))
+        # A real click reaches the application's filters twice: first for
+        # the window (a QWindow, not a widget), then for the widget under
+        # the pointer. Only the widget's says where it landed -- judging
+        # the window's as "somewhere else" hid the picker before its own
+        # wedge got the click, which then fell through to the card beneath.
+        if ev.type() == QEvent.MouseButtonPress and self.isVisible() \
+                and isinstance(obj, QWidget):
+            inside = obj is self or self.isAncestorOf(obj)
             on_anchor = False
             try:
-                on_anchor = target is not None and target is self._anchor
+                on_anchor = obj is self._anchor
             except RuntimeError:
                 pass
             if not inside and not on_anchor:
@@ -212,6 +220,31 @@ class SlotRadial(QWidget):
 
     # -- paint -----------------------------------------------------------------
 
+    def _caption_fonts(self) -> Tuple[QFont, QFont]:
+        cap = QFont(self.font())
+        cap.setPixelSize(12)
+        cap.setBold(True)
+        small = QFont(self.font())
+        small.setPixelSize(11)
+        return cap, small
+
+    def caption(self) -> Tuple[str, str]:
+        """(the title; where it goes: "Avatar Remote ▸ Toggles") -- the two
+        never touch. A title too long for the whole path gets the room of
+        all but "▸ Toggles" (the middle names the set too), then is elided;
+        a font too wide even for that loses the start of "▸ Toggles" last."""
+        cap, small = self._caption_fonts()
+        left, right = QFontMetrics(cap), QFontMetrics(small)
+        both = self.width() - 2 * _CAPTION_PAD - _CAPTION_GAP
+        name = _NAMES[self._menu][1]
+        where = f"Avatar Remote ▸ {name}"
+        if left.horizontalAdvance(self._title) + right.horizontalAdvance(where) > both:
+            where = f"▸ {name}"
+        if right.horizontalAdvance(where) > both - _CAPTION_MIN_TITLE:
+            where = right.elidedText(where, Qt.ElideLeft, both - _CAPTION_MIN_TITLE)
+        room = both - right.horizontalAdvance(where)
+        return left.elidedText(self._title, Qt.ElideRight, max(0, room)), where
+
     def paintEvent(self, _ev) -> None:  # noqa: N802
         v = _theme.qss_vars()
         p = QPainter(self)
@@ -221,21 +254,15 @@ class SlotRadial(QWidget):
         p.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0), 12, 12)
         base = QFont(self.font())
         # the caption: what is being placed, and in which set
-        cap = QFont(base)
-        cap.setPixelSize(12)
-        cap.setBold(True)
+        cap, small = self._caption_fonts()
+        title, where = self.caption()
+        box = QRectF(_CAPTION_PAD, 4, self.width() - 2 * _CAPTION_PAD, _CAPTION_H - 6)
         p.setFont(cap)
         p.setPen(QColor(v["txt"]))
-        what = _NAMES[self._menu][1]
-        title = QFontMetrics(cap).elidedText(self._title, Qt.ElideRight, self.width() - 110)
-        p.drawText(QRectF(10, 4, self.width() - 20, _CAPTION_H - 6),
-                   Qt.AlignLeft | Qt.AlignVCenter, title)
-        small = QFont(base)
-        small.setPixelSize(11)
+        p.drawText(box, Qt.AlignLeft | Qt.AlignVCenter, title)
         p.setFont(small)
         p.setPen(QColor(v["muted"]))
-        p.drawText(QRectF(10, 4, self.width() - 20, _CAPTION_H - 6),
-                   Qt.AlignRight | Qt.AlignVCenter, f"Avatar Remote ▸ {what}")
+        p.drawText(box, Qt.AlignRight | Qt.AlignVCenter, where)
         c = self._centre()
         num = QFont(base)
         num.setPixelSize(16)
