@@ -29,14 +29,11 @@ update itself at launch.
 <!-- Replace this section before each release. Keep it short and concrete:
      what changed, and what a user would notice. -->
 
-A small update to 0.16.0, for Linux.
+A small update to 0.16.1.
 
-- **The Linux AppImage is back.** 0.15.2 and 0.16.0 came without one:
-  GitHub's Linux build stopped at three tests that measured text in Windows'
-  font. On Windows nothing changes.
-- **Two layout fixes on Linux:** *Arm shocks* no longer makes its row jump
-  while it asks "Arm shocks? Yes / No", and the Avatar Remote's slot picker
-  no longer cuts "Avatar Remote ▸ Toggles" short beside a short name.
+- **Toy cards start folded.** On the Toys page each toy is one row, its
+  bar, until you click it: a click opens its signal chains, another folds
+  it away again. A click on a toy's row on Home still opens its card.
 
 **Coming from 0.15?** 0.16.0 brought a Toys page, a switch per action on
 each shocker, friends tied to their VRChat accounts, a guided tour, Ctrl+Z

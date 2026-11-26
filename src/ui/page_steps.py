@@ -52,7 +52,7 @@ STEPS = {
     ),
     "Toys": (
         Step("Switch your toy on", "Scan now looks at once.", "Scan now"),
-        Step("Open a chain to tune it", "A signal chain for every contact.",
+        Step("Click a toy to tune it", "A signal chain for every contact.",
              ("Input", "Depth", "Punch", "Output")),
         Step("Build your own zones", "From any contact on your avatar.", "SPS Sources"),
         Step("Tune against a test stroke", "The simulator and the signal graph.",

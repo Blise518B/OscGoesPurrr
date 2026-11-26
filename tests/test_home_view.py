@@ -280,7 +280,8 @@ class TestToyList:
     def test_the_caret_points_right_closed_and_down_open(self, host):
         """The same ▸ / ▾ as the chain bars and the Tuning tools fold --
         a down caret must never mean "closed" on one bar and "open" on
-        the next. A card starts open (Blise's ask, 2026-11-16)."""
+        the next. A card starts folded to its bar, one row per toy (Blise's
+        call, 2026-11-26)."""
         from PySide6.QtCore import Qt
         from PySide6.QtTest import QTest
         from PySide6.QtWidgets import QLabel
@@ -288,21 +289,29 @@ class TestToyList:
         bar = frame.findChild(QWidget, "toyBar")
         caret = bar.findChild(QLabel, "expandCaret")
         body = frame.findChild(QWidget, "toyBody")
-        assert caret.text() == "▾" and not body.isHidden()
+        assert caret.text() == "▸" and body.isHidden()
         host.window.show()                    # the bar toggles on isVisible
         QTest.mouseClick(bar, Qt.LeftButton)
-        assert caret.text() == "▸" and body.isHidden()
-        QTest.mouseClick(bar, Qt.LeftButton)
         assert caret.text() == "▾" and not body.isHidden()
+        QTest.mouseClick(bar, Qt.LeftButton)
+        assert caret.text() == "▸" and body.isHidden()
+        host.window.hide()
+
+    def test_every_card_starts_as_its_one_row(self, host):
+        """Folded, a card is its bar alone: nothing of the body shows."""
+        host.window.show()
+        QApplication.processEvents()
+        for data in host.device_ui_frames.values():
+            assert data["body"].isHidden() and data["bar"].isVisible()
         host.window.hide()
 
     def test_a_card_opens_on_its_motors_chains_each_folded(self, host):
-        """The Toys page shows every motor's chains without a click, each
-        as its folded bar, under the motor's name; a chain opens on its
-        own click."""
+        """An opened card shows every motor's chains, each as its folded
+        bar, under the motor's name; a chain opens on its own click."""
         from ui.motor_signal_chain import (
             MotorChainListWidget, MotorSignalChainWidget, _ChainFoldBar)
         host.window.show()
+        host.device_ui_frames["Bravo"]["set_expanded"](True)
         QApplication.processEvents()
         body = host.device_ui_frames["Bravo"]["body"]
         lists = body.findChildren(MotorChainListWidget)
@@ -1088,7 +1097,7 @@ class TestHomeIsTheOverview:
         row = host.row("Bravo")
         assert row["frame"].findChild(QWidget, "toyBody") is None
         assert row["caret"].text() == "›"
-        assert host.device_ui_frames["Bravo"]["caret"].text() == "▾"   # open
+        assert host.device_ui_frames["Bravo"]["caret"].text() == "▸"   # folded
         # the quick switches are all there
         assert set(row["contact_chips"]) == {
             "touch_self", "touch_others", "pen_self", "pen_others"}

@@ -10,7 +10,7 @@ the sidebar, holds everything about them: each toy's signal chains, the toy
 server, SPS Sources and the tuning tools.
 
 ![The Toys page](./img/toys-page.png)
-*The Toys page: Scan now, the Toy server line, anti-stuck, and a card per toy. SPS Sources and Tuning tools are folded at the bottom.*
+*The Toys page: Scan now, the Toy server line, anti-stuck, and a card per toy, folded to its one row. SPS Sources and Tuning tools are folded at the bottom.*
 
 ## Scan now
 
@@ -33,10 +33,12 @@ to leave one toy out. See [Anti-stuck and Sleep](./toy-safety.md).
 ## A toy's card
 
 A card's bar is the same as the toy's row on Home: the four chips, **Sleep**
-and **Anti-stuck**, battery, meters, **Mute** and **Test**. Under it, the card is already open on each
+and **Anti-stuck**, battery, meters, **Mute** and **Test**. Every card starts
+folded to that bar, one row per toy. Click the bar to open the card on each
 motor's chains, each folded to one bar: its name, a letter per stage lit by
-its live level, and its settings at a glance. Click a chain to open it. A
-click on the toy's bar folds the whole card away, and another brings it back.
+its live level, and its settings at a glance. Click a chain to open it.
+Another click on the toy's bar folds the whole card away again. A click on
+the toy's row on Home opens its card here.
 
 ![A toy's card, its chain opened](./img/toy-card.png)
 *A toy's chain opened: Chain 1 of its motor, from Input through Depth, Speed and Punch, Combine, Wake and Envelope to Zero cut and Output.*

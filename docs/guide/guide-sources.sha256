@@ -1,3 +1,3 @@
-2f7801e8b08edbf510733399c2eaeadd4cf5f1a0339138184844dc394b48a837
+a72ec4384a63fa3ba0fa35a110b8f5f6445f6b5bda10c5bb8f131d6ccea61a93
 # sha256 of the guide's sources (guide/ and docs/assets/tokens.css, docs/assets/ogp-icon.svg, docs/assets/fonts),
 # written by tools/build_guide.py; tests/test_guide_build.py checks it

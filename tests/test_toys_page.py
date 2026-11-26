@@ -238,8 +238,9 @@ class TestSteps:
         h.window.layout().addWidget(h._build_mode_grid())
         h.window.resize(1200, 1600)
         h.window.show()
-        # the card opens by itself, on its motors' folded chains: a chain open
+        # the card opened, on its motors' folded chains: a chain open
         from ui.motor_signal_chain import _ChainFoldBar
+        h.device_ui_frames["Bravo"]["set_expanded"](True)
         QApplication.processEvents()
         bar = next(b for b in h.device_ui_frames["Bravo"]["body"].findChildren(_ChainFoldBar)
                    if b.isVisible())

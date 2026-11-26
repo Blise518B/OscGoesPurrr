@@ -185,8 +185,8 @@
       '<span class="o-cchip on" data-safe="as" data-tip="toyas">Anti-stuck</span>';
   }
   // One toy, in two places (device_frame._build_toy_bar): its row on Home,
-  // which opens its card on the Toys page, and that card, open on its
-  // motors' folded chains. At this width the bar is one line, all of it
+  // which opens its card on the Toys page, and that card, folded to its
+  // bar until clicked, then open on its motors' folded chains. At this width the bar is one line, all of it
   // centred on it: the name and zones, the chips as two rows -- Touch above
   // Penetration, the captions in a column -- with Sleep over Anti-stuck
   // beside them, then the battery, meters, Mute and Test (the app drops to
@@ -1103,10 +1103,10 @@
     toysas: ['Toys’ anti-stuck', 'VRChat only sends a value when it changes. If a contact stops updating - you swap avatar, your partner leaves, the link drops - its last value would keep a toy going. Anti-stuck notices a value that has frozen and stops it.<br><br>A value frozen <b>part-way</b> is cut quickly (1 s by default); one held at <b>100%</b> gets the longer wait, then eases off over 3 s. A new value brings it back at once. Each kind of device has its own: the toys here, each suit and the trackers on the Suits page, the headset on its page. Each toy’s bar has an <b>Anti-stuck</b> of its own too, to leave one toy out.'],
     aswhere: ['Anti-stuck', 'Each kind of device has its own anti-stuck, with its own timers: the toys on the Toys page (and each toy on its bar), the bHaptics suit, the OWO suit and the haptic trackers on the Suits page, the headset on the PSVR2 page.'],
     mute: ['Mute', 'Silences this toy only. Everything else keeps playing, and its setup is untouched.'],
-    toy: ['Toys', 'Every toy you have connected, plus the ones you’ve used before that are switched off right now (grey). The bar shows what drives the toy in the active mode, who it hears, its battery and a live meter per motor - the same as its row on Home.<br><br>Under it, each motor’s <b>signal chains</b>, folded - click one to set it up (Input → Depth/Speed/Punch → Combine → Wake → Envelope → Zero cut → Output). A click on the bar folds the toy away. <b>Mute</b> silences the toy without touching its setup; <b>Test</b> gives it a short buzz.'],
+    toy: ['Toys', 'Every toy you have connected, plus the ones you’ve used before that are switched off right now (grey). The bar shows what drives the toy in the active mode, who it hears, its battery and a live meter per motor - the same as its row on Home.<br><br>Each toy starts folded to its bar. <b>Click the bar</b> to open it on each motor’s <b>signal chains</b>, folded - click one to set it up (Input → Depth/Speed/Punch → Combine → Wake → Envelope → Zero cut → Output). Another click on the bar folds the toy away. <b>Mute</b> silences the toy without touching its setup; <b>Test</b> gives it a short buzz.'],
     avparams: ['Avatar parameters', 'What this toy tells your avatar - for a light, an icon or a meter on it. <b>Mirror to VRChat parameter</b> sends each motor’s level as a Float; <b>Tell VRChat while this toy is connected</b> sends a Bool. Says how many are on; click to open or close.'],
     deltoy: ['Delete device', 'Forgets this toy and everything set up for it, in every mode. If you switch it on again later it comes back as a new toy with default settings. (The demo keeps its toys.)'],
-    toyspage: ['Toys', 'Every toy you have connected, plus the ones you’ve used before that are switched off right now (grey). Each card is open on its motors’ signal chains, folded: click one to set it up.'],
+    toyspage: ['Toys', 'Every toy you have connected, plus the ones you’ve used before that are switched off right now (grey). Each card is folded to its bar, one row per toy: click it to open its motors’ signal chains.'],
     toyrow: ['Devices', 'Everything you have, at a glance. <b>Click a row</b> to open it on its own page - a toy opens at its card on the Toys page, where its signal chains are. The switches on a row work right here: a toy’s Touch / Penetration chips, Mute and Test; the shockers’ Arm shocks, Share with friends and On / Off.'],
     devices: ['Devices', 'Everything you have, at a glance: every toy you have connected (the ones you’ve used before stay listed, grey while they’re off), and your shocker hub, suits and headset while they’re switched on in Settings → Features.<br><br><b>Click a row</b> to open it on its own page - a toy opens at its card on the Toys page, where its signal chains are. The switches on a row work right here: a toy’s Touch / Penetration chips, Mute and Test; the shockers’ Arm shocks, Share with friends and On / Off.'],
     server: ['Toy server', 'The Buttplug.io server that talks to your Bluetooth toys. OGP runs its own copy, so there is nothing else to start, and it connects and reconnects by itself. With the built-in engine switched off, this says where your own Intiface Central is - on this PC or a phone - and whether it was found.'],
@@ -1210,8 +1210,6 @@
   });
 
   applyFeatures(); refreshShockRow(); refreshPsvr2Row();
-  // the Toys page's cards start open, on their motors' folded chains
-  TOYS.forEach(function (t) { if (t.on) openToy(cardOf(t.id), true); });
   window.OGPDemo = {
     state: S, go: go, contact: contactNow, on: on, emit: emit, icons: ICONS,
     // the pages in their own files: their frame, and what they drive

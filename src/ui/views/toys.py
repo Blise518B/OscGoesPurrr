@@ -13,7 +13,8 @@ Top to bottom:
                      up by itself, and the way to Settings → Intiface Engine.
                      The sidebar keeps its own pill, on every page.
 - the toy cards   -- ui/views/device_frame.py: each toy's bar (the same as
-                     its row on Home) opening into its signal chains.
+                     its row on Home), folded to that one row until it is
+                     clicked, opening into its signal chains.
                      Toys that are remembered but switched off stay listed
                      in a grey outline.
 - SPS Sources     -- your own zones built from raw contacts
@@ -118,12 +119,13 @@ class ToysMixin:
             "that are switched off right now (grey). The bar shows what "
             "drives the toy in the active mode, who it hears, its battery "
             "and a live meter per motor - the same as its row on Home.<br><br>"
-            "Under it, each motor's <b>signal chains</b>, folded - click one "
-            "to set it up (Input → Depth/Speed/Punch → "
+            "Each toy starts folded to its bar. <b>Click the bar</b> to open "
+            "it on each motor's <b>signal chains</b>, folded - click one to "
+            "set it up (Input → Depth/Speed/Punch → "
             "Combine → Wake → Envelope → Zero cut → "
-            "Output — click any stage to edit it). A click on the bar folds "
-            "the toy away. <b>Mute</b> silences the toy without touching its "
-            "setup; <b>Test</b> gives it a short buzz.")
+            "Output — click any stage to edit it). Another click on the bar "
+            "folds the toy away. <b>Mute</b> silences the toy without "
+            "touching its setup; <b>Test</b> gives it a short buzz.")
         # Right beside the heading (Blise's ask, 2026-10-28): a button to
         # look now, and when the app looks by itself next
         scan_now = QPushButton("Scan now")

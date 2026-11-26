@@ -301,8 +301,8 @@ class DeviceFrameMixin:
                              osc_addresses: dict, motor_count: int,
                              motor_kinds: Optional[List[str]] = None) -> dict:
         """One toy, in two places: its card on the Toys page -- a bar and
-        a body, open by default, holding the per-motor signal chains
-        (folded; the bar folds the body away) -- and its row on Home, the same bar on its
+        a body, folded by default, holding the per-motor signal chains
+        (folded too; a click on the bar opens the body) -- and its row on Home, the same bar on its
         own, which opens the card when clicked (open_toy_card). The bar is
         the toy's overview (connection, what drives it and who it hears,
         battery, a meter per motor, Mute/Test); both bars show the same
@@ -381,11 +381,11 @@ class DeviceFrameMixin:
             else:
                 QWidget.mousePressEvent(bar, ev)
         bar.mousePressEvent = on_bar_press
-        # Open from the start (Blise's ask, 2026-11-16): the Toys page is
-        # where a toy is set up precisely, so each card shows its motors'
-        # chains -- folded, one bar each -- without a click. Home's row is
-        # the compact overview.
-        set_expanded(True)
+        # Folded from the start, one row per toy (Blise's call, 2026-11-26,
+        # taking back 2026-11-16's open cards): a click on the bar opens
+        # the card on its motors' chains, each folded to one bar, and a
+        # click on its row on Home opens it here (open_toy_card).
+        set_expanded(False)
 
         layout = getattr(self, "unified_devices_layout", None)
         if layout is not None:

@@ -914,8 +914,9 @@ back:
       Touch / Penetration chips, battery, meters, Mute, Test -- and opens
       its card on the **Toys** page (`toys`, right after Home in the
       sidebar), which holds the detail: the same bar over the toy's
-      signal chains -- the card open from the start, each motor's chains
-      folded to one bar each (2026-11-16) -- Scan now, the toy server line,
+      signal chains -- the card folded to its bar from the start, one row
+      per toy, and opened by a click on it (2026-11-26), each motor's
+      chains folded to one bar each -- Scan now, the toy server line,
       SPS Sources and the tuning tools. Both bars are built by
       `device_frame._build_toy_bar`, and every live update (connection,
       battery, meters, chips, Mute) reaches both (`_toy_bars`). A bar's
